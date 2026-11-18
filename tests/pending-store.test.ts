@@ -52,18 +52,20 @@ function setup(t: { after: (fn: () => void) => void }) {
   return { db, store, park, changes, dir, tick: (ms: number) => { clock += ms; } };
 }
 
-test('積んだ行は一覧に出て、input はどこにも無い。shown は鍵を伏せ、masked が伏せた数を数える', async t => {
+test('積んだ行は一覧に出て、input の鍵は無い。待っているあいだの shown は実行する文のまま（意図どおり: beat の鍵でなければ鍵の形も生）。beat の鍵だけ [BEAT-SECRET] にして masked に数える', async t => {
   const s = setup(t);
   const row = await s.park();
   assert.equal(row.status, 'waiting');
   const listed = s.store.list({ status: 'waiting' });
   assert.equal(listed.length, 1);
-  const text = JSON.stringify(listed);
-  assert.ok(!text.includes(SECRET), '鍵が一覧に出ない');
   assert.ok(!('input' in listed[0]!), '一覧の行に input の鍵が無い');
-  assert.match(listed[0]!.shown, /curl -H "Authorization: \[REDACTED\]/u);
-  assert.match(listed[0]!.shown, /https:\/\/example\.com\/up/u, '切らずに実行のとおり');
-  assert.equal(listed[0]!.masked, 1);
+  assert.match(listed[0]!.shown, new RegExp(`curl -H "Authorization: Bearer ${SECRET}" https://example\\.com/up`, 'u'), '切らず伏せず実行のとおり');
+  assert.equal(listed[0]!.masked, 0);
+  const held = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, held: () => [{ source: 'env ANTHROPIC_API_KEY', value: SECRET }] });
+  const marked = await held.park({ tool: 'shell_run', input: { command: `curl -H "Authorization: Bearer ${SECRET}" https://example.com/up` }, cwd: s.dir, kind: 'send', reason: 'r', runId: 'r', runKind: 'chat', conversationId: 'conv-2', check: { decision: 'ask', reasons: ['r'] } });
+  assert.match(marked.shown, /curl -H "Authorization: Bearer \[BEAT-SECRET: env ANTHROPIC_API_KEY\]" https:\/\/example\.com\/up/u);
+  assert.equal(marked.masked, 1);
+  held.reject(marked.id);
   assert.equal(s.store.row(row.id)!.input.includes(SECRET), true, '実行のための生の入力は DB に持つ');
   assert.deepEqual(s.changes.map(c => c.status), ['waiting']);
 });
@@ -90,11 +92,15 @@ test('shown は実行するものを切らずに見せる: 要約の本文が切
   assert.match(shell.shown, /sub/u, '作業フォルダが見える');
 });
 
-test('構造のある入力は、鍵の名前で伏せたものも masked に数える', async t => {
+test('構造のある入力: 待っているあいだは鍵の名前の値も出し（意図どおり）、決めたあとは今までどおり伏せて masked に数える', async t => {
   const s = setup(t);
   const row = await s.park({ tool: 'fake_config', input: { name: 'svc', api_key: 'abcdef123456' } });
-  assert.ok(!row.shown.includes('abcdef123456'));
-  assert.equal(row.masked, 1);
+  assert.ok(row.shown.includes('abcdef123456'));
+  assert.equal(row.masked, 0);
+  const decided = s.store.reject(row.id);
+  assert.ok(!JSON.stringify(decided).includes('abcdef123456'));
+  assert.equal(decided.masked, 1);
+  assert.equal(decided.oldPreview, undefined, '決めた行には付けない');
 });
 
 test('実行の外で動かせない道具（agent_run・question_add・task_complete・task_checkpoint）は積めない', async t => {
@@ -248,34 +254,35 @@ test('decided の until は今日より前の分だけ。決めた時刻が同�
   assert.equal(s.store.view(a.id)!.title, 'Run a command');
 });
 
-test('parts は見せる形の部品（本文・作業フォルダ・残りの項目）を伏せたまま分けて返す', async t => {
+test('parts は見せる形の部品（本文・作業フォルダ・残りの項目）を分けて返す。待っているあいだは生のまま、決めたあとは伏せた形', async t => {
   const s = setup(t);
   const shell = await s.park({ tool: 'shell_run', input: { command: `npm test -- --token=${SECRET}`, cwd: 'web', timeoutSec: 30 } });
   assert.equal(shell.parts.cwd, 'web');
-  assert.match(shell.parts.body ?? '', /^npm test -- --token=\[REDACTED\]$/u);
+  assert.equal(shell.parts.body, `npm test -- --token=${SECRET}`);
   assert.deepEqual(JSON.parse(shell.parts.extra ?? 'null'), { timeoutSec: 30 });
   assert.ok(!shell.parts.body!.includes('Working folder'), '作業フォルダの行は本文に入らない');
   const target = join(s.dir, 'notes.md');
   const file = await s.park({ tool: 'file_write', input: { path: target, content: '# Notes\nline' }, kind: 'hook' });
   assert.deepEqual(file.parts, { body: '# Notes\nline', cwd: null, extra: JSON.stringify({ path: target }, null, 2) });
   const secret = await s.park({ tool: 'fake_secret', input: { api_key: 'abcdef123456' } });
-  assert.deepEqual({ ...secret.parts, body: null }, { body: null, cwd: null, extra: null });
-  assert.match(secret.parts.body ?? '', /"api_key": .*\[REDACTED\]/u, '鍵の名前の値が本文のときは伏せた入力まるごと');
-  assert.equal(secret.parts.body, secret.shown.split('\n').slice(1).join('\n'), 'shown と同じ伏せ方');
-  assert.ok(!JSON.stringify(secret).includes('abcdef123456'));
+  assert.deepEqual(secret.parts, { body: 'abcdef123456', cwd: null, extra: null }, '意図どおり: 鍵の名前の値も、実行する入力として出す');
   const leaky = await s.park({ tool: 'fake_echo', input: { text: `Authorization: Bearer ${SECRET}` } });
-  assert.ok(!JSON.stringify(leaky.parts).includes(SECRET));
+  assert.equal(leaky.parts.body, `Authorization: Bearer ${SECRET}`);
   s.store.reject(shell.id);
-  assert.deepEqual(s.store.view(shell.id)!.parts, shell.parts, '決めた行も部品は残す（伏せた形なので）');
+  assert.match(s.store.view(shell.id)!.parts.body ?? '', /^npm test -- --token=\[REDACTED\]$/u, '決めた行の部品は伏せた形');
+  assert.equal(s.store.view(shell.id)!.parts.cwd, 'web');
   assert.equal(s.store.row(shell.id)!.input, '', '生の入力は消す');
   s.store.claim(file.id);
   s.store.finish(file.id, { status: 'ran', output: 'done' });
-  assert.deepEqual(s.store.view(file.id)!.parts, file.parts);
+  assert.deepEqual(s.store.view(file.id)!.parts, file.parts, '鍵の無い部品は同じ');
   s.store.claim(leaky.id);
   s.store.closeInterrupted();
-  assert.deepEqual(s.store.view(leaky.id)!.parts, leaky.parts);
+  assert.ok(!JSON.stringify(s.store.view(leaky.id)!.parts).includes(SECRET));
   s.store.cancelConversations(['conv-1']);
-  assert.deepEqual(s.store.view(secret.id)!.parts, secret.parts);
+  const rested = s.store.view(secret.id)!;
+  assert.match(rested.parts.body ?? '', /"api_key": .*\[REDACTED\]/u, '決めたあとは、鍵の名前の値が本文のとき伏せた入力まるごと');
+  assert.equal(rested.parts.body, rested.shown.split('\n').slice(1).join('\n'), 'shown と同じ伏せ方');
+  assert.ok(!JSON.stringify(rested).includes('abcdef123456'));
   assert.match(s.store.view(shell.id)!.shown, /npm test/u, 'shown はこれまでどおり');
 });
 
@@ -285,7 +292,7 @@ test('事前の判定を持つ道具は、判定（check）を渡さないと積
   assert.equal((await s.park({ tool: 'fake_echo', input: { text: 'no precheck' }, check: undefined })).status, 'waiting', '事前の判定の無い道具は要らない');
 });
 
-test('作業フォルダが鍵の名前の項目から来るときは、作業フォルダの行も伏せる', async t => {
+test('作業フォルダが鍵の名前の項目から来るときは、決めたあとは作業フォルダの行も伏せる（待っているあいだは実行のとおり出す）', async t => {
   const s = setup(t);
   const tool: ToolDef<{ text: string; api_key: string }> = {
     name: 'fake_cwd_secret', description: 'x', input: Type.Object({ text: Type.String(), api_key: Type.String() }), effect: 'exec', allowedIn: ['chat'],
@@ -294,11 +301,13 @@ test('作業フォルダが鍵の名前の項目から来るときは、作業�
   };
   const store = new PendingStore(s.db, { tools: new ToolRegistry().register(tool), dataDir: s.dir });
   const row = await store.park({ tool: tool.name, input: { text: 'hello', api_key: 'zq81secretvalue' }, cwd: s.dir, kind: 'owner', reason: 'r', runId: 'r', runKind: 'chat', conversationId: 'c' });
-  assert.ok(!JSON.stringify(row).includes('zq81secretvalue'));
-  assert.equal(row.parts.cwd, '[REDACTED]');
+  assert.equal(row.parts.cwd, 'zq81secretvalue');
+  const decided = store.reject(row.id);
+  assert.ok(!JSON.stringify(decided).includes('zq81secretvalue'));
+  assert.equal(decided.parts.cwd, '[REDACTED]');
 });
 
-test('鍵らしいトップのキーが 2 つあっても、どちらの値も見せる（キーの文字は伏せる）。要約のある道具では残りの項目に出る', async t => {
+test('鍵らしいトップのキーが 2 つあっても、どちらの値も見せる（決めたあとはキーの文字を伏せる）。要約のある道具では残りの項目に出る', async t => {
   const s = setup(t);
   const keyA = 'ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0001';
   const keyB = 'ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB0002';
@@ -311,18 +320,25 @@ test('鍵らしいトップのキーが 2 つあっても、どちらの値も�
   const both = await store.park({ ...base, tool: bare.name, input: { [keyA]: 'one', [keyB]: 'two' } });
   assert.match(both.parts.body ?? '', /"one"/u);
   assert.match(both.parts.body ?? '', /"two"/u);
-  assert.ok(!JSON.stringify(both).includes('ghp_'), both.parts.body ?? '');
+  assert.ok(both.parts.body?.includes(keyA), '待っているあいだは入力のとおり（意図どおり）');
   const extra = await store.park({ ...base, tool: echo.name, input: { text: 'hello', [keyA]: 'three' } });
   assert.equal(extra.parts.body, 'hello');
   assert.match(extra.parts.extra ?? '', /"three"/u);
-  assert.ok(!JSON.stringify(extra).includes('ghp_'), extra.parts.extra ?? '');
+  for (const id of [both.id, extra.id]) store.reject(id);
+  const [restExtra, restBoth] = [store.view(extra.id)!, store.view(both.id)!];
+  assert.match(restBoth.parts.body ?? '', /"one"/u);
+  assert.match(restBoth.parts.body ?? '', /"two"/u);
+  assert.ok(!JSON.stringify(restBoth).includes('ghp_'), restBoth.parts.body ?? '');
+  assert.equal(restExtra.parts.body, 'hello');
+  assert.match(restExtra.parts.extra ?? '', /"three"/u);
+  assert.ok(!JSON.stringify(restExtra).includes('ghp_'), restExtra.parts.extra ?? '');
 });
 
-test('MCP の道具: 入力まるごとを見せるときも、サーバーに渡した秘密の値をそのまま伏せる', async t => {
+test('MCP の道具: 入力まるごとを見せるときも、鍵らしい名前でサーバーに渡した値は印に替える。決めたあとは今までどおり伏せる', async t => {
   const s = setup(t);
   const built = buildMcpTool({
     server: { id: 'web' }, remote: { name: 'search', inputSchema: { type: 'object', properties: { q: { type: 'string' }, n: { type: 'number' } } } },
-    entry: {}, language: 'en', limits: { callTimeoutMs: 1000, resultMaxChars: 1000 }, caller: () => undefined, secrets: () => ['plainvalue123'],
+    entry: {}, language: 'en', limits: { callTimeoutMs: 1000, resultMaxChars: 1000 }, caller: () => undefined, secrets: () => ['plainvalue123'], held: () => [{ source: 'env SEARCH_API_KEY', value: 'plainvalue123' }],
   });
   assert.ok(built.ok);
   const tool = (built as { tool: ToolDef }).tool;
@@ -330,4 +346,26 @@ test('MCP の道具: 入力まるごとを見せるときも、サーバーに�
   const check = await tool.preCheck!({ q: 'plainvalue123', n: 1 } as never, {} as never);
   const row = await store.park({ tool: tool.name, input: { q: 'look plainvalue123 up', n: 1 }, check, cwd: s.dir, kind: 'send', reason: 'r', runId: 'r', runKind: 'chat', conversationId: 'c' });
   assert.ok(!JSON.stringify(row).includes('plainvalue123'), JSON.stringify(row.parts));
+  assert.match(row.parts.body ?? '', /look \[BEAT-SECRET: env SEARCH_API_KEY\] up/u);
+  assert.ok(!JSON.stringify(store.reject(row.id)).includes('plainvalue123'));
+});
+
+test('前の版で積んだ待ちの行（state.rest が無い・伏せた形で保存）は、生の入力から札を作り直して出す。決めたあとは保存してあった伏せた形のまま', async t => {
+  const s = setup(t);
+  const command = 'echo token=abc123def456 | iex';
+  const oldShown = 'Run a command\necho token=[REDACTED] | iex';
+  const oldState = { title: 'Run a command', parts: { body: 'echo token=[REDACTED] | iex', cwd: null, extra: null }, cwdReal: null, preview: [{ path: 'run.ps1', text: 'pw=[REDACTED]', truncated: false }] };
+  const id = Number(s.db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
+    VALUES ('shell_run', ?, ?, 1, ?, 'judge', 'r', '[]', NULL, ?, NULL, 'run-1', 'chat', 'conv-1', NULL, NULL, 0, 'waiting', 1)`).run(JSON.stringify({ command }), oldShown, s.dir, JSON.stringify(oldState)).lastInsertRowid);
+  const view = s.store.view(id)!;
+  assert.equal(view.parts.body, command);
+  assert.ok(view.shown.includes(command), view.shown);
+  assert.equal(view.masked, 0);
+  assert.deepEqual(view.held, []);
+  assert.equal(view.oldPreview, true, '前の版の下見には印を付ける');
+  s.store.reject(id);
+  const decided = s.store.view(id)!;
+  assert.equal(decided.shown, oldShown);
+  assert.equal(decided.parts.body, 'echo token=[REDACTED] | iex');
+  assert.equal(decided.masked, 1);
 });

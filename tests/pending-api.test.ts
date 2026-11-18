@@ -40,18 +40,23 @@ async function setup(t: Parameters<typeof startApp>[0]) {
   return { ...s, runs, park, events, settled, conversation };
 }
 
-test('GET /api/pending: input は応答のどこにも無く、shown は伏せた形', async t => {
+test('GET /api/pending: input は応答のどこにも無い。待っているあいだの shown は実行する文のまま（意図どおり: beat の鍵でなければ鍵の形も生）、決めたあとは伏せた形', async t => {
   const s = await setup(t);
   const row = await s.park();
   const res = await s.api('/api/pending?status=waiting');
   const text = await res.text();
   assert.equal(res.status, 200);
-  assert.ok(!text.includes(SECRET), '鍵が応答に出ない');
+  assert.ok(text.includes(SECRET), '承認の札は実行する文をそのまま出す');
   assert.ok(!text.includes('"input"'), 'input の鍵が応答に無い');
   const body = JSON.parse(text) as { items: Array<{ id: number; shown: string; masked: number }> };
   assert.deepEqual(body.items.map(i => i.id), [row.id]);
-  assert.equal(body.items[0]!.masked, 1);
-  assert.match(body.items[0]!.shown, /\[REDACTED\]/u);
+  assert.equal(body.items[0]!.masked, 0);
+  assert.equal((await s.json(`/api/pending/${row.id}/reject`, 'POST', {})).status, 200);
+  const decided = await s.api('/api/pending?status=decided');
+  const decidedText = await decided.text();
+  assert.ok(!decidedText.includes(SECRET), '決めた行は伏せた形');
+  assert.match(decidedText, /\[REDACTED\]/u);
+  await s.park();
   const one = await s.json(`/api/pending?conversation=${s.conversation.id}`, 'GET');
   assert.equal(one.body.items.length, 1);
   const bad = await s.json('/api/pending?status=everything', 'GET');

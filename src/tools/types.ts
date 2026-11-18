@@ -170,6 +170,8 @@ export type TaskControl =
   | { outcome: 'yield'; reason: string }
   | { outcome: 'failed'; reason: string };
 
+export interface HeldValue { source: string; value: string }
+
 export interface ToolDef<I = any> {
   name: string;
   description: string;
@@ -192,6 +194,8 @@ export interface ToolDef<I = any> {
   planOk?: true;
   replayable?: false;
   redact?: (text: string) => string;
+  // 承認の札で印に替える、beat が持っている鍵の値と、その出どころの名前（redact の代わりに使う。redact は形でも伏せ、実行される値を隠しうるため）
+  held?: () => readonly HeldValue[];
   projectOnly?: true;
   // projectOnly の道具のうち、製品の会話・タスクの振り返り（memoryProject のある振り返り）でも使えるもの（製品の記憶の道具）
   productReview?: true;

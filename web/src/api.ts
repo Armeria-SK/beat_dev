@@ -56,7 +56,7 @@ export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'jud
 export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
 export interface PendingFact { path: string; exists: boolean; type?: 'file' | 'dir' | 'link' | 'other'; size?: number; mtime?: number; files?: number; newest?: number; more?: boolean }
 export interface PendingAction {
-  id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; kind: PendingKind; reason: string;
+  id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; held?: string[]; oldPreview?: true; kind: PendingKind; reason: string;
   cwd: string | null; preview: PendingPreview[]; files: PendingFact[]; effect?: { files: number; bytes: number; more?: true } | null;
   conversation_id: string; task_id: string | null; project_id: string | null;
   task_title: string | null; project_name: string | null; conversation_title?: string | null; project_archived?: boolean;
@@ -129,7 +129,7 @@ export interface ModelChoice { modelId?: string | null; effort?: string | null; 
 // 実行中に送って、まだ履歴に入っていない発言（今の実行の次の区切りで入る）
 export interface PendingMessage { id: string; text: string; attachments: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>; interrupt: boolean; createdAt: number }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
-export interface PendingPreview { path: string; text: string; truncated: boolean }
+export interface PendingPreview { path: string; text: string; truncated: boolean; chars?: number }
 // 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
 export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
 export interface ContextDetail { reason: string; measured?: number; required?: number; hint?: string }

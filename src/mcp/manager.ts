@@ -12,10 +12,10 @@ import { toolText } from '../shared/messages/tools.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import type { NotifyInput } from '../notify/notifications.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
-import type { ToolDef } from '../tools/types.ts';
+import type { HeldValue, ToolDef } from '../tools/types.ts';
 import { mcpToolName } from './names.ts';
 import { McpPins, shapeOf, type McpShape } from './pins.ts';
-import { buildMcpTool, cleanDescription, type McpCaller, type McpRemoteTool } from './tool.ts';
+import { buildMcpTool, cleanDescription, heldValues, type McpCaller, type McpRemoteTool } from './tool.ts';
 
 export interface McpLink {
   caller: McpCaller;
@@ -99,6 +99,7 @@ interface Entry {
   failedNotified: boolean;
   // このサーバーへ渡した秘密の値（env・headers）。エラー・stderr・答えの文から、一般の形に当たらなくても伏せる
   secrets: string[];
+  held: HeldValue[];
 }
 
 // 秘密の値の伏せ字は、短すぎる値（普通の語に当たってしまう）は対象にしない
@@ -274,7 +275,7 @@ export class McpManager {
   #entryFor(server: McpServerConfig): Entry {
     let entry = this.#entries.get(server.id);
     if (!entry) {
-      entry = { id: server.id, fingerprint: '', generation: 0, state: 'connecting', view: [], lastStderr: '', attempts: [], notifiedChanged: new Set(), failedNotified: false, secrets: [] };
+      entry = { id: server.id, fingerprint: '', generation: 0, state: 'connecting', view: [], lastStderr: '', attempts: [], notifiedChanged: new Set(), failedNotified: false, secrets: [], held: [] };
       this.#entries.set(server.id, entry);
     }
     return entry;
@@ -304,6 +305,7 @@ export class McpManager {
     const env = refs(server.env, this.#d.env);
     const headers = refs(server.headers, this.#d.env);
     entry.secrets = [...Object.values(env.values), ...Object.values(headers.values)].filter(v => v.length >= SECRET_MIN);
+    entry.held = heldValues(env.values, headers.values);
     const missing = [...env.missing, ...headers.missing];
     if (missing.length) { fail('env_missing', missing.join(', ')); return; }
     const limits = this.#d.config().mcp.limits;
@@ -387,7 +389,7 @@ export class McpManager {
       const configured = configuredTool(server, r.name);
       if (!configured) { view.push({ ...base, state: 'unlisted' }); continue; }
       if (configured.enabled === false) { view.push({ ...base, state: 'off' }); continue; }
-      const built = buildMcpTool({ server, remote: r, entry: configured, language, limits, caller: () => this.#entries.get(server.id)?.link?.caller, secrets: () => this.#entries.get(server.id)?.secrets ?? [] });
+      const built = buildMcpTool({ server, remote: r, entry: configured, language, limits, caller: () => this.#entries.get(server.id)?.link?.caller, secrets: () => this.#entries.get(server.id)?.secrets ?? [], held: () => this.#entries.get(server.id)?.held ?? [] });
       if (!built.ok) { view.push({ ...base, state: 'schema_invalid', reason: built.reason }); continue; }
       if (seen.has(built.tool.name)) { view.push({ ...base, state: 'schema_invalid', reason: 'duplicate_name' }); continue; }
       const pin = this.#pins.check(server.id, r.name, r);
