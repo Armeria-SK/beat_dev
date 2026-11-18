@@ -3,7 +3,7 @@ import type { JaTable } from './table.ts';
 
 export const providerJa = {
   'key.missing': "環境変数 {env} に API キーが入っていません（.env か OS の環境変数に入れてください）",
-  'http.context_overflow': "入力がモデルのコンテキストの長さを超えました（HTTP {status}）",
+  'http.context_overflow': "入力がモデルの context length を超えました（HTTP {status}）",
   'http.auth': "認証に失敗しました（HTTP {status}）",
   'http.rate_limit': "使える量の上限に達しました（HTTP 429）",
   'http.not_found': "モデルか API が見つかりません（HTTP 404）",
@@ -20,8 +20,8 @@ export const providerJa = {
   'models.unreadable': "プロバイダーがモデルの一覧を返しませんでした",
   'models.too_large': "プロバイダーのモデルの一覧が大きすぎて読めません",
   'probe.exceeds_model': "設定の contextLength（{declared}）がモデルの上限（{modelMax}）を超えています",
-  'probe.unknown': "コンテキストの長さが分かりません（サーバーから取れず、設定にもありません）",
-  'probe.too_small': "コンテキストの長さが足りません: 測った値 {effective} < 要る値 {required}（{source}）",
+  'probe.unknown': "context length が分かりません（サーバーから取れず、設定にもありません）",
+  'probe.too_small': "context length が足りません: 測った値 {effective} < 要る値 {required}（{source}）",
   'probe.ok': "使えます: {effective} トークン{note}",
   'probe.note': "（{note}）",
   'probe.source.measured': "測った値 {n}",
@@ -43,6 +43,6 @@ export const providerJa = {
   'hint.llamacpp': "llama-server を -c 付きで起動し、各スロットが {required} 以上になるようにしてください（-np でスロットを増やすと -c が分けられます）",
   'hint.vllm': "vLLM を --max-model-len {required} 以上で起動してください",
   'hint.tabbyapi': "TabbyAPI の config.yml の max_seq_len（model の下）を {required} 以上にしてモデルを読み込み直し、contextLength も合わせてください（cache_size も同じかそれより大きく）",
-  'hint.generic': "サーバーのコンテキストの長さを {required} 以上にし、設定の contextLength も合わせてください",
-  'hint.hosted': "コンテキストの長さが {required} 以上のモデルを選んでください",
+  'hint.generic': "サーバーの context length を {required} 以上にし、設定の contextLength も合わせてください",
+  'hint.hosted': "context length が {required} 以上のモデルを選んでください",
 } satisfies JaTable<typeof providerText>;
