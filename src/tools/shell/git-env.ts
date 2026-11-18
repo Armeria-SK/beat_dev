@@ -124,7 +124,7 @@ function countEnv(entries: ReadonlyArray<readonly [string, string]>): Record<str
   entries.forEach(([key, value], i) => { env[`GIT_CONFIG_KEY_${i}`] = key; env[`GIT_CONFIG_VALUE_${i}`] = value; });
   return env;
 }
-// 途中で止まった実行の残りを消す目安（実行は最長でも1時間）
+// 途中で止まった（落ちたプロセスの）実行の残りを消す目安。このプロセスでまだ cleanup していない実行は、時間にかかわらず消さない（裏のコマンドは時間の上限が無い）
 const STALE_MS = 6 * 60 * 60 * 1000;
 
 export interface GitRun {
@@ -172,13 +172,16 @@ function writePrePush(dir: string, hooks: string, prePush: PrePush): boolean {
   return writeHook(join(hooks, 'pre-push'), check + chain);
 }
 
+// cleanup がまだ呼ばれていない実行の置き場所（裏で動き続けるコマンドは 6 時間を超えうる）。片付けで消さない
+const live = new Set<string>();
+
 function sweepStale(root: string): void {
   let names: string[];
   try { names = readdirSync(root); } catch { return; }
   for (const name of names) {
     try {
       const path = join(root, name);
-      if (Date.now() - statSync(path).mtimeMs > STALE_MS) rmSync(path, { recursive: true, force: true });
+      if (!live.has(path) && Date.now() - statSync(path).mtimeMs > STALE_MS) rmSync(path, { recursive: true, force: true });
     } catch { /* 消せなければ残す */ }
   }
 }
@@ -191,6 +194,7 @@ export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: str
   const hooks = options.prePush ? join(dir, 'hooks') : options.ownerHooks ?? join(dir, 'hooks');
   let helpers: string[] = [];
   let prePushReady = false;
+  live.add(dir);
   try {
     mkdirSync(hooks === options.ownerHooks ? dir : hooks, { recursive: true });
     sweepStale(root);
@@ -203,7 +207,7 @@ export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: str
   const entries = [...overrides(hooks, helpers), ...(options.prePush ? [['push.recurseSubmodules', 'no'] as const] : [])];
   return {
     env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1', ...countEnv(entries) },
-    cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 残っても、次の実行が古いものを消す */ } },
+    cleanup: () => { live.delete(dir); try { rmSync(dir, { recursive: true, force: true }); } catch { /* 残っても、次の実行が古いものを消す */ } },
     ...(options.prePush ? { prePushReady, refused: () => existsSync(join(dir, 'refused')) } : {}),
   };
 }
