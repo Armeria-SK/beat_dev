@@ -36,6 +36,12 @@ export function kanbanMark(db: DatabaseSync, projectId: string): string {
   return digest(rows.map(row => `${row.id}:${row.status}:${row.c}`));
 }
 
+// 持ち主が since より後に提案を Reject したか（Q-79-1: 休んでいても 1 回考え直す。理由は次の材料に入る）
+export function ownerRejectedSince(db: DatabaseSync, projectId: string, since: number): boolean {
+  return db.prepare(`SELECT 1 FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE t.project_id = ? AND t.proposal IS NOT NULL AND t.status = 'cancelled'
+    AND e.kind = 'cancelled' AND e.actor = 'user' AND e.created_at > ? LIMIT 1`).get(projectId, since) !== undefined;
+}
+
 // 計画書の印: その製品の計画書（会話ごと）の控えのハッシュ。考える実行は計画書を書けない（plan_write は許す一覧の外）
 export function planMark(kv: KV, projectId: string): string {
   const prefix = `plan:${projectId}:`;

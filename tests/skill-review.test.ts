@@ -28,7 +28,7 @@ const results = (app: App, conversationId: string, n: number) => {
   for (let i = 0; i < n; i++) app.conversations.append(conversationId, { role: 'tool', toolCallId: `t${i}`, name: 'calculate', content: '2' });
 };
 
-async function setup(t: { after: (fn: () => void) => void }, options: { botMemory?: boolean; edit?: (c: AppConfig) => void; key?: string } = {}) {
+async function setup(t: { after: (fn: () => void) => void }, options: { botMemory?: boolean; edit?: (c: AppConfig) => void; key?: string; timers?: boolean } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const config = testConfig();
@@ -45,7 +45,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { botMemor
   const clock = { now: Date.parse('2026-11-15T03:00:00Z') };
   let adapter!: FakeAdapter;
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, botMemory: options.botMemory === true,
+    paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: options.timers === true, botMemory: options.botMemory === true,
     ...(options.key ? { env: { FAKE_KEY: options.key } } : {}),
     adapterOverride: p => (adapter = new FakeAdapter(p)),
   });
@@ -252,6 +252,23 @@ test('S-1b R6: a skill review reads a window of tool results only, with the call
   const prompt = String(s.adapter().calls.at(-1)!.messages.at(-1)?.content);
   assert.match(prompt, /\[beat\] \(called file_read \{"path":"notes\.md"\}\)/u);
   assert.match(prompt, /\[Tool file_read\] \[file_read\] line 1 ⏎ line 2/u);
+});
+
+test('review: with no usable background model a waiting review waits a minute and opens no conversation (7-9 review)', async t => {
+  const s = await setup(t, { timers: true });
+  s.app.conversations.create({ id: 'c1' });
+  s.app.conversations.append('c1', { role: 'tool', toolCallId: 'k1', name: 'calculate', content: '2' });
+  s.app.reviews.enqueue('manual', 'skill:manual:c1', { conversationId: 'c1', kind: 'skill' });
+  s.adapter().probeResult = { status: 'error', message: 'down' };
+  await s.app.status.probeAll(s.app.config());
+  const reviewConversations = () => (s.app.db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE kind = 'task'").get() as { n: number }).n;
+  s.app.worker.start();
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const wake = s.app.worker.status().nextWakeAt;
+  s.app.worker.stop();
+  assert.equal(s.skillJobs()[0]?.status, 'pending', 'the review still waits for a model');
+  assert.equal(reviewConversations(), 0, 'no empty review conversation per try');
+  assert.ok(wake !== null && wake - s.clock.now >= 60_000, `next try in ${wake === null ? 'none' : wake - s.clock.now} ms`);
 });
 
 test('S-1b: without bot memory no memory review is queued (idle, long chat, task end, Review now), and a left-over one is closed without the model', async t => {
