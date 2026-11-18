@@ -40,6 +40,8 @@ export function memoryWriter(ctx: ToolContext): MemoryWriter {
 }
 
 export const EVIDENCE_MIN_CHARS = 12;
+// 持ち主の発言 1 つ丸ごとを証拠にするときの下限（「はい」「ok」だけでどの記憶も直せないように）
+export const EVIDENCE_WHOLE_MIN_CHARS = 5;
 const QUOTES = /^["'“”‘’「」『』`\s]+|["'“”‘’「」『』`\s]+$/gu;
 const plain = (text: string): string => text.normalize('NFKC').replaceAll('⏎', ' ').replace(/\s+/gu, ' ').toLowerCase().trim();
 
@@ -47,7 +49,7 @@ const quoteOf = (evidence: string): string => plain(plain(evidence.replace(QUOTE
 
 // 振り返りの実行が記憶を直す・消すときの見張り（beat mem-fix）。振り返りの記録に触れていない記憶を、記録に無いという理由だけで書き換えさせない。
 // 通すのは: この振り返りの実行が作った・もう直した記憶、または evidence（記録からそのまま写した言葉。頭の [User] は外して照らす）が記録にあるとき。
-// 持ち主が確かめた記憶（最後の版が持ち主のもの・履歴が無い・外で直された）は、持ち主の発言（添付と beat の文を除く）にあるときだけ。持ち主の発言 1 つ丸ごとなら短くてもよい。記憶が読めなければ断る
+// 持ち主が確かめた記憶（最後の版が持ち主のもの・履歴が無い・外で直された）は、持ち主の発言（添付と beat の文を除く）にあるときだけ。持ち主の発言 1 つ丸ごとなら 5 文字から。記憶が読めなければ断る
 function reviewGuard(ctx: ToolContext, projectId: string, store: NonNullable<NonNullable<ToolContext['services']>['memoryFiles']>, name: string, evidence: string | undefined): void {
   if (ctx.kind !== 'review') return;
   const history = store.history(projectId, name);
@@ -58,8 +60,9 @@ function reviewGuard(ctx: ToolContext, projectId: string, store: NonNullable<Non
   const quote = quoteOf(evidence ?? '');
   if (!quote) throw new MemoryFileError(ownerHeld ? 'memfile.review_owner_words' : 'memfile.review_no_evidence', { name });
   const owner = (ctx.reviewEvidence?.owner ?? []).map(plain);
-  if (owner.includes(quote)) return;
-  if (Array.from(quote).length < EVIDENCE_MIN_CHARS) throw new MemoryFileError('memfile.review_short', { name, min: EVIDENCE_MIN_CHARS });
+  const length = Array.from(quote).length;
+  if (length >= EVIDENCE_WHOLE_MIN_CHARS && owner.includes(quote)) return;
+  if (length < EVIDENCE_MIN_CHARS) throw new MemoryFileError('memfile.review_short', { name, min: EVIDENCE_MIN_CHARS, whole: EVIDENCE_WHOLE_MIN_CHARS });
   if (owner.some(m => m.includes(quote))) return;
   if (ownerHeld) throw new MemoryFileError('memfile.review_owner_words', { name });
   if (ctx.reviewEvidence && plain(ctx.reviewEvidence.record).includes(quote)) return;

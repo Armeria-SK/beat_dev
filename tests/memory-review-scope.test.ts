@@ -11,6 +11,7 @@ import { productMemoryText, reviewEvidence, reviewPrompt } from '../src/memory/r
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
+import { engineText } from '../src/shared/messages/engine.ts';
 import { attachmentBlock, type Upload } from '../src/uploads/store.ts';
 import { FakeAdapter, reply, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
@@ -65,7 +66,7 @@ async function setup(t: { after: (fn: () => void) => void }) {
 
 const fromChatA = (tainted: boolean): MemoryWriter => ({ actor: 'beat', tainted, runId: 'run-a', conversationId: 'a' });
 const text = (key: Parameters<typeof storeText>[1], params: Record<string, string | number>) => storeText('en', key, params);
-const refusal = (tool: string, key: Parameters<typeof storeText>[1], name: string) => `[${tool}] ${text(key, { name, min: 12 })}`;
+const refusal = (tool: string, key: Parameters<typeof storeText>[1], name: string) => `[${tool}] ${text(key, { name, min: 12, whole: 5 })}`;
 const REFUSED = /^\[memory_(?:update|forget)\] Left "[a-z0-9-]+" as it is: /u;
 const upload = (content: string): Upload => ({ id: 'u1', name: 'spec.txt', mime: 'text/plain', kind: 'text', size: content.length, sha256: 'x', text: content, pages: null, created_at: 0 });
 
@@ -137,6 +138,43 @@ test('memory review scope: a short owner message quoted whole counts, and a lead
   assert.equal(results.filter(r => REFUSED.test(r)).length, 0, results.join('\n'));
   assert.equal(s.app.memoryFiles.list(s.project.id).some(n => n.name === deployNote), false, 'the note was deleted');
   assert.equal(s.file(scriptNote), '# Deploy script\n\nThe deploy script is scripts/ship.ps1.\n');
+});
+
+test('memory review scope: the placeholder of an attachment-only message, "(A file was attached)", is neither owner words nor record', async t => {
+  const s = await setup(t);
+  await s.chat('a', 'x');
+  const ownerNote = s.app.memoryFiles.save(s.project.id, { title: 'Build tool', content: 'The build uses make.' }, fromChatA(false)).name;
+  const beatNote = s.app.memoryFiles.save(s.project.id, { title: 'Lint', content: 'Use eslint.' }, fromChatA(false)).name;
+  s.ownerReview(ownerNote);
+  const placeholder = engineText('en', 'attachment.file');
+  assert.equal(placeholder, '(A file was attached)');
+  await s.chat('b', `${placeholder}\n\n${attachmentBlock(upload('The build uses cmake now'))}`);
+  const results = await s.review('b', [
+    toolCall('memory_update', { name: ownerNote, content: 'cmake.', why: 'x', evidence: placeholder }),
+    toolCall('memory_update', { name: beatNote, content: 'Use biome.', why: 'x', evidence: placeholder }),
+    reply('done'),
+  ]);
+  assert.deepEqual(results, [refusal('memory_update', 'memfile.review_owner_words', ownerNote), refusal('memory_update', 'memfile.review_not_found', beatNote)]);
+  assert.deepEqual(reviewEvidence({ transcript: `[User] ${placeholder}`, ownerMessages: [`${placeholder}\n\n${attachmentBlock(upload('y'))}`] }), { record: '', owner: [] });
+});
+
+test('memory review scope: a whole owner message shorter than 5 characters ("はい", "ok") is not evidence; 「デプロイのメモを消して」 still is', async t => {
+  const s = await setup(t);
+  await s.chat('a', 'x');
+  const { name } = s.app.memoryFiles.save(s.project.id, { title: 'Deploy memo', content: 'Deploy with deploy.sh.' }, fromChatA(false));
+  s.ownerReview(name);
+  await s.chat('b', 'はい');
+  await s.chat('b', 'ok');
+  await s.chat('b', 'デプロイのメモを消して');
+  const results = await s.review('b', [
+    toolCall('memory_forget', { name, reason: 'x', evidence: 'はい' }),
+    toolCall('memory_forget', { name, reason: 'x', evidence: 'ok' }),
+    toolCall('memory_forget', { name, reason: 'The owner asked to delete it', evidence: 'デプロイのメモを消して' }),
+    reply('done'),
+  ]);
+  assert.deepEqual(results.slice(0, 2), [refusal('memory_forget', 'memfile.review_short', name), refusal('memory_forget', 'memfile.review_short', name)]);
+  assert.doesNotMatch(results[2]!, REFUSED, results[2]);
+  assert.equal(s.app.memoryFiles.list(s.project.id).some(n => n.name === name), false);
 });
 
 test('memory review scope: a short quote that is not a whole owner message is refused as too short', async t => {

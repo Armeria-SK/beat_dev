@@ -59,7 +59,7 @@ import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions, requirementsText } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
-import { stripAttachments } from '../uploads/store.ts';
+import { ownWords, stripAttachments } from '../uploads/store.ts';
 
 export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
 export const TRUNCATION_RATIO = 0.6;
@@ -172,8 +172,6 @@ export interface ChatEngineDeps {
   retriesPerModel?: number;
 }
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${[engineText(DEFAULT_LANGUAGE, 'attachment.image'), engineText(DEFAULT_LANGUAGE, 'attachment.file')].map(escapeRegExp).join('|')})$`, 'u');
 
 // messageCode / messageParams は、モデルの確認（probe）の messageCode / messageParams と同じ（確認していない・設定に無いときは engine.problem.*）。画面が自分の言語で組み立てられるように添える。
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: MessageParams | undefined }
@@ -334,7 +332,7 @@ export class ChatEngine {
       const saved = this.#d.conversations.append(conversationId, userMessage(item));
       firstId ??= saved.id;
       // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
-      this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(content).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : content);
+      this.#d.conversations.autoTitle(conversationId, attachments.length ? ownWords(content) || attachments[0]!.name : content);
       this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     }
     this.#taintFromHistory(runId, conversationId);

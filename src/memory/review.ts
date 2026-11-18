@@ -7,7 +7,7 @@ import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
 import { prefix, type Memory } from './store.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import type { ProductMemory } from './files.ts';
-import { ATTACHMENT_OPEN, LEGACY_ATTACHMENT_FRAMES, stripAttachments } from '../uploads/store.ts';
+import { ATTACHMENT_OPEN, ATTACHMENT_PLACEHOLDER, LEGACY_ATTACHMENT_FRAMES, ownWords } from '../uploads/store.ts';
 import { storeText } from '../shared/messages/stores.ts';
 
 export type ReviewTrigger = 'task' | 'idle' | 'heavy_run' | 'book_full' | 'manual';
@@ -435,10 +435,10 @@ export function reviewEvidence(input: RecordInput & { ownerMessages?: readonly s
     const unindented = line.replace(/^ {2}/u, '');
     const body = unindented.replace(/^\[[^\]\n]*\] /u, '');
     const fixed = (s: string) => frame.includes(s.trim()) || s.startsWith(ATTACHMENT_OPEN) || LEGACY_ATTACHMENT_FRAMES.some(f => s.startsWith(f.open));
-    if (fixed(unindented) || fixed(body)) continue;
+    if (fixed(unindented) || fixed(body) || ATTACHMENT_PLACEHOLDER.test(body.trim())) continue;
     record.push(body.endsWith(text.truncated) ? body.slice(0, -text.truncated.length) : body);
   }
-  const owner = (input.ownerMessages ?? []).map(m => stripAttachments(m)).filter(Boolean);
+  const owner = (input.ownerMessages ?? []).map(ownWords).filter(Boolean);
   return { record: record.filter(Boolean).join('\n'), owner };
 }
 
