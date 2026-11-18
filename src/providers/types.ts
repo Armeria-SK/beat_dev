@@ -9,7 +9,7 @@ export interface ModelRequest {
   messages: ChatMessage[];
   tools: ToolSpec[];
   maxOutputTokens: number;
-  // 考える深さ（reasoning_effort）。無ければ何も送らない（モデルの既定）
+  // 考える深さ（OpenAI 互換は reasoning_effort、Anthropic は output_config.effort）。無ければ何も送らない（モデルの既定）
   effort?: string | undefined;
   signal: AbortSignal;
 }
@@ -46,7 +46,7 @@ export interface ProbeResult {
   messageParams?: MessageParams | undefined;
   hint?: string | undefined;
   capabilities?: string[] | undefined;
-  // サーバーが /v1/models で知らせた、選べる考える深さ（supported_reasoning_efforts）。知らせないサーバーでは無い
+  // 提供元が知らせた、選べる考える深さ（OpenAI 互換は /v1/models の supported_reasoning_efforts、Anthropic は Models API の capabilities.effort）。知らせない提供元では無い
   efforts?: string[] | undefined;
   checkedAt: number;
 }
