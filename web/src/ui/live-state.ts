@@ -204,7 +204,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
         effects: e.change === 'deleted' ? [...refresh('conversations', 'unread'), { kind: 'gone', conversationId: e.conversationId }] : refresh('conversations'),
       };
     case 'project.changed':
-      return { state: s, effects: refresh('projects', ...(e.change === 'archived' || e.change === 'restored' ? ['conversations'] as const : [])) };
+      return { state: s, effects: refresh('projects', ...(e.change === 'archived' || e.change === 'restored' ? ['conversations', 'pending'] as const : [])) };
     case 'plan.changed':
       return { state: planBump(s, e.projectId), effects: refresh('projects') };
     case 'acceptance.changed':

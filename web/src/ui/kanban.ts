@@ -12,8 +12,8 @@ export const isTemplate = (task: Pick<Task, 'cron' | 'parent_id'>): boolean => t
 
 export const awaitsCheck = (task: Pick<Task, 'status' | 'check_state'>): boolean => task.status === 'done' && task.check_state === 'awaiting';
 
-export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state'>): ColumnId | null {
-  if (isTemplate(task)) return null;
+export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state' | 'cancelled_from'>): ColumnId | null {
+  if (isTemplate(task) || (task.status === 'cancelled' && task.cancelled_from === 'inbox')) return null;
   switch (task.status) {
     case 'inbox': return 'proposed';
     case 'ready': return 'approved';
