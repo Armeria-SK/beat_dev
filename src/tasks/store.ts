@@ -116,6 +116,8 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'pending_actions', column: 'task_id' },
   { table: 'questions', column: 'task_id' },
   { table: 'questions', column: 'fix_task_id' },
+  { table: 'worktrees', column: 'task_id', cutWhen: "state IN ('gone', 'discarded', 'merged')" },
+  { table: 'worktrees', column: 'proposal_id', cutWhen: "state IN ('gone', 'discarded', 'merged')" },
 ] as const;
 export const OWNER_RUN_KV = 'task-owner-run:';
 const OWNER_PICKABLE = `(origin IN ('user', 'schedule') OR EXISTS (SELECT 1 FROM kv WHERE kv.key = '${OWNER_RUN_KV}' || tasks.id))`;
@@ -601,8 +603,9 @@ export class TaskStore {
         throw new TaskError('error.not_deletable');
       }
       for (const ref of TASK_SOFT_REFERENCES) {
-        if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ? LIMIT 1`).get(id)) throw new TaskError('error.still_referenced');
+        if (this.#db.prepare(`SELECT 1 FROM ${ref.table} WHERE ${ref.column} = ?${'cutWhen' in ref ? ` AND NOT (${ref.cutWhen})` : ''} LIMIT 1`).get(id)) throw new TaskError('error.still_referenced');
       }
+      for (const ref of TASK_SOFT_REFERENCES) if ('cutWhen' in ref) this.#db.prepare(`UPDATE ${ref.table} SET ${ref.column} = NULL WHERE ${ref.column} = ?`).run(id);
       queued = this.#db.prepare("SELECT id FROM tasks WHERE parent_id = ? AND status = 'ready'").all(id) as Array<{ id: string }>;
       for (const run of queued) {
         this.#writeFinish(run.id, 'cancelled', taskText(this.#language(), 'summary.cancelled_schedule_deleted'), 'user');
