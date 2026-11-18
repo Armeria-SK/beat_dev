@@ -254,6 +254,13 @@ test('B5: 外を読んだ実行の質問の答えを返したタスクには、�
   const res = await s.http(`/api/questions/${row!.id}/answer`, { choice: 1 });
   assert.equal(res.body.resumedTaskId, task.id);
   assert.equal(s.app.tasks.textTainted(task.id), true);
+  const typed = s.app.tasks.create({ title: 'T2', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
+  await questionAdd.execute({ ...ask, question: 'Which zone?' } as never, ctxFor(s, typed.id, { tainted: true }));
+  const [zone] = s.app.questions.list({ status: 'open' });
+  assert.equal((await s.http(`/api/questions/${zone!.id}/answer`, { choice: null, text: 'UTC' })).body.resumedTaskId, typed.id);
+  const note = s.app.tasks.events(typed.id).find(e => e.kind === 'context')?.content ?? '';
+  assert.match(note, /read text from elsewhere/u);
+  assert.doesNotMatch(note, /owner answer is used as the owner request/u, 'もとのタスクの owner_request は変えないので、そうは書かない');
 });
 
 test('答え: 仮の選択 → kept でタスクなし。別の選択肢 → changed と user のタスク 1 つ（2 回押しても 1 つ）。owner_request に質問の文と Why は入らない', async t => {
