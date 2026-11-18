@@ -1,4 +1,9 @@
 .ui-narrowbar, .ui-tabbar { display: none; }
+.bt-root:lang(ja) { word-break: auto-phrase; }
+.bt-root:lang(ja) textarea { word-break: normal; }
+:where(.bt-root) :where(code, kbd, samp, pre) { font-family: var(--font-mono); }
+.bt-empty__title, .bt-screen__title, .bt-card__title, .bt-mini__name { text-wrap-style: balance; }
+.bt-meta, .bt-empty__text, .bt-setting__desc, .bt-card__body { text-wrap-style: pretty; }
 .bt-app[data-panes="0"] { grid-template-columns: 248px minmax(0, 1fr); }
 .bt-sidebar, .bt-app__main, .bt-screen { overflow: clip; }
 

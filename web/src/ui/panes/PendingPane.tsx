@@ -12,6 +12,8 @@ import {
 import { reportOpError } from '../task-ops.ts';
 import '../styles/pending.css';
 
+const PREVIEW_CHARS = 8000;
+const literalMark = (row: PendingAction): boolean => [row.shown, row.parts?.body, row.parts?.cwd, row.parts?.extra, ...row.preview.map(f => f.text)].some(text => text?.includes('[BEAT-SECRET'));
 const TILE_ICON = { send: 'send', delete: 'bin', unsure: 'alert' } as const satisfies Record<KindTile, string>;
 
 type T = ReturnType<typeof useT>;
@@ -30,7 +32,8 @@ function outcomeText(t: T, outcome: Outcome): string {
 
 function fromText(t: T, row: PendingAction, withProduct: boolean, titles: ReadonlyMap<string, string | null>): string {
   const title = fromTitle(row, titles) ?? t('ui.session.untitled');
-  return withProduct && row.project_name ? t('ui.pending.fromProduct', row.project_name, title) : t('ui.pending.from', title);
+  const product = row.project_name && row.project_archived ? t('ui.pf.archived', row.project_name) : withProduct ? row.project_name : null;
+  return product ? t('ui.pending.fromProduct', product, title) : t('ui.pending.from', title);
 }
 
 function sizeText(t: T, bytes: number): string {
@@ -64,6 +67,8 @@ function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
         <div key={file.path} className="ui-pending__file">
           <span className="bt-meta">{t('ui.pending.preview')} · <code>{file.path}</code></span>
           <pre className="ui-pending__body"><code>{file.text}</code></pre>
+          {row.oldPreview && <p className="bt-meta ui-pending__old" role="note">{t('ui.pending.oldPreview')}</p>}
+          {file.truncated && <p className="bt-meta" role="note">{file.chars !== undefined && file.chars > PREVIEW_CHARS ? t('ui.pending.previewCut', PREVIEW_CHARS, file.chars) : t('ui.pending.previewCutAny')}</p>}
         </div>
       ))}
       {facts.length > 0 && (
@@ -117,8 +122,8 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
       <div className="ui-pending__detail">
         {view.inline && <code className="ui-pending__code ui-pending__command">{view.inline}</code>}
         <ActionBody row={row} view={view} />
-        {(why || row.masked > 0) && (
-          <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && t('ui.pending.masked', row.masked)].filter(Boolean).join(' · ')}</p>
+        {(why || row.masked > 0 || literalMark(row)) && (
+          <p className="bt-meta ui-pending__why">{[why && ('key' in why ? t(why.key) : why.text), row.masked > 0 && (row.held?.length ? t('ui.pending.heldKey', row.masked, row.held.join(', ')) : t('ui.pending.masked', row.masked)), row.masked === 0 && literalMark(row) && t('ui.pending.literalMark')].filter(Boolean).join(' · ')}</p>
         )}
         <div className="bt-pending__from bt-meta"><span>{fromText(t, row, withProduct, titles)}</span><span>{formatRelative(row.created_at, now)}</span></div>
       </div>

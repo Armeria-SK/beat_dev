@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -40,18 +40,23 @@ async function setup(t: Parameters<typeof startApp>[0]) {
   return { ...s, runs, park, events, settled, conversation };
 }
 
-test('GET /api/pending: input は応答のどこにも無く、shown は伏せた形', async t => {
+test('GET /api/pending: input は応答のどこにも無い。待っているあいだの shown は実行する文のまま（意図どおり: beat の鍵でなければ鍵の形も生）、決めたあとは伏せた形', async t => {
   const s = await setup(t);
   const row = await s.park();
   const res = await s.api('/api/pending?status=waiting');
   const text = await res.text();
   assert.equal(res.status, 200);
-  assert.ok(!text.includes(SECRET), '鍵が応答に出ない');
+  assert.ok(text.includes(SECRET), '承認の札は実行する文をそのまま出す');
   assert.ok(!text.includes('"input"'), 'input の鍵が応答に無い');
   const body = JSON.parse(text) as { items: Array<{ id: number; shown: string; masked: number }> };
   assert.deepEqual(body.items.map(i => i.id), [row.id]);
-  assert.equal(body.items[0]!.masked, 1);
-  assert.match(body.items[0]!.shown, /\[REDACTED\]/u);
+  assert.equal(body.items[0]!.masked, 0);
+  assert.equal((await s.json(`/api/pending/${row.id}/reject`, 'POST', {})).status, 200);
+  const decided = await s.api('/api/pending?status=decided');
+  const decidedText = await decided.text();
+  assert.ok(!decidedText.includes(SECRET), '決めた行は伏せた形');
+  assert.match(decidedText, /\[REDACTED\]/u);
+  await s.park();
   const one = await s.json(`/api/pending?conversation=${s.conversation.id}`, 'GET');
   assert.equal(one.body.items.length, 1);
   const bad = await s.json('/api/pending?status=everything', 'GET');
@@ -176,4 +181,26 @@ test('会話を消した行は parts も空', async t => {
   const text = await (await s.api('/api/pending?status=decided')).text();
   assert.ok(!text.includes('erase-parts-marker'));
   assert.deepEqual(s.app.pending.view(row.id)!.parts, { body: null, cwd: null, extra: null });
+});
+
+test('walk-1118 D7: GET /api/pending は、行の会話の題（conversation_title）と、製品をしまったか（project_archived）を返す。しまったあとも会話の題が出る', async t => {
+  const products = realpathSync.native(tempDir(t));
+  mkdirSync(join(products, 'shop'));
+  const s = await startApp(t, { tools: [...builtinTools(), slowTool([])], projectFolderExempt: [products] });
+  const shop = (await s.json('/api/projects', 'POST', { root: join(products, 'shop') })).body.project as { id: string };
+  const chat = s.app.conversations.create({ title: 'Please create hello.txt', projectId: shop.id });
+  const loose = s.app.conversations.create({});
+  const park = (conversationId: string, projectId: string | null) => s.app.pending.park({
+    tool: 'fake_slow', input: { text: 'curl https://example.com' }, cwd: s.paths.workspace, kind: 'send', reason: 'Sends data out', runId: 'run-1', runKind: 'chat', conversationId, projectId,
+  });
+  await park(chat.id, shop.id);
+  await park(loose.id, null);
+  const rows = async () => (await s.json('/api/pending?status=waiting', 'GET')).body.items as Array<{ conversation_id: string; conversation_title: string | null; project_archived: boolean }>;
+  const pick = (items: Awaited<ReturnType<typeof rows>>, id: string) => items.find(i => i.conversation_id === id)!;
+  let items = await rows();
+  assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', false]);
+  assert.deepEqual([pick(items, loose.id).conversation_title, pick(items, loose.id).project_archived], [null, false], '題の無い会話は null、製品の無い行は false');
+  assert.equal((await s.json(`/api/projects/${shop.id}`, 'PATCH', { archived: true })).status, 200);
+  items = await rows();
+  assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', true]);
 });

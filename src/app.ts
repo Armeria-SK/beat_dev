@@ -216,7 +216,7 @@ export class App {
     this.tools = new ToolRegistry();
     for (const tool of options.tools ?? builtinTools()) if (this.botMemory || !MEMORY_TOOL_NAMES.includes(tool.name)) this.tools.register(tool);
     this.approvals = new ApprovalBroker(this.db);
-    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); this.#pendingWake(change); } });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, held: () => this.registry.held(), onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); this.#pendingWake(change); } });
     const interrupted = this.pending.closeInterrupted();
     if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));

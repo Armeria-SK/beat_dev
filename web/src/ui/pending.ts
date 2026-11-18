@@ -111,8 +111,8 @@ export const fileFacts = (row: Pick<PendingAction, 'files'>): FileFact[] => row.
   return { path: f.path, kind: 'file', bytes: f.size ?? 0, at: f.mtime ?? null };
 });
 
-export const fromTitle = (row: Pick<PendingAction, 'task_title' | 'conversation_id'>, titles: ReadonlyMap<string, string | null>): string | null =>
-  row.task_title || titles.get(row.conversation_id) || null;
+export const fromTitle = (row: Pick<PendingAction, 'task_title' | 'conversation_id' | 'conversation_title'>, titles: ReadonlyMap<string, string | null>): string | null =>
+  row.task_title || titles.get(row.conversation_id) || row.conversation_title || null;
 
 export type Outcome =
   | { kind: 'running'; at: number }
