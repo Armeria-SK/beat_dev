@@ -24,7 +24,7 @@ let calls: Array<{ method: string; path: string; signal: AbortSignal | null }> =
 
 interface Sent { method: string; path: string; body: Json | null }
 
-function serveSettings(config: Json, extra: (path: string, method: string) => unknown = () => undefined): Sent[] {
+function serveSettings(config: Json, extra: (path: string, method: string) => unknown = () => undefined, models: Json[] = []): Sent[] {
   const sent: Sent[] = [];
   let current = structuredClone(config);
   const view = () => ({ config: current, apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' });
@@ -35,8 +35,8 @@ function serveSettings(config: Json, extra: (path: string, method: string) => un
     if (method !== 'GET') sent.push({ method, path: String(path), body });
     let out: unknown = await extra(String(path), method);
     if (out === undefined && String(path) === '/api/settings' && method === 'GET') out = view();
-    if (out === undefined && String(path) === '/api/settings' && method === 'PUT') { current = body!.config; out = { ...view(), models: [] }; }
-    if (out === undefined && String(path) === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    if (out === undefined && String(path) === '/api/settings' && method === 'PUT') { current = body!.config; out = { ...view(), models }; }
+    if (out === undefined && String(path) === '/api/models') out = { models, routing: { chat: [], background: [] } };
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   return sent;
@@ -359,28 +359,114 @@ test('Settings › Models（DOM）model-auto: 長さが分からない（unknown
 });
 
 test('Settings › Models（DOM）: the Scout row (beat 7-1) shows Off when routing.scout is empty; picking a model saves routing.scout, picking Off removes the key; backups written in the file stay', async () => {
-  const pick = async (container: HTMLElement, label: string) => {
-    await click(container.querySelector('button[aria-label="Scout"]'));
-    await settle();
-    await click([...container.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent === label));
-    await settle();
-    await settle();
-    const widen = container.querySelector('.ui-set__widen');
-    if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
-  };
+
   const { container, sent } = await openModels(withModels());
   assert.ok(container.querySelector('[data-row="roles:scout"]'));
   assert.equal(container.querySelector('button[aria-label="Scout"]')?.textContent?.trim(), en['ui.set.models.scoutOff']);
-  await pick(container, 'GEMMA');
+  await pickIn(container, 'Scout', 'GEMMA');
   assert.deepEqual(sent.at(-1)?.body?.config.routing.scout, ['gemma']);
   assert.equal(container.querySelector('button[aria-label="Scout"]')?.textContent?.trim(), 'GEMMA');
-  await pick(container, en['ui.set.models.scoutOff']);
+  await pickIn(container, 'Scout', en['ui.set.models.scoutOff']);
   assert.equal('scout' in (sent.at(-1)?.body?.config.routing ?? {}), false, 'Off removes routing.scout');
   await cleanup();
 
   const withBackup = withModels();
   withBackup.routing.scout = ['qwen', 'phi'];
   const second = await openModels(withBackup);
-  await pick(second.container, 'GEMMA');
+  await pickIn(second.container, 'Scout', 'GEMMA');
   assert.deepEqual(second.sent.at(-1)?.body?.config.routing.scout, ['gemma', 'phi']);
+});
+
+
+const modelViews = (efforts: Record<string, string[]>): Json[] => ['qwen', 'gemma', 'phi'].map(id => ({
+  id, label: id.toUpperCase(), provider: 'local', model: id, inChat: true, probe: null, limits: { context: null, maxOutput: null, required: null }, ...(efforts[id] ? { efforts: efforts[id] } : {}),
+}));
+
+async function pickIn(container: HTMLElement, label: string, item: string) {
+  await click(container.querySelector(`button[aria-label="${label}"]`));
+  await settle();
+  await click([...container.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent === item));
+  await settle();
+  await settle();
+  const widen = container.querySelector('.ui-set__widen');
+  if (widen) { await click(buttons(widen, 'Confirm')[0]); await settle(); await settle(); }
+}
+
+test('Settings › Models（DOM）: Scout の深さ（beat 7-3c-2）は Model default + Scout のモデルの efforts を出し、選ぶと scout.effort に保存し cloudRunsPerHour は残る。Model default で effort の鍵だけ消える', async () => {
+  const depth = en['ui.set.models.scoutEffort'];
+  const config = withModels();
+  config.routing.scout = ['gemma'];
+  config.scout = { cloudRunsPerHour: 3 };
+  const sent = serveSettings(config, () => undefined, modelViews({ gemma: ['low', 'medium', 'high', 'xhigh', 'max'] }));
+  const { container } = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  assert.ok(container.querySelector('[data-row="roles:scoutEffort"]'));
+  assert.equal(container.querySelector(`button[aria-label="${depth}"]`)?.textContent?.trim(), en['ui.set.models.scoutEffortDefault']);
+  await click(container.querySelector(`button[aria-label="${depth}"]`));
+  await settle();
+  assert.deepEqual([...container.querySelectorAll('[role="menuitemradio"]')].map(el => el.textContent), [en['ui.set.models.scoutEffortDefault'], 'low', 'medium', 'high', 'xhigh', 'max']);
+  await click([...container.querySelectorAll('[role="menuitemradio"]')].find(el => el.textContent === 'xhigh'));
+  await settle();
+  await settle();
+  assert.deepEqual(sent.at(-1)?.body?.config.scout, { cloudRunsPerHour: 3, effort: 'xhigh' });
+  assert.deepEqual(sent.at(-1)?.body?.config.routing.scout, ['gemma'], '深さの保存で Scout のモデルは変えない');
+  assert.equal(container.querySelector(`button[aria-label="${depth}"]`)?.textContent?.trim(), 'xhigh');
+  assert.equal(container.querySelector('[data-depth-missing]'), null);
+  await pickIn(container, depth, en['ui.set.models.scoutEffortDefault']);
+  assert.deepEqual(sent.at(-1)?.body?.config.scout, { cloudRunsPerHour: 3 }, 'Model default は effort の鍵だけを消す');
+  await cleanup();
+
+  const bare = withModels();
+  bare.routing.scout = ['gemma'];
+  bare.scout = { effort: 'high' };
+  const second = serveSettings(bare, () => undefined, modelViews({ gemma: ['low', 'high'] }));
+  const { container: c2 } = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  await pickIn(c2, depth, en['ui.set.models.scoutEffortDefault']);
+  assert.equal('scout' in (second.at(-1)?.body?.config ?? {}), false, 'scout が空になれば鍵ごと書かない');
+});
+
+test('Settings › Models（DOM）: Scout が Off なら深さの行は出ない。選べる値の無いモデルでは選びを出さず 1 行だけ。保存した値がいまのモデルに無ければ、その値のまま注意の 1 行', async () => {
+  const depth = en['ui.set.models.scoutEffort'];
+  serveSettings(withModels(), () => undefined, modelViews({ gemma: ['low', 'high'] }));
+  const off = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  assert.ok(off.container.querySelector('[data-row="roles:scout"]'));
+  assert.equal(off.container.querySelector('[data-row="roles:scoutEffort"]'), null, 'Off では出さない');
+  await cleanup();
+
+  const none = withModels();
+  none.routing.scout = ['phi'];
+  serveSettings(none, () => undefined, modelViews({ gemma: ['low', 'high'] }));
+  const plain = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  assert.ok(plain.container.querySelector('[data-row="roles:scoutEffort"]'));
+  assert.equal(plain.container.querySelector(`button[aria-label="${depth}"]`), null, '値の無いモデルでは選びを出さない');
+  assert.equal(plain.container.querySelector('[data-depth-none]')?.textContent, en['ui.set.models.scoutEffortNone']);
+  await cleanup();
+
+  const stale = withModels();
+  stale.routing.scout = ['gemma'];
+  stale.scout = { effort: 'xhigh' };
+  serveSettings(stale, () => undefined, modelViews({ gemma: ['low', 'medium', 'high'] }));
+  const mismatch = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  assert.equal(mismatch.container.querySelector(`button[aria-label="${depth}"]`)?.textContent?.trim(), 'xhigh', '保存した値を選んだまま');
+  assert.equal(mismatch.container.querySelector('[data-below="roles:scoutEffort"] [data-depth-missing]')?.textContent, en['ui.set.models.scoutEffortMissing']('xhigh'));
+  assert.equal(mismatch.container.querySelector('[data-depth-none]'), null);
+});
+
+test('Settings › Models（DOM）: 選べる値の無いモデルでも保存した値があれば、Model default とその値の選びと注意の 1 行を出し、Model default で effort だけ消せる', async () => {
+  const depth = en['ui.set.models.scoutEffort'];
+  const config = withModels();
+  config.routing.scout = ['phi'];
+  config.scout = { cloudRunsPerHour: 3, effort: 'xhigh' };
+  const sent = serveSettings(config, () => undefined, modelViews({ gemma: ['low', 'high'] }));
+  const { container } = await render(createElement(Settings, props({ section: 'models' })));
+  await settle();
+  assert.equal(container.querySelector(`button[aria-label="${depth}"]`)?.textContent?.trim(), 'xhigh', '保存した値を選んだまま');
+  assert.ok(container.querySelector('[data-below="roles:scoutEffort"] [data-depth-missing]'));
+  assert.equal(container.querySelector('[data-depth-none]'), null, '選びを出すときは「値が無い」の行を出さない');
+  await pickIn(container, depth, en['ui.set.models.scoutEffortDefault']);
+  assert.deepEqual(sent.at(-1)?.body?.config.scout, { cloudRunsPerHour: 3 });
 });

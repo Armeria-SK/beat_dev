@@ -15,7 +15,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKeyFor } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
-import { JUDGE_OFF, judgeBackups, judgeChoice, judgeIsOff, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, scoutBackups, scoutChoice, setConversation, setFallback, setJudge, setScout, type ModelReach } from './view.ts';
+import { JUDGE_OFF, judgeBackups, judgeChoice, judgeIsOff, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, scoutBackups, scoutChoice, scoutEffort, setConversation, setFallback, setJudge, setScout, setScoutEffort, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
 type T = ReturnType<typeof useT>;
@@ -359,6 +359,11 @@ export function ModelsPanel() {
   const backups = judgeBackups(ctx.config);
   const scoutTail = scoutBackups(ctx.config);
   const modelName = (id: string): string => modelOptions.find(o => o.value === id)?.label ?? id;
+  const scoutId = scoutChoice(ctx.config);
+  const depths = ctx.models.find(m => m.id === scoutId)?.efforts ?? [];
+  const depth = scoutEffort(ctx.config);
+  const depthMissing = depth !== '' && !depths.includes(depth);
+  const depthOptions: Option<string>[] = [{ value: '', label: t('ui.set.models.scoutEffortDefault') }, ...[...depths, ...(depthMissing ? [depth] : [])].map(d => ({ value: d, label: d }))];
   return (
     <>
       <Group title={t('ui.set.models.providers')}>
@@ -393,6 +398,14 @@ export function ModelsPanel() {
           below={scoutTail.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', scoutTail.map(modelName).join(', '))}</span>}>
           <Select value={scoutChoice(ctx.config)} options={[{ value: '', label: t('ui.set.models.scoutOff') }, ...modelOptions]} label={t('ui.set.models.scout')} onChange={id => void ctx.commit('roles:scout', c => setScout(c, id))} />
         </Row>
+        {scoutId !== '' && (
+          <Row k="roles:scoutEffort" title={t('ui.set.models.scoutEffort')} desc={t('ui.set.models.scoutEffortDesc')}
+            below={depthMissing && <span className="bt-meta" data-depth-missing>{t('ui.set.models.scoutEffortMissing', depth)}</span>}>
+            {depths.length === 0 && !depthMissing
+              ? <span className="bt-meta" data-depth-none>{t('ui.set.models.scoutEffortNone')}</span>
+              : <Select value={depth} options={depthOptions} label={t('ui.set.models.scoutEffort')} onChange={value => void ctx.commit('roles:scoutEffort', c => setScoutEffort(c, value))} />}
+          </Row>
+        )}
       </Group>
     </>
   );

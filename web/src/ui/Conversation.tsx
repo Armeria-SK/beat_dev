@@ -7,7 +7,7 @@ import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
 import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
-import { getLanguage, useT } from '../i18n/index.ts';
+import { getExplainLanguage, useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
 import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
@@ -57,16 +57,16 @@ const short = (text: string, max = 80): string => {
   return line.length > max ? `${line.slice(0, max)}…` : line;
 };
 
-function noticeText(t: T, n: RunNotice): string {
+export function noticeText(t: T, n: RunNotice): string {
   switch (n.kind) {
     case 'switch': return t('ui.notice.switched', n.to);
-    case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getLanguage());
+    case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getExplainLanguage());
     case 'compaction': return t('ui.notice.compacted', n.summarized);
     case 'denied': return n.detail ? `${t('ui.notice.denied', n.tool)} · ${n.detail}` : t('ui.notice.denied', n.tool);
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
     case 'stopped': return t('ui.notice.stopped');
     case 'interrupted': return t('ui.notice.interrupted');
-    case 'error': return serverText(n.errorCode, n.errorParams, getLanguage()) ?? n.errorMessage ?? n.errorKind;
+    case 'error': return serverText(n.errorCode, n.errorParams, getExplainLanguage()) ?? n.errorMessage ?? n.errorKind;
   }
 }
 

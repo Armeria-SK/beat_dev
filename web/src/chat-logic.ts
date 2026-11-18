@@ -1,6 +1,6 @@
 import type { PermissionMode } from '../../src/shared/permission-mode.ts';
 import { ApiError, type ModelChoice, type ModelView } from './api.ts';
-import { getLanguage, type Lang, type PlainKey } from './i18n/index.ts';
+import { getExplainLanguage, type Lang, type PlainKey } from './i18n/index.ts';
 import { probeMessage, serverText } from './server-text.ts';
 
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: Record<string, string | number> | undefined }
@@ -47,7 +47,7 @@ export function sendFailureOf(error: unknown, fallback: string, models: readonly
   const body = asRecord(error.body);
   return {
     noModels: body?.errorCode === 'engine.no_usable' && Array.isArray(body.problems) && body.problems.length === 0,
-    message: noUsableText(error.body, models, getLanguage()) ?? error.message,
+    message: noUsableText(error.body, models, getExplainLanguage()) ?? error.message,
     hint: text(asRecord(body?.detail)?.hint),
     context: (body?.errorKind ?? body?.error) === 'context_overflow',
     body: error.body,
