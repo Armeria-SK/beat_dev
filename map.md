@@ -68,7 +68,7 @@
 - 移し替え 37（beat G-1）: `questions.category`（質問の話題。既定 `other`。一覧〔`scope` / `ui` / `data` / `naming` / `tech` / `security` / `other`〕はまだ仮なので CHECK は付けず、名前の確かめは store と道具の形でする）と、会話からタスクを引く索引 `ix_tasks_conversation`（`conversation_id` が空でない行だけ）。前からある行は `other` になる。書くのは `src/questions/store.ts`。
 - 移し替え 38（beat S-1）: `memory_jobs.kind`（`memory` / `skill`。既定 `memory`）と `skill_drafts.outside`・`skill_registry.outside`（0 / 1。既定 0）を足す。
 - 移し替え 39（beat 7-1）: `tasks.proposal`（TEXT、NULL 可。考える役の提案の形の JSON。前からある行は NULL）。考える役の提案の見分けは `proposal IS NOT NULL`（`proposed_by` は NULL のまま。承認で `user` に替わる今の道に乗せるため）。
-- 移し替え 40（beat 7-4）: `origin = 'self'` で `status = 'ready'` のタスクを `inbox` にし、`updated_at` を今の時刻（ms）にする。考える実行の行（`proposed_by = 'scout-run'`。移すと提案のカードとして Kanban に出る）と、持ち主が「今すぐ実行」した行（kv `task-owner-run:<id>` がある）は移さない。ほかの状態・ほかの出どころのタスク、`task_events`、kv は変えない。
+- 移し替え 40（beat 7-4）: `origin = 'self'` で `status = 'ready'` のタスクを `inbox` にし、`updated_at` を今の時刻（ms）にする。考える実行の行（`proposed_by = 'scout-run'`。移すと提案のカードとして Kanban に出る）と、持ち主が「今すぐ実行」した行（kv `task-owner-run:<id>` がある）は移さない。5-1 より前に承認して `self` のまま実行待ちだった行も移る（持ち主がもう一度承認すると `user` になって動く。そのままでは動かないため）。ほかの状態・ほかの出どころのタスク、`task_events`、kv は変えない。
 - 入口: `src/db/database.ts`（`openDatabase`）
 - 使うもの: `node:sqlite` だけ（型として `engine/types.ts` を参照）
 

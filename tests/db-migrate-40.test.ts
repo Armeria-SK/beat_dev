@@ -15,7 +15,7 @@ const counts = (db: DatabaseSync): Record<string, number> => Object.fromEntries(
 const rowsOf = (db: DatabaseSync, sql: string): Array<Record<string, unknown>> => db.prepare(sql).all().map(r => ({ ...r }));
 
 const TASKS = 'SELECT id, status, origin, proposed_by, proposal, lease_until, updated_at FROM tasks ORDER BY id';
-const MOVED = ['s-ready', 's-ready-child'];
+const MOVED = ['s-approved-old', 's-ready', 's-ready-child'];
 
 function seedV39(path: string) {
   const db = openDatabase(path, MIGRATIONS.slice(0, AT));
@@ -26,6 +26,7 @@ function seedV39(path: string) {
     task.run('s-template', 'Every morning', 'scheduled', 'self', null, null);
     task.run('s-ready-child', 'Every morning (run)', 'ready', 'self', null, 's-template');
     task.run('s-pressed', 'Pressed by the owner', 'ready', 'self', null, null);
+    task.run('s-approved-old', 'Approved before 5-1 (origin stayed self)', 'ready', 'self', null, null);
     for (const status of ['inbox', 'running', 'waiting', 'done', 'failed', 'cancelled']) task.run(`s-${status}`, status, status, 'self', null, null);
     task.run('scout-ready', 'Scout: shop', 'ready', 'self', SCOUT_RUN, null);
     task.run('scout-running', 'Scout: shop', 'running', 'self', SCOUT_RUN, null);
@@ -36,6 +37,7 @@ function seedV39(path: string) {
     db.prepare("UPDATE tasks SET proposal = '{\"kind\":\"feature\"}' WHERE id = 's-inbox'").run();
     db.prepare("INSERT INTO kv (key, value, updated_at) VALUES (?, '1', 1)").run(`${OWNER_RUN_KV}s-pressed`);
     db.prepare("INSERT INTO task_events (task_id, kind, actor, content, created_at) VALUES ('s-ready', 'created', 'beat', NULL, 1)").run();
+    db.prepare("INSERT INTO task_events (task_id, kind, actor, content, created_at) VALUES ('s-approved-old', 'approved', 'user', NULL, 1)").run();
     return { counts: counts(db), tasks: rowsOf(db, TASKS), kv: rowsOf(db, 'SELECT * FROM kv ORDER BY key'), events: rowsOf(db, 'SELECT * FROM task_events ORDER BY id') };
   } finally { db.close(); }
 }
@@ -57,7 +59,7 @@ test('移し替え 40（7-4）: beat が自分で決めた実行待ち（self �
     assert.deepEqual(rowsOf(db, 'SELECT * FROM task_events ORDER BY id'), before.events);
     const after = rowsOf(db, TASKS);
     moved = after.filter(r => MOVED.includes(String(r.id)));
-    assert.deepEqual(moved.map(r => [r.id, r.status, r.origin, r.proposed_by]), [['s-ready', 'inbox', 'self', null], ['s-ready-child', 'inbox', 'self', null]]);
+    assert.deepEqual(moved.map(r => [r.id, r.status, r.origin, r.proposed_by]), [['s-approved-old', 'inbox', 'self', null], ['s-ready', 'inbox', 'self', null], ['s-ready-child', 'inbox', 'self', null]]);
     for (const r of moved) assert.ok(Number(r.updated_at) >= Math.floor(started / 1000) * 1000 && Number(r.updated_at) <= Date.now(), String(r.updated_at));
     assert.deepEqual(after.filter(r => !MOVED.includes(String(r.id))), before.tasks.filter(r => !MOVED.includes(String(r.id))), 'scout rows, the pressed row and every other row are unchanged');
   } finally { db.close(); }

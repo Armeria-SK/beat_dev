@@ -63,6 +63,8 @@ function seedV23(path: string): void {
   } finally { db.close(); }
 }
 
+const BEFORE_7_4 = MIGRATIONS.slice(0, 39);
+
 test('移し替え 24: 前からある、外を読んだ実行・会話の書いたタスクの経過に印 untrusted-input を付ける。会話を消しても判定役に文が届かない。きれいなタスクは読めるまま。開き直しても印は増えない', t => {
   const dir = tempDir(t);
   const path = join(dir, 'beat.db');
@@ -71,9 +73,9 @@ test('移し替え 24: 前からある、外を読んだ実行・会話の書い
   assert.ok(MIGRATIONS.length >= 24);
   assert.match(String(MIGRATIONS[23]), /untrusted-input/u);
 
-  const db = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const db = openDatabase(path, BEFORE_7_4, { backupDir: backups });
   try {
-    assert.equal(version(db), MIGRATIONS.length);
+    assert.equal(version(db), BEFORE_7_4.length);
     for (const id of ['t-note', 't-run', 't-gone', 'tpl']) assert.equal(count(db, id), 1, id);
     assert.equal(count(db, 't-erased'), 1, '会話を前に消した実行（会話の分からない実行）の書いた経過');
     assert.equal(count(db, 't-orphan'), 1, '予定を前に消した実行のタスク（予定の本文を写したまま証拠が無い）');
@@ -103,9 +105,9 @@ test('移し替え 24: 前からある、外を読んだ実行・会話の書い
   } finally { db.close(); }
 
   assert.match(readdirSync(backups).join(','), /-v23-.+\.db/u);
-  const again = openDatabase(path, MIGRATIONS, { backupDir: backups });
+  const again = openDatabase(path, BEFORE_7_4, { backupDir: backups });
   try {
-    assert.equal(version(again), MIGRATIONS.length);
+    assert.equal(version(again), BEFORE_7_4.length);
     assert.equal(readdirSync(backups).length, 1);
   } finally { again.close(); }
 });
