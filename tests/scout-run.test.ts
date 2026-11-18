@@ -405,6 +405,18 @@ test('scout: scout runs are not counted in worker.maxRunsPerHour, so an approved
   assert.equal(s.app.tasks.get(task.id)!.status, 'done');
 });
 
+test('scout: a review held back by the piled-review rule does not keep the scout from running (7-9: the commit wake waited about an hour)', async t => {
+  const s = await setup(t, { review: true, edit: c => { c.worker.maxRunsPerHour = 2; } });
+  const done = s.app.conversations.create({ kind: 'task', title: 'earlier task' });
+  s.app.runs.start('earlier-r', 'task', done.id);
+  s.app.runs.finish('earlier-r', { ok: true, attempts: 1 });
+  assert.ok(s.app.reviews.enqueue('heavy_run', 'held:1', { conversationId: done.id }), 'a held review waits');
+  s.adapter().scripts.push(reply('nothing'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.scoutRows().length, 1);
+  assert.equal(s.count('memory_jobs', "status = 'pending'"), 1, 'the held review still waits');
+});
+
 test('scout: owner task routes answer 409 for a scout run row (no way into #forced)', async t => {
   const s = await setup(t);
   const held = gate();

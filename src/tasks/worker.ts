@@ -410,7 +410,7 @@ export class Worker {
       const reviewing = own && c.memory.review;
       const kinds: ReviewKind[] = skillOn && idleEnough ? ['memory', 'skill'] : ['memory'];
       const job = !task && reviewing ? this.#d.reviews?.next({ skipPiled: holdPiled, kinds }) : undefined;
-      if (!task && !job && holdPiled && reviewing && this.#d.reviews?.next({ kinds })) { reschedule(Math.min(now + 10 * 60_000, tasks.nextWakeAt({ allowSelf }) ?? Infinity)); return 'budget'; }
+      const held = !task && !job && holdPiled && reviewing && this.#d.reviews?.next({ kinds }) !== undefined;
       if (job) {
         const outcome = await this.#review(job, release);
         reschedule(outcome === 'busy' ? now + 60_000 : now);
@@ -423,8 +423,8 @@ export class Worker {
           reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
-        reschedule(Math.min(tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity));
-        return 'idle';
+        reschedule(Math.min(held ? now + 10 * 60_000 : Infinity, tasks.nextWakeAt({ allowSelf }) ?? Infinity, scout.wakeAt ?? Infinity));
+        return held ? 'budget' : 'idle';
       }
       const outcome = await this.#run(task, release);
       reschedule(now);
