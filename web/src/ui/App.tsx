@@ -137,8 +137,8 @@ export function App() {
   const [projectsFailing, setProjectsFailing] = useState(false);
   const projectList = useMemo(() => projectLoads(() => api.projects(), projects => dispatch({ type: 'projects', projects }), undefined, undefined, setProjectsFailing), [dispatch]);
   const upsertProject = useCallback((project: Project) => {
-    projectList.supersede();
     dispatch({ type: 'project', project });
+    void projectList.load();
   }, [projectList, dispatch]);
   const load = useMemo(() => ({
     projects: () => { void projectList.load(); },

@@ -80,14 +80,14 @@ const project = (id: string, over: Partial<Project> = {}): Project => ({
 });
 
 
-test('ui/live-state: project.changed は製品の一覧を読み直す（しまう・戻すは会話の一覧も）', () => {
+test('ui/live-state: project.changed は製品の一覧を読み直す（しまう・戻すは会話の一覧と、Pending の待ちの一覧も。walk-1118 D7: 待ちの行の「しまった」の印を読み直さずに出す）', () => {
   for (const change of ['created', 'updated'] as const) {
     const r = reduce(EMPTY, ev({ type: 'project.changed', projectId: 'p1aaaa', change }));
     assert.deepEqual(refreshes(r.effects), ['projects'], change);
     assert.equal(r.state, EMPTY);
   }
   for (const change of ['archived', 'restored'] as const) {
-    assert.deepEqual(refreshes(reduce(EMPTY, ev({ type: 'project.changed', projectId: 'p1aaaa', change })).effects), ['conversations', 'projects'], change);
+    assert.deepEqual(refreshes(reduce(EMPTY, ev({ type: 'project.changed', projectId: 'p1aaaa', change })).effects), ['conversations', 'pending', 'projects'], change);
   }
 });
 

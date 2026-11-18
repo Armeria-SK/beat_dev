@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -176,4 +176,26 @@ test('会話を消した行は parts も空', async t => {
   const text = await (await s.api('/api/pending?status=decided')).text();
   assert.ok(!text.includes('erase-parts-marker'));
   assert.deepEqual(s.app.pending.view(row.id)!.parts, { body: null, cwd: null, extra: null });
+});
+
+test('walk-1118 D7: GET /api/pending は、行の会話の題（conversation_title）と、製品をしまったか（project_archived）を返す。しまったあとも会話の題が出る', async t => {
+  const products = realpathSync.native(tempDir(t));
+  mkdirSync(join(products, 'shop'));
+  const s = await startApp(t, { tools: [...builtinTools(), slowTool([])], projectFolderExempt: [products] });
+  const shop = (await s.json('/api/projects', 'POST', { root: join(products, 'shop') })).body.project as { id: string };
+  const chat = s.app.conversations.create({ title: 'Please create hello.txt', projectId: shop.id });
+  const loose = s.app.conversations.create({});
+  const park = (conversationId: string, projectId: string | null) => s.app.pending.park({
+    tool: 'fake_slow', input: { text: 'curl https://example.com' }, cwd: s.paths.workspace, kind: 'send', reason: 'Sends data out', runId: 'run-1', runKind: 'chat', conversationId, projectId,
+  });
+  await park(chat.id, shop.id);
+  await park(loose.id, null);
+  const rows = async () => (await s.json('/api/pending?status=waiting', 'GET')).body.items as Array<{ conversation_id: string; conversation_title: string | null; project_archived: boolean }>;
+  const pick = (items: Awaited<ReturnType<typeof rows>>, id: string) => items.find(i => i.conversation_id === id)!;
+  let items = await rows();
+  assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', false]);
+  assert.deepEqual([pick(items, loose.id).conversation_title, pick(items, loose.id).project_archived], [null, false], '題の無い会話は null、製品の無い行は false');
+  assert.equal((await s.json(`/api/projects/${shop.id}`, 'PATCH', { archived: true })).status, 200);
+  items = await rows();
+  assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', true]);
 });

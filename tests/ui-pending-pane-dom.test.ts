@@ -63,3 +63,12 @@ test('ui/PendingPane（DOM）: Decided の行を開くと、却下の理由の�
   assert.equal(second!.querySelector('details .ui-pending__why')?.textContent, 'Reason: wrong host');
   assert.equal(third!.querySelector('details'), null);
 });
+
+test('walk-1118 D7: しまった製品の行は、画面の会話一覧に無くてもサーバーの会話の題で「from …」を出し（Untitled にしない）、製品がしまってあることを出す', async () => {
+  const archived = row({ id: 11, conversation_id: 'gone1', conversation_title: 'Please create hello.txt', project_archived: true });
+  const live = row({ id: 12, conversation_id: 'c2', conversation_title: 'Fix the price rounding', project_archived: false });
+  const untitled = row({ id: 13, conversation_id: 'c3', conversation_title: null, project_archived: false });
+  const container = await showList([archived, live, untitled], []);
+  const from = [...container.querySelectorAll('.bt-pending__from > span:first-child')].map(s => s.textContent).sort();
+  assert.deepEqual(from, ['Shop site · archived · from “Please create hello.txt”', 'from “Fix the price rounding”', 'from “Untitled”'].sort());
+});
