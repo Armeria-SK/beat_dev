@@ -16,7 +16,7 @@ function sample(): Config {
     ],
     routing: { chat: ['big', 'sonnet'], background: ['big'] },
     tools: { deny: ['.env'], roots: [{ path: 'workspace', mode: 'write' }], hooks: { preToolUse: [], postToolUse: [] }, shell: { enabled: true, allow: [] } },
-    worker: { enabled: true, autonomy: false, maxRunsPerHour: 6 },
+    worker: { enabled: true, maxParallel: 1, maxRunsPerHour: 6 },
     memory: { userMaxChars: 1500, notesMaxChars: 2500 },
     profile: { name: 'beat', shape: 'orb', color: '#C9A227', motion: 'auto' },
   };
@@ -93,19 +93,19 @@ test('保存の合流: id を持つ一覧の並べ替えだけでも当たる。
   assert.deepEqual(diffConfig(saved, appended).map(e => e.type), ['addItem'], '末尾に足しただけなら並べ替えの編集は出ない');
 });
 
-test('保存の合流（自発行動の場面）: 右のパネルが先に変えた worker.autonomy を、設定の保存が巻き戻さない', () => {
+test('保存の合流: 別のタブが先に変えた worker.maxParallel を、設定の保存が巻き戻さない', () => {
   const saved = sample();
   const draft = structuredClone(saved);
   draft.memory.userMaxChars = 2000;
   const latest = structuredClone(saved);
-  latest.worker.autonomy = true;
+  latest.worker.maxParallel = 2;
   const result = merge(saved, draft, latest);
   assert.deepEqual(result.conflicts, []);
-  assert.equal(result.config.worker.autonomy, true, '先に変わっていた値は残る');
+  assert.equal(result.config.worker.maxParallel, 2, '先に変わっていた値は残る');
   assert.equal(result.config.memory.userMaxChars, 2000, '自分の編集は入る');
-  assert.deepEqual(latest.worker, { enabled: true, autonomy: true, maxRunsPerHour: 6 }, '最新の設定そのものは書き換えない');
+  assert.deepEqual(latest.worker, { enabled: true, maxParallel: 2, maxRunsPerHour: 6 }, '最新の設定そのものは書き換えない');
   assert.equal(JSON.stringify({ ...result.config, memory: undefined }), JSON.stringify({ ...latest, memory: undefined }), 'ほかは最新のまま');
-  assert.equal(JSON.stringify(draft).includes('"autonomy":true'), false, '編集中の設定は最新で上書きされない');
+  assert.equal(draft.worker.maxParallel, 1, '編集中の設定は最新で上書きされない');
 });
 
 test('保存の合流: 触った所を先に変えられていたら衝突で、場所を返す', () => {
@@ -123,7 +123,7 @@ test('保存の合流: 触った所を先に変えられていたら衝突で、
 test('保存の合流: 先に同じ値になっていれば衝突ではない', () => {
   const saved = sample();
   const draft = structuredClone(saved);
-  draft.worker.autonomy = true;
+  draft.worker.maxParallel = 2;
   draft.models.push({ id: 'tiny', provider: 'local', model: 't' });
   const latest = structuredClone(draft);
   const result = merge(saved, draft, latest);
@@ -229,12 +229,12 @@ test('保存の合流（JSON の欄）: 設定全体を書き換えても、触�
   draft.extra = { note: 'new key' };
   draft.worker = { ...draft.worker };
   const latest = structuredClone(saved);
-  latest.worker.autonomy = true;
+  latest.worker.maxParallel = 2;
   const result = merge(saved, draft, latest);
   assert.deepEqual(result.conflicts, []);
   assert.equal(result.config.timezone, 'Europe/London');
   assert.deepEqual(result.config.extra, { note: 'new key' });
-  assert.equal(result.config.worker.autonomy, true, 'JSON の欄で触っていない値は最新のまま');
+  assert.equal(result.config.worker.maxParallel, 2, 'JSON の欄で触っていない値は最新のまま');
 });
 
 test('合流は入力を書き換えない', () => {

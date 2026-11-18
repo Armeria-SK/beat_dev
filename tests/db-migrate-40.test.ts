@@ -45,7 +45,7 @@ function seedV39(path: string) {
 }
 
 test('移し替え 40（7-4）: beat が自分で決めた実行待ちと、止まって残った実行中（self の ready / running）だけを inbox に移し（running の lease_until は空に）、更新の時刻を今の ms にする。考える実行の行・持ち主が今すぐ実行した行・ほかの状態と出どころは変えず、控えが 1 つでき、2 回目は何もしない', t => {
-  assert.equal(MIGRATIONS.length, AT + 1, 'this is migration 40');
+  assert.ok(MIGRATIONS.length >= AT + 1, 'migration 40 exists');
   const dir = tempDir(t);
   const path = join(dir, 'beat.db');
   const backups = join(dir, 'backups');
