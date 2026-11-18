@@ -205,6 +205,20 @@ test('B4: 動かすファイルの見せる中身は、全体を伏せてから�
   s.pending.reject(latest(s).id);
 });
 
+test('B1: 長い file_write の入力も、記録と出来事には JSON のまま残す（path は切らない）', async t => {
+  const s = setup(t);
+  const content = 'line "quoted" \\ 日本語\n'.repeat(700);
+  assert.ok(content.length > 10_000);
+  await s.call('file_write', { path: 'notes/long.md', content });
+  const row = s.db.prepare("SELECT input FROM tool_calls WHERE tool = 'file_write'").get() as { input: string };
+  assert.ok(row.input.length <= 4000);
+  const stored = JSON.parse(row.input);
+  assert.equal(stored.path, 'notes/long.md');
+  assert.ok(stored.content.endsWith('…'));
+  const event = s.events.find(e => e.type === 'tool.call' && e.name === 'file_write');
+  assert.equal(event?.type === 'tool.call' ? JSON.parse(event.input).path : undefined, 'notes/long.md');
+});
+
 test('V7: 積んだあとでファイルの中身が書き換わったら、承認しても動かさない', async t => {
   const s = setup(t);
   const file = join(s.paths.workspace, 'put.js');

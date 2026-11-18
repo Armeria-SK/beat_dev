@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import { prefixLength } from '../engine/tokens.ts';
 import type { RunEvent, ToolCall, ToolGate } from '../engine/types.ts';
+import { previewJson } from '../shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
 import { stricterMode, type PermissionMode } from '../shared/permission-mode.ts';
@@ -228,7 +229,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const tool = deps.registry.get(call.name);
   const shownInput = truncated
     ? redactSecrets(truncated.raw).slice(0, 2000)
-    : JSON.stringify(redactJsonValue(call.arguments ?? call.raw ?? null)).slice(0, 4000);
+    : previewJson(redactJsonValue(call.arguments ?? call.raw ?? null), 4000);
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
