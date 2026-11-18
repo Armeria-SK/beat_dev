@@ -230,7 +230,7 @@ export interface TaskEvent { id: number; kind: string; actor: string; content: s
 export interface WorkerRun { kind: 'task' | 'review' | 'scout'; reviewKind?: 'memory' | 'skill'; taskId: string | null; runId: string; title: string }
 export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 export interface WorkerStatus {
-  enabled: boolean; paused: boolean; quiet: boolean;
+  enabled: boolean; paused: boolean;
   running: WorkerRun | null; runningAll: WorkerRun[]; maxParallel: number; nextWakeAt: number | null; runsLastHour: number; maxRunsPerHour: number;
   judgeOff?: boolean;
   waiting?: Record<string, WaitReason>;

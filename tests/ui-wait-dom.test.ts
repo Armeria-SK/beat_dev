@@ -119,7 +119,7 @@ test('ui/PlanPane（DOM）: the pill stays "Queued" and the reason is a meta lin
 });
 
 const worker = (waits: Record<string, WaitReason>): WorkerStatus => ({
-  enabled: false, paused: true, quiet: false, running: null, runningAll: [], maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 6, waiting: waits,
+  enabled: false, paused: true, running: null, runningAll: [], maxParallel: 1, nextWakeAt: null, runsLastHour: 0, maxRunsPerHour: 6, waiting: waits,
 });
 const project = { id: PRODUCT, name: 'Parser' } as Project;
 

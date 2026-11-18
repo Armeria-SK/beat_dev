@@ -35,8 +35,8 @@ function ownerShapedConfig() {
   return config;
 }
 
-test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls・worker.autonomy・worker.idleMinutes・worker.selfTasksNeedApproval', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes', 'worker.selfTasksNeedApproval']);
+test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls・worker.autonomy・worker.idleMinutes・worker.selfTasksNeedApproval・worker.quietStart・worker.quietEnd', () => {
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes', 'worker.selfTasksNeedApproval', 'worker.quietStart', 'worker.quietEnd']);
 });
 
 test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
@@ -79,6 +79,10 @@ const IGNORED_ROWS: Array<{ name: string; key: string; set: (raw: Record<string,
     key: 'worker.idleMinutes', set: raw => { raw.worker = { ...(raw.worker ?? {}), idleMinutes: 0 }; }, has: config => 'idleMinutes' in config.worker },
   { name: '7-4 worker.selfTasksNeedApproval: false の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
     key: 'worker.selfTasksNeedApproval', set: raw => { raw.worker = { ...(raw.worker ?? {}), selfTasksNeedApproval: false }; }, has: config => 'selfTasksNeedApproval' in config.worker },
+  { name: '7-4 worker.quietStart: "23:00" の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.quietStart', set: raw => { raw.worker = { ...(raw.worker ?? {}), quietStart: '23:00' }; }, has: config => 'quietStart' in config.worker },
+  { name: '7-4 worker.quietEnd: "07:00" の古い設定で起動でき、読んだ設定に残らず、起動のログの Ignored の 1 行に入る',
+    key: 'worker.quietEnd', set: raw => { raw.worker = { ...(raw.worker ?? {}), quietEnd: '07:00' }; }, has: config => 'quietEnd' in config.worker },
 ];
 
 for (const row of IGNORED_ROWS) {

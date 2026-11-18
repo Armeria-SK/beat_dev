@@ -59,8 +59,8 @@ async function taskMakes(s: Awaited<ReturnType<typeof setup>>, parentId: string,
   assert.equal(await s.app.worker.tick(), 'ran');
 }
 
-test('5-1: 承認した beat の提案は、静かな時間帯・持ち主が今触っている、のどちらでも選ばれて動く', async t => {
-  const s = await setup(t, c => { c.worker.quietStart = '00:00'; c.worker.quietEnd = '23:59'; });
+test('5-1: 承認した beat の提案は、持ち主が今触っていても選ばれて動く', async t => {
+  const s = await setup(t);
   for (const origin of ['self', 'curiosity'] as const) {
     const proposal = s.app.tasks.create({ title: `proposal-${origin}`, origin, propose: true, actor: 'beat' });
     assert.equal(proposal.status, 'inbox');
@@ -70,7 +70,6 @@ test('5-1: 承認した beat の提案は、静かな時間帯・持ち主が今
     assert.equal(approved.origin, 'user');
     assert.equal(approved.proposed_by, origin);
     assert.equal(approved.status, 'ready');
-    assert.ok(s.app.worker.quiet());
     s.adapter().scripts.push(toolCall('task_complete', { summary: 'done', notify: false }));
     assert.equal(await s.app.worker.tick(), 'ran', origin);
     assert.equal(s.app.tasks.get(proposal.id)!.status, 'done', origin);

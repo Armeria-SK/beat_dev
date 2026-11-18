@@ -8,7 +8,7 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { DEDUP_MS } from '../src/notify/notifications.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { inQuietHours, taskPrompt } from '../src/tasks/worker.ts';
+import { taskPrompt } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { fail, FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
@@ -176,15 +176,6 @@ test('一時停止中と、1 時間あたりの上限を超えたときは動か
   s.clock.now += HOUR + MIN;
   s.adapter().scripts.push(toolCall('task_complete', { summary: '3' }));
   assert.equal(await s.app.worker.tick(), 'ran');
-});
-
-test('静かな時間帯の判定（日付をまたぐ指定にも対応）', () => {
-  const at = (iso: string) => Date.parse(iso);
-  assert.equal(inQuietHours(at('2026-11-05T14:30:00Z'), 'Asia/Tokyo', '23:00', '07:00'), true); // 23:30
-  assert.equal(inQuietHours(at('2026-11-04T21:59:00Z'), 'Asia/Tokyo', '23:00', '07:00'), true); // 06:59
-  assert.equal(inQuietHours(at('2026-11-04T22:00:00Z'), 'Asia/Tokyo', '23:00', '07:00'), false); // 07:00
-  assert.equal(inQuietHours(at('2026-11-05T04:00:00Z'), 'Asia/Tokyo', '12:00', '14:00'), true); // 13:00
-  assert.equal(inQuietHours(at('2026-11-05T04:00:00Z'), 'Asia/Tokyo', '', ''), false);
 });
 
 // ── 実行の結果 ──

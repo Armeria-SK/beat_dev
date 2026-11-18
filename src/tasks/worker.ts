@@ -129,11 +129,6 @@ const TASK_TEXT: Record<Language, TaskText> = {
   },
 };
 
-export function inQuietHours(now: number, timezone: string, start: string, end: string): boolean {
-  if (!start || !end || start === end) return false;
-  const hm = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
-  return start < end ? hm >= start && hm < end : hm >= start || hm < end;
-}
 
 export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE, agreement?: string): string {
   const text = TASK_TEXT[language];
@@ -254,10 +249,6 @@ export class Worker {
 
   memoryReviewsOn(c: AppConfig = this.#d.config()): boolean { return c.memory.review && this.#d.botMemory === true; }
 
-  quiet(): boolean {
-    const c = this.#d.config();
-    return inQuietHours(this.#now(), c.timezone, c.worker.quietStart, c.worker.quietEnd);
-  }
 
   #ownerWork(task: Task): boolean {
     const chain: Task[] = [];
@@ -317,7 +308,7 @@ export class Worker {
       if (reason) waiting[task.id] = reason;
     }
     return {
-      enabled: c.worker.enabled, paused: this.paused, quiet: this.quiet(),
+      enabled: c.worker.enabled, paused: this.paused,
       running: [...this.#running.values()][0] ?? null, runningAll: [...this.#running.values()], maxParallel: c.worker.maxParallel, nextWakeAt: this.#nextWakeAt ?? null,
       runsLastHour: this.runsLastHour(), maxRunsPerHour: c.worker.maxRunsPerHour, waiting,
     };

@@ -16,7 +16,6 @@ const en = {
   'pattern.mcp_env_name': 'An environment variable name uses letters, digits and _, starts with a letter or _, and is up to 27 characters',
   'pattern.mcp_header_name': 'A header name uses letters, digits and -, starts with a letter, and is up to 27 characters',
   'pattern.browser_site': 'Write a site as a lowercase host name (for example example.com). A leading = means that host only (no subdomains). *, paths, ports and IP addresses are not allowed',
-  'pattern.time': 'Use the form HH:MM (24-hour, for example 22:30), or leave it empty',
   'pattern.other': 'This is not in the required form',
   'string.required': 'Enter a value',
   'string.min_length': 'Use at least {min} characters',

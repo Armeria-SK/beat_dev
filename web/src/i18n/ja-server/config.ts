@@ -13,7 +13,6 @@ export const configJa = {
   'pattern.mcp_env_name': "環境変数の名前は英字・数字・_ を使い、英字か _ で始め、27 文字までにしてください",
   'pattern.mcp_header_name': "ヘッダーの名前は英字・数字・- を使い、英字で始め、27 文字までにしてください",
   'pattern.browser_site': "サイトは英小文字のホスト名で書いてください（例 example.com）。先頭の = はそのホストだけ（サブドメインを含めない）の意味です。*・パス・ポート・IP アドレスは使えません",
-  'pattern.time': "HH:MM の形（24 時間、例 22:30）にするか、空にしてください",
   'pattern.other': "決まった形になっていません",
   'string.required': "値を入れてください",
   'string.min_length': "{min} 文字以上にしてください",
