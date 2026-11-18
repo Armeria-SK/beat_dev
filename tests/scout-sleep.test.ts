@@ -16,6 +16,7 @@ import { readSleep } from '../src/scout/sleep.ts';
 import { restScout, scoutState } from '../src/scout/run.ts';
 import type { Proposal } from '../src/tasks/proposal.ts';
 import type { Task } from '../src/tasks/store.ts';
+import { Worker } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { isScoutState } from '../web/src/ui/scout.ts';
 import { FakeAdapter, reply, type Script, tempDir, testConfig } from './helpers.ts';
@@ -666,4 +667,39 @@ test('treeMark: changes when a product file changes, not when beat\'s own data f
   assert.equal(await treeMark(root, data), before, 'beat\'s own writes do not move the mark');
   utimesSync(join(root, 'src', 'a.ts'), later, later);
   assert.notEqual(await treeMark(root, data), before, 'a product edit moves the mark');
+});
+
+test('scout sleep: a folder-only wake keeps the "not growing" counts only for a stuck sleep, so a finished product re-checks an edit instead of going stuck (re-review 2 MEDIUM)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  await s.app.worker.tick();
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+  // 終わる直前に 2 回進まなかった履歴（left 1・flat 2 が kv に残っている）
+  s.app.kv.setJson(`scout:product:${s.projectId}`, { ...scoutState(s.app.kv, s.projectId), left: 1, flat: 2 });
+  const file = join(s.root, 'src', 'a.ts');
+  writeFileSync(file, 'export const a = 2;\n');
+  const at = new Date(Math.max(Date.now(), s.clock.now) + 3_600_000);
+  utimesSync(file, at, at);
+  s.adapter().scripts.push(reply('Looked at src again.'));
+  s.later(6);
+  assert.equal(await s.app.worker.tick(), 'ran', 'the edit is re-checked');
+  assert.notEqual(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+});
+
+test('worker: a poke that arrives while a tick is running is not lost (re-review 2 LOW)', async t => {
+  const s = await setup(t);
+  let ticks = 0;
+  let worker!: Worker;
+  worker = new Worker({
+    db: s.app.db, tasks: s.app.tasks, engine: s.app.engine, conversations: s.app.conversations, notifications: s.app.notifications, kv: s.app.kv,
+    config: () => s.app.config(), log: () => undefined, now: () => s.clock.now,
+    // 1 回目は start() 自身の呼び出し、2 回目が最初の tick（その最中に突く）
+    pendingWake: () => { ticks += 1; if (ticks === 2) worker.poke(); },
+  });
+  t.after(() => worker.stop());
+  worker.start();
+  for (let i = 0; i < 50 && ticks < 3; i += 1) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(ticks, 3, 'the poke during the first tick gives a second tick right after it');
 });

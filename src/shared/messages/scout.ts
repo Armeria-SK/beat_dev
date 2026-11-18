@@ -8,7 +8,7 @@ const en = {
   'proposal.deepen_unknown': 'Not deepened: no single open proposal of this product has an id starting with {id}',
   'proposal.deepen_done': 'Not deepened: proposal {id} was already deepened at this commit. Pick another one, or stop',
   'proposal.deepened': 'Deepened proposal {id} "{title}". The owner sees the updated details on the Kanban',
-  'note.not_growing': 'The ledger is not growing: the number of areas left to check did not go down in {count} runs in a row, so the scout sleeps until the code, the plan or the Kanban changes',
+  'note.not_growing': 'The ledger is not growing: the number of areas left to check did not go down in {count} runs in a row, so the scout sleeps until a commit, a plan save or a Kanban change, or Think now',
   'note.broken': 'scout/ledger.md has {count} lines the scout cannot read. Fix or remove them by hand',
   'proposals.title': 'New proposals for {name}',
   'proposals.body': 'The scout put new proposals on the Kanban of {name}. Approve or reject them there',

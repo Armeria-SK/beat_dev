@@ -174,6 +174,8 @@ export class Worker {
   // 作業フォルダの印を最後に比べた時刻（製品ごと）。見回りの間隔より短くは比べない
   readonly #treeCheckedAt = new Map<string, number>();
   #ticking = false;
+  // tick の最中に来た poke（その tick の予定に上書きされて消えないように、終わったらもう一度回す）
+  #pokedWhileTicking = false;
   #stopped = true;
 
   constructor(deps: WorkerDeps) { this.#d = deps; }
@@ -221,6 +223,7 @@ export class Worker {
 
   poke(): void {
     if (this.#stopped || this.#d.autoSchedule === false) return;
+    if (this.#ticking) this.#pokedWhileTicking = true;
     this.#schedule(0);
   }
 
@@ -325,11 +328,13 @@ export class Worker {
     // 選ぶ部分は 1 本ずつ（#ticking）。実行を始めたら（await の前に）外して、枠が残っていれば次を選べるようにする
     if (this.#ticking || this.#running.size >= c.worker.maxParallel) return 'busy';
     this.#ticking = true;
+    this.#pokedWhileTicking = false;
     let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
       this.#ticking = false;
+      this.#pokedWhileTicking = false;
       if (this.#running.size < this.#d.config().worker.maxParallel) this.poke();
     };
     try {
@@ -424,7 +429,12 @@ export class Worker {
       const outcome = await this.#run(task, release);
       reschedule(now);
       return outcome;
-    } finally { if (!released) this.#ticking = false; }
+    } finally {
+      if (!released) {
+        this.#ticking = false;
+        if (this.#pokedWhileTicking) { this.#pokedWhileTicking = false; this.poke(); }
+      }
+    }
   }
 
   #detectReviewTriggers(c: AppConfig, now: number): void {
@@ -719,7 +729,7 @@ export class Worker {
       const tree = await treeMark(project.root, dataDir).catch(() => '');
       if (!moved && tree === sleep.tree) continue;
       woken.set(project.id, { ...quick, tree });
-      this.#wake(project.id, moved);
+      this.#wake(project.id, moved || sleep.reason !== 'stuck');
     }
     return woken;
   }
