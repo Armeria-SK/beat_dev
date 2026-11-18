@@ -478,6 +478,8 @@ test('backlog: 確かめが npm・pnpm・yarn で始まり、製品のフォル�
   const refused = await runProductCheck({ command: 'npm test', root }, { config, dataDir: s.dataDir, signal: new AbortController().signal });
   assert.equal(!refused.ok && refused.reason, 'spawn');
   assert.equal(!refused.ok && refused.reason !== 'aborted' ? refused.tail : '', NO_PACKAGE_JSON);
+  assert.doesNotMatch(NO_PACKAGE_JSON, /add (a )?package\.json/iu, 'the task AI is not invited to add a stub package.json');
+  assert.match(NO_PACKAGE_JSON, /needs the owner/u);
   assert.equal(existsSync(join(parent, 'climbed')), false, "the other project's test script did not run");
 
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'shop', private: true, scripts: { test: "node -e \"require('fs').writeFileSync('ran-here', '')\"" } }));
@@ -489,7 +491,7 @@ test('backlog: 確かめが npm・pnpm・yarn で始まり、製品のフォル�
   const bare = join(parent, 'bare');
   mkdirSync(bare);
   for (const command of ['npm test', '  NPM.cmd run check', 'pnpm test', 'yarn', 'npm run build && npm test']) assert.equal(climbsToParent(command, bare), true, command);
-  for (const command of ['node npm-check.js', 'cd web && npm test', 'npm --prefix web test', 'npm test --prefix=web', 'make test', 'npx vitest']) assert.equal(climbsToParent(command, bare), false, command);
+  for (const command of ['node npm-check.js', 'cd web && npm test', 'npm --prefix web test', 'npm test --prefix=web', 'npm -C web test', 'pnpm --dir web test', 'pnpm -C web test', 'yarn --cwd web test', 'yarn --cwd=web test', 'make test', 'npx vitest']) assert.equal(climbsToParent(command, bare), false, command);
 });
 
 test('5-3a: 確かめは shell_run と同じ git の切り離しで動き、長い出力でも本当の最後を返す。コマンドの中の秘密は伏せる', async t => {

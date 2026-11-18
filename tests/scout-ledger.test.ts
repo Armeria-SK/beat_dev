@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App, builtinTools } from '../src/app.ts';
@@ -240,24 +240,32 @@ test('backlog: 署名の設定（commit.gpgsign など）だけなら git で古
   assert.equal(await headOf(signed.root, s.paths.data), head);
   assert.deepEqual(lines, []);
 
-  for (const [name, key, value] of [['fsmon', 'core.fsmonitor', 'C:/x/evil.exe'], ['gpgprog', 'gpg.program', 'C:/x/evil.exe'], ['mixed', 'core.fsmonitor', 'C:/x/evil.exe'], ['dangling', 'branch.main.remote', '../evil']] as const) {
+  const refused: Array<[string, string | null, string, string]> = [
+    ['fsmon', null, '[core]\n\tfsmonitor = C:/x/evil.exe\n', 'core.fsmonitor'],
+    ['gpgprog', null, '[gpg]\n\tprogram = C:/x/evil.exe\n', 'gpg.program'],
+    ['mixed', 'commit.gpgsign', '[core]\n\tfsmonitor = C:/x/evil.exe\n', 'core.fsmonitor'],
+    ['dangling', 'commit.gpgsign', '[branch "main"]\n\tremote = ../evil\n', 'branch.<…>.remote'],
+    ['emptybranch', 'commit.gpgsign', '[branch ""]\n\tremote = ../evil\n', 'branch.<…>.remote'],
+    ['extremote', 'commit.gpgsign', '[remote "origin"]\n\turl = ext::sh -c evil\n', 'remote.<…>.url'],
+    ['urltok', 'commit.gpgsign', '[url "https://shorttok123@github.com/"]\n\tinsteadOf = https://github.com/\n', 'url.<…>.insteadof'],
+  ];
+  for (const [name, signing, raw] of refused) {
     const shop = s.project(name);
     initRepo(shop.root);
     write(shop.root, 'src/a/x.ts');
     commitAll(shop.root, 'one');
-    if (name === 'mixed' || name === 'dangling') setKey(shop.root, 'commit.gpgsign', 'true');
-    setKey(shop.root, key, value);
+    if (signing) setKey(shop.root, signing, 'true');
+    appendFileSync(join(shop.root, '.git', 'config'), raw);
     assert.equal((await s.view(shop.id, shop.root)).mode, 'mtime', name);
     assert.equal(await headOf(shop.root, s.paths.data), null, name);
   }
-  assert.equal(lines.length, 4, lines.join('\n'));
+  assert.equal(lines.length, refused.length, lines.join('\n'));
   assert.equal((await s.view(s.app.projects.list().find(p => p.name === 'fsmon')!.id, join(s.dir, 'fsmon'))).mode, 'mtime');
-  assert.equal(lines.length, 4, 'told once per folder and reason');
-  assert.match(lines[0]!, /^\[WARN\] beat does not run git in .*fsmon \(its git settings have core\.fsmonitor, which can run programs\); checks that need git use file times there or are skipped$/u);
-  assert.match(lines[1]!, /gpg\.program, which can run programs/u);
-  assert.match(lines[2]!, /mixed \(its git settings have core\.fsmonitor, which/u, 'the signing key is not named as the reason');
-  assert.match(lines[3]!, /dangling \(its git settings have branch\.main\.remote, which/u);
-  assert.doesNotMatch(lines.join('\n'), /evil/u, 'the value is not shown');
+  assert.equal(lines.length, refused.length, 'told once per folder and reason');
+  for (const [i, [name, , , label]] of refused.entries()) {
+    assert.equal(lines[i], `[WARN] beat does not run git in ${realpathSync.native(join(s.dir, name))} (its git settings have ${label}, which beat does not run git with); checks that need git use file times there or are skipped`);
+  }
+  assert.doesNotMatch(lines.join('\n'), /evil|shorttok123|github/u, 'no setting value or URL text reaches the log');
 });
 
 test('7-2 まだ見ていない場所（git）: .gitignore の中は出ず、追っていないが無視されないファイルは出る。見たエントリの場所は消える', { skip: !gitAvailable }, async t => {

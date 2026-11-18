@@ -350,7 +350,8 @@ function alternatesUnsafe(objectsDir: string, seen = new Set<string>(), budget =
   return false;
 }
 
-export function inspectRepo(start: string): RepoInfo {
+// ignore: 設定の判定（configOk・badKey）だけで数えない項目の名前。シェルの守りは渡さない（空）
+export function inspectRepo(start: string, ignore: ReadonlySet<string> = new Set()): RepoInfo {
   const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [], localRemotes: [] };
   const found = findGitDir(start);
   if (!found) return none;
@@ -370,7 +371,8 @@ export function inspectRepo(start: string): RepoInfo {
     } catch { return { ...none, found: true, unreadable: true }; }
   }
   const remotes = remoteNames(entries);
-  const bad = unusualKey(entries) ?? danglingRemote(entries, remotes);
+  const judged = ignore.size === 0 ? entries : entries.filter(entry => !ignore.has(entry.key));
+  const bad = unusualKey(judged) ?? danglingRemote(judged, judged === entries ? remotes : remoteNames(judged));
   let hooksFiles = false;
   try { hooksFiles = ownKind(join(commonDir, 'hooks')) === 'link' || readdirSync(join(commonDir, 'hooks')).some(name => !name.endsWith('.sample')); } catch { /* hooks フォルダが無い */ }
   return {
