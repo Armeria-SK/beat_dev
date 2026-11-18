@@ -23,6 +23,8 @@ export interface ShellRuleShape {
   send?: { program: string; origin: string };
   delete?: { words: string[]; paths: string[] };
   bind?: string;
+  // The parsed words of the statement (quotes joined), for the held-value check: not part of any rule base
+  words?: string[];
 }
 
 export interface RuleCandidate { kind: RuleKind; tool: string; base: string; keys: string[]; shown: string }
@@ -217,7 +219,7 @@ export function shellRuleShape(statements: readonly StatementFacts[], productRoo
   const removal = outbound?.kind === 'delete' && keys.length === 1 && keys[0] === 'delete.files' ? deleteBase(st) : undefined;
   if (!command && !send && !removal) return undefined;
   const bind = command && !command.full ? installBind(command.cmd, env) : undefined;
-  return { ...(command ? { cmd: command.cmd, ...(command.full ? { full: true as const } : {}) } : {}), ...(send ? { send } : {}), ...(removal ? { delete: removal } : {}), ...(bind ? { bind } : {}) };
+  return { ...(command ? { cmd: command.cmd, ...(command.full ? { full: true as const } : {}) } : {}), ...(send ? { send } : {}), ...(removal ? { delete: removal } : {}), ...(bind ? { bind } : {}), words: st.words.map(w => w.text) };
 }
 
 // The bind of a two-word install rule: the scripts object of each package.json the pre-check previewed (the install rewrites its dependencies), any other file whole.

@@ -323,7 +323,7 @@ function effectOf(snapshot: Snapshot | undefined): PendingEffect | null {
 }
 
 export interface PendingStoreOptions {
-  tools: { get(name: string): ToolDef | undefined };
+  tools: { get(name: string): ToolDef | undefined; list?(): ToolDef[] };
   dataDir: string;
   now?: (() => number) | undefined;
   onChange?: ((change: PendingChange) => void) | undefined;
@@ -336,12 +336,23 @@ export class PendingStore {
 
   constructor(db: DatabaseSync, options: PendingStoreOptions) { this.#db = db; this.#o = options; }
 
-  #held(tool: ToolDef): HeldValue[] { return [...(this.#o.held?.() ?? []), ...(tool.held?.() ?? [])]; }
+  // Every value beat holds: the providers' keys, every registered tool's (each MCP server's env and header keys) and the tool's own, once each. A key of one server in another tool's call is marked too
+  #allHeld(tool?: ToolDef): HeldValue[] {
+    const of = (t: ToolDef): readonly HeldValue[] => { try { return t.held?.() ?? []; } catch { return []; } };
+    const seen = new Map<string, HeldValue>();
+    for (const h of [...(this.#o.held?.() ?? []), ...(this.#o.tools.list?.() ?? []).flatMap(of), ...(tool ? of(tool) : [])]) if (!seen.has(h.value)) seen.set(h.value, h);
+    return [...seen.values()];
+  }
+
+  #held(tool: ToolDef): HeldValue[] { return this.#allHeld(tool); }
 
   // The values the card hides for this tool, for the rule lookup in the pipeline (same source as the card)
   heldFor(tool: ToolDef): HeldValue[] { return this.#held(tool); }
 
-  #heldOf(name: string): HeldValue[] { const tool = this.#o.tools.get(name); return tool ? this.#held(tool) : [...(this.#o.held?.() ?? [])]; }
+  #heldOf(name: string): HeldValue[] { return this.#allHeld(this.#o.tools.get(name)); }
+
+  // Settings lists a rule learned before its value became held with the value marked (the stored row keeps it)
+  markHeld(text: string): string { return heldMarker(this.#allHeld()).mark(text); }
 
   // rememberable, checked again against the values held now (a key added after the row was parked): the approve route and the row view use this
   rememberableNow(row: PendingRow, state: PendingState = parseJson<PendingState>(row.state, {})): boolean {
@@ -402,7 +413,7 @@ export class PendingStore {
       ...(cardPreview?.length ? { preview: cardPreview } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
-      ...(input.rule && input.projectId && !input.tainted && masked === 0 ? { rule: input.rule } : {}),
+      ...(input.rule && input.projectId && !input.tainted && masked === 0 && !carriesHeld([input.rule.base, input.rule.shown, ...(input.check?.ruleShape?.words ?? [])], heldNow) ? { rule: input.rule } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
       rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text), this.#held(tool).map(h => h.value)) })) } : {}) },
     };

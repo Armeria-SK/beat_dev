@@ -374,7 +374,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const ruleFor = (candidate: RuleCandidate | undefined): RuleHit | undefined => {
     if (!candidate || !ctx.project?.id) return undefined;
     // A call carrying a value beat holds (the same list the Pending card hides) never goes by a rule; without that list, no rule at all
-    try { return deps.pending && !carriesHeld([JSON.stringify(args) ?? '', candidate.base, candidate.shown], deps.pending.heldFor(tool)) ? matchRule(deps.db, ctx.project.id, candidate) : undefined; } catch { return undefined; }
+    try { return deps.pending && !carriesHeld([JSON.stringify(args) ?? '', candidate.base, candidate.shown, ...(first?.ruleShape?.words ?? [])], deps.pending.heldFor(tool)) ? matchRule(deps.db, ctx.project.id, candidate) : undefined; } catch { return undefined; }
   };
   const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound, offer = false): Promise<ToolCallOutcome> => {
     const sendOrDelete = parkOutbound?.kind === 'send' || parkOutbound?.kind === 'delete' ? parkOutbound : undefined;

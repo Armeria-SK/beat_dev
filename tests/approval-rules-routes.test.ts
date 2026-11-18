@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import { builtinTools } from '../src/app.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
-import type { RuleCandidate } from '../src/tools/approval-rules.ts';
+import { addRule, type RuleCandidate } from '../src/tools/approval-rules.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { startApp } from './app-setup.ts';
 
@@ -108,4 +108,16 @@ test('J-5 口（預かった秘密）: 積んだあとで道具の預かった�
   assert.equal((await s.rules()).length, 0);
   assert.equal(s.app.pending.row(row.id)!.status, 'waiting');
   assert.equal((await s.json(`/api/pending/${row.id}/approve`, 'POST', {})).status, 202);
+});
+
+test('J-5 一覧（預かった秘密）: 預かる前に覚えた決まりの見せる 1 行は、一覧では預かった値を印に替える（保存した行はそのまま）', async t => {
+  const s = await setup(t);
+  held.length = 0;
+  t.after(() => { held.length = 0; });
+  addRule(s.app.db, { projectId: s.project.id, candidate: { kind: 'policy', tool: 'fake_rule', base: '{"name":"fake_rule","v":1}', keys: ['policy.tool'], shown: `Run exactly: node build.js ${HELD}` }, fromPending: 1, now: 1 });
+  assert.ok((await s.rules())[0]!.shown.includes(HELD), 'control: not held yet');
+  held.push({ source: 'fake key', value: HELD });
+  const shown = (await s.rules())[0]!.shown;
+  assert.equal(shown, 'Run exactly: node build.js [BEAT-SECRET: fake key]');
+  assert.ok((s.app.db.prepare('SELECT shown FROM approval_rules').get() as { shown: string }).shown.includes(HELD), 'residual: the stored row keeps it');
 });

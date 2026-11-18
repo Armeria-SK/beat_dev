@@ -5,7 +5,7 @@ import { domainProblem, type Router, sendJson } from './http.ts';
 
 // J-5: the owner's "don't ask again" rules. Listing and removal only; rules are added from the Pending approve (routes-pending.ts) and never edited (a wider rule would need a new approval)
 export function registerRuleRoutes(router: Router, app: App): void {
-  router.add('GET', '/api/approval-rules', ({ res }) => sendJson(res, 200, { items: listRules(app.db) }));
+  router.add('GET', '/api/approval-rules', ({ res }) => sendJson(res, 200, { items: listRules(app.db).map(rule => ({ ...rule, shown: app.pending.markHeld(rule.shown) })) }));
   router.add('DELETE', '/api/approval-rules/:id', ({ res, params }) => {
     const raw = params[0];
     const id = Number(raw);
