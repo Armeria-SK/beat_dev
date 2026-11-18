@@ -42,7 +42,7 @@ export function memoryWriter(ctx: ToolContext): MemoryWriter {
 export const EVIDENCE_MIN_CHARS = 12;
 // 持ち主の発言 1 つ丸ごとを証拠にするときの下限（「はい」「ok」だけでどの記憶も直せないように）
 export const EVIDENCE_WHOLE_MIN_CHARS = 5;
-const QUOTES = /^["'“”‘’「」『』`\s]+|["'“”‘’「」『』`\s]+$/gu;
+const QUOTES = /^["'\u201C\u201D\u2018\u2019\u300C\u300D\u300E\u300F`\s]+|["'\u201C\u201D\u2018\u2019\u300C\u300D\u300E\u300F`\s]+$/gu;
 const plain = (text: string): string => text.normalize('NFKC').replaceAll('⏎', ' ').replace(/\s+/gu, ' ').toLowerCase().trim();
 
 const quoteOf = (evidence: string): string => plain(plain(evidence.replace(QUOTES, '')).replace(/^\[user\]\s*/u, '').replace(QUOTES, ''));
