@@ -329,6 +329,25 @@ test('8-4 前の Build の始まり: 6-0 の控えのコミットから差分を
   assert.equal((await s.changes(g.id, `?base=build&task=${uuid(99)}`)).status, 400, 'ほかの製品・無いタスクは選べない');
 });
 
+test('8-4 タスクを消す: 書き換えの記録があっても消せて、記録の行は残り（タスクとの結び付きだけ空になる）、差分と Undo はそのまま動く', async t => {
+  const s = await rig(t);
+  const p = await s.product('plain', { 'a.txt': 'v1\n' });
+  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' })]);
+  const task = s.app.tasks.create({ title: 'nightly', origin: 'user', actor: 'user', projectId: p.id, cron: '0 9 * * *', timezone: 'UTC' });
+  s.app.db.prepare('UPDATE file_changes SET task_id = ? WHERE project_id = ?').run(task.id, p.id);
+  assert.deepEqual((await s.changes(p.id, `?base=records&task=${task.id}`)).body.files.map((f: any) => f.path), ['a.txt']);
+  const deleted = await s.json(`/api/tasks/${task.id}`, 'DELETE');
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.equal(s.app.tasks.get(task.id), undefined);
+  assert.deepEqual(s.rows(p.id).map(r => [r.path, r.action, r.task_id]), [['a.txt', 'modify', null]]);
+  assert.equal((await s.changes(p.id, `?base=records&task=${task.id}`)).status, 400, '消したタスクでは絞れない');
+  const listed = await s.changes(p.id);
+  assert.deepEqual(listed.body.files.map((f: any) => [f.path, f.undo]), [['a.txt', true]]);
+  const undone = await s.undo(p.id, { paths: ['a.txt'] });
+  assert.deepEqual([undone.body.undone, undone.body.refused], [['a.txt'], []]);
+  assert.equal(read(p.root, 'a.txt'), 'v1\n');
+});
+
 test('8-4 書いた場所: place が NULL でない行（worktree の書き込み）は差分にも Undo にも出ない', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n' });

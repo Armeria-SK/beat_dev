@@ -12,6 +12,9 @@ const HOURLY_30 = { freq: 'hourly', values: { minute: '30' } };
 const worktreeRow = (db: S['app']['db'], id: string, column: string, taskId: string, state: string): void => {
   db.prepare(`INSERT INTO worktrees (id, project_id, repo, ${column === 'proposal_id' ? 'proposal_id' : 'task_id'}, kind, path, branch, base, state, created_at, updated_at) VALUES (?, 'p', 'C:/r', ?, 'task', NULL, 'beat/x-1a2b', 'abc', ?, 1, 1)`).run(id, taskId, state);
 };
+const fileChangeRow = (db: S['app']['db'], taskId: string): void => {
+  db.prepare("INSERT INTO file_changes (project_id, place, run_id, conversation_id, task_id, batch, path, action, before_hash, after_hash, size, kept, created_at) VALUES ('p', NULL, 'r1', 'c1', ?, NULL, 'a.txt', 'modify', NULL, NULL, 0, 0, 1)").run(taskId);
+};
 
 function snapshot(s: S) {
   return JSON.stringify({
@@ -323,9 +326,10 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
     pending_actions: id => { s.app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, task_id, status, created_at) VALUES ('shell_run', '{}', 'x', 'send', 'r', 'r1', 'task', 'c1', ?, 'waiting', 1)").run(id); },
     questions: (id, column) => { s.app.db.prepare(`INSERT INTO questions (question, ${column === 'fix_task_id' ? 'fix_task_id' : 'task_id'}, created_at) VALUES ('q', ?, 1)`).run(id); },
     worktrees: (id, column) => { worktreeRow(s.app.db, `w-${column}-${id}`, column, id, 'branch'); },
+    file_changes: id => { fileChangeRow(s.app.db, id); },
   };
   assert.deepEqual(Object.keys(insert).sort(), [...new Set(TASK_SOFT_REFERENCES.map(r => r.table))].sort());
-  for (const ref of TASK_SOFT_REFERENCES) {
+  for (const ref of TASK_SOFT_REFERENCES.filter(r => !('cutWhen' in r && r.cutWhen === 'TRUE'))) {
     for (const task of [s.userTask(`timed ${ref.table}.${ref.column}`, { runAt: s.clock.now + HOUR }), s.userTask(`template ${ref.table}.${ref.column}`, { cron: '0 9 * * *', timezone: 'UTC' })]) {
       insert[ref.table](task.id, ref.column);
       const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
@@ -340,6 +344,19 @@ test('DELETE: やわらかい参照の表のどれかに行があると 409', as
       assert.ok(s.app.tasks.get(task.id), task.title);
     }
   }
+});
+
+test('DELETE: 書き換えの記録（file_changes）は断らず、行を残してタスクとの結び付きだけ空にする', async t => {
+  const s = await taskApp(t);
+  for (const task of [s.userTask('timed', { runAt: s.clock.now + HOUR }), s.userTask('template', { cron: '0 9 * * *', timezone: 'UTC' })]) {
+    fileChangeRow(s.app.db, task.id);
+    fileChangeRow(s.app.db, task.id);
+    const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
+    assert.equal(res.status, 200, task.title);
+    assert.equal(s.app.tasks.get(task.id), undefined);
+    assert.equal(s.count('file_changes', 'task_id = ?', task.id), 0);
+  }
+  assert.equal(s.count('file_changes', 'task_id IS NULL'), 4, '記録の行は消さない');
 });
 
 test('DELETE: worktree の行は、終わっていなければ（creating・active・branch・removing）409、終わっていれば（gone・discarded・merged）参照を空にして消す', async t => {
