@@ -391,8 +391,9 @@ export class QuestionStore {
           tasks.reopen(row.task_id, 'user', questionText(DEFAULT_LANGUAGE, 'reopen_reason', { id, answer: answerText }));
           reopenedTaskId = row.task_id;
         }
-      } else if (kind === 'changed' && asker && !FINISHED.includes(asker.status) && (!row.acceptance_item || ownedItems(asker).includes(row.acceptance_item))) {
+      } else if (kind === 'changed' && asker && asker.status !== 'running' && !FINISHED.includes(asker.status) && (!row.acceptance_item || ownedItems(asker).includes(row.acceptance_item))) {
         tasks.event(asker.id, 'answer', 'user', taskText(DEFAULT_LANGUAGE, 'event.answer', { question: row.question, text: answerText }));
+        if (row.tainted === 1) tasks.markUntrusted(asker.id, 'question', questionText(DEFAULT_LANGUAGE, text === null ? 'untrusted_note' : 'untrusted_note_owner'));
         if (asker.status === 'ready') {
           tasks.setReady(asker.id, { actor: 'user' });
           resumedTaskId = asker.id;

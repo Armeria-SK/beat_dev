@@ -194,7 +194,7 @@ test('B5 (backlog 662): 動く前のタスクの、急ぎでない質問への�
   assert.deepEqual((await s.http('/api/questions/counts')).body.byTask, {});
 });
 
-test('B5: 終わったタスクの質問への違う答えは、今までどおり直しのタスク。動いているタスクには出来事だけ（断らない）。仮の選択のままなら何も変えない', async t => {
+test('B5: 終わったタスクの質問への違う答えは、今までどおり直しのタスク。動いているタスクの質問の答えも直しのタスク（断らない）。仮の選択のままなら何も変えない', async t => {
   const s = await setup(t);
   const done = s.app.tasks.create({ title: 'Done one', origin: 'user', actor: 'user' });
   await questionAdd.execute(ask as never, ctxFor(s, done.id));
@@ -212,10 +212,11 @@ test('B5: 終わったタスクの質問への違う答えは、今までどお�
   const count = s.app.tasks.list().length;
   const sent = await s.http(`/api/questions/${live!.id}/answer`, { choice: 1 });
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
-  assert.deepEqual([sent.body.fixTaskId, sent.body.resumedTaskId], [null, null]);
+  assert.ok(sent.body.fixTaskId, '動いている実行は始めに読んだ経過しか見ないので、答えは直しのタスクにする');
+  assert.equal(sent.body.resumedTaskId, null);
   assert.equal(s.app.tasks.get(running.id)!.status, 'running', '動いているタスクはそのまま');
-  assert.equal(s.app.tasks.events(running.id).filter(e => e.kind === 'answer').length, 1);
-  assert.equal(s.app.tasks.list().length, count);
+  assert.equal(s.app.tasks.events(running.id).filter(e => e.kind === 'answer').length, 0);
+  assert.equal(s.app.tasks.list().length, count + 1);
 
   const later = s.app.tasks.create({ title: 'Later one', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
   await questionAdd.execute({ ...ask, question: 'Which zone?' } as never, ctxFor(s, later.id));
@@ -224,6 +225,35 @@ test('B5: 終わったタスクの質問への違う答えは、今までどお�
   assert.deepEqual([kept.body.kind, kept.body.fixTaskId, kept.body.resumedTaskId], ['kept', null, null]);
   assert.equal(s.app.tasks.get(later.id)!.run_at, s.clock.now + 3_600_000, '仮の選択のままなら、時刻も変えない');
   assert.equal(s.app.tasks.events(later.id).filter(e => e.kind === 'answer').length, 0);
+});
+
+test('B5 の見落とし: 実行の途中に答え、その実行が task_complete で終わっても、違う答えは直しのタスクとして残る', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
+  let answered: { status: number; body: any } | undefined;
+  const answerMidRun = async function* (req: Parameters<Script>[0]) {
+    const [row] = s.app.questions.list({ status: 'open' });
+    answered = await s.http(`/api/questions/${row!.id}/answer`, { choice: 1 });
+    yield* toolCall('task_complete', { summary: 'done with 2026-11-14', notify: false })(req);
+  };
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun as Script);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+  assert.equal(answered?.status, 200, JSON.stringify(answered?.body));
+  assert.ok(answered!.body.fixTaskId, '答えを拾うタスクがある');
+  assert.equal(answered!.body.question.fix_task_id, answered!.body.fixTaskId);
+  assert.equal(s.app.tasks.get(answered!.body.fixTaskId)!.status, 'ready');
+});
+
+test('B5: 外を読んだ実行の質問の答えを返したタスクには、外の印を付ける（直しのタスクと同じ）', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user', runAt: s.clock.now + 3_600_000 });
+  await questionAdd.execute(ask as never, ctxFor(s, task.id, { tainted: true }));
+  const [row] = s.app.questions.list({ status: 'open' });
+  assert.equal(s.app.tasks.textTainted(task.id), false);
+  const res = await s.http(`/api/questions/${row!.id}/answer`, { choice: 1 });
+  assert.equal(res.body.resumedTaskId, task.id);
+  assert.equal(s.app.tasks.textTainted(task.id), true);
 });
 
 test('答え: 仮の選択 → kept でタスクなし。別の選択肢 → changed と user のタスク 1 つ（2 回押しても 1 つ）。owner_request に質問の文と Why は入らない', async t => {
