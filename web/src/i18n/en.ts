@@ -1847,4 +1847,5 @@ export const en = {
   'ui.files.openFailed': 'Could not open this file',
   'ui.files.hiddenNote': 'This file looks like a secret, so its contents are not shown here.',
   'ui.files.binaryNote': 'This file is not text, so its contents are not shown here.',
+  'ui.files.ignoreUnchecked': 'Ignore rules could not be checked, so file contents are not shown.',
 };

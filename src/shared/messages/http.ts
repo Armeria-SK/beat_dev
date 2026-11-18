@@ -103,6 +103,7 @@ const en = {
   'files_missing': 'The file or folder was not found',
   'files_not_dir': 'This is not a folder',
   'files_not_file': 'This is not a file',
+  'files_unchecked': 'The ignore rules (.gitignore) of this product could not be checked with git, so file contents are not shown',
 };
 
 export const httpText = defineMessages('http', en);

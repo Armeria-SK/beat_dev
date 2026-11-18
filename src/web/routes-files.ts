@@ -16,6 +16,7 @@ const REFUSAL: Record<FilesRefusal, () => HttpProblem> = {
   missing: () => problem(404, 'not_found', 'files_missing'),
   not_dir: () => problem(400, 'not_dir', 'files_not_dir'),
   not_file: () => problem(400, 'not_file', 'files_not_file'),
+  unchecked: () => problem(403, 'unchecked', 'files_unchecked'),
 };
 
 // beat 8-5a: Files の欄の口（読むだけ）。product は製品のフォルダ、knowledge は data/projects/<id>/（mesh）。
@@ -32,7 +33,8 @@ export function registerFilesRoutes(router: Router, app: App): void {
       if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
       return { root: realpathSync.native(project.root), deny, git: gitFolder(project.root) ? { dataDir: app.paths.data } : null };
     }
-    const dir = projectDir(app.paths.projects, project.id);
+    let dir: string;
+    try { dir = projectDir(app.paths.projects, project.id); } catch { throw REFUSAL.refused(); }
     const st = lstatSync(dir, { throwIfNoEntry: false });
     if (!st) throw REFUSAL.missing();
     if (st.isSymbolicLink() || !st.isDirectory()) throw REFUSAL.refused();

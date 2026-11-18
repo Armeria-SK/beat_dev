@@ -9,7 +9,7 @@ import '../styles/files.css';
 // 欄が 760px より狭いと木が全幅になり、ファイルは木の上に開いて戻るボタンが出る（files.css の container query）
 export interface FilesPaneProps { productId: string; revision: string }
 
-type Folder = { state: 'loading' } | { state: 'failed' } | { state: 'ok'; entries: FileEntry[]; truncated: boolean };
+type Folder = { state: 'loading' } | { state: 'failed' } | { state: 'ok'; entries: FileEntry[]; truncated: boolean; ignoreChecked: boolean };
 type Opened = { path: string; content: FileContent | null; failed: string | null };
 
 const TREES: readonly FileTree[] = ['product', 'knowledge'];
@@ -31,7 +31,7 @@ export function FilesPane({ productId, revision }: FilesPaneProps) {
     if (!quiet) setFolders(all => ({ ...all, [dir]: { state: 'loading' } }));
     try {
       const listing = await api.files(productId, tree, dir);
-      if (gen === generation.current) setFolders(all => ({ ...all, [dir]: { state: 'ok', entries: listing.entries, truncated: listing.truncated } }));
+      if (gen === generation.current) setFolders(all => ({ ...all, [dir]: { state: 'ok', entries: listing.entries, truncated: listing.truncated, ignoreChecked: listing.ignoreChecked } }));
     } catch {
       if (gen === generation.current) setFolders(all => ({ ...all, [dir]: { state: 'failed' } }));
     }
@@ -109,6 +109,7 @@ export function FilesPane({ productId, revision }: FilesPaneProps) {
   };
 
   const root = folders[''];
+  const unchecked = Object.values(folders).some(folder => folder.state === 'ok' && !folder.ignoreChecked);
   return (
     <div className={`ui-files${file ? ' is-open' : ''}`} data-tree={tree}>
       <div className="ui-files__grid">
@@ -116,6 +117,7 @@ export function FilesPane({ productId, revision }: FilesPaneProps) {
           <div className="bt-seg ui-files__trees" role="group" aria-label={t('ui.files.which')}>
             {TREES.map(name => <button key={name} type="button" className="bt-seg__opt" aria-pressed={tree === name} onClick={() => setTree(name)}>{t(name === 'product' ? 'ui.files.product' : 'ui.files.knowledge')}</button>)}
           </div>
+          {unchecked && <p className="bt-meta ui-files__note ui-files__unchecked" role="status">{t('ui.files.ignoreUnchecked')}</p>}
           {root?.state === 'failed'
             ? <Notice tone="warn" icon="alert" title={t('ui.files.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void loadFolder('') }} />
             : <ul className="bt-tree" role="tree" aria-label={t(tree === 'product' ? 'ui.files.product' : 'ui.files.knowledge')}>{rows('', 0)}</ul>}

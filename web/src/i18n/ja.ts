@@ -554,4 +554,5 @@ export const ja = {
   'ui.files.openFailed': 'このファイルを開けませんでした',
   'ui.files.hiddenNote': '秘密の情報らしいファイルなので、中身はここに出しません。',
   'ui.files.binaryNote': '文字のファイルではないので、中身はここに出しません。',
+  'ui.files.ignoreUnchecked': '無視するファイルの決まり（.gitignore）を確かめられなかったので、ファイルの中身は出しません。',
 } satisfies { [K in ExplainKey]?: Dict[K] };

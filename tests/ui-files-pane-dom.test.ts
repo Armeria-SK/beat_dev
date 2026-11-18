@@ -19,7 +19,7 @@ const file = (path: string, extra: Partial<FileEntry> = {}): FileEntry => ({ nam
 
 type Trees = Record<string, Record<string, FileEntry[]>>;
 
-function serve(trees: Trees, files: Record<string, FileContent | { status: number; body: unknown }>, calls: string[]) {
+function serve(trees: Trees, files: Record<string, FileContent | { status: number; body: unknown }>, calls: string[], ignoreChecked = true) {
   globalThis.fetch = (async (path: string | URL | Request) => {
     const url = new URL(String(path), 'http://x');
     calls.push(`${url.pathname}${url.search}`);
@@ -27,7 +27,7 @@ function serve(trees: Trees, files: Record<string, FileContent | { status: numbe
     const tree = url.searchParams.get('tree') ?? 'product';
     if (url.pathname === '/api/projects/p1/files') {
       const entries = trees[tree]?.[url.searchParams.get('dir') ?? ''];
-      return entries ? reply({ dir: url.searchParams.get('dir'), entries, truncated: false }) : reply({ error: 'not_found', message: 'The file or folder was not found' }, 404);
+      return entries ? reply({ dir: url.searchParams.get('dir'), entries, truncated: false, ignoreChecked }) : reply({ error: 'not_found', message: 'The file or folder was not found' }, 404);
     }
     if (url.pathname === '/api/projects/p1/file') {
       const found = files[`${tree}:${url.searchParams.get('path')}`];
@@ -50,9 +50,9 @@ const PRODUCT: Trees = {
   knowledge: { '': [file('STATE.md'), file('DECISIONS.md')] },
 };
 
-async function show(trees: Trees = PRODUCT, files: Parameters<typeof serve>[1] = {}, revision = '0') {
+async function show(trees: Trees = PRODUCT, files: Parameters<typeof serve>[1] = {}, revision = '0', ignoreChecked = true) {
   const calls: string[] = [];
-  serve(trees, files, calls);
+  serve(trees, files, calls, ignoreChecked);
   const rendered = await render(createElement(FilesPane, { productId: 'p1', revision }));
   await settle();
   return { ...rendered, calls };
@@ -177,4 +177,16 @@ test('ui/FilesPane（DOM）: revision が変わると開いているフォルダ
   await settle();
   assert.deepEqual([...calls].sort(), ['/api/projects/p1/file?tree=product&path=package.json', '/api/projects/p1/files?tree=product&dir=', '/api/projects/p1/files?tree=product&dir=src']);
   assert.deepEqual(rowNames(rendered.container), ['src', 'upload', 'main.ts', '.env', 'package.json'], '読み直しても開いたまま');
+});
+
+test('ui/FilesPane（DOM）: 無視の決まりを確かめられなかった一覧なら、中身を出さないことを 1 行で知らせる。確かめられていれば出さない', async () => {
+  const checked = await show();
+  assert.equal(checked.container.querySelector('.ui-files__unchecked'), null);
+  await cleanup();
+  const { container } = await show(PRODUCT, {}, '0', false);
+  const note = container.querySelector('.ui-files__unchecked');
+  assert.ok(note, '知らせが出る');
+  assert.equal(note.getAttribute('role'), 'status');
+  assert.ok(note.textContent!.includes('Ignore rules could not be checked, so file contents are not shown.'));
+  assert.deepEqual(rowNames(container), ['src', '.env', 'package.json'], '一覧は出したまま');
 });

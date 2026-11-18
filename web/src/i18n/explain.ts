@@ -553,6 +553,7 @@ export const EXPLAIN_KEYS = [
   'ui.files.openFailed',
   'ui.files.hiddenNote',
   'ui.files.binaryNote',
+  'ui.files.ignoreUnchecked',
 ] as const satisfies readonly DictKey[];
 
 export type ExplainKey = typeof EXPLAIN_KEYS[number];

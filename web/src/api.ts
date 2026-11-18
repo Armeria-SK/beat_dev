@@ -500,5 +500,5 @@ export const api = {
 // beat 8-5a: Files の欄（読むだけ）。product は製品のフォルダ、knowledge は beat が持つ製品の知識のフォルダ。mark は前のコミットからの変更（git の製品だけ）
 export type FileTree = 'product' | 'knowledge';
 export interface FileEntry { name: string; path: string; kind: 'dir' | 'file'; mark?: 'M' | 'A'; hidden?: true }
-export interface FolderListing { dir: string; entries: FileEntry[]; truncated: boolean }
+export interface FolderListing { dir: string; entries: FileEntry[]; truncated: boolean; ignoreChecked: boolean }
 export interface FileContent { path: string; size: number; modifiedAt: number; mark: 'M' | 'A' | null; hidden: boolean; binary: boolean; truncated: boolean; text: string | null }

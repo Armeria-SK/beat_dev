@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -233,4 +233,71 @@ test('8-5a: 製品のフォルダが無くなったら 409', async t => {
   await removeDir(s.shop);
   assert.equal((await s.list('')).status, 409);
   assert.equal((await s.read('a.txt')).status, 409);
+});
+
+test('8-5a: この欄だけで隠す秘密らしい名前（credentials.json・_netrc・.envrc・*.ppk・*.tfvars など）は中身を出さない', async t => {
+  const s = await setup(t);
+  const names = ['credentials.json', 'service-account.json', '_netrc', '.envrc', 'key.ppk', 'id_ed25519_sk', 'id_ecdsa_sk.pub', '.pgpass', '.yarnrc.yml', 'terraform.tfvars', 'terraform.tfstate', '.vault-token', '.s3cfg', '.boto'];
+  for (const name of names) writeFileSync(join(s.shop, name), SECRET);
+  mkdirSync(join(s.shop, '.config', 'gh'), { recursive: true });
+  writeFileSync(join(s.shop, '.config', 'gh', 'hosts.yml'), SECRET);
+  const root = (await s.list('')).body.entries as Array<{ name: string; hidden?: true }>;
+  for (const name of names) assert.equal(root.find(e => e.name === name)?.hidden, true, name);
+  for (const path of [...names, '.config/gh/hosts.yml']) {
+    const res = await s.read(path);
+    assert.equal(res.status, 200, path);
+    assert.equal(res.body.hidden, true, path);
+    assert.ok(!JSON.stringify(res.body).includes(SECRET), path);
+  }
+});
+
+test('8-5a: 1 つのフォルダは 1000 件まで返し、残りがあれば truncated', async t => {
+  const s = await setup(t);
+  mkdirSync(join(s.shop, 'many'));
+  for (let i = 0; i < 1001; i++) writeFileSync(join(s.shop, 'many', `f${String(i).padStart(4, '0')}.txt`), '');
+  const res = await s.list('many');
+  assert.equal(res.body.entries.length, 1000);
+  assert.equal(res.body.truncated, true);
+  assert.equal((await s.list('src')).body.truncated, false);
+});
+
+test('8-5a: 知識のフォルダ（data/projects/<id>）がリンクなら、外を指しても data/projects の中を指しても断る', async t => {
+  const s = await setup(t);
+  const mine = join(s.paths.projects, s.id);
+  await removeDir(mine);
+  const sibling = join(s.paths.projects, 'zz-sibling');
+  mkdirSync(sibling);
+  for (const dir of [s.outside, sibling]) writeFileSync(join(dir, 'STATE.md'), SECRET);
+  for (const target of [s.outside, sibling]) {
+    symlinkSync(target, mine, WINDOWS ? 'junction' : 'dir');
+    const listed = await s.list('', 'knowledge');
+    assert.equal(listed.status, 403, `${target} ${JSON.stringify(listed.body)}`);
+    const res = await s.read('STATE.md', 'knowledge');
+    assert.equal(res.status, 403, target);
+    assert.ok(!JSON.stringify(res.body).includes(SECRET), target);
+    unlinkSync(mine);
+  }
+});
+
+test('8-5a: git の製品で無視の決まりを確かめられないとき、一覧は ignoreChecked: false、ファイルの中身は読ませない。git でない製品は true', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  writeFileSync(join(s.shop, 'a.txt'), SECRET);
+  assert.equal((await s.list('')).body.ignoreChecked, true, 'git でない製品');
+  assert.equal((await s.read('a.txt')).body.text, SECRET);
+  git(s.shop, 'init', '-q', '-b', 'main');
+  git(s.shop, 'config', 'core.sshCommand', 'x');
+  const root = await s.list('');
+  assert.equal(root.status, 200);
+  assert.equal(root.body.ignoreChecked, false);
+  const res = await s.read('a.txt');
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error, 'unchecked');
+  assert.ok(!JSON.stringify(res.body).includes(SECRET));
+});
+
+test('8-5a: パスの中の壊れた %（%E0）は 404 で、サーバーは落ちない', async t => {
+  const s = await setup(t);
+  const bad = await s.api('/api/projects/%E0/files');
+  assert.equal(bad.status, 404);
+  assert.equal((await s.list('')).status, 200, 'そのあとも答える');
 });
