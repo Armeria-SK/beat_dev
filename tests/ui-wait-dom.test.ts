@@ -154,7 +154,7 @@ test('ui/Kanban（DOM）: an Approved card says why it is waiting ("another task
   assert.ok(card()!.textContent!.includes('another task of this product is running'), card()!.textContent!);
 });
 
-test('ui/Kanban（DOM）: while Work on its own is Off, a beat task says so and "next in queue" goes to the owner task that will run', async () => {
+test('ui/Kanban（DOM）: a beat task waiting for Run now says so (7-4) and "next in queue" goes to the owner task that will run', async () => {
   serve(path => {
     if (path === '/api/tasks') return { active: [task('ready', { id: 's1', title: 'Tidy the notes', origin: 'self', priority: 1 }), task('ready', { title: 'Build: Parser' })], finished: [] };
     if (path === '/api/tasks/finished?limit=20') return { tasks: [], next: null, total: 0 };
@@ -162,11 +162,11 @@ test('ui/Kanban（DOM）: while Work on its own is Off, a beat task says so and 
     return undefined;
   });
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
-  const props: KanbanProps = { conversations: [], drafts: [], checklists: new Map<string, never[]>(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map(), waits: { s1: { kind: 'off' } } };
+  const props: KanbanProps = { conversations: [], drafts: [], checklists: new Map<string, never[]>(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map(), waits: { s1: { kind: 'owner' } } };
   const { container } = await render(createElement(Kanban, props));
   await settle();
   const card = (title: string) => [...container.querySelectorAll('.bt-card')].find(c => c.textContent?.includes(title))!.textContent!;
-  assert.ok(card('Tidy the notes').includes('Work on its own is off'), card('Tidy the notes'));
+  assert.ok(card('Tidy the notes').includes('Decided by beat itself'), card('Tidy the notes'));
   assert.ok(!card('Tidy the notes').includes('next in queue'), card('Tidy the notes'));
   assert.ok(card('Build: Parser').includes('next in queue'), card('Build: Parser'));
 });

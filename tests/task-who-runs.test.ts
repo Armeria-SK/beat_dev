@@ -59,6 +59,19 @@ async function taskMakes(s: Awaited<ReturnType<typeof setup>>, parentId: string,
   assert.equal(await s.app.worker.tick(), 'ran');
 }
 
+test('7-4: 時刻つき（when）の提案を承認しても、まだ来ていない時刻は残り、その時刻まで動かない。過ぎた時刻なら消えてすぐ動ける', async t => {
+  const s = await setup(t);
+  const later = s.clock.now + 60 * 60_000;
+  const timed = s.app.tasks.create({ title: 'timed proposal', origin: 'self', propose: true, runAt: later, actor: 'beat' });
+  const past = s.app.tasks.create({ title: 'past proposal', origin: 'self', propose: true, runAt: s.clock.now - 60_000, actor: 'beat' });
+  assert.deepEqual([timed.status, timed.run_at], ['inbox', later]);
+  assert.deepEqual([s.app.tasks.approve(timed.id).run_at, s.app.tasks.approve(past.id).run_at], [later, null]);
+  assert.equal(s.app.tasks.pickNext({ accept: task => task.id === timed.id }), undefined, 'not before its time');
+  assert.equal(s.app.tasks.pickNext({ accept: task => task.id === past.id })?.id, past.id);
+  s.clock.now = later;
+  assert.equal(s.app.tasks.pickNext({ accept: task => task.id === timed.id })?.id, timed.id, 'at its time');
+});
+
 test('5-1: 承認した beat の提案は、持ち主が今触っていても選ばれて動く', async t => {
   const s = await setup(t);
   for (const origin of ['self', 'curiosity'] as const) {

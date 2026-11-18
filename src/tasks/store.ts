@@ -534,7 +534,7 @@ export class TaskStore {
       if (template && next === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
       this.#adopt(task);
       if (template) this.#db.prepare("UPDATE tasks SET status = 'scheduled', run_at = ?, lease_until = NULL, updated_at = ? WHERE id = ?").run(next, now, id);
-      else this.#db.prepare("UPDATE tasks SET status = 'ready', lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, run_at = NULL, updated_at = ? WHERE id = ?").run(now, id);
+      else this.#db.prepare("UPDATE tasks SET status = 'ready', lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, run_at = CASE WHEN run_at > ? THEN run_at END, updated_at = ? WHERE id = ?").run(now, now, id);
     });
     return this.#changed(id);
   }

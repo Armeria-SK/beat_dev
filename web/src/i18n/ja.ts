@@ -361,7 +361,7 @@ export const ja = {
   'ui.set.shell.allowDesc': 'このように始まるコマンド',
   'ui.set.shell.askDesc': 'モードが Normal のときも聞きます',
   'ui.set.shell.denyDesc': '聞かずに断ります',
-  'ui.set.bg.onDesc': '振り返り・Scout・自分で決めた繰り返し · あなたが始めたものはどちらでも動きます',
+  'ui.set.bg.onDesc': '振り返り・Scout・beat が組んだ繰り返し · あなたが始めたものはどちらでも動きます',
   'ui.set.bg.perHourDesc': '1〜120',
   'ui.set.bg.parallelDesc': '1〜4',
   'ui.set.folders.none': 'まだフォルダがありません',
