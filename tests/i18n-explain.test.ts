@@ -6,6 +6,7 @@ import { EXPLAIN_KEYS, NOT_EXPLAIN } from '../web/src/i18n/explain.ts';
 import { applyServerSettings, getExplainChoice, getExplainLanguage, resolveAuto, setExplainLanguage, t } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { subscribe } from '../web/src/i18n/state.ts';
+import type { PlainKey } from '../web/src/i18n/types.ts';
 
 // beat i18n I-1: 説明の文だけを日本語にする仕組み。名前（ナビ・ボタン・見出し・行の題）は英語のまま。
 
@@ -75,9 +76,10 @@ test('ja を選ぶと説明は日本語、名前は英語のまま。en に戻�
     assert.equal(t('ui.nav.settings'), 'Settings');
     assert.equal(t('ui.set.look.reduce'), 'Reduce motion');
     assert.equal(t('ui.set.models.scout'), 'Scout');
-    // 日本語の無い説明は英語に落ちる
-    assert.ok(!('ui.set.server.originsDesc' in jaTable));
-    assert.equal(t('ui.set.server.originsDesc'), en['ui.set.server.originsDesc']);
+    // 日本語の表に無い鍵は英語に落ちる
+    const untranslated = Object.keys(enTable).find(key => !(key in jaTable) && typeof enTable[key] === 'string') as PlainKey;
+    assert.ok(untranslated);
+    assert.equal(t(untranslated), enTable[untranslated]);
     setExplainLanguage('ja');
     assert.equal(calls, before + 1, '同じ値では描き直さない');
     setExplainLanguage('en');
