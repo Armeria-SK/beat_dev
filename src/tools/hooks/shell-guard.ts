@@ -561,8 +561,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
     const unknownCwd = relative && !track.known;
+    // Windows のドライブの根からのパス（\x）・ドライブだけのパス（X:foo）は、フォルダが分からなければドライブも分からない
+    const rootish = windows && !ref.word.dynamic && !ref.word.home && (/^[\\/](?![\\/])/u.test(input) || /^[A-Za-z]:(?![\\/])/u.test(input));
     const target = (t: DeleteTarget): void => { if (record && write && current) current.targets.push(t); };
-    if (unknownCwd) {
+    if (unknownCwd || (rootish && !track.known)) {
       target({ input, wild: false });
       if (record) paths.push({ input, placement: { kind: 'unresolved', reason: text('list.cwd_unknown', { input }) }, write });
       if (write) addCode(say('list.cwd_unknown', { input })); else add('ask', say('list.cwd_unknown', { input }), 'opaque');
@@ -574,9 +576,14 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
     // 分かっているフォルダはすべて、どれにいても同じ確かめをする（決められない cd のあとでも飛ばさない）
     // 相対パスはこれまでにいられたすべてのフォルダで、ドライブの根からのパス・別のドライブのパス（X:foo）はいま動きうるすべてのフォルダで調べる
+    // 同じ場所になるフォルダは 1 回だけ調べる（先に主でない形で調べた場所が、主として出てきたときだけもう一度）
+    const checked = new Map<string, boolean>();
     for (const base of relative ? track.all : track.now) {
       const primary = !unknownCwd && (!relative || track.now.includes(base));
       const expanded = resolveWord(ref.word, base, windows, language);
+      const place = 'unresolved' in expanded ? '' : expanded.path;
+      if (checked.has(place) && (checked.get(place) || !primary)) continue;
+      checked.set(place, primary || checked.get(place) === true);
       if (primary && !unknownCwd) target(ref.word.glob ? { input, wild: true } : 'unresolved' in expanded || ref.word.dynamic ? { input, wild: false } : { input, path: expanded.path, wild: false });
       if ('unresolved' in expanded) {
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });

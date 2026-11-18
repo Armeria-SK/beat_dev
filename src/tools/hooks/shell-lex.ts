@@ -510,7 +510,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (ch === ' ' || ch === '\t') { i++; continue; }
     if (ch === '\n') {
       i++;
-      if (!afterOp) { end(false); cond = false; lastGroup = null; }
+      if (!afterOp || !empty()) { end(false); cond = false; lastGroup = null; afterOp = false; }
       if (pending.length) { const f = readHeredocs(); if (f) return f; }
       continue;
     }

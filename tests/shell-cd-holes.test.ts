@@ -165,9 +165,39 @@ test('guard-cd: a drive-root path after a cd that may change drives is checked o
     const v = f.check(`${maybe}${write}`, shell);
     assert.ok(v.paths.some(p => p.write && p.placement.kind !== 'inside' && p.input === rel && v.decision !== 'allow'), `${shell}: ${v.decision} ${JSON.stringify(v.paths)}`);
     assert.ok(v.askKinds.includes('outside_write') || v.decision === 'deny', `${shell}: ${v.askKinds.join(',')}`);
+    // the delete and a wrapped command look at the other drive's path too (the decision alone cannot tell: the cd itself is outside)
+    const otherPath = join(other, relative(here, f.ws), 'evil.txt').toLowerCase();
+    const onOther = (paths: ReadonlyArray<{ path?: string }>) => paths.some(p => p.path?.toLowerCase() === otherPath);
     const del = shell === 'powershell' ? `${maybe}Remove-Item "${rel}"` : `if true; then cd ${otherSlash}; fi; rm "${rel}"`;
-    assert.notEqual(f.check(del, shell).decision, 'allow', `${shell}: ${del}`);
-    // a wrapped command is checked the same way
-    if (shell === 'bash-win') assert.notEqual(f.check(`${maybe}bash -c 'echo x > "${rel}"'`, shell).decision, 'allow', 'wrapped');
+    assert.ok(onOther(f.check(del, shell).paths), `${shell}: ${del}`);
+    if (shell === 'bash-win') assert.ok(onOther(f.check(`${maybe}bash -c 'echo x > "${rel}"'`, shell).paths), 'wrapped');
+    // a cd that cannot be worked out: a path from the drive root is folder-unknown too (the drive is not known)
+    const unknown = shell === 'powershell' ? `cd $x; Set-Content "${rel}" x` : `cd $x; echo x > "${rel}"`;
+    assert.ok(f.check(unknown, shell).reasonKeys.includes('list.cwd_unknown'), `${shell}: ${unknown}`);
+    assert.ok(!f.check(shell === 'powershell' ? `Set-Content "${rel}" x` : `echo x > "${rel}"`, shell).reasonKeys.includes('list.cwd_unknown'), `${shell}: known folder`);
+  }
+});
+
+test('guard-cd: an assignment or a redirect after an operator and a line end is its own statement', t => {
+  const f = fixture(t);
+  for (const shell of BASH) {
+    for (const command of ['true && LANG=C\nls', 'true && GIT_PAGER=cat\ngit log', 'ls |\nLANG=C\nls', 'true &&\nLANG=C\nls']) {
+      const v = f.check(command, shell);
+      assert.ok(v.reasonKeys.includes('list.env'), `${shell}: ${JSON.stringify(command)}: ${v.reasonKeys.join(',')}`);
+    }
+    const r = f.check('true &&\n> out.txt\nls', shell).statements.find(s => s.program === 'ls');
+    assert.equal(r?.redirected, false, shell);
+  }
+});
+
+test('guard-cd: a path checked from several folders is listed once per place', t => {
+  const f = fixture(t);
+  const abs = join(f.ws, 'zz.txt');
+  for (const shell of ['powershell', ...BASH] as const) {
+    const cmd = shell === 'powershell' ? `if (1) { cd sub }; if (1) { cd a }; Remove-Item "${abs}"` : `true && cd sub; true && cd a; rm "${abs}"`;
+    const v = f.check(cmd, shell);
+    assert.equal(v.paths.filter(p => p.input === abs).length, 1, `${shell}: ${JSON.stringify(v.paths)}`);
+    const rm = v.statements.find(s => s.program === (shell === 'powershell' ? 'remove-item' : 'rm'))!;
+    assert.equal(rm.targets.length, 1, `${shell}: ${JSON.stringify(rm.targets)}`);
   }
 });
