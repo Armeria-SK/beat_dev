@@ -24,6 +24,7 @@ const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git
 const MAX_READ_BYTES = 512 * 1024;
 const DEFAULT_READ_LINES = 2000;
 const PAGE_NOTE_ROOM = 400;
+const REDACT_WINDOW_LINES = 300;
 const MAX_DELTA_BYTES = 4 * 1024 * 1024;
 const MAX_WRITE_CHARS = 1_000_000;
 
@@ -90,12 +91,29 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
     if (stat.size > MAX_READ_BYTES && !input.limit) return { content: toolText(language, 'file.too_big', { size: stat.size.toLocaleString('en-US') }), isError: true };
     const text = readFileSync(abs, 'utf8');
     if (text.includes('\u0000')) return { content: toolText(language, 'file.binary'), isError: true };
-    const lines = redactSecrets(text, [], { keepLines: true }).split(/\r?\n/u);
+    const lines = text.split(/\r?\n/u);
     if (lines.length > 1 && text.endsWith('\n')) lines.pop();
     const start = (input.offset ?? 1) - 1;
-    return { content: readPage(lines, start, Math.min(lines.length, start + (input.limit ?? DEFAULT_READ_LINES)), language, ctx.outputTokens) };
+    const end = Math.min(lines.length, start + (input.limit ?? DEFAULT_READ_LINES));
+    redactAround(lines, start, end);
+    return { content: readPage(lines, start, end, language, ctx.outputTokens) };
   },
 };
+
+const KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
+
+function redactAround(lines: string[], start: number, end: number): void {
+  let from = Math.max(0, start - REDACT_WINDOW_LINES);
+  for (let i = from - 1; i >= 0; i--) {
+    const marker = KEY_MARKER.exec(lines[i]!);
+    if (!marker) continue;
+    if (marker[1] === 'BEGIN') from = i;
+    break;
+  }
+  const to = Math.min(lines.length, end + REDACT_WINDOW_LINES);
+  const redacted = redactSecrets(lines.slice(from, to).join('\n'), [], { keepLines: true }).split('\n');
+  for (let i = from; i < to; i++) lines[i] = redacted[i - from] ?? '';
+}
 
 function readPage(lines: readonly string[], start: number, end: number, language: Language, tokens: number | undefined): string {
   const budget = tokens ?? Infinity;
@@ -103,7 +121,7 @@ function readPage(lines: readonly string[], start: number, end: number, language
   const page = (to: number) => lines.slice(start, to).join('\n') + hint(to);
   const fits = (to: number) => {
     const redacted = redactSecrets(page(to));
-    return redacted.endsWith(hint(to)) && prefixLength(redacted, TOOL_OUTPUT_LIMIT, budget) >= redacted.length;
+    return prefixLength(redacted, TOOL_OUTPUT_LIMIT, budget) >= redacted.length;
   };
   if (start >= end || fits(end)) return page(end);
   const whole = lines.slice(start, end).join('\n');

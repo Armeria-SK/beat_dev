@@ -155,16 +155,16 @@ function assertNoTokenPiece(content: string): void {
 }
 
 // 空白も改行も無い 1 行の JSON。tok の値（TOKEN）が始まる位置を tokenAt バイト目にする
-function writeJsonLine(dir: string, tokenAt: number, suffixPad: number): void {
-  const pad = tokenAt - '{"pad":"'.length - '","tok":"'.length;
-  const line = `{"pad":"${'a'.repeat(pad)}","tok":"${TOKEN}","more":"${'b'.repeat(suffixPad)}"}`;
+function writeJsonLine(dir: string, tokenAt: number, suffixPad: number, lead = ''): void {
+  const pad = tokenAt - lead.length - '{"pad":"'.length - '","tok":"'.length;
+  const line = `${lead}{"pad":"${'a'.repeat(pad)}","tok":"${TOKEN}","more":"${'b'.repeat(suffixPad)}"}`;
   writeFileSync(join(dir, 'tok.js'), `process.stdout.write(${JSON.stringify(line)});`);
 }
 
 test('TE-3 審査: 尻の始まりが秘密の 8 バイトあとに来ても（改行の無い JSON）、秘密のかけらは出ない', async t => {
   const s = setup(t, 4096);
   const suffix = 4096 + 8 - TOKEN.length - '","more":"'.length - '"}'.length;
-  writeJsonLine(s.workspace, 20_000, suffix);
+  writeJsonLine(s.workspace, 20_000, suffix, `${'z'.repeat(18_000)}\n`);
   const outcome = await s.call({ command: 'node tok.js' });
   assert.equal(outcome.decision, 'allow', outcome.output.content.slice(0, 300));
   assert.match(outcome.output.content, /\[\.\.\. [\d,]+ bytes left out \.\.\.\]/u, '前提: 頭と尻に切れている');
@@ -180,4 +180,44 @@ test('TE-3 審査: 頭の終わりが秘密の 8 バイトあとに来ても、�
   assert.match(outcome.output.content, /\[\.\.\. [\d,]+ bytes left out \.\.\.\]/u, '前提: 頭と尻に切れている');
   assertNoTokenPiece(outcome.output.content);
   assert.ok(outcome.output.content.includes('{"pad":"aaaa'), '頭の残りは見える');
+});
+
+// 決まった並びの英数字（同じ 6 文字が繰り返さない）
+function valueOf(length: number): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let seed = 12345; let out = '';
+  for (let i = 0; i < length; i++) { seed = (seed * 1103515245 + 12345) % 2147483648; out += chars[seed % chars.length]; }
+  return out;
+}
+
+function assertNoValuePiece(content: string, value: string): void {
+  for (let i = 0; i + 6 <= value.length; i += 3) assert.equal(content.includes(value.slice(i, i + 6)), false, `値のかけら ${value.slice(i, i + 6)} が出た`);
+}
+
+// 改行のある行のあとに 1 行の JSON '{"cookie":"<値>","note":"VISIBLE-REST..."}'。尻（4096 バイト）は値の into バイト目から始まる
+function writeCookieLine(dir: string, valueLength: number, into: number): string {
+  const value = valueOf(valueLength);
+  const lead = `${'z'.repeat(30_000)}\n{"cookie":"`;
+  const after = 4096 - (valueLength - into) - '","note":"'.length - '"}'.length;
+  const line = `${lead}${value}","note":"VISIBLE-REST${'r'.repeat(after - 'VISIBLE-REST'.length)}"}`;
+  writeFileSync(join(dir, 'cookie.js'), `process.stdout.write(${JSON.stringify(line)});`);
+  return value;
+}
+
+test('TE-3 再審査: 5,000 字の cookie の値の 3,000 バイト目から尻が始まっても、値は出ず、同じ行の値のあとは見える', async t => {
+  const s = setup(t, 4096);
+  const value = writeCookieLine(s.workspace, 5_000, 3_000);
+  const outcome = await s.call({ command: 'node cookie.js' });
+  assert.equal(outcome.decision, 'allow', outcome.output.content.slice(0, 300));
+  assert.match(outcome.output.content, /\[\.\.\. [\d,]+ bytes left out \.\.\.\]/u, '前提: 頭と尻に切れている');
+  assertNoValuePiece(outcome.output.content, value);
+  assert.ok(outcome.output.content.includes('VISIBLE-REST'), '行の頭が文脈（8KB）の中にあれば、値のあとは見える');
+});
+
+test('TE-3 再審査: 値が文脈（8KB）より長く、行の頭が文脈の外なら、尻の切れた最初の行を出さない', async t => {
+  const s = setup(t, 4096);
+  const value = writeCookieLine(s.workspace, 20_000, 17_000);
+  const outcome = await s.call({ command: 'node cookie.js' });
+  assert.match(outcome.output.content, /\[\.\.\. [\d,]+ bytes left out \.\.\.\]/u);
+  assertNoValuePiece(outcome.output.content, value);
 });

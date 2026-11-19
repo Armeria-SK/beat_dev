@@ -168,3 +168,16 @@ test('TE-3 審査: 改行で終わる 2,000 行のファイルは、末尾の空
   const out = await s.read({ path: 'ends.txt' });
   assert.equal(out, lines.join('\n'), '案内（of 2001）が付かない');
 });
+
+test('TE-3 再審査: 伏せ字の窓（頁の前後 300 行）の両端を秘密鍵がまたいでも（BEGIN も END も窓の外）、鍵の中身は出ない', async t => {
+  const s = setup(t);
+  const body = Array.from({ length: 800 }, (_, i) => `KEYBODY${String(i).padStart(3, '0')}${'Q'.repeat(54)}`);
+  const lines = [...Array.from({ length: 9 }, (_, i) => `head ${i}`), '-----BEGIN PRIVATE KEY-----', ...body, '-----END PRIVATE KEY-----', ...Array.from({ length: 1000 }, (_, i) => `tail ${i}`)];
+  s.write('long-key.txt', lines);
+  for (const [offset, limit] of [[350, 20], [805, 30], [20, 5]] as const) {
+    const out = await s.read({ path: 'long-key.txt', offset, limit });
+    assert.doesNotMatch(out, /KEYBODY\d{3}/u, `offset=${offset} limit=${limit}`);
+    assert.ok(out.endsWith(`Read on with offset=${offset + limit}]`), out.slice(-80));
+  }
+  assert.equal((await s.read({ path: 'long-key.txt', offset: 812, limit: 1 })).split('\n')[0], 'tail 0', '行の番号はずれない');
+});

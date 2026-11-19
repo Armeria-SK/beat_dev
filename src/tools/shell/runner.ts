@@ -151,7 +151,7 @@ export interface RunResult {
 
 export interface StreamRest { text: string; skipped: number; before: string; afterHead: string }
 
-export const EDGE_CONTEXT_BYTES = 2048;
+export const EDGE_CONTEXT_BYTES = 8192;
 
 const charStart = (buffer: Buffer, from: number, limit: number): number => {
   let at = from;

@@ -67,7 +67,8 @@ function headAndTail(head: string, rest: StreamRest | undefined, language: Langu
   const ownHead = redactSecrets(head);
   const shownHead = ownHead.slice(0, commonEdge(ownHead, redactSecrets(head + rest.afterHead), false));
   const ownTail = redactSecrets(rest.text);
-  const shownTail = ownTail.slice(ownTail.length - commonEdge(ownTail, redactSecrets(rest.before + rest.text), true));
+  const matched = ownTail.slice(ownTail.length - commonEdge(ownTail, redactSecrets(rest.before + rest.text), true));
+  const shownTail = rest.before.includes('\n') ? matched : matched.slice(matched.indexOf('\n') + 1 || matched.length);
   const skipped = rest.skipped + Buffer.byteLength(ownTail, 'utf8') - Buffer.byteLength(shownTail, 'utf8');
   return `${shownHead.trimEnd()}\n${toolText(language, 'shell.omitted', { bytes: skipped.toLocaleString('en-US') })}\n${shownTail}`;
 }
