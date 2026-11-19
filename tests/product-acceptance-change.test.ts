@@ -161,6 +161,8 @@ test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,67
     await s.send(uuid(1), { text: 'x', projectId: demo.id, permissionMode: 'plan' });
     assert.ok(s.adapter().calls.at(-1)!.tools.some(tool => tool.name === (locked ? 'acceptance_change' : 'acceptance_write')));
     const last = s.adapter().calls.at(-1)!;
+    // 数えるのは system（frozen + dynamic）と道具の説明だけ。最初の発言に付く tail（build-quality S1: 時刻・印の意味の 1 行・実行ごとの印。
+    // 約 68 トークン）は入れていない。入れると browser ja draft で 5,126（線は 5,068.8 で、超える）
     const { tokens } = estimateRequest(`${last.system.frozen}
 ${last.system.dynamic}`, [], last.tools);
     const available = (await s.json(`/api/conversations/${uuid(1)}/context?modelId=small`, 'GET')).body.available as number;

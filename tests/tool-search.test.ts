@@ -396,7 +396,8 @@ test('T-1 使用量（contextUsage）と起動の見積もり（baseTokens）は
   s.adapter().scripts = [reply('ok')];
   await s.send(uuid(1), { text: 'x', modelId: 'm1' });
   const req = s.calls().find(c => c.model.id === 'm1')!;
-  const real = estimateRequest(`${req.system.frozen}\n${req.system.dynamic}`, [], req.tools).tokens;
+  // 本当の要求は最初の発言に tail（build-quality S1: 時刻・印の意味の 1 行・印）を付けて送り、使用量もそれを数える
+  const real = estimateRequest(`${req.system.frozen}\n${req.system.dynamic}`, [], req.tools, 1, req.system.tail).tokens;
   assert.ok(Math.abs(usage - real) < 64, `contextUsage ${usage} vs the real request ${real}`);
   const base = s.app.baseTokens();
   assert.ok(Math.abs(base - real) < real * 0.2, `baseTokens ${base} vs the real request ${real}`);
