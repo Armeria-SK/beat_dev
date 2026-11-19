@@ -6,6 +6,7 @@ import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { ImageRef } from '../engine/types.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { storeText, type StoreMessageKey } from '../shared/messages/stores.ts';
+import { engineText } from '../shared/messages/engine.ts';
 import { pdfText } from '../shared/pdf-text.ts';
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -129,3 +130,9 @@ export function stripAttachments(text: string): string {
   const start = FRAME_START.exec(text);
   return (start ? text.slice(0, start.index) : text).trim();
 }
+
+// 添付だけを送ったときに web/server.ts が本文の代わりに入れる文（「(A file was attached)」など）。利用者の言葉ではない
+export const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${[engineText(DEFAULT_LANGUAGE, 'attachment.image'), engineText(DEFAULT_LANGUAGE, 'attachment.file')].map(escapeRegExp).join('|')})$`, 'u');
+
+// 利用者が自分で書いた部分だけ（添付の枠より後ろと、添付だけのときの代わりの文を外す）
+export const ownWords = (text: string): string => stripAttachments(text).replace(ATTACHMENT_PLACEHOLDER, '');

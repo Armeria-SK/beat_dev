@@ -175,9 +175,15 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const filter = projectWhere('memory_jobs', project);
     const rows = app.db.prepare(`SELECT memory_jobs.*, ${projectOfSql('memory_jobs')} AS project_id FROM memory_jobs WHERE 1 = 1${filter.sql} ORDER BY id DESC LIMIT 50`)
       .all(...filter.args) as unknown as Array<ReviewJob & { project_id: string | null }>;
+    const fileChanges = app.db.prepare('SELECT id, project_id, name, action, actor, summary, tainted, created_at FROM memory_file_events WHERE run_id = ? ORDER BY id');
+    // 製品の記憶のファイルの変更（beat mem-fix）は、DB の記憶の行と同じ欄（action・before・after・undone_at）を持つ形で足す。after は本文でなくファイルの場所、id は memory_events と重ならない文字列
     const jobs = rows.map(job => ({
       ...job, triggerLabel: reviewLabel(languageOf(app.config()), job.kind, job.trigger),
-      changes: job.run_id ? app.db.prepare('SELECT * FROM memory_events WHERE run_id = ? ORDER BY id').all(job.run_id) : [],
+      changes: job.run_id ? [
+        ...app.db.prepare('SELECT * FROM memory_events WHERE run_id = ? ORDER BY id').all(job.run_id),
+        ...(fileChanges.all(job.run_id) as Array<{ id: number; project_id: string; name: string; action: string; actor: string; summary: string | null; tainted: number; created_at: number }>)
+          .map(e => ({ ...e, id: `file-${e.id}`, source: 'file' as const, before: null, after: `memory/${e.name}.md`, undone_at: null })),
+      ] : [],
     }));
     sendJson(res, 200, { jobs, pending: app.reviews.pendingCount(), total: todayCount(app, 'memory_jobs', undefined, project) });
   });
