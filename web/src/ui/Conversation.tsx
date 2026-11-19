@@ -13,6 +13,7 @@ import { Markdown } from '../Markdown.tsx';
 import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
 import { serverText, warningText } from '../server-text.ts';
 import { useContextUsage } from '../use-context-usage.ts';
+import { RedoAction } from './ChangesRedo.tsx';
 import { Checklist } from './Checklist.tsx';
 import { useNow } from './hooks.ts';
 import { latestOnly } from './latest.ts';
@@ -66,6 +67,7 @@ export function noticeText(t: T, n: RunNotice): string {
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
     case 'stopped': return t('ui.notice.stopped');
     case 'interrupted': return t('ui.notice.interrupted');
+    case 'undo': return [n.undone > 0 && t('ui.notice.undid', n.undone), n.refused > 0 && t('ui.notice.undidRefused', n.refused), n.more > 0 && t('ui.notice.undidMore', n.more)].filter(Boolean).join(' · ');
     case 'error': return serverText(n.errorCode, n.errorParams, getExplainLanguage()) ?? n.errorMessage ?? n.errorKind;
   }
 }
@@ -85,7 +87,7 @@ function QuietNotice({ notices }: { notices: RunNotice[] }) {
       <span className="bt-notice__rule" />
       <span className="ui-notice__text">
         {notices.map((n, i) => (
-          <Fragment key={i}>{i > 0 && ' · '}{noticeText(t, n)}{n.kind === 'memory' && <MemoryUndo eventId={n.eventId} />}</Fragment>
+          <Fragment key={i}>{i > 0 && ' · '}{noticeText(t, n)}{n.kind === 'memory' && <MemoryUndo eventId={n.eventId} />}{n.kind === 'undo' && n.batch && <RedoAction projectId={n.projectId} batch={n.batch} />}</Fragment>
         ))}
       </span>
       <span className="bt-notice__rule" />
@@ -561,7 +563,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         );
       }
       case 'live': return <LiveReply key={item.key} text={item.text} since={item.since} />;
-      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} pending={pendingLink} terminal={panes?.onOpenTerminal} />;
+      case 'tools': return <ToolGroup key={item.key} rows={item.rows} isNew={rise} pending={pendingLink} terminal={panes?.onOpenTerminal} changes={panes?.onOpenChanges} />;
       case 'notice': {
         if (item.weight === 'quiet') return <QuietNotice key={item.key} notices={item.notices} />;
         const n = item.notices[0]!;

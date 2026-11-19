@@ -7,14 +7,14 @@ import '../styles/files.css';
 
 // beat 8-5a: Files の欄（Design FilesPane）。読むだけ。左に木（開いたフォルダごとに読み足す）、右に選んだファイル。
 // 欄が 760px より狭いと木が全幅になり、ファイルは木の上に開いて戻るボタンが出る（files.css の container query）
-export interface FilesPaneProps { productId: string; revision: string }
+export interface FilesPaneProps { productId: string; revision: string; onOpenChanges?: ((path: string) => void) | undefined }
 
 type Folder = { state: 'loading' } | { state: 'failed' } | { state: 'ok'; entries: FileEntry[]; truncated: boolean; ignoreChecked: boolean };
 type Opened = { path: string; content: FileContent | null; failed: string | null };
 
 const TREES: readonly FileTree[] = ['product', 'knowledge'];
 
-export function FilesPane({ productId, revision }: FilesPaneProps) {
+export function FilesPane({ productId, revision, onOpenChanges }: FilesPaneProps) {
   const t = useT();
   const [tree, setTree] = useState<FileTree>('product');
   const [folders, setFolders] = useState<Record<string, Folder>>({});
@@ -123,14 +123,14 @@ export function FilesPane({ productId, revision }: FilesPaneProps) {
             : <ul className="bt-tree" role="tree" aria-label={t(tree === 'product' ? 'ui.files.product' : 'ui.files.knowledge')}>{rows('', 0)}</ul>}
         </div>
         <div className="ui-files__view">
-          {file ? <FileBody opened={file} onBack={() => setFile(null)} /> : <EmptyState title={t('ui.pane.files')} text={t('ui.files.pickHint')} />}
+          {file ? <FileBody opened={file} onBack={() => setFile(null)} onOpenChanges={tree === 'product' ? onOpenChanges : undefined} /> : <EmptyState title={t('ui.pane.files')} text={t('ui.files.pickHint')} />}
         </div>
       </div>
     </div>
   );
 }
 
-function FileBody({ opened, onBack }: { opened: Opened; onBack: () => void }) {
+function FileBody({ opened, onBack, onOpenChanges }: { opened: Opened; onBack: () => void; onOpenChanges: ((path: string) => void) | undefined }) {
   const t = useT();
   const { content } = opened;
   const meta = [opened.path];
@@ -144,7 +144,7 @@ function FileBody({ opened, onBack }: { opened: Opened; onBack: () => void }) {
   return (
     <>
       <Button small variant="ghost" icon="arrowL" className="ui-files__back" onClick={onBack}>{t('ui.files.back')}</Button>
-      <div className="bt-pane__bar"><span className="bt-meta" title={opened.path}>{meta.join(' · ')}</span></div>
+      <div className="bt-pane__bar"><span className="bt-meta" title={opened.path}>{meta.join(' · ')}</span>{onOpenChanges && content?.mark && <a className="bt-tool__link bt-meta ui-files__changes" href="#" onClick={e => { e.preventDefault(); onOpenChanges(opened.path); }}>{t('ui.changes.open')}</a>}</div>
       {opened.failed !== null && <Notice tone="warn" icon="alert" title={t('ui.files.openFailed')} text={opened.failed} />}
       {content?.hidden && <p className="bt-meta ui-files__note">{t('ui.files.hiddenNote')}</p>}
       {content?.binary && !content.hidden && <p className="bt-meta ui-files__note">{t('ui.files.binaryNote')}</p>}

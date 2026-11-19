@@ -8,6 +8,7 @@
 .ui-files__view > .bt-empty { max-width: none; }
 .ui-files__text { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .ui-files__note { margin: 0; }
+.ui-files__view > .bt-pane__bar > .ui-files__changes { flex: none; }
 .ui-files .ui-files__back { display: none; }
 @container (max-width: 759px) {
   .ui-files__grid { grid-template-columns: minmax(0, 1fr); }
