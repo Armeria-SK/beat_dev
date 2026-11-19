@@ -23,6 +23,18 @@ export type WorktreeNote = 'not_on_branch' | 'in_progress' | 'missing';
 export interface MainGitPrint { git: boolean; head: string; branch: string; refs: string; stash: string; config: string; hooks: string; worktrees: string }
 const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 const readOr = (path: string): Buffer | string => { try { return readFileSync(path); } catch { return 'unreadable'; } };
+// フックの置き場の中身: ふつうのファイルは中身ごと（下のフォルダもたどる）、ほかの種類（リンク・FIFO など）は種類だけ（読まない）
+function treeDigest(dir: string, keep: (name: string) => boolean, depth = 0): string {
+  let names: string[];
+  try { names = readdirSync(dir).sort(); } catch { return 'none'; }
+  return names.filter(keep).map(name => {
+    const path = join(dir, name);
+    const stat = lstatOf(path);
+    if (stat?.isFile()) return `${name} file ${sha(readOr(path))}`;
+    if (stat?.isDirectory()) return `${name} dir ${depth < 8 ? sha(treeDigest(path, () => true, depth + 1)) : 'deep'}`;
+    return `${name} ${stat?.isSymbolicLink() ? 'link' : stat ? 'special' : 'gone'}`;
+  }).join('\n');
+}
 function folderDigest(dir: string, keep: (name: string, path: string) => boolean): string {
   let names: string[];
   try { names = readdirSync(dir).sort(); } catch { return 'none'; }
@@ -45,7 +57,7 @@ export async function mainGitPrint(root: string, dataDir: string, ownCopies?: st
   const { common: commonText, ...rest } = print ?? { head: '', branch: '', refs: '', stash: '', common: '' };
   const common = commonText ? resolve(root, commonText) : fileCommonDir(root);
   if (!common) return undefined;
-  const hooks = folderDigest(join(common, 'hooks'), name => !name.endsWith('.sample'));
+  const hooks = treeDigest(join(common, 'hooks'), name => !name.endsWith('.sample'));
   const worktrees = folderDigest(join(common, 'worktrees'), (_, path) => {
     const gitdir = readOr(join(path, 'gitdir')).toString().trim();
     return !(ownCopies && gitdir !== 'unreadable' && isInside(ownCopies, dirname(gitdir)));
@@ -591,14 +603,28 @@ export class Worktrees {
       if ((await git(['symbolic-ref', '-q', 'HEAD']))?.trim() !== `refs/heads/${row.branch}`) return false;
       if ((await git(['rev-parse', '-q', '--verify', 'HEAD']))?.trim() !== (row.own_tip ?? row.base)) return false;
       // checkout が書いている途中で止まると、索引が無く古い index.lock が残る。ファイルには触らずに HEAD から索引だけ作り直して比べる（持ち主の書きかけは M や ?? で残る）
+      let rebuilt = false;
       if (lstatOf(join(admin, 'index')) === undefined) {
         if (lstatOf(join(admin, 'index.lock')) !== undefined) await unlink(join(admin, 'index.lock'));
         if (await git(['read-tree', 'HEAD']) === null) return false;
+        rebuilt = true;
       }
       const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
       if (status === null) return false;
       const entries = status.split('\0').filter(Boolean);
-      return entries.length > 0 && entries.every(entry => /^(?: D|D |DD) /u.test(entry));
+      if (entries.length === 0) return false;
+      let cut = 0;
+      for (const entry of entries) {
+        if (/^(?: D|D |DD) /u.test(entry)) continue;
+        // 止まった checkout が書いていたファイル: HEAD の中身より短く、その頭と同じ（1 つまで）
+        if (!rebuilt || !entry.startsWith(' M ') || ++cut > 1) return false;
+        const name = entry.slice(3);
+        const blob = await raw([...NO_MAINTENANCE, 'cat-file', 'blob', `HEAD:${name}`]);
+        let file: Buffer;
+        try { file = readFileSync(join(row.path!, name)); } catch { return false; }
+        if (!blob || file.length >= blob.length || !blob.subarray(0, file.length).equals(file)) return false;
+      }
+      return true;
     })) === true;
   }
 

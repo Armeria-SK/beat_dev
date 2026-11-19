@@ -991,7 +991,9 @@ test('8-2 4 回目 MEDIUM 1a: コマンドの中の cd で本体（作業コピ�
       assert.equal(check.decision, 'deny', `${label}: ${command}`);
       assert.ok(['wt.main_path', 'wt.opaque'].includes(check.reasonKeys?.[0] ?? '') && check.reasonKeys?.length === 1, `${label}: ${command}: ${check.reasons.join(' / ')}`);
     }
-    assert.deepEqual((await shellPreCheck({ command: `cd ${rel}; npm run fmt` }, c)).reasonKeys, ['wt.main_path'], label);
+    const named = await shellPreCheck({ command: `cd ${rel}; npm run fmt` }, c);
+    assert.deepEqual(named.reasonKeys, ['wt.main_path'], label);
+    assert.ok(named.reasons[0]!.includes(`the product folder ${r.product} is not used`), `${label}: ${named.reasons[0]}`);
     assert.ok(!((await shellPreCheck({ command: 'cd .; npm run test' }, c)).reasonKeys ?? []).some(k => k.startsWith('wt.')), label);
   }
   if (WINDOWS) {
@@ -1032,16 +1034,27 @@ test('8-2 4 回目 MEDIUM 1c: 値がくっついた変数のオプション（-C
 });
 
 test('8-2 4 回目 LOW 2: 索引が無く index.lock が残った、書きかけの checkout の作りかけの行も見回りが消す。持ち主の書きかけがあれば残す', { skip: !gitAvailable }, async t => {
-  for (const [label, ownerEdit] of [['crash', false], ['owner edit', true]] as const) {
+  const cases: Array<[string, Record<string, string>, boolean]> = [
+    ['crash', {}, false],
+    ['a.txt cut to nothing', { 'a.txt': '' }, false],
+    ['a.txt cut short', { 'a.txt': 'on' }, false],
+    ['owner edit', { 'a.txt': 'owner edit\n' }, true],
+    ['owner edit, not a prefix', { 'a.txt': 'ox' }, true],
+    ['two files cut', { 'a.txt': 'on', 'tracked.txt': 'ke' }, true],
+    ['index intact, a.txt shortened by someone', { 'a.txt': 'on' }, true],
+  ];
+  for (const [label, files, kept] of cases) {
     const r = await wtRig(t);
     const admin = resolve(r.wtPath, gitIn(r.wtPath, 'rev-parse', '--git-dir'));
     r.db.prepare("UPDATE worktrees SET state = 'creating', updated_at = 1 WHERE id = ?").run(r.wt.id);
-    rmSync(join(admin, 'index'));
-    writeFileSync(join(admin, 'index.lock'), '');
-    rmSync(join(r.wtPath, 'tracked.txt'));
-    if (ownerEdit) writeFileSync(join(r.wtPath, 'a.txt'), 'owner edit\n');
-    assert.deepEqual(await r.worktrees.sweepWorktrees(), ownerEdit ? { removed: 0, left: 1 } : { removed: 1, left: 0 }, label);
-    assert.equal(existsSync(r.wtPath), ownerEdit, label);
+    if (!label.startsWith('index intact')) {
+      rmSync(join(admin, 'index'));
+      writeFileSync(join(admin, 'index.lock'), '');
+    }
+    if (!('tracked.txt' in files)) rmSync(join(r.wtPath, 'tracked.txt'));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(r.wtPath, name), text);
+    assert.deepEqual(await r.worktrees.sweepWorktrees(), kept ? { removed: 0, left: 1 } : { removed: 1, left: 0 }, label);
+    assert.equal(existsSync(r.wtPath), kept, label);
   }
 });
 
@@ -1063,6 +1076,11 @@ test('8-2 4 回目 LOW 3: 本体の設定・stash・HEAD・フック・作業コ
     const after = await mainGitPrint(product, data, own);
     assert.ok(mainGitChanges(before!, after!).includes(part), `${part}: ${mainGitChanges(before!, after!).join(', ')}`);
   }
+  mkdirSync(join(product, '.git', 'hooks', 'lib'));
+  writeFileSync(join(product, '.git', 'hooks', 'lib', 'common.sh'), 'one\n');
+  const inner = await mainGitPrint(product, data, own);
+  writeFileSync(join(product, '.git', 'hooks', 'lib', 'common.sh'), 'two\n');
+  assert.deepEqual(mainGitChanges(inner!, (await mainGitPrint(product, data, own))!), ['hooks'], 'フックの下のフォルダの中の変化も見る');
   const before = await mainGitPrint(product, data, own);
   writeFileSync(join(product, '.git', 'hooks', 'pre-push.sample'), 'sample\n');
   gitIn(product, 'worktree', 'add', '-q', '-b', 'beat/own', join(own, 'x'));

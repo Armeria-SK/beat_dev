@@ -16,7 +16,7 @@ export const WT_GIT_ENV = 'wt.git_env';
 // git の文があるコマンドで、作業コピーの外のパスを名指す
 export const WT_OUTSIDE_PATH = 'wt.outside_path';
 
-export interface WorktreeRefusal { key: typeof WT_GIT_SHARED | typeof WT_OPAQUE | typeof WT_GIT_ENV | typeof WT_MAIN_PATH; cmd: string }
+export interface WorktreeRefusal { key: typeof WT_GIT_SHARED | typeof WT_OPAQUE | typeof WT_GIT_ENV | typeof WT_MAIN_PATH; cmd: string; path?: string }
 
 type Kind = 'b' | 's' | 'opt';
 type Flags = ReadonlyMap<string, Kind>;
@@ -181,8 +181,10 @@ export function worktreeGitRefusal(statements: readonly StatementFacts[], place:
   // 作業コピーの外（cd で本体へ移ったあと）か、決められないフォルダで動く文は断る（git の文は gitRefusal が数える）
   const away = all.filter(st => st.program !== '' && !isGitProgram(st.program) && (st.cwd === null || [...(st.cwds ?? []), st.cwd].some(dir => !insideCopy(place.worktree, dir))));
   if (away.length) {
-    const inMain = away.find(st => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])].some(dir => mainWrites([dir], place).length > 0));
-    return { key: inMain ? WT_MAIN_PATH : WT_OPAQUE, cmd: shownOf(inMain ?? away[0]!) };
+    const dirsOf = (st: StatementFacts): string[] => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])];
+    const inMain = away.find(st => dirsOf(st).some(dir => mainWrites([dir], place).length > 0));
+    if (inMain) return { key: WT_MAIN_PATH, cmd: shownOf(inMain), path: dirsOf(inMain).find(dir => mainWrites([dir], place).length > 0)! };
+    return { key: WT_OPAQUE, cmd: shownOf(away[0]!) };
   }
   const gits = all.filter(st => isGitProgram(st.program));
   if (gits.length === 0) return undefined;

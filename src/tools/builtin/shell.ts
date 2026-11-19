@@ -170,7 +170,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
       remotes: once(() => wtGit?.(place.worktree, ['remote'])?.split(/\r?\n/u).map(line => line.trim()).filter(Boolean)),
       sharedConfig: once(() => wtGit?.(place.worktree, ['config', '--list'])),
     });
-    if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.cmd, path: refused.cmd })], reasonKeys: [refused.key] };
+    if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.cmd, path: refused.path ?? refused.cmd })], reasonKeys: [refused.key] };
     // git の文があるコマンドで、見張りが作業コピーの外（または決められない場所）を指すパスを見つけたら、git ごと断る（字句の読み違いの受け止め）
     const outside = gitWithOutsidePath(verdict.statements, verdict.paths, place);
     if (outside !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_OUTSIDE_PATH, { path: outside })], reasonKeys: [WT_OUTSIDE_PATH] };
