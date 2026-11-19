@@ -117,7 +117,8 @@ const OUTSIDE_JOB = [
   'rundll32 url.dll,FileProtocolHandler check.js',
 ];
 // パッケージを取ってきて動かす・作る形（値を取るオプションで位置がずれるものも）
-const PACKAGE_FETCH = ['npm -w a exec vitest', 'npm --prefix . exec vitest', 'npm --loglevel silent exec vitest', 'pnpm --dir . dlx vitest', 'npm init vite', 'npm create vite', 'pnpm create vite', 'yarn create vite', 'bun create vite', 'corepack pnpm dlx vitest'];
+const PACKAGE_FETCH = ['npm -w a exec vitest', 'npm --prefix . exec vitest', 'npm --loglevel silent exec vitest', 'pnpm --dir . dlx vitest', 'npm init vite', 'npm create vite', 'pnpm create vite', 'yarn create vite', 'bun create vite', 'corepack pnpm dlx vitest',
+  'corepack pnpm install', 'corepack use pnpm@9', 'uvx ruff', 'uv tool run ruff', 'uv tool install ruff', 'pipx run black', 'pipx install black'];
 // パイプのある文（製品のコードの段 4 に当たらず、判定役へ行く）
 const PIPE = 'node -e "console.log(1)" | node check.js';
 const pidAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -673,6 +674,13 @@ test('8-6a D-11 (1): fixShellRefusal は写しの外・解けないパス・GIT_
   }
   assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'init', '-y')] }), undefined, 'npm init -y は取ってこない');
   assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'test', '--', 'exec')] }), undefined, '-- のあとは見ない');
+  for (const words of [['pnpm', 'exec', 'tsc'], ['yarn', 'exec', 'tsc'], ['pnpm', '--filter', 'a', 'exec', 'tsc'], ['bun', 'run', 'x'], ['npm', 'uninstall', 'x'], ['npm', 'init', '-w', 'packages/a'], ['npm', 'run', 'create'], ['uv', 'run', 'pytest'], ['pipx', 'list']]) {
+    assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] }), undefined, `通信に数えない: ${words.join(' ')}`);
+  }
+  for (const words of [['npm', '-w', 'test', 'exec', 'v'], ['corepack', 'pnpm', 'install'], ['corepack', 'npm', 'install', 'left-pad'], ['corepack', 'prepare', 'pnpm@9', '--activate'], ['corepack', 'use', 'pnpm@9'], ['corepack', 'install'], ['corepack', 'pnpm@9', 'dlx', 'v'],
+    ['uvx', 'ruff'], ['uv', 'tool', 'run', 'ruff'], ['uv', 'tool', 'install', 'ruff'], ['pipx', 'run', 'black'], ['pipx', 'install', 'black']]) {
+    assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] })?.key, 'fix.network', words.join(' '));
+  }
   for (const program of ['wmic', 'rundll32', 'invoke-cimmethod', 'invoke-wmimethod']) {
     assert.equal(fixShellRefusal({ ...base, statements: [run(program, 'x')] })?.key, 'fix.background', program);
   }

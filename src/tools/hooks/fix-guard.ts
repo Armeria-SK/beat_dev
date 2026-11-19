@@ -42,24 +42,52 @@ const GIT_PLACE_EQ = /^--(?:git-dir|work-tree)=(.*)$/u;
 const DETACHING = new Set(['shape.background', 'code.spawn']);
 // ジョブの外でプロセスを作らせる道（WMI の Win32_Process.Create・[wmiclass]）。起動役（wmic・Invoke-CimMethod・rundll32 など）は LAUNCHERS と code.launcher
 const WMI_CREATE = /win32_process|\[wmiclass\]/iu;
-// パッケージを取ってきて動かす・作る（npm exec / npm x / pnpm dlx / yarn dlx / bun x / npm create / npm init <pkg> など）
-const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
-const FETCH_AND_RUN = new Set(['exec', 'x', 'dlx', 'create']);
+// パッケージを取ってきて動かす・作る語（道具ごと）。npm は init <名前> も（npm init vite は create-vite を取ってくる）
+const FETCH_AND_RUN: Readonly<Record<string, ReadonlySet<string>>> = {
+  npm: new Set(['exec', 'x', 'create']), pnpm: new Set(['dlx', 'create']), yarn: new Set(['dlx', 'create']), bun: new Set(['x', 'create']),
+};
+// 必ず値を取るオプション（その次の語は値で、サブコマンドではない）。値を取らないものを入れると次の語を見落とすので、確かなものだけ
+const VALUE_FLAGS = new Set(['-w', '--workspace', '--prefix', '--loglevel', '--registry', '--cache', '--userconfig', '--filter', '--dir', '--workspace-dir', '--cwd']);
+// ここで見つかれば、そのあとの語はサブコマンドではない（パッケージ・スクリプトの名前）
+const OTHER_SUBCOMMANDS = new Set(['install', 'i', 'add', 'uninstall', 'remove', 'rm', 'un', 'r', 'run', 'run-script', 'test', 't', 'start', 'stop', 'restart',
+  'ci', 'ls', 'list', 'll', 'why', 'outdated', 'update', 'up', 'upgrade', 'audit', 'pack', 'build', 'rebuild', 'version', 'view', 'info', 'config', 'link',
+  'unlink', 'prune', 'dedupe', 'help', 'explain', 'fund', 'doctor', 'cache', 'exec', 'init', 'pm']);
+// Python の、名前で取ってきて動かす・入れる道具
+const PY_FETCH: Readonly<Record<string, (words: readonly string[]) => boolean>> = {
+  uvx: () => true,
+  uv: words => { const tool = words.indexOf('tool'); return tool >= 0 && words.slice(tool + 1).some(w => w === 'run' || w === 'install'); },
+  pipx: words => words.some(w => w === 'run' || w === 'install'),
+};
 
-// 名前だけで外へ出る文: npx の仲間、パッケージを取ってきて動かす・作る文、名前を引く・届くかを見る文（宛先が字のままでも）。
-// 値を取るオプション（-w a・--prefix .）で位置がずれても見落とさないよう、-- より前のどの語でも見る（npm run x のような名前も断る側に倒す）
+// オプションとその値を飛ばした語（-- の手前まで）
+function plainWords(words: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (w === '--') break;
+    if (VALUE_FLAGS.has(w)) { i++; continue; }
+    if (!w.startsWith('-')) out.push(w);
+  }
+  return out;
+}
+
+// 名前だけで外へ出る文: npx の仲間、corepack（どの形でも道具を取ってくる）、パッケージを取ってきて動かす・作る文、名前を引く・届くかを見る文（宛先が字のままでも）。
+// 値を取るオプションで位置がずれても見落とさないよう、ほかのサブコマンド（install・run など）が出るまでの -- より前の語をどれも見る
 function reachesNetwork(st: StatementFacts): boolean {
   const program = st.program.toLowerCase();
-  if (NPX_TOOLS.has(program) || LOOKUP.has(program)) return true;
-  let words = st.words.slice(1).map(w => w.text.toLowerCase());
-  if (program === 'corepack') {
-    const manager = words.findIndex(w => !w.startsWith('-'));
-    if (manager < 0 || !PACKAGE_MANAGERS.has(words[manager]!)) return false;
-    words = words.slice(manager + 1);
-  } else if (!PACKAGE_MANAGERS.has(program)) return false;
-  const end = words.indexOf('--');
-  const before = end < 0 ? words : words.slice(0, end);
-  return before.some((w, i) => FETCH_AND_RUN.has(w) || (w === 'init' && before.slice(i + 1).some(next => !next.startsWith('-'))));
+  if (NPX_TOOLS.has(program) || LOOKUP.has(program) || program === 'corepack') return true;
+  const words = plainWords(st.words.slice(1).map(w => w.text.toLowerCase()));
+  const py = PY_FETCH[program];
+  if (py) return py(words);
+  const fetching = FETCH_AND_RUN[program];
+  if (!fetching) return false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+    if (fetching.has(w)) return true;
+    if (program === 'npm' && w === 'init') return i + 1 < words.length;
+    if (OTHER_SUBCOMMANDS.has(w)) return false;
+  }
+  return false;
 }
 
 const startsOutsideJob = (st: StatementFacts): boolean => LAUNCHERS.has(st.program.toLowerCase()) || st.reasonKeys.includes('code.launcher');
