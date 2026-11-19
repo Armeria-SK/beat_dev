@@ -1084,6 +1084,80 @@ test('AP-1b N3: 外を読んだタスクの実行で、ほかのファイルを�
   assert.deepEqual(r.ran, ['node scripts/shoot.mjs']);
 });
 
+// ── AP-1f: the loopback mark (code.self_touch) is left off only for <loopback>:<plain digits> that are not beat's port. Literal references only (R9) ──
+
+const loopbackScript = async (r: Rig, name: string, body: string, command = `node scripts/${name}.mjs`) => {
+  mkdirSync(join(r.ws, 'scripts'), { recursive: true });
+  writeFileSync(join(r.ws, 'scripts', `${name}.mjs`), `${body}\n`);
+  const pre = shellPreCheck({ command }, r.ctx);
+  const out = await r.call('shell_run', { command });
+  return { pre, out };
+};
+
+test('AP-1f N8: 製品のポート（beat のポートでない）だけを localhost:<数字> で叩くスクリプトは beat 自身に触る印が付かず、順 4（productRun）で通る', async t => {
+  const r = rig(t);
+  assert.notEqual(r.ctx.config.server.port, 5173, '前提: 5173 は beat のポートでない');
+  for (const [name, body] of [
+    ['shoot', "await page.goto('http://localhost:5173/');"],
+    ['loop', 'await fetch(`http://127.0.0.1:5173/index.html`);'],
+    ['short', "await fetch('http://127.1:5173/');"],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(!pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.ok(pre.productRun !== undefined, `${name}: 順 4 に乗る`);
+    assert.equal(out.decidedBy, pre.productRun, `${name}: ${out.output.content}`);
+  }
+  assert.equal(r.judge.calls, 0);
+});
+
+test('AP-1f T-G8: beat のポート・ポートの無いループバック・組み立てたループバックは今までどおり beat 自身に触る印が付き、決まりにも順 4 にもならない', async t => {
+  const r = rig(t);
+  const port = r.ctx.config.server.port;
+  const digits = String(port);
+  const variants: Array<[string, string]> = [
+    ['beat-port', `fetch('http://127.0.0.1:${port}/');`],
+    ['leading-zero', `fetch('http://localhost:0${port}/');`],
+    ['template', 'fetch(`http://localhost:${PORT}/`);'],
+    ['concat', "fetch('localhost:' + p);"],
+    ['concat-colon', "fetch('http://localhost' + ':' + p);"],
+    ['join', "fetch(['127.0.0.1', p].join(':'));"],
+    ['request-literal', `http.request({ host: '127.0.0.1', port: ${port} });`],
+    ['request-var', "http.request({ host: '127.0.0.1', port: p });"],
+    ['ipv6-full', `fetch('http://[0:0:0:0:0:0:0:1]:${port}/');`],
+    ['ipv6-any', `fetch('http://[::]:${port}/');`],
+    ['sub-localhost', `fetch('http://app.localhost:${port}/');`],
+    ['no-port', "fetch('http://localhost/');"],
+    ['port-elsewhere', `fetch('http://localhost:5173/');\nconst other = ${port};`],
+    ['join-v4', "fetch('http://' + ['127.0.0', 1].join('.') + ':5173/');"],
+    ['short-v4', "fetch('http://127.1/');"],
+    ['short-v4-beat', `fetch('http://127.1:${port}/');`],
+    ['ipv6-full-no-port', "fetch('http://[0:0:0:0:0:0:0:1]/');"],
+    ['sub-localhost-no-port', "fetch('http://app.localhost/');"],
+    ['ipv6-any-no-port', "fetch('http://[::]/');"],
+    ['split-digits', "fetch('http://localhost:" + digits.slice(0, 2) + "' + '" + digits.slice(2) + "/');"],
+    ['brace-shell', `execSync('bash -c "curl http://local{host,}:${digits[0]}{${digits.slice(1)},}/"');`],
+    ['api', "fetch('http://localhost:5173/api/pending');"],
+  ];
+  for (const [name, body] of variants) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.equal(pre.productRun, undefined, `${name}: 印があれば順 4 に乗らない`);
+    assert.ok(out.decidedBy !== 'owner-rule' && out.decidedBy !== 'product-code', `${name}: ${out.decidedBy}`);
+    assert.equal(out.decidedBy, 'pending', `${name}: ${out.output.content}`);
+    assert.equal(r.waiting().at(-1)!.rule ?? null, null, `${name}: 決まりの候補にならない（NEVER_KEYS）`);
+  }
+  assert.deepEqual(r.ran, []);
+});
+
+test('AP-1f T-G8: beat のポートを設定で変えると、新しいポートで印が付き、前のポートの数字だけなら付かない', async t => {
+  const r = rig(t, c => { c.server.port = 5173; });
+  const moved = await loopbackScript(r, 'moved', "await fetch('http://localhost:5173/');");
+  assert.ok(moved.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(moved.pre.reasonKeys));
+  assert.equal(moved.out.decidedBy, 'pending');
+  const old = await loopbackScript(r, 'old', "await fetch('http://localhost:4777/');");
+  assert.ok(!old.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(old.pre.reasonKeys));
+});
+
 test('AP-1b N7: 外を読んだ実行でも、送る（curl → origin）・消す・MCP の名前の送るの決まりに当たる呼び出しは通る。外を読んだ実行の send・delete の行から決まりを作れる', async t => {
   const mcp: ToolDef = { name: 'mcp__s__post', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'network', allowedIn: ['chat'], mcp: { server: 's', tool: 'post' }, execute: async input => ({ content: `posted ${input.title}` }) };
   const r = rig(t, () => undefined, [mcp]);

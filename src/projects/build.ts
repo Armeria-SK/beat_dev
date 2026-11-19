@@ -3,9 +3,10 @@ import { LocalizedError, type MessageParams } from '../shared/messages/define.ts
 import { buildText, type BuildMessageKey } from '../shared/messages/build.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
-import { PLAN_GIST_LABEL, type Task, type TaskStore } from '../tasks/store.ts';
+import { redactSecrets } from '../shared/redaction.ts';
+import { ACCEPTANCE_ITEMS_LABEL, OUTSIDE_PLAN_NOTE, PLAN_GIST_LABEL, type Task, type TaskStore } from '../tasks/store.ts';
 import { USER_REQUEST_LIMIT, USER_REQUEST_TOKENS } from '../tools/auto-approve.ts';
-import { docOf, frozenHash, type AcceptanceDoc, type AcceptanceStore, type AcceptanceVersionRow } from './acceptance.ts';
+import { docOf, frozenHash, type AcceptanceDoc, type AcceptanceItem, type AcceptanceStore, type AcceptanceVersionRow } from './acceptance.ts';
 import { PlanError, planGist, type PlanStore } from './plan.ts';
 import { languageTagOf, ProjectError, type ProjectStore } from './store.ts';
 
@@ -19,6 +20,21 @@ export const BUILD_BODY = (docLanguage: string | null, only?: readonly string[])
   ...(only ? [`This build covers only the new or changed acceptance items ${only.join(', ')}.`] : []),
   ...(docLanguage ? [`Owner-facing notes go in ${docLanguage}.`] : []),
 ].join(' ');
+
+const ITEMS_SHARE = 0.5;
+
+function itemLines(entries: readonly AcceptanceItem[], roomChars: number, roomTokens: number): string[] {
+  const lines: string[] = [];
+  let text = ACCEPTANCE_ITEMS_LABEL;
+  for (const entry of entries) {
+    const line = `- ${entry.id}: ${redactSecrets(entry.result).replace(/\s+/gu, ' ').trim()}`;
+    const next = `${text}\n${line}`;
+    if (next.length > roomChars || estimateTextTokens(next) > roomTokens) break;
+    lines.push(line);
+    text = next;
+  }
+  return lines;
+}
 
 export class BuildError extends LocalizedError<BuildMessageKey> {
   constructor(code: BuildMessageKey, params?: MessageParams) { super(buildText, code, params); }
@@ -70,13 +86,16 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
   const marked = [...runs].filter(run => RUN_ID.test(run)).slice(0, MAX_MARKED_RUNS);
 
   const title = `Build: ${project.name}`;
-  const lead = `${title}\n${PLAN_GIST_LABEL}\n`;
-  const gist = untrusted ? '' : planGist(plan.content, Math.max(0, USER_REQUEST_LIMIT - lead.length), Math.max(0, USER_REQUEST_TOKENS - estimateTextTokens(lead)));
+  const head = untrusted ? `${title}\n${OUTSIDE_PLAN_NOTE}` : title;
+  const entries = doc.items.filter(entry => entry.removedIn === null && (!only || only.includes(entry.id)));
+  const items = itemLines(entries, Math.floor((USER_REQUEST_LIMIT - head.length) * ITEMS_SHARE), Math.floor((USER_REQUEST_TOKENS - estimateTextTokens(head)) * ITEMS_SHARE));
+  const lead = [head, ...(items.length ? [ACCEPTANCE_ITEMS_LABEL, ...items] : []), PLAN_GIST_LABEL, ''].join('\n');
+  const gist = planGist(plan.content, Math.max(0, USER_REQUEST_LIMIT - lead.length), Math.max(0, USER_REQUEST_TOKENS - estimateTextTokens(lead)));
 
   let task: Task | undefined;
   const makeTask = () => {
     task = d.tasks.create({
-      title, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: !untrusted, ownerPlan: gist,
+      title, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: true, ownerPlan: gist, ownerItems: items, ownerPlanOutside: untrusted,
       acceptanceItems: only ?? doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id),
       createdInConversation: wanted.conversationId,
     });

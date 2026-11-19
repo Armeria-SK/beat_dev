@@ -10,6 +10,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { PlanStore, type PlanMeta } from '../src/projects/plan.ts';
+import { OUTSIDE_PLAN_NOTE, PLAN_GIST_LABEL } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid, planChat, planFile } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
@@ -124,7 +125,7 @@ test('4-K 印を外す（置き場）: baseHash が合えば tainted が消え�
   assert.deepEqual([outside.tainted, outside.updated_by], [false, 'owner']);
 });
 
-test('4-K 確かめ（本物の App）: 外を読んだ実行が書いた計画書を持ち主が 1 文字直して PUT → tainted のまま、Build のタスクの judgeRequest が空', async t => {
+test('4-K 確かめ（本物の App、AP-1a で反転: Build を押した計画は外を読んでいても持ち主の頼み、Q3）: 外を読んだ実行が書いた計画書を持ち主が 1 文字直して PUT → tainted のまま、Build のタスクの judgeRequest に要点と外を読んだ計画の注記が入る', async t => {
   const s = await setup(t);
   const product = await s.product('owner-edit');
   await s.taintedAiPlan(product.id, uuid(60), '# Plan by AI');
@@ -134,7 +135,8 @@ test('4-K 確かめ（本物の App）: 外を読んだ実行が書いた計画�
   assert.deepEqual([put.body.plan.updated_by, put.body.plan.tainted], ['owner', true]);
   assert.equal((await s.plan(product.id)).tainted, true);
   const taskId = await s.build(product.id);
-  assert.equal(s.app.tasks.judgeRequest(taskId), '');
+  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: owner-edit\n${OUTSIDE_PLAN_NOTE}\n${PLAN_GIST_LABEL}\n# Plan by AI!`);
+  assert.equal(s.app.tasks.textTainted(taskId), true, 'タスクの実行は外を読んだ扱い');
 });
 
 test('4-K 確かめ（本物の App）: 同じ計画書をファイルとして外で 1 文字直す → GET でも tainted', async t => {
@@ -166,6 +168,7 @@ test('4-K 確かめ（本物の App）: reviewed を押す → tainted が消え
   assert.deepEqual(s.events.filter(e => e.type === 'plan.changed').slice(before), [{ type: 'plan.changed', projectId: product.id, conversationId: planChat(s.app, product.id), hash: current.hash, by: 'owner' }]);
   const taskId = await s.build(product.id);
   assert.notEqual(s.app.tasks.judgeRequest(taskId), '');
+  assert.ok(!s.app.tasks.judgeRequest(taskId).includes(OUTSIDE_PLAN_NOTE), '見たと押した計画には外を読んだ注記が付かない');
 });
 
 test('4-4 印を外す口: 計画モードの会話が計画書を書いているあいだは 409 plan.writing で印が残る（持ち主が見ていない文の印を外さない）', async t => {

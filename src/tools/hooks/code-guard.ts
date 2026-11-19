@@ -4,6 +4,7 @@ import type { Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { segments, STATEMENT_WORDS, stripQuotedContent, type Segment } from './parse-cmd.ts';
 import { expandPath } from './scope.ts';
+import { loopbackHost, selfPortsOf, selfTarget, type SelfServer } from './self-port.ts';
 
 // コードを動かす前の確かめ（plans/clive-gaps/security-self-api.md の R1.1〜R1.7・R1.10）。
 // ファイルや組み立てた文字のコード・この PC の中のサーバー・別のプロセスなど、「コマンドの文字だけでは中身を判定できないもの」を、
@@ -85,10 +86,38 @@ const LOOPBACK = /(?:^|[^\w.])(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.
 // beat 自身の設定・人格・承認・記憶に触れる文字（人への目印。判定には使わない）
 const SELF_MARKERS: ReadonlyArray<[string, RegExp]> = [
   ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['beat.db', /beat\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
-  ['skills/', /skills[\\/]/iu], ['127.0.0.1 / localhost', LOOPBACK],
+  ['skills/', /skills[\\/]/iu],
 ];
-export function selfTouchMarkers(text: string, selfHosts: readonly string[]): string[] {
+const LOOPBACK_MARKER = '127.0.0.1 / localhost';
+const LOOPBACK_ALL = new RegExp(LOOPBACK.source, 'giu');
+const HOST_WORD = /\[[^[\]\s]*\]|[\w%-]+(?:\.[\w%-]+)*/gu;
+const HOST_HINT = /localhost|ip6-|[\d:%]/iu;
+const PLAIN_PORT = /^:(\d+)(?:$|[\s/?#)\]}>,;&|]|(['"`])(?!\s*[+.[]))/u;
+
+function loopbackWord(word: string): boolean {
+  if (!HOST_HINT.test(word)) return false;
+  if (loopbackHost(word)) return true;
+  if (!/^[\d[]|%/u.test(word) || /^[0.]+$/u.test(word) || /^\d{1,7}$/u.test(word)) return false;
+  try { return loopbackHost(new URL(`http://${word}/`).hostname.replace(/\.+$/u, '')); } catch { return false; }
+}
+
+function touchesLoopback(text: string, server: SelfServer): boolean {
+  const { ports } = selfPortsOf(server);
+  let found = false;
+  const marks = (end: number): boolean => {
+    found = true;
+    const port = PLAIN_PORT.exec(text.slice(end, end + 64));
+    return !port || ports.has(Number(port[1]));
+  };
+  for (const match of text.matchAll(LOOPBACK_ALL)) if (marks(match.index + match[0].length)) return true;
+  for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index + match[0].length)) return true;
+  if (found && new RegExp(String.raw`\b0*(?:${[...ports].join('|')})\b`, 'u').test(text)) return true;
+  return selfTarget(text, server) !== undefined;
+}
+
+export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer): string[] {
   const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  if (touchesLoopback(text, server)) found.push(LOOPBACK_MARKER);
   const lower = text.toLowerCase();
   for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !found.includes(host)) found.push(host);
   return found;

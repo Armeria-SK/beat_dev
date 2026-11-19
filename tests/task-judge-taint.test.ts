@@ -103,3 +103,24 @@ test('判定役の頼み: 承認のあとに印 untrusted-input が足されて�
   assert.equal(s.app.tasks.events(task.id)[0]!.run_id, UNTRUSTED_RUN, '前提: いちばん新しい経過は印');
   assert.equal(s.app.tasks.unapprove(task.id).status, 'inbox');
 });
+
+test('判定役の頼み AP-1a N6（= T-G6）: 外を読んだ子の担当・孫の担当でも、根の持ち主の控えだけが返り、子・孫の題・本文・メモは入らない。根が持ち主の頼みでなければ空', async t => {
+  const s = await setup(t);
+  const root = s.app.tasks.create({ title: 'Owner root', body: 'owner body', origin: 'user', actor: 'user', ownerRequest: true });
+  const child = s.app.tasks.create({ title: 'CHILD-TITLE', body: 'CHILD-BODY', doneCriteria: 'CHILD-DONE', origin: 'user', actor: 'beat', spawnedBy: root.id });
+  const grand = s.app.tasks.create({ title: 'GRAND-TITLE', body: 'GRAND-BODY', origin: 'user', actor: 'beat', spawnedBy: child.id });
+  s.app.tasks.markUntrusted(child.id, 'mesh', 'read a plan written after reading elsewhere');
+  s.app.tasks.update(grand.id, { appendNote: 'GRAND-NOTE from a tainted run' }, 'ai', uuid(77));
+  assert.deepEqual([s.app.tasks.textTainted(child.id), s.app.tasks.textTainted(grand.id)], [true, true], '前提: 子と孫は外を読んだ扱い');
+  for (const id of [child.id, grand.id]) {
+    const request = s.app.tasks.judgeRequest(id);
+    assert.equal(request, 'Owner root\nowner body', id);
+    assert.doesNotMatch(request, /CHILD|GRAND/u);
+  }
+  s.app.tasks.markUntrusted(root.id, 'build', 'built from a plan written after reading elsewhere');
+  assert.equal(s.app.tasks.judgeRequest(grand.id), 'Owner root\nowner body', '根に印が付いても控えは残る');
+  const bare = s.app.tasks.create({ title: 'Model root', body: 'model body', origin: 'user', actor: 'beat' });
+  const bareChild = s.app.tasks.create({ title: 'CHILD-OF-BARE', origin: 'user', actor: 'beat', spawnedBy: bare.id });
+  s.app.tasks.markUntrusted(bareChild.id, 'mesh', 'x');
+  assert.equal(s.app.tasks.judgeRequest(bareChild.id), '', '控えの無い根の子は今までどおり空');
+});
