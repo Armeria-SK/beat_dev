@@ -102,7 +102,8 @@ export class Router {
       const m = route.pattern.exec(pathname);
       if (!m) continue;
       pathMatched = true;
-      if (route.method === method) return { handler: route.handler, params: m.slice(1).map(decodeURIComponent) };
+      if (route.method !== method) continue;
+      try { return { handler: route.handler, params: m.slice(1).map(decodeURIComponent) }; } catch { return undefined; }
     }
     return pathMatched ? 'method_not_allowed' : undefined;
   }

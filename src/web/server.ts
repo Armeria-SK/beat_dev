@@ -40,6 +40,7 @@ import { registerQuestionRoutes } from './routes-questions.ts';
 import { registerGrowthRoutes } from './routes-growth.ts';
 import { registerMemoryRoutes } from './routes-memory.ts';
 import { registerChangeRoutes } from './routes-changes.ts';
+import { registerFilesRoutes } from './routes-files.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
@@ -441,6 +442,7 @@ export function createWebServer(app: App): WebServer {
   registerProjectRoutes(router, app);
   registerMemoryRoutes(router, app);
   registerChangeRoutes(router, app);
+  registerFilesRoutes(router, app);
   // ── タスク・ワーカー・通知・プロフィール ──
   registerTaskRoutes(router, app);
   registerPendingRoutes(router, app);
