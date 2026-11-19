@@ -64,20 +64,22 @@ function redactUrlParam(match: string, rawName: string, rawValue: string): strin
   return secret && length > 0 ? `${rawName}=[REDACTED]${tail}` : match;
 }
 
-export function sanitizeModelInputText(input: string): SanitizedModelInputText {
+const masked = (matched: string, keepLines: boolean): string => (keepLines ? `[REDACTED]${'\n'.repeat(matched.split('\n').length - 1)}` : '[REDACTED]');
+
+export function sanitizeModelInputText(input: string, keepLines = false): SanitizedModelInputText {
   let text = input;
   let redactionCount = 0;
   for (const pattern of SECRET_PATTERNS) {
-    text = text.replace(pattern, () => {
+    text = text.replace(pattern, matched => {
       redactionCount += 1;
-      return '[REDACTED]';
+      return masked(matched, keepLines);
     });
   }
   const jwt = redactJwt(text);
   text = jwt.text;
   redactionCount += jwt.redaction_count;
-  text = text.replace(URL_CREDENTIAL, () => { redactionCount += 1; return '[REDACTED]'; });
-  const keys = redactPrivateKeys(text);
+  text = text.replace(URL_CREDENTIAL, matched => { redactionCount += 1; return masked(matched, keepLines); });
+  const keys = redactPrivateKeys(text, keepLines);
   text = keys.text;
   redactionCount += keys.redaction_count;
   return Object.freeze({ text, redaction_count: redactionCount });
@@ -170,7 +172,7 @@ function strayEndStart(input: string, at: number, floor: number): number {
   }
 }
 
-function redactPrivateKeys(input: string): SanitizedModelInputText {
+function redactPrivateKeys(input: string, keepLines = false): SanitizedModelInputText {
   const ranges: Array<readonly [number, number]> = [];
   let open: { start: number; bodyFrom: number; end?: number } | undefined;
   let blankList: number[] | undefined;
@@ -190,7 +192,7 @@ function redactPrivateKeys(input: string): SanitizedModelInputText {
     open = undefined;
   }
   if (open) ranges.push([open.start, openEnd(open)]);
-  return replaceRanges(input, ranges);
+  return replaceRanges(input, ranges, keepLines);
 }
 
 export function redactKeyEcho(echo: string): { text: string; open: boolean } {
@@ -202,11 +204,11 @@ export function redactOpenKey(output: string): string {
   const first = privateKeyRanges(output, true).ranges[0];
   return first ? `[REDACTED]${output.slice(first[1])}` : output;
 }
-function replaceRanges(input: string, ranges: readonly (readonly [number, number])[]): SanitizedModelInputText {
+function replaceRanges(input: string, ranges: readonly (readonly [number, number])[], keepLines = false): SanitizedModelInputText {
   if (ranges.length === 0) return { text: input, redaction_count: 0 };
   const parts: string[] = [];
   let start = 0;
-  for (const [from, to] of ranges) { parts.push(input.slice(start, from), '[REDACTED]'); start = to; }
+  for (const [from, to] of ranges) { parts.push(input.slice(start, from), masked(input.slice(from, to), keepLines)); start = to; }
   parts.push(input.slice(start));
   return { text: parts.join(''), redaction_count: ranges.length };
 }
@@ -219,7 +221,7 @@ const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/gu;
 
 // 鍵そのものを伏せる。鍵の途中の空白は、2 つ以上・改行・タブなど並びが変わっていても同じ鍵として伏せる（相手が空白をそろえて返しても残さない）。
 // JSON の文字列の中の書き方（\ と " のエスケープ）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）
-export function redactExact(input: string, exactSecrets: readonly string[]): string {
+export function redactExact(input: string, exactSecrets: readonly string[], keepLines = false): string {
   const forms = new Set<string>();
   for (const secret of exactSecrets) {
     if (secret.trim().length === 0) continue;
@@ -229,14 +231,15 @@ export function redactExact(input: string, exactSecrets: readonly string[]): str
   let redacted = input;
   for (const form of [...forms].sort((a, b) => b.length - a.length)) {
     const pattern = form.split(/\s+/u).map(part => part.replace(REGEX_SPECIAL, '\\$&')).join('\\s+');
-    redacted = redacted.replace(new RegExp(pattern, 'gu'), '[REDACTED]');
+    redacted = redacted.replace(new RegExp(pattern, 'gu'), matched => masked(matched, keepLines));
   }
   return redacted;
 }
 
-export function redactSecrets(input: string, exactSecrets: readonly string[] = []): string {
-  let redacted = redactExact(input, exactSecrets);
-  redacted = sanitizeModelInputText(redacted).text;
+export function redactSecrets(input: string, exactSecrets: readonly string[] = [], options: { keepLines?: boolean } = {}): string {
+  const keepLines = options.keepLines === true;
+  let redacted = redactExact(input, exactSecrets, keepLines);
+  redacted = sanitizeModelInputText(redacted, keepLines).text;
   redacted = redacted.replace(URL_USERINFO_PASSWORD, '$1[REDACTED]@');
   redacted = redacted.replace(URL_USERINFO_TOKEN, '$1[REDACTED]@');
   redacted = redacted.replace(URL_PARAM, redactUrlParam);

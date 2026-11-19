@@ -81,7 +81,9 @@ test('ツールの結果と承認の文: 英語で書く', async t => {
   mkdirSync(join(s.paths.workspace, 'empty'));
   assert.equal(await out('file_list', { path: 'empty' }), 'empty/ is empty');
   assert.equal(await out('file_write', { path: 'big.txt', content: 'a'.repeat(20_000) }), 'Created: big.txt (20,000 characters; +1 -0 lines)');
-  assert.equal((await out('file_read', { path: 'big.txt' })).slice(16_000), '\n\n[The output was long, so only 16,000 of 20,000 characters were returned. The rest is not shown]');
+  assert.equal((await out('file_read', { path: 'big.txt' })).slice(15_600), '\n\n[Line 1 of 1 is 20,000 characters long, so only its first 15,600 characters were returned]');
+  assert.equal(await out('file_write', { path: 'long-lines.txt', content: `${'b'.repeat(20_000)}\nnext` }), 'Created: long-lines.txt (20,005 characters; +2 -0 lines)');
+  assert.equal((await out('file_read', { path: 'long-lines.txt' })).slice(15_600), '\n\n[Line 1 of 2 is 20,000 characters long, so only its first 15,600 characters were returned. Read the following lines with offset=2]');
 
   const outside = await out('file_read', { path: '../outside.txt' });
   const roots = s.ctx.policy.roots;

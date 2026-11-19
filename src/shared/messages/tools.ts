@@ -44,6 +44,7 @@ const en = {
   'pipeline.truncated': '[The output was long, so only {shown} of {total} characters were returned. {note}]',
   'pipeline.note_full': 'The full text is in {ref}',
   'pipeline.note_none': 'The rest is not shown',
+  'pipeline.truncated_middle': '[The output was long ({total} characters), so only its first {head} and last {tail} characters were returned. {omitted} characters in the middle were left out. {note}]',
 
   'summary.file_write': 'Write to a file: {path}',
   'summary.memory_save': 'Save to memory ({label})',
@@ -57,6 +58,8 @@ const en = {
   'file.too_big': 'This is a large file ({size} bytes). Read it in parts with offset and limit',
   'file.binary': 'This looks like a binary file, so it is not read',
   'file.more': '[Lines {from} to {to} of {total}. Read on with offset={next}]',
+  'file.line_cut': '[Line {line} of {total} is {chars} characters long, so only its first {shown} characters were returned{more}]',
+  'file.line_cut_more': '. Read the following lines with offset={next}',
   'file.exists': 'It already exists: {path}',
   'file.is_dir': 'This is a folder: {path}',
   'file.recheck_failed': 'Checking the write destination failed: {detail}',
@@ -76,7 +79,8 @@ const en = {
 
   'shell.spawn_failed': 'Cannot start the shell ({shell}): {detail}',
   'shell.header': '({shell}, cwd: {cwd}, exit code: {code}, {seconds} s)',
-  'shell.truncated': '[The output was {total} bytes, so only the first {cap} bytes were returned{tail}]',
+  'shell.truncated': '[The output was {total} bytes, so only its beginning (the first {cap} bytes) and its end were returned{tail}]',
+  'shell.omitted': '[... {bytes} bytes left out ...]',
   'shell.truncated_tail': '. Full output: {path}',
   'shell.timeout': '[Stopped after the {seconds} s timeout (child processes included)]',
   'shell.aborted': '[Stopped]',

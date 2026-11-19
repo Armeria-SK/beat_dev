@@ -24,6 +24,22 @@ export function prefixLength(text: string, maxChars: number, maxTokens: number):
   return length;
 }
 
+export function suffixLength(text: string, maxChars: number, maxTokens: number): number {
+  let cjk = 0; let other = 0; let length = 0;
+  let end = text.length;
+  while (end > 0) {
+    const low = text.charCodeAt(end - 1);
+    const high = end > 1 ? text.charCodeAt(end - 2) : 0;
+    const size = low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? 2 : 1;
+    if (length + size > maxChars) break;
+    if (CJK.test(text.slice(end - size, end))) cjk++; else other++;
+    if (cjk + other / 3.5 > maxTokens) break;
+    length += size;
+    end -= size;
+  }
+  return length;
+}
+
 export function estimateMessageTokens(message: ChatMessage): number {
   let tokens = 4;
   if (message.role === 'user') {

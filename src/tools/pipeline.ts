@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
-import { prefixLength } from '../engine/tokens.ts';
+import { prefixLength, suffixLength } from '../engine/tokens.ts';
 import type { RunEvent, ToolCall, ToolGate } from '../engine/types.ts';
 import { previewJson } from '../shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
@@ -185,6 +185,13 @@ function capOutput(output: ToolOutput, language: Language, tokens: number | unde
   const shown = prefixLength(content, TOOL_OUTPUT_LIMIT, tokens ?? Infinity);
   if (shown >= content.length) return { ...output, content };
   const note = output.fullRef ? toolText(language, 'pipeline.note_full', { ref: output.fullRef }) : toolText(language, 'pipeline.note_none');
+  if (output.keepTail) {
+    const limit = tokens ?? Infinity;
+    const head = prefixLength(content, Math.floor(TOOL_OUTPUT_LIMIT * 0.6), limit * 0.6);
+    const tail = suffixLength(content, TOOL_OUTPUT_LIMIT - Math.floor(TOOL_OUTPUT_LIMIT * 0.6), limit * 0.4);
+    const middle = toolText(language, 'pipeline.truncated_middle', { total: content.length.toLocaleString('en-US'), head: head.toLocaleString('en-US'), tail: tail.toLocaleString('en-US'), omitted: (content.length - head - tail).toLocaleString('en-US'), note });
+    return { ...output, content: `${content.slice(0, head)}\n\n${middle}\n\n${content.slice(content.length - tail)}` };
+  }
   return { ...output, content: `${content.slice(0, shown)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: shown.toLocaleString('en-US'), note })}` };
 }
 
