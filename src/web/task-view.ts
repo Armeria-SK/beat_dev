@@ -7,14 +7,14 @@ function masked(app: App, text: string | null): string | null {
   return text === null ? null : redactSecrets(text, app.registry.secrets());
 }
 
-export interface TaskWorktree { id: string; branch: string; base: string; state: string; files: number | null; added: number | null; removed: number | null; note: string | null }
+export interface TaskWorktree { id: string; branch: string; base: string; state: string; files: number | null; added: number | null; removed: number | null; note: string | null; held: { path: string; files: number } | null }
 
 // beat 8-2: タスクの作業コピー（8-3 の画面が使う）。変わった量は数え終わるまで null
 function worktreeOf(app: App, task: Task): TaskWorktree | null {
   const row = app.worktrees?.forTask(task.id);
   if (!row) return null;
   const stats = app.worktrees.statsOf(row);
-  return { id: row.id, branch: row.branch, base: row.base, state: row.state, files: stats?.files ?? null, added: stats?.added ?? null, removed: stats?.removed ?? null, note: row.note };
+  return { id: row.id, branch: row.branch, base: row.base, state: row.state, files: stats?.files ?? null, added: stats?.added ?? null, removed: stats?.removed ?? null, note: row.note, held: app.mergeWatch?.held(row) ?? null };
 }
 
 export function maskedTaskView(app: App, task: Task): TaskView & { reject_reason?: string | null; worktree: TaskWorktree | null } {

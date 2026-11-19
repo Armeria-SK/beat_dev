@@ -117,7 +117,7 @@ const STALE_CREATING_MS = 10 * 60 * 1000;
 const MAX_ADMIN_FILE = 4096;
 const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'BISECT_LOG'];
 // 仕上げのコミットに入れない新しいファイルの名前（.env* と *.env・鍵・credentials.json・secrets.*。名前に secret を含むだけのソースは入れる）
-const HELD_NAME = /(?:^|\/)(?:\.env[^/]*|[^/]+\.env|[^/]+\.(?:pem|key)|credentials\.json|secrets\.[^/]+)$/iu;
+export const HELD_NAME = /(?:^|\/)(?:\.env[^/]*|[^/]+\.env|[^/]+\.(?:pem|key)|credentials\.json|secrets\.[^/]+)$/iu;
 const NO_MAINTENANCE = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
 const WINDOWS = process.platform === 'win32';
 const fold = (p: string): string => (WINDOWS ? p.toLowerCase() : p);
@@ -564,7 +564,7 @@ export class Worktrees {
   }
 
   // ブランチの先端が本体の今のブランチの祖先か。祖先なら、取り込み待ちの行を merged にする。D-13 の行（not_on_branch）と、先端が作ったときのままの行は取り込み済みにしない
-  async isMerged(id: string): Promise<boolean | undefined> {
+  async isMerged(id: string, options: { mark?: boolean } = {}): Promise<boolean | undefined> {
     const row = this.get(id);
     const repo = row && BEAT_BRANCH.test(row.branch) ? this.#repoHere(row) : null;
     if (!row || !repo) return undefined;
@@ -572,7 +572,7 @@ export class Worktrees {
     if (!tip) return undefined;
     if (row.note !== null || tip === row.base) return false;
     const merged = await this.#mergedIntoBranch(repo, tip);
-    if (merged && row.state === 'branch') this.#set(id, { state: 'merged', tip }, 'branch');
+    if (merged && row.state === 'branch' && options.mark !== false) this.#set(id, { state: 'merged', tip }, 'branch');
     return merged;
   }
 
@@ -641,7 +641,8 @@ export class Worktrees {
   }
 
   // 自分が作ったと表にある作業コピーとブランチだけを片づける。消せなければ removing で残し、見回りがやり直す
-  async removeWorktree(id: string, options: { keepBranch: boolean; state?: 'merged' | 'discarded' | 'gone'; discardLocal?: boolean }): Promise<RemoveResult> {
+  // confirmedTip: 持ち主が見て捨てると決めたブランチの先端（beat の書いていないコミットも消す）。ready: 消しかけにする直前に、読み直した行で呼ぶ（同じ同期の区切りで行を removing にする）
+  async removeWorktree(id: string, options: { keepBranch: boolean; state?: 'merged' | 'discarded' | 'gone'; discardLocal?: boolean; confirmedTip?: string; ready?: (row: WorktreeRow) => boolean }): Promise<RemoveResult> {
     const row = this.get(id);
     if (!row) return { ok: false, reason: 'unknown' };
     if (!BEAT_BRANCH.test(row.branch) || !WORKTREE_ID.test(row.id)) return { ok: false, reason: 'foreign' };
@@ -676,7 +677,11 @@ export class Worktrees {
     }
 
     let ending: WorktreeEnding | null = options.state ?? (row.state === 'removing' ? row.ending : row.state === 'merged' ? 'merged' : null);
-    const ownTip = row.own_tip ?? row.base;
+    const ownTip = options.confirmedTip ?? row.own_tip ?? row.base;
+    if (options.ready) {
+      const fresh = this.get(id);
+      if (!fresh || fresh.state !== row.state || !options.ready(fresh)) return { ok: false, reason: 'busy' };
+    }
     this.#set(id, { state: 'removing', keep_branch: options.keepBranch ? 1 : 0, ending });
     if (row.path && lstatOf(row.path) !== undefined) {
       if (!place.ok || !ownFolder(place.root, row)) return { ok: false, reason: 'foreign' };

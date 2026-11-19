@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type ScoutMode, type ScoutState, type Task, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, useT } from '../../i18n/index.ts';
@@ -25,7 +25,7 @@ export interface ProductHomeProps {
   onProject?: ((project: Project) => void) | undefined;
 }
 
-interface Loaded { active: Task[]; awaiting: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[] }
+interface Loaded { active: Task[]; awaiting: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; changed: ReadonlySet<string> }
 
 const MODE_KEY = { off: 'ui.scout.mode.off', research: 'ui.scout.mode.research', fix: 'ui.scout.mode.fix' } as const satisfies Record<ScoutMode, string>;
 
@@ -76,9 +76,11 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
   };
   const look = useLastLook(productLookKey(id), project !== undefined);
   const read = useCallback(async (): Promise<Loaded> => {
-    const [tasks, finished, runs] = await Promise.all([api.tasks(id), api.finishedTasks(null, KANBAN_PAGE, id), api.runs(RUNS_WINDOW, id)]);
-    return { active: tasks.active, awaiting: tasks.awaiting ?? [], finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs };
+    const [tasks, finished, runs, checks] = await Promise.all([api.tasks(id), api.finishedTasks(null, KANBAN_PAGE, id), api.runs(RUNS_WINDOW, id), api.sessionChecks(id).then(r => r.sessions, () => [])]);
+    return { active: tasks.active, awaiting: tasks.awaiting ?? [], finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, changed: new Set(checks.map(c => c.conversation_id)) };
   }, [id]);
+  // beat 8-3: 製品の画面を開いたら、持ち主が取り込んだブランチを見回りを待たずに見つける
+  useEffect(() => { void api.checkBranches(id).catch(() => undefined); }, [id]);
   const { data, failed, load } = useHomeLoad(read, revision, drafts);
   const { busy, stop, retry } = useRunActions(worker, load);
   const commands = useProductCommands(id, backgroundRevision);
@@ -86,7 +88,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
   const mine = useMemo(() => conversations.filter(c => c.project_id === id), [conversations, id]);
   const mini = useMemo(() => {
     if (!data) return null;
-    const sessions = sessionCards({ conversations: mine, drafts, runs: data.runs, checklists });
+    const sessions = sessionCards({ conversations: mine, drafts, runs: data.runs, checklists, changed: data.changed });
     return miniBoard(buildBoard({ active: [...data.active, ...data.awaiting], finished: data.finished, hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }));
   }, [data, mine, drafts, checklists]);
   const running = useMemo(

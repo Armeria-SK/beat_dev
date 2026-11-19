@@ -3,7 +3,7 @@ import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
 import { EDIT_TOOLS } from './changes.ts';
 
-export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; projectId?: string | null; conversationId?: string | null; buildChat?: { chat: string; conversation: string | null } }
+export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; merge?: boolean; projectId?: string | null; conversationId?: string | null; buildChat?: { chat: string; conversation: string | null } }
 
 export interface SettledTool { callId: string; name: string; input: string; gate?: ToolGate | undefined }
 export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; settledCount?: number | undefined; waitingSince?: number | undefined }
@@ -97,7 +97,7 @@ const buildChat = (t: Task): Pick<TaskMark, 'buildChat'> =>
   (t.created_in_conversation && t.acceptance_items && !t.spawned_by ? { buildChat: { chat: t.created_in_conversation, conversation: t.conversation_id } } : {});
 
 export function mergeTasks(prev: ReadonlyMap<string, TaskMark>, snapshot: readonly Task[]): Map<string, TaskMark> {
-  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), projectId: t.project_id ?? null, ...(t.conversation_id ? { conversationId: t.conversation_id } : {}), ...(t.check_state ? { checkState: t.check_state } : {}), ...buildChat(t) }]));
+  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), projectId: t.project_id ?? null, ...(t.conversation_id ? { conversationId: t.conversation_id } : {}), ...(t.check_state ? { checkState: t.check_state } : {}), ...(t.worktree?.state === 'branch' ? { merge: true } : {}), ...buildChat(t) }]));
   for (const [id, mark] of prev) {
     const fresh = next.get(id);
     if (fresh ? mark.updatedAt > fresh.updatedAt : mark.live) next.set(id, mark);
@@ -241,9 +241,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
-      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), projectId: e.task.project_id ?? null, ...(e.task.conversation_id ? { conversationId: e.task.conversation_id } : {}), ...(e.task.check_state ? { checkState: e.task.check_state } : {}), ...buildChat(e.task) });
+      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), projectId: e.task.project_id ?? null, ...(e.task.conversation_id ? { conversationId: e.task.conversation_id } : {}), ...(e.task.check_state ? { checkState: e.task.check_state } : {}), ...(e.task.worktree?.state === 'branch' ? { merge: true } : {}), ...buildChat(e.task) });
       const mark = tasks.get(e.task.id)!;
-      const moved = !old || old.status !== mark.status || old.waitingKind !== mark.waitingKind || old.checkState !== mark.checkState || old.buildChat?.conversation !== mark.buildChat?.conversation;
+      const moved = !old || old.status !== mark.status || old.waitingKind !== mark.waitingKind || old.checkState !== mark.checkState || old.merge !== mark.merge || old.buildChat?.conversation !== mark.buildChat?.conversation;
       const chat = moved ? mark.buildChat?.chat : undefined;
       const next = { ...(chat ? bump(s, chat) : s), tasks, taskRevision: s.taskRevision + 1 };
       const build = e.task.project_id && e.task.acceptance_items && old?.status !== e.task.status ? e.task.project_id : null;

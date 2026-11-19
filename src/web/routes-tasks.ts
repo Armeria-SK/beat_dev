@@ -15,6 +15,7 @@ import { answerQuestion } from './routes-questions.ts';
 import { maskedEvents, maskedLastRun, maskedTaskView } from './task-view.ts';
 import { AcceptanceError } from '../projects/acceptance.ts';
 import { GateError, itemSummary, ownerDecide } from '../projects/gate.ts';
+import { mergeWaiting, type BranchAction } from '../projects/merge-watch.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -63,6 +64,12 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (!task) throw problem(404, 'not_found', 'task_missing');
     return task;
   };
+  // Awaiting check: 確かめる項目が残っている（check_state）か、取り込み待ちのブランチがある（beat 8-3）。両方のタスクは 1 つにまとめる
+  const awaitingTasks = (project: ReturnType<typeof projectFilterOf>): Task[] => {
+    const checks = app.tasks.awaiting(project);
+    const seen = new Set(checks.map(task => task.id));
+    return [...checks, ...mergeWaiting(app.db, project).filter(task => !seen.has(task.id))];
+  };
   const ownerTask = (id: string): Task => {
     const task = getTask(id);
     if (isScoutRun(task)) throw problem(409, 'task', 'scout_run');
@@ -74,7 +81,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     sendJson(res, 200, {
       active: app.tasks.list({ project }).map(withItems),
       finished: app.tasks.recentlyFinished(50, project).map(withItems),
-      awaiting: app.tasks.awaiting(project).map(withItems),
+      awaiting: awaitingTasks(project).map(withItems),
       finishedTotal: app.tasks.finishedTotal(project),
       repeating: app.tasks.templates(project).map(task => ({ ...view(task), last_run: maskedLastRun(app, task.last_run) })),
     });
@@ -276,6 +283,52 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const task = ownerTask(params[0]!);
     await decide(req, task, 'all', 'checked');
     sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task) });
+  });
+
+  // ── 取り込み待ちのブランチ（beat 8-3）。触るのは表 worktrees にあるそのタスクの行だけ ──
+  const branchRow = (task: Task) => {
+    const row = app.worktrees.forTask(task.id);
+    if (!row) throw problem(409, 'task', 'no_branch');
+    return row;
+  };
+  const branchDone = (res: Parameters<typeof sendJson>[0], task: Task, done: BranchAction) => {
+    if (!done.ok) {
+      if (done.reason === 'no_branch' || done.reason === 'busy' || done.reason === 'moved' || done.reason === 'changed') {
+        throw problem(409, 'task', done.reason === 'no_branch' ? 'no_branch' : done.reason === 'busy' ? 'branch_busy' : done.reason === 'moved' ? 'branch_moved' : 'branch_changed');
+      }
+      if ((done.reason === 'dirty' || done.reason === 'locked') && done.path) throw problem(409, 'task', 'branch_dirty', { params: { path: done.path } });
+      if (done.reason === 'unreadable' && done.path) throw problem(409, 'task', 'branch_unreadable', { params: { path: done.path } });
+      throw problem(409, 'task', 'branch_failed');
+    }
+    sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task), outcome: done.outcome });
+  };
+  router.add('GET', '/api/tasks/:id/branch', async ({ res, params }) => {
+    const task = ownerTask(params[0]!);
+    const row = branchRow(task);
+    const project = task.project_id ? app.projects.get(task.project_id) : undefined;
+    const listed = project ? await app.mergeWatch.preview(row, project.root) : { ok: false as const, reason: 'no_branch' as const };
+    if (!listed.ok) {
+      // 作業コピーが読めない（.git のファイルが無いなど）: 何が残っているか見せられないので、場所を出して持ち主に任せる
+      if (listed.reason === 'unreadable' && listed.path) throw problem(409, 'task', 'branch_unreadable', { params: { path: listed.path } });
+      throw problem(409, 'task', 'no_branch');
+    }
+    sendJson(res, 200, { branch: row.branch, base: row.base, ...listed.preview });
+  });
+  router.add('POST', '/api/tasks/:id/merged', async ({ req, res, params }) => {
+    const task = ownerTask(params[0]!);
+    const body = requireObject(await readJson(req));
+    // 作業コピーに残るファイルを見せて確かめたときだけ、見せた先端と指紋が付く（Discard と同じ確かめ）
+    const tip = requireString(body, 'tip', { optional: true, max: 64 });
+    const files = requireString(body, 'files', { optional: true, max: 64 });
+    if ((tip === undefined) !== (files === undefined)) throw problem(400, 'task', 'branch_confirm_pair');
+    branchDone(res, task, await app.mergeWatch.markMerged(branchRow(task).id, tip !== undefined && files !== undefined ? { tip, print: files } : undefined));
+  });
+  router.add('POST', '/api/tasks/:id/discard', async ({ req, res, params }) => {
+    const task = ownerTask(params[0]!);
+    const body = requireObject(await readJson(req));
+    const tip = requireString(body, 'tip', { max: 64 })!;
+    const files = requireString(body, 'files', { max: 64 })!;
+    branchDone(res, task, await app.mergeWatch.discard(branchRow(task).id, { tip, print: files }));
   });
 
   // ── ワーカー ──

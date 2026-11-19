@@ -9,10 +9,10 @@ import { Conversation, type BuildLive } from './Conversation.tsx';
 import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice } from './live-state.ts';
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
-import { Panes, usePanes } from './Panes.tsx';
+import { Panes, usePanes, type BranchView } from './Panes.tsx';
 import type { UndoneNotice } from './panes/ChangesPane.tsx';
 import { paneTarget, pendingFor, pendingRouteReady, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
-import { kanbanPaneCount } from './kanban.ts';
+import { kanbanPaneCount, type ChangesTarget } from './kanban.ts';
 import type { PaneView } from './panes.ts';
 import { questionsFor, taskQuestions, withQuestionCounts } from './questions.ts';
 import { PLAN_EDITS, planStays, runningIn } from './plan.ts';
@@ -366,7 +366,7 @@ export function App() {
   const paneProduct = convo ? convoProduct?.id ?? null : null;
   const panes = usePanes(paneProduct);
   const paneCount = convo ? panes.shown.length : 0;
-  const [want, setWant] = useState<{ productId: string; view: PaneView } | null>(null);
+  const [want, setWant] = useState<{ productId: string; view: PaneView; branch?: BranchView } | null>(null);
   const openPaneOf = useCallback((productId: string, view: PaneView) => {
     setWant({ productId, view });
     location.replace(routeHash(paneTarget(productId, conversations)));
@@ -381,9 +381,26 @@ export function App() {
   }, [paneRoute, paneRouteProduct, live.projectsLoaded, live.conversationsSettled, projects, openPaneOf]);
   useEffect(() => {
     if (!want || paneProduct !== want.productId) return;
-    if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);
+    if (want.branch) panes.openBranch(want.branch);
+    else if (want.view === 'plan') panes.openPlan(false);
+    else { if (want.view === 'changes') panes.closeBranch(); panes.openPane(want.view); }
     setWant(null);
   }, [want, paneProduct, panes]);
+  // beat 8-3: カードの Open changes。ブランチならその差分、会話ならその会話の Changes、ほかは製品の Changes の欄を開く
+  const openChangesOf = useCallback((target: ChangesTarget) => {
+    const branch = target.worktreeId && target.branch ? { productId: target.productId, worktreeId: target.worktreeId, branch: target.branch } : undefined;
+    if (paneProduct === target.productId && (!target.conversationId || target.conversationId === chatId)) {
+      if (branch) panes.openBranch(branch); else { panes.closeBranch(); panes.openPane('changes'); }
+      return;
+    }
+    if (target.conversationId) {
+      setWant({ productId: target.productId, view: 'changes', ...(branch ? { branch } : {}) });
+      location.hash = routeHash({ view: 'chat', id: target.conversationId });
+      return;
+    }
+    setWant({ productId: target.productId, view: 'changes', ...(branch ? { branch } : {}) });
+    location.replace(routeHash(paneTarget(target.productId, conversations)));
+  }, [paneProduct, chatId, panes, conversations]);
   const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan, onOpenPending: () => panes.openPane('pending'), onOpenTerminal: panes.openTerminal, onOpenChanges: panes.openChanges } : undefined;
   const undone = useCallback((notice: UndoneNotice) => {
     if (chatId) dispatch({ type: 'notice', conversationId: chatId, notice: { runId: `undo:${notice.batch ?? Date.now()}`, kind: 'undo', ...notice } });
@@ -425,7 +442,7 @@ export function App() {
         ) : (
           <main className="bt-screen" inert={drawer}>
             {behind.view === 'kanban' ? (
-              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} questionsByTask={questionsByTask} waits={worker?.waiting} />
+              <Kanban conversations={conversations} drafts={drafts} checklists={checklists} revision={live.taskRevision + live.epoch} projects={projects} pendingByTask={pendingByTask} questionsByTask={questionsByTask} waits={worker?.waiting} onOpenChanges={openChangesOf} />
             ) : behind.view === 'task' ? (
               <TaskScreen key={behind.id} id={behind.id} revision={`${live.taskRevision}:${live.epoch}:${live.pendingRevision}`} worker={worker} projects={projects} pending={pendingByTask.get(behind.id) ?? 0} />
             ) : behind.view === 'overview' ? (
@@ -461,7 +478,7 @@ export function App() {
           </main>
         )}
         {paneProduct && paneCount > 0 && (
-          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting} productRoot={convoProduct?.root ?? null} editRevision={paneEdits} onUndone={undone}
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting} productRoot={convoProduct?.root ?? null} editRevision={paneEdits} onUndone={undone} onOpenChanges={openChangesOf}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
             pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
             questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }}

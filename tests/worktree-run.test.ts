@@ -647,7 +647,7 @@ test('8-2 見直し MEDIUM: タスクの形に worktree（id・branch・base・s
   const [row] = s.rows();
   maskedTaskView(s.app, s.app.tasks.get(b.id)!);
   await waitFor(() => maskedTaskView(s.app, s.app.tasks.get(b.id)!).worktree?.files !== null, '数え終わる');
-  assert.deepEqual(maskedTaskView(s.app, s.app.tasks.get(b.id)!).worktree, { id: row!.id, branch: row!.branch, base: row!.base, state: 'branch', files: 1, added: 2, removed: 0, note: null });
+  assert.deepEqual(maskedTaskView(s.app, s.app.tasks.get(b.id)!).worktree, { id: row!.id, branch: row!.branch, base: row!.base, state: 'branch', files: 1, added: 2, removed: 0, note: null, held: null });
   busy.gate.release();
   await busy.first;
 });
