@@ -110,9 +110,12 @@ const decodedCopy = (text: string): string => text
   })
   .replace(/[\t\n\r]/gu, '');
 
-function touchesLoopback(text: string, server: SelfServer, beatPorts: ReadonlySet<number>): boolean {
-  const ports = new Set([...selfPortsOf(server).ports, ...beatPorts]);
-  const named = [...ports].filter(port => port >= NUMBER_SCAN_FROM);
+export interface BeatPorts { own: ReadonlySet<number>; denied: ReadonlySet<number> }
+
+function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts): boolean {
+  const own = new Set([...selfPortsOf(server).ports, ...beatPorts.own]);
+  const ports = new Set([...own, ...beatPorts.denied]);
+  const named = [...own].filter(port => port >= NUMBER_SCAN_FROM);
   if (named.length) {
     const number = new RegExp(String.raw`\b0*(?:${named.join('|')})\b`, 'u');
     if (number.test(text) || number.test(decodedCopy(text))) return true;
@@ -126,7 +129,7 @@ function touchesLoopback(text: string, server: SelfServer, beatPorts: ReadonlySe
   return selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined;
 }
 
-export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: ReadonlySet<number>): string[] {
+export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts): string[] {
   const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
   if (touchesLoopback(text, server, beatPorts)) found.push(LOOPBACK_MARKER);
   const lower = text.toLowerCase();

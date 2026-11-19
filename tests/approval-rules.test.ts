@@ -22,6 +22,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { buildMcpTool, heldValues } from '../src/mcp/tool.ts';
 import type { BrowserDriver } from '../src/tools/browser/driver.ts';
+import { deniedLoopbackPorts } from '../src/tools/browser/loopback.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import type { AskKind, HeldValue, PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
@@ -1169,7 +1170,7 @@ test('AP-1f T-G8（審査で反転: 既定の 4777 はいつも beat のポー�
 
 test('AP-1f T-G8 試しの beat: beat が 4888 で動いていても、本物の beat の 4777 を叩くスクリプトには印が付く', async t => {
   const r = rig(t, c => { c.server.port = 4888; });
-  for (const [name, body] of [['real', "await fetch('http://localhost:4777/');"], ['trial', "await fetch('http://127.0.0.1:4888/');"]] as const) {
+  for (const [name, body] of [['real', "await fetch('http://localhost:4777/');"], ['trial', "await fetch('http://127.0.0.1:4888/');"], ['real-bare', 'const port = 4777;']] as const) {
     const { pre, out } = await loopbackScript(r, name, body);
     assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
     assert.equal(out.decidedBy, 'pending', name);
@@ -1184,6 +1185,38 @@ test('AP-1f T-G8 提供元のポート: 設定のローカルの提供元（1143
   assert.equal(out.decidedBy, 'pending');
 });
 
+test('AP-1f N10: 提供元・中継のポートの数字が、ループバックの書き方なしにコードにあるだけなら印は付かない（数字だけの見張りは beat 自身のポートだけ）', async t => {
+  const r = rig(t, c => {
+    c.providers.push(
+      { ...c.providers[0]!, id: 'lmstudio', baseUrl: 'http://127.0.0.1:1234/v1' },
+      { ...c.providers[0]!, id: 'vllm', baseUrl: 'http://localhost:8000/v1' },
+      { ...c.providers[0]!, id: 'relay', baseUrl: 'http://127.0.0.1:3000/v1' },
+    );
+  });
+  const denied = deniedLoopbackPorts(r.ctx.config, []);
+  assert.ok([1234, 8000, 3000].every(port => denied.has(port)), '前提: 3 つとも断るポート');
+  for (const [name, body] of [
+    ['timeout', 'setTimeout(done, 3000);'],
+    ['user', 'const user = { id: 1234 };'],
+    ['wait', 'await page.waitForTimeout(8000);'],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.deepEqual(pre.reasonKeys?.filter(key => key === 'code.self_touch') ?? [], [], `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.ok(pre.productRun !== undefined, `${name}: 順 4 に乗る`);
+    assert.equal(out.decidedBy, pre.productRun, `${name}: ${out.output.content}`);
+  }
+  assert.equal(r.judge.calls, 0);
+  for (const [name, body] of [
+    ['bare-beat', `const port = ${r.ctx.config.server.port};`],
+    ['bare-default', 'const port = 4777;'],
+    ['lmstudio-loopback', "await fetch('http://localhost:1234/v1/models');"],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.equal(out.decidedBy, 'pending', name);
+  }
+});
+
 test('AP-1f T-G8 前のポート: 設定のポートを変えて反映する前も、起動したときのポート（ブラウザの見た beat のポート）に印が付く', async t => {
   const r = rig(t, c => { c.server.port = 4888; });
   let current: AppConfig = r.ctx.config;
@@ -1195,6 +1228,9 @@ test('AP-1f T-G8 前のポート: 設定のポートを変えて反映する前�
   assert.equal(old.out.decidedBy, 'pending');
   const without = shellPreCheck({ command: 'node scripts/served.mjs' }, { ...r.ctx, config: current });
   assert.ok(!without.reasonKeys?.includes('code.self_touch'), '対照: 設定だけでは前のポートが分からない');
+  const bare = await loopbackScript(r, 'bare-served', 'const port = 4888;', withSession);
+  assert.ok(bare.pre.reasonKeys?.includes('code.self_touch'), `数字だけでも前のポートに印: ${JSON.stringify(bare.pre.reasonKeys)}`);
+  assert.equal(bare.out.decidedBy, 'pending');
 });
 
 test('AP-1b N7: 外を読んだ実行でも、送る（curl → origin）・消す・MCP の名前の送るの決まりに当たる呼び出しは通る。外を読んだ実行の send・delete の行から決まりを作れる', async t => {
