@@ -13,6 +13,7 @@ import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, typ
 import type { ElementTable } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 import { allowedLoopbackUrl, deniedLoopbackPorts, type BrowserGrant } from './loopback.ts';
+import { DRIVING_MS, MirrorFrames, observePage, SHOT_INTERVAL_MS, SHOT_TIMEOUT_MS, strongerAction, WATCH_MS, type MirrorAction, type MirrorFrame } from './mirror.ts';
 
 type BrowserConfig = AppConfig['tools']['browser'];
 
@@ -58,6 +59,8 @@ export interface BrowserTab {
   readonly id: string;
   readonly conversationId: string;
   readonly kind: BrowserTabKind;
+  // タブを開いた実行の製品（grant.productId）。製品に属さない会話のタブは undefined で、Browser の欄に出ない
+  readonly productId: string | undefined;
   readonly page: PageHandle;
   // 最後に読んだ「触れるもの」の表。URL が変わったら使わない
   table: ElementTable | undefined;
@@ -87,6 +90,28 @@ export interface BrowserApi {
   // 上限を超える分は閉じて数だけ返す。work が失敗したら、集めた窓はすべて閉じる。work の外で開いた窓・ほかの会話の文脈の窓は今までどおり即座に閉じる
   withPopups<T>(work: () => Promise<T>): Promise<{ value: T; opened: BrowserTab[]; closed: number }>;
 }
+
+// Browser の欄が映すタブの様子（9-2a）。url・title は最後に撮ったときのもの
+export interface BrowserView {
+  tab: string;
+  conversationId: string;
+  runId: string;
+  url: string;
+  title: string;
+  driving: boolean;
+  action: MirrorAction;
+  // 最後の画像の時刻と番号（まだ無ければ null と 0）
+  at: number | null;
+  seq: number;
+  viewport: { width: number; height: number };
+  profile: { kind: 'work' } | { kind: 'owner'; path: string };
+}
+
+// 欄に出してよい会話か（DB で、その製品の会話・タスク・子の担当か）。attended は持ち主が見ている会話（持ち主のプロファイルのタブを出してよい）
+export type MirrorConversation = (conversationId: string) => { attended: boolean } | undefined;
+
+// タブごとの写しの記録。raw は見張りを付ける前のページ（撮影が自分の見張りに数えられないため）
+interface TabMirror { raw: PageHandle; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string }
 
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
@@ -138,6 +163,16 @@ export class BrowserSession {
   #epoch = 0;
   // 作ってから見た beat のポートすべて（起動の時の設定を含む）。設定を変えて反映する前も、動いている古いポートを断り続ける
   #selfPorts = new Set<number>();
+  // Browser の欄の写し（9-2a）
+  readonly #frames = new MirrorFrames();
+  readonly #mirror = new Map<string, TabMirror>();
+  // いま動いている呼び出しと、その番号（タブの操作を、どの実行・どの呼び出しのものか覚える）
+  #current: { call: BrowserCall; no: number } | undefined;
+  #callNo = 0;
+  // 欄が読みに来た製品と、一定間隔の撮影を続ける期限
+  readonly #watched = new Map<string, number>();
+  #shotTimer: (() => void) | undefined;
+  #shooting = false;
 
   constructor(deps: BrowserSessionDeps) {
     this.#d = deps;
@@ -176,6 +211,8 @@ export class BrowserSession {
   async run<T>(call: BrowserCall, fn: (api: BrowserApi) => Promise<T>): Promise<T> {
     if (!this.enabled()) throw new BrowserFailure('disabled', 'browser.disabled');
     await this.#acquire(call.signal);
+    const no = ++this.#callNo;
+    this.#current = { call, no };
     try {
       if (call.signal.aborted) throw new BrowserFailure('aborted', 'browser.aborted');
       if (!this.enabled()) throw new BrowserFailure('disabled', 'browser.disabled');
@@ -188,6 +225,11 @@ export class BrowserSession {
       }
       return await fn(this.#api(call));
     } finally {
+      // この呼び出しで操作したタブを 1 枚ずつ撮る（ロックの中。中止されたら待たせない）
+      if (!call.signal.aborted) {
+        for (const tab of [...this.#tabs.values()]) if (tab.productId !== undefined && this.#mirror.get(tab.id)?.call === no) await this.#shoot(tab);
+      }
+      this.#current = undefined;
       if (this.#owner && call.grant.attended) this.#armIdle(this.#ownerIdle, () => this.#shutdownOwner());
       const context = this.#contexts.get(call.grant.conversationId);
       if (context) this.#armIdle(context.idle, () => this.#closeContext(context));
@@ -213,8 +255,97 @@ export class BrowserSession {
 
   async close(): Promise<void> {
     this.#epoch += 1;
+    this.#shotTimer?.();
+    this.#shotTimer = undefined;
+    this.#watched.clear();
     await this.#shutdown();
     await this.#closeLogin();
+    this.#frames.clear();
+  }
+
+  // ---- Browser の欄（9-2a。持ち主の画面だけが読む。モデルには渡さない） ----
+  // 欄に出してよいタブ: その製品のタブで、DB でもその製品の会話のもの。持ち主のプロファイルのタブは、持ち主が見ている会話のものだけ（own() と同じ決まり）
+  #visible(tab: BrowserTab, productId: string, conversation: MirrorConversation): boolean {
+    if (tab.productId !== productId) return false;
+    const found = conversation(tab.conversationId);
+    return found !== undefined && (tab.kind === 'work' || found.attended);
+  }
+
+  // その製品でいちばん最近操作したタブの様子。読まれているあいだ、その製品の動いているタブを一定間隔で撮る
+  view(productId: string, conversation: MirrorConversation): BrowserView | null {
+    const now = this.#now();
+    this.#watched.set(productId, now + WATCH_MS);
+    this.#armShots();
+    let best: { tab: BrowserTab; mirror: TabMirror } | undefined;
+    for (const tab of this.#tabs.values()) {
+      const mirror = this.#mirror.get(tab.id);
+      if (mirror?.action === undefined || !this.#visible(tab, productId, conversation)) continue;
+      if (!best || mirror.actedAt > best.mirror.actedAt) best = { tab, mirror };
+    }
+    if (!best) return null;
+    const { tab, mirror } = best;
+    const frame = this.#frames.frame(tab.conversationId, tab.id);
+    return {
+      tab: tab.id, conversationId: tab.conversationId, runId: mirror.runId, url: mirror.url, title: mirror.title,
+      driving: this.#driving(tab, mirror, now), action: mirror.action!, at: frame?.at ?? null, seq: frame?.seq ?? 0,
+      viewport: { ...VIEWPORT },
+      profile: tab.kind === 'owner' ? { kind: 'owner', path: this.#d.paths.browserProfile } : { kind: 'work' },
+    };
+  }
+
+  // そのタブの最後の画像（欄に出してよいタブで、その会話の最後の 1 枚がこのタブのものだけ）
+  frame(tabId: string, productId: string, conversation: MirrorConversation): MirrorFrame | undefined {
+    const tab = this.#tabs.get(tabId);
+    if (!tab || !this.#visible(tab, productId, conversation)) return undefined;
+    return this.#frames.frame(tab.conversationId, tab.id);
+  }
+
+  #driving(tab: BrowserTab, mirror: TabMirror, now: number): boolean {
+    return this.#current?.call.grant.conversationId === tab.conversationId || now - mirror.actedAt < DRIVING_MS;
+  }
+
+  // 1 枚撮る。撮り始めた順を覚え、遅れて終わった古い撮影で新しい画像を上書きしない。閉じたタブ・失敗・時間切れは捨てる
+  async #shoot(tab: BrowserTab): Promise<void> {
+    const mirror = this.#mirror.get(tab.id);
+    if (!mirror) return;
+    const token = this.#frames.begin();
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), SHOT_TIMEOUT_MS); timer.unref(); });
+    try {
+      const shot = (async () => ({ png: await mirror.raw.screenshot(), title: await mirror.raw.title(), url: mirror.raw.url() }))();
+      shot.catch(() => undefined);
+      const got = await Promise.race([shot, late]);
+      if (!got || this.#tabs.get(tab.id) !== tab) return;
+      mirror.url = got.url; mirror.title = got.title;
+      this.#frames.store(tab.conversationId, tab.id, token, got.png, this.#now());
+    } catch { /* 撮れなかった 1 枚は捨てる（道具の呼び出しの結果は変えない） */ } finally { clearTimeout(timer); }
+  }
+
+  // 一定間隔の撮影（D-9）。欄が読んでいる製品の、動いているタブだけ。ロックが空いているときだけ始め、ロックは握らない（呼び出しを撮影で待たせない）
+  #armShots(): void {
+    if (this.#shotTimer) return;
+    this.#shotTimer = this.#schedule(() => { this.#shotTimer = undefined; void this.#tick(); }, SHOT_INTERVAL_MS);
+  }
+
+  async #tick(): Promise<void> {
+    const now = this.#now();
+    for (const [productId, until] of this.#watched) if (until <= now) this.#watched.delete(productId);
+    if (this.#watched.size === 0) return;
+    if (!this.#locked && !this.#shooting) {
+      this.#shooting = true;
+      try {
+        // 会話ごとに、いちばん最近操作したタブ
+        const latest = new Map<string, BrowserTab>();
+        for (const tab of this.#tabs.values()) {
+          const mirror = this.#mirror.get(tab.id);
+          if (tab.productId === undefined || !this.#watched.has(tab.productId) || mirror?.action === undefined || !this.#driving(tab, mirror, now)) continue;
+          const before = latest.get(tab.conversationId);
+          if (!before || mirror.actedAt > this.#mirror.get(before.id)!.actedAt) latest.set(tab.conversationId, tab);
+        }
+        for (const tab of latest.values()) await this.#shoot(tab);
+      } finally { this.#shooting = false; }
+    }
+    this.#armShots();
   }
 
   // ---- 設定の画面から（ログイン用の窓・止める・プロファイルの削除） ----
@@ -453,7 +584,13 @@ export class BrowserSession {
   }
 
   #dropTabs(match: (tab: BrowserTab) => boolean): void {
-    for (const tab of [...this.#tabs.values()]) if (match(tab)) this.#tabs.delete(tab.id);
+    for (const tab of [...this.#tabs.values()]) if (match(tab)) this.#forgetTab(tab);
+  }
+
+  #forgetTab(tab: BrowserTab): void {
+    this.#tabs.delete(tab.id);
+    this.#mirror.delete(tab.id);
+    this.#frames.forgetTab(tab.id);
   }
 
   async #shutdownOwner(): Promise<void> {
@@ -521,14 +658,25 @@ export class BrowserSession {
 
   // ---- タブ ----
   async #closeTab(tab: BrowserTab): Promise<void> {
-    this.#tabs.delete(tab.id);
+    this.#forgetTab(tab);
     await withTimeout(tab.page.close(), CLOSE_TIMEOUT_MS);
   }
 
-  #addTab(conversationId: string, kind: BrowserTabKind, page: PageHandle, handle: BrowserHandle): BrowserTab {
-    const tab: BrowserTab = { id: `t${this.#nextTab++}`, conversationId, kind, page, table: undefined, used: ++this.#clock };
+  // タブを作る。ページの操作に見張りを付け、操作した実行・いまの操作を覚える（撮るのは呼び出しの終わり）
+  #addTab(grant: BrowserGrant, kind: BrowserTabKind, raw: PageHandle, handle: BrowserHandle): BrowserTab {
+    const id = `t${this.#nextTab++}`;
+    const mirror: TabMirror = { raw, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '' };
+    const note = (action: MirrorAction): void => {
+      const current = this.#current;
+      if (current) { mirror.action = mirror.call === current.no ? strongerAction(mirror.action, action) : action; mirror.call = current.no; mirror.runId = current.call.grant.runId; } else mirror.action = action;
+      mirror.actedAt = this.#now();
+      mirror.url = raw.url();
+    };
+    const page = observePage(raw, note, png => { if (tab.productId !== undefined && this.#tabs.get(id) === tab) this.#frames.store(tab.conversationId, id, this.#frames.begin(), png, this.#now()); });
+    const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, table: undefined, used: ++this.#clock };
     this.#tabs.set(tab.id, tab);
     this.#tabHandles.set(tab, handle);
+    this.#mirror.set(id, mirror);
     return tab;
   }
 
@@ -565,10 +713,10 @@ export class BrowserSession {
           // 同じプロファイルを 2 つのブラウザで開けない。ログイン用の窓が開いているあいだは、持ち主のブラウザは使えない
           if (this.#login) throw new BrowserFailure('login_open', 'browser.login_open');
           const handle = await this.#ensureOwner();
-          return this.#addTab(grant.conversationId, 'owner', await handle.newPage(), handle);
+          return this.#addTab(grant, 'owner', await handle.newPage(), handle);
         }
         const context = await this.#ensureContext(grant);
-        return this.#addTab(grant.conversationId, 'work', await context.handle.newPage(), context.handle);
+        return this.#addTab(grant, 'work', await context.handle.newPage(), context.handle);
       },
       tab: id => {
         const mine = own();
@@ -613,7 +761,7 @@ export class BrowserSession {
         let closed = 0;
         for (const { page, kind, handle } of sink.pages) {
           if (this.#tabLimit(grant.conversationId, config.limits.maxTabs)) { await withTimeout(page.close(), CLOSE_TIMEOUT_MS); closed += 1; continue; }
-          opened.push(this.#addTab(grant.conversationId, kind, page, handle));
+          opened.push(this.#addTab(grant, kind, page, handle));
         }
         return { value, opened, closed };
       },

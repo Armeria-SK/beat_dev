@@ -6,6 +6,7 @@ import { startApp } from './app-setup.ts';
 import { FakeBrowserDriver } from './helpers/fake-browser.ts';
 import { BrowserFailure, type LaunchOptions } from '../src/tools/browser/driver.ts';
 import { headedAvailable } from '../src/tools/browser/session.ts';
+import { rootKeyOf } from '../src/projects/work-folder.ts';
 
 // T-41: ブラウザの API（状態・ログイン用の窓・閉じる・ログイン情報を消す）
 
@@ -147,4 +148,103 @@ test('profile/reset: 置き場所が data の下でなければ消さない', as
   const same = await json('/api/browser/profile/reset', 'POST', {});
   assert.equal(same.status, 409);
   assert.equal(existsSync(paths.data), true);
+});
+
+// 9-2a: Browser の欄の口（GET /api/browser/view・/api/browser/frame）
+async function mirrorSetup(t: Parameters<typeof startApp>[0]) {
+  const driver = new FakeBrowserDriver();
+  driver.site('https://a.example.com/', { title: 'Shop', png: Buffer.from('png-a') });
+  driver.site('https://b.example.com/', { title: 'Other', png: Buffer.from('png-b') });
+  const s = await startApp(t, { configure: enable, browserDriver: driver, browserDisplay: true });
+  const project = (name: string) => {
+    const root = join(s.paths.workspace, name);
+    mkdirSync(root, { recursive: true });
+    return s.app.projects.create({ name, root, rootKey: rootKeyOf(root), checkCommand: null });
+  };
+  const shop = project('shop');
+  const other = project('other');
+  const open = (conversationId: string, productId: string | undefined, url: string) => s.app.browser.run(
+    { grant: { conversationId, runId: `run-${conversationId}`, attended: true, loopback: false, ...(productId ? { productId } : {}) }, signal: new AbortController().signal },
+    async api => { const tab = await api.openTab('owner'); await tab.page.goto(url, 1000); return tab.id; },
+  );
+  return { ...s, driver, shop, other, open };
+}
+
+test('view / frame: 認証は ほかの口と同じ（別の Origin からは 403）', async t => {
+  const s = await mirrorSetup(t);
+  const evil = { Origin: 'http://evil.example' };
+  for (const path of [`/api/browser/view?product=${s.shop.id}`, `/api/browser/frame?product=${s.shop.id}&tab=t1`]) {
+    const res = await s.api(path, { headers: evil });
+    assert.equal(res.status, 403, path);
+  }
+});
+
+test('view / frame: 製品の ID は DB の製品だけ、タブの ID は t<数> の形だけ', async t => {
+  const s = await mirrorSetup(t);
+  assert.equal((await s.api('/api/browser/view')).status, 400);
+  assert.equal((await s.api('/api/browser/view?product=../x')).status, 400);
+  assert.equal((await s.api('/api/browser/view?product=p-nothere')).status, 404);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=x1`)).status, 400);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=t1&seq=-1`)).status, 400);
+  assert.equal((await s.api('/api/browser/frame?product=p-nothere&tab=t1')).status, 404);
+  const empty = await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET');
+  assert.deepEqual(empty, { status: 200, body: { view: null } });
+});
+
+test('view / frame: 製品のタブの様子と画像。同じ seq は 304、no-store。ほかの製品・製品に属さない会話のタブは出さない', async t => {
+  const s = await mirrorSetup(t);
+  const chat = s.app.conversations.create({ title: 'Build the shop', projectId: s.shop.id });
+  const elsewhere = s.app.conversations.create({ title: 'Other', projectId: s.other.id });
+  const free = s.app.conversations.create({ title: 'Free' });
+  const tab = await s.open(chat.id, s.shop.id, 'https://a.example.com/');
+  const view = await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET');
+  assert.equal(view.status, 200);
+  assert.equal(view.body.view.tab, tab);
+  assert.equal(view.body.view.url, 'https://a.example.com/');
+  assert.equal(view.body.view.title, 'Shop');
+  assert.equal(view.body.view.runId, `run-${chat.id}`);
+  assert.deepEqual(view.body.view.by, { kind: 'conversation', id: chat.id, title: 'Build the shop' });
+  const frame = await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${tab}`);
+  assert.equal(frame.status, 200);
+  assert.equal(frame.headers.get('content-type'), 'image/png');
+  assert.equal(frame.headers.get('cache-control'), 'no-store');
+  assert.equal(frame.headers.get('x-frame-seq'), String(view.body.view.seq));
+  assert.equal(Buffer.from(await frame.arrayBuffer()).toString(), 'png-a');
+  const same = await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${tab}&seq=${view.body.view.seq}`);
+  assert.equal(same.status, 304);
+  assert.equal((await same.arrayBuffer()).byteLength, 0);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${tab}&seq=${view.body.view.seq + 1}`)).status, 200);
+  // ほかの製品の会話・製品に属さない会話のタブ（どちらも新しい）は、この製品に出ない
+  const otherTab = await s.open(elsewhere.id, s.other.id, 'https://b.example.com/');
+  const freeTab = await s.open(free.id, undefined, 'https://b.example.com/');
+  assert.equal((await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET')).body.view.tab, tab);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${otherTab}`)).status, 404);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${freeTab}`)).status, 404);
+  assert.equal((await s.json(`/api/browser/view?product=${s.other.id}`, 'GET')).body.view.tab, otherTab);
+  // 会話の製品を DB が知らない・DB ではほかの製品の会話のタブ（grant だけ製品を名乗る）も出さない
+  const lying = await s.open(free.id, s.shop.id, 'https://b.example.com/');
+  const crossed = await s.app.browser.run({ grant: { conversationId: elsewhere.id, runId: 'run-x', attended: true, loopback: false, productId: s.shop.id }, signal: new AbortController().signal },
+    async api => { const made = await api.openTab('work'); await made.page.goto('https://b.example.com/', 1000); return made.id; });
+  assert.equal((await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET')).body.view.tab, tab);
+  for (const id of [lying, crossed]) assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${id}`)).status, 404);
+  const stray = await s.open('aaaaaaaa-0000-4000-8000-00000000ffff', s.shop.id, 'https://b.example.com/');
+  assert.equal((await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET')).body.view.tab, tab);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${stray}`)).status, 404);
+});
+
+test('view: タスクのタブは、だれのタブかにタスクの題を出す', async t => {
+  const s = await mirrorSetup(t);
+  const task = s.app.tasks.create({ title: 'Check the upload page', origin: 'user', actor: 'user', projectId: s.shop.id });
+  const conversation = s.app.conversations.create({ kind: 'task', title: 'task', projectId: s.shop.id });
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(conversation.id, task.id);
+  await s.app.browser.run({ grant: { conversationId: conversation.id, runId: 'run-task', attended: false, loopback: true, productId: s.shop.id }, signal: new AbortController().signal },
+    async api => { const tab = await api.openTab('work'); await tab.page.goto('https://a.example.com/', 1000); });
+  const view = await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET');
+  assert.deepEqual(view.body.view.by, { kind: 'task', id: task.id, title: 'Check the upload page' });
+  assert.deepEqual(view.body.view.profile, { kind: 'work' });
+  // タスクの会話（DB で持ち主が見ている会話でない）に持ち主のプロファイルのタブがあっても、出さない
+  const owner = await s.app.browser.run({ grant: { conversationId: conversation.id, runId: 'run-task', attended: true, loopback: true, productId: s.shop.id }, signal: new AbortController().signal },
+    async api => { const tab = await api.openTab('owner'); await tab.page.goto('https://b.example.com/', 1000); return tab.id; });
+  assert.equal((await s.json(`/api/browser/view?product=${s.shop.id}`, 'GET')).body.view.tab, view.body.view.tab);
+  assert.equal((await s.api(`/api/browser/frame?product=${s.shop.id}&tab=${owner}`)).status, 404);
 });
