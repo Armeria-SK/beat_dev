@@ -472,7 +472,7 @@ test('3-1c 目次の順と圧縮: buildDynamic の次・要約の前に入り、
   assert.ok(dynamic.indexOf('This conversation belongs to the product') < at, dynamic);
 });
 
-test('3-1c 目次は 1 回の実行で 1 回だけ作り、区切りの印は実行ごとに違う。1 回の実行の中の 2 回の頼みでは system が変わらない。材料が変わると次の実行で作り直す', async t => {
+test('3-1c 目次は 1 回の実行で 1 回だけ作り、区切りの印は会話ごとに 1 つ（TE-1。別の会話では違う）。1 回の実行の中の 2 回の頼みでは system が変わらない。材料が変わると次の実行で作り直す', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
   const before = s.app.mesh.builds;
@@ -490,11 +490,15 @@ test('3-1c 目次は 1 回の実行で 1 回だけ作り、区切りの印は実
   assert.equal(s.app.mesh.builds, before + 2);
   assert.match(meshBody(s.last().system.dynamic), /^now: \(AI note\) step one$/mu);
   const second = MARK.exec(s.last().system.dynamic)![1];
-  assert.notEqual(first, second, '印は実行ごとに違う');
+  assert.equal(first, second, '印は同じ会話の実行をまたいで同じ（TE-1）');
 
   s.adapter().scripts = [reply('third')];
   await s.send(uuid(1), { text: 'once more' });
   assert.equal(s.app.mesh.builds, before + 2, '材料が同じなら次の実行でも作り直さない');
+
+  s.adapter().scripts = [reply('other')];
+  await s.send(uuid(2), { text: 'go', projectId: shop.id, permissionMode: 'auto' });
+  assert.notEqual(MARK.exec(s.last().system.dynamic)![1], first, '別の会話の印は違う');
 });
 
 test('3-1c contextUsage: 目次を同じ長さの仮の印で囲んで数え、次に送る文の見積もりと合う', async t => {

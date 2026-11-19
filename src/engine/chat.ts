@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
+import { transaction } from '../db/database.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
 import { conversationSawOutside } from '../db/outside.ts';
@@ -58,7 +59,7 @@ import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
-import { buildDynamic, buildSnapshot, buildTail, fenceTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
+import { buildDynamic, buildSnapshot, buildTail, fenceTail, isFencedTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { ownWords, stripAttachments } from '../uploads/store.ts';
 import type { RunJob } from '../os/run-job.ts';
@@ -227,6 +228,8 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
   return preferred.length ? [...preferred] : config.models.map(m => m.id);
 }
 
+// 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
+interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background', number>> }
 // 1 回の実行の要約の状態: 要約した回数・失敗したか（失敗したら外すだけ）・要約した発言の合計・「外しました」で最後に知らせた件数
 interface CompactionState { count: number; failed: boolean; summarized: number; trimmedShown: number }
 
@@ -274,9 +277,8 @@ export class ChatEngine {
   #runMode = new Map<string, PermissionMode>();
   #runFence = new Map<string, string>();
   #runIndex = new Map<string, string>();
-  // 実行ごとの tail: 付けて送った発言（保存した発言の id → 文）と、最後に送った節と時刻（S1。前に送った tail は以後も同じ文で送る）。
-  // carriers: 時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
-  #runTail = new Map<string, { attached: Map<number, string>; sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background', number>> }>();
+  // この実行が tail を付けた発言の id（実行の前から tail を持つ最後の発言に、新しい tail が要るときだけ付け替えるため）
+  #runTail = new Map<string, Set<number>>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
   // 考えるだけで上限に達したあと、その実行で上げた返事の上限（実行 → モデルの ID → 上限。上げたモデルにだけ、#assemble がそのモデルの許す範囲で使う）
   #outputCap = new Map<string, Map<string, number>>();
@@ -1436,7 +1438,7 @@ export class ChatEngine {
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     // dynamic は実行のあいだ変わらない部分だけ（日付まで）。時刻・Checklist・裏のコマンドは tail へ（S1。dynamic が変わると後ろの履歴が全部書き直しになる）
     const now = d.now?.() ?? new Date();
-    const fence = this.#fence(p.runId);
+    const fence = this.#fence(p.runId, p.conversationId);
     const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
     const sections = { checklist, background };
     const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
@@ -1444,42 +1446,60 @@ export class ChatEngine {
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
     // 考える部分を送り返すかはここだけで決め、呼び出し・道具の結果の量・続きの見積もり・使用量の表示が同じ履歴を使う。
     // 送り返すのは、それを書いた提供元・モデルへ送り、要約の無い会話で、考える部分の量も数えて古い発言を 1 つも外さずに入りきるときだけ（前の発言が変わると API が断る）
-    // 実行の中では、道具の結果・発言から実行の nonce を消す（tail の印を装えないように）
+    // 実行の中では、道具の結果・発言から会話の nonce を消す（tail の印を装えないように）
     let history = stored.map(m => withThinkingFor(clean(forModel(m.message), p.runId ? fence : undefined), conversation?.summary ? undefined : { provider: model.provider, model: model.model }));
-    // この実行で発言に付けて送った tail は、同じ発言に同じ文で付け直す。モデルを呼ぶとき（sendTail）だけ、変わった分を最後の user / tool の発言に付けて覚える
-    const tails = p.runId ? this.#runTail.get(p.runId) ?? { attached: new Map<number, string>(), carriers: {} } : undefined;
-    const withTails = (list: ChatMessage[]) => (tails?.attached.size ? list.map((m, i) => { const tail = tails.attached.get(stored[i]!.id); return tail !== undefined && m.role !== 'assistant' ? { ...m, tail } : m; }) : list);
-    history = withTails(history);
-    if (tails && p.sendTail) {
-      const last = stored.at(-1);
-      if (last && last.message.role !== 'assistant' && !tails.attached.has(last.id)) {
-        // いまの文を載せた発言が、要約で消えたか、削られて送る範囲から外れるなら、前に送ったことにしないで全部を付け直す（削る量は全体の tail を足した多めの見積もり）
-        const carried = Object.values(tails.carriers);
-        let lost = false;
-        if (carried.length) {
-          let removed = 0;
-          try { removed = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: system.tail }).removed; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
-          const window = new Set(stored.slice(removed).map(m => m.id));
-          lost = carried.some(id => !window.has(id));
-        }
-        const next = nextTail(lost ? undefined : tails.sent, config.timezone, language, now, sections);
-        if (next) {
-          if (lost) tails.carriers = {};
-          tails.carriers.time = last.id;
-          for (const key of ['checklist', 'background'] as const) {
-            if (lost || (tails.sent?.[key] ?? '') !== sections[key]) { if (sections[key]) tails.carriers[key] = last.id; else delete tails.carriers[key]; }
-          }
-          tails.attached.set(last.id, fenceTail(next.text, fence.nonce)); tails.sent = next.sent; this.#runTail.set(p.runId!, tails);
-          history = withTails(history);
-        }
+    // 発言に保存した tail（TE-1）は、次の実行でも同じ文で同じ場所に送る。実行の中では、いまの会話の印で囲まれたものだけ送る（ほかは外し、載せていた節は送っていないものとして付け直す）。
+    // 実行の外（使用量）は保存したまま数える
+    const kept = new Set<number>();
+    history = history.map((m, i) => {
+      if (m.role === 'assistant' || m.tail === undefined) return m;
+      if (!p.runId || isFencedTail(m.tail, fence.nonce)) { kept.add(stored[i]!.id); return m; }
+      const { tail: _tail, ...rest } = m;
+      return rest as ChatMessage;
+    });
+    // 最後の user / tool の発言に付ける、変わった分の tail を決める（何も書かない）。モデルを呼ぶとき（実行の中の sendTail）だけ、付けて保存する。
+    // 最後に送った節と時刻・載せた発言は kv の tail-state:<会話>
+    const last = stored.at(-1);
+    const mine = p.runId ? this.#runTail.get(p.runId) ?? new Set<number>() : new Set<number>();
+    let next: { tail: string; state: TailState } | undefined;
+    if (last && last.id > 0 && last.message.role !== 'assistant' && !mine.has(last.id)) {
+      const state = d.kv.getJson<TailState>(`tail-state:${p.conversationId}`) ?? { carriers: {} };
+      // いまの文を載せた発言が、要約で消えたか、削られて送る範囲から外れるか、印が違って送らないなら、前に送ったことにしないで全部を付け直す（削る量は全体の tail を足した多めの見積もり）。
+      // 最後の発言が実行の前から tail を持つ（やり直し・失敗のあと）なら、新しい tail が要るときだけ、その発言の tail を全部の tail に替える
+      const carried = Object.values(state.carriers ?? {});
+      const relabel = kept.has(last.id);
+      let lost = relabel;
+      if (carried.length && !lost) {
+        let removed = 0;
+        try { removed = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: system.tail }).removed; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
+        const window = new Set(stored.slice(removed).map(m => m.id));
+        lost = carried.some(id => !window.has(id) || !kept.has(id));
       }
+      const due = relabel && !nextTail(state.sent, config.timezone, language, now, sections) ? undefined : nextTail(lost ? undefined : state.sent, config.timezone, language, now, sections);
+      if (due) {
+        const carriers: TailState['carriers'] = lost ? {} : { ...state.carriers };
+        carriers.time = last.id;
+        for (const key of ['checklist', 'background'] as const) {
+          if (lost || (state.sent?.[key] ?? '') !== sections[key]) { if (sections[key]) carriers[key] = last.id; else delete carriers[key]; }
+        }
+        next = { tail: fenceTail(due.text, fence.nonce), state: { sent: due.sent, carriers } };
+      }
+    }
+    if (next && last && p.runId && p.sendTail) {
+      const { tail, state } = next;
+      transaction(d.conversations.db, () => {
+        d.conversations.setTail(last.id, tail);
+        d.kv.setJson(`tail-state:${p.conversationId}`, state);
+      });
+      mine.add(last.id); this.#runTail.set(p.runId, mine);
+      history = history.map((m, i) => (i === stored.length - 1 && m.role !== 'assistant' ? { ...m, tail } : m));
     }
     // 古い Anthropic の考えるモデル（stripsThinkingOnText）に考える部分を送り返すとき、adapter は tail を全部 system の後ろに置く。
     // 送り返すかは adapter が最後に決めるので、ここでは送り返しうるとき全体の tail も数える（多めの見積もり）
     const oldThinking = config.providers.find(x => x.id === model.provider)?.kind === 'anthropic' && stripsThinkingOnText(model.model) && history.some(m => m.role === 'assistant' && m.thinking);
-    // まだ発言に付けていない、次に送る tail（見積もり用）。モデルを呼ぶときは、付けた分は発言が数えるので、system の後ろに置くとき（最後が assistant）だけ。
-    // それ以外（使用量・道具の結果の量・続きの見積もり）は、次の呼び出しで付きうる全体
-    const pending = !p.sendTail || oldThinking || stored.at(-1)?.message.role === 'assistant' ? system.tail : '';
+    // まだ発言に付けていない、次に送る tail（見積もり用）。発言が無いか最後が assistant なら、次の発言か system の後ろに置く全体。最後が user / tool なら、モデルを呼ぶときは付けた分を発言が数えるので 0、
+    // それ以外（使用量・道具の結果の量・続きの見積もり）は、次の呼び出しで最後の発言に付く分
+    const pending = !last || oldThinking || last.message.role === 'assistant' ? system.tail : p.sendTail ? '' : next?.tail ?? '';
     let replay = false;
     if (history.some(m => m.role === 'assistant' && m.thinking)) {
       try { replay = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: pending }).removed === 0; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
@@ -1524,14 +1544,21 @@ export class ChatEngine {
       if (runId) this.#runIndex.set(runId, body);
     }
     if (!body) return '';
-    return wrapMeshIndex(body, this.#fence(runId).nonce);
+    return wrapMeshIndex(body, this.#fence(runId, conversationId).nonce);
   }
 
-  // 実行ごとの印（mesh の索引と tail が同じ nonce を使う）。実行の外（使用量）は同じ長さの仮の nonce
-  #fence(runId: string | undefined): ReturnType<typeof makeFence> {
+  // 会話ごとの印（mesh の索引と tail が同じ nonce を使う。kv の fence:<会話>。TE-1: 保存した tail が前の実行の印を持つので、実行をまたいで同じ印を使う）。
+  // 作って書くのは実行の中だけ。実行の外（使用量）は同じ長さの仮の nonce で、何も書かない
+  #fence(runId: string | undefined, conversationId: string): ReturnType<typeof makeFence> {
     if (!runId) return makeFence(PLACEHOLDER_NONCE);
     let nonce = this.#runFence.get(runId);
-    if (!nonce) { nonce = newNonce(); this.#runFence.set(runId, nonce); }
+    if (!nonce) {
+      const key = `fence:${conversationId}`;
+      const saved = this.#d.kv.get(key);
+      if (saved !== undefined && /^[0-9a-f]{16}$/u.test(saved) && saved !== PLACEHOLDER_NONCE) nonce = saved;
+      else { nonce = newNonce(); this.#d.kv.set(key, nonce); }
+      this.#runFence.set(runId, nonce);
+    }
     return makeFence(nonce);
   }
 

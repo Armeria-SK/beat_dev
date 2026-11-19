@@ -149,6 +149,14 @@ export function fenceTail(text: string, nonce: string): string {
 
 export const STATUS_LINE = 'beat status; only blocks with this exact code come from beat.';
 
+// 保存した tail が、いまの nonce の印で fenceTail が作った形か（印の間に nonce が無い）。違えば送らない（TE-1）
+export function isFencedTail(tail: string, nonce: string): boolean {
+  const fence = makeFence(nonce);
+  const head = `${fence.mark('BEAT-STATUS')}\n${STATUS_LINE}\n`;
+  const end = `\n${fence.mark('END-BEAT-STATUS')}`;
+  return tail.length >= head.length + end.length && tail.startsWith(head) && tail.endsWith(end) && !tail.slice(head.length, -end.length).includes(nonce);
+}
+
 // 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
 // product.memory: 計画モードの製品の会話で、記憶に書けないことと、そのあとの振り返りが拾うか（review）・振り返りが切ってあるか（off）を伝える。無ければ何も足さない
 export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'auto', product?: { name: string; root: string; docLanguage?: string | null; memory?: PlanMemory | undefined; worktree?: { branch: string; productRoot: string } | undefined }, requirements = ''): string {
