@@ -8,7 +8,7 @@ import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import { actPreview, browserActCheck, inspectAct, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
+import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, type ActionEvents } from '../browser/driver.ts';
 import { formatElements, readElements } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
@@ -91,7 +91,7 @@ function assertTabUrl(browser: BrowserSession, api: BrowserApi, tab: BrowserTab,
   }
 }
 
-interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined }
+interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean }
 
 // タブの中身を、外の内容の見出し・枠・本文・触れるもの・足跡の形にする
 async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserTab, language: Language, secrets: readonly string[], options: ReadOptions): Promise<ToolOutput> {
@@ -116,7 +116,7 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
   api.touch(tab);
   const delta = api.proxyDelta();
-  const mode = toolText(language, isLoopbackUrl(url) ? 'browser.mode_dev_server' : siteAllows(api.config.sites, url) ? 'browser.mode_listed' : 'browser.mode_unlisted');
+  const mode = toolText(language, isLoopbackUrl(url) ? (options.devServer(url) ? 'browser.mode_dev_server' : 'browser.mode_loopback_other') : siteAllows(api.config.sites, url) ? 'browser.mode_listed' : 'browser.mode_unlisted');
   const lines = [
     toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) }),
     '<<<',
@@ -188,7 +188,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
           const refusal = tab.page.lastRefusal();
           if (refusal !== undefined) throw new BrowserFailure('blocked', REFUSAL_KEYS[refusal]);
           assertTabUrl(browser, api, tab, tab.page.url());
-          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined });
+          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx) });
         } catch (thrown) {
           // 開けなかった・行き先が公開でなかったタブは、中身を残さない（新しく作ったタブは上限も使わせない）
           if (created || (thrown instanceof BrowserFailure && thrown.code === 'blocked')) await api.closeTab(tab.id).catch(() => false);
@@ -217,7 +217,7 @@ export const browserRead: ToolDef<{ tab?: string; offset?: number; mode?: 'text'
       requireTabs(browser, ctx, input.tab);
       return browser.run({ grant, signal: ctx.signal }, async api => {
         const tab = api.tab(input.tab);
-        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode });
+        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx) });
       });
     });
   },
@@ -294,10 +294,11 @@ const REF = Type.String({ pattern: '^e[0-9]{1,4}$', description: 'The number of 
 // 実行の直前の探し直し（inspectAct）は、通った理由に関わらず必ずやる。
 // 承認を得た呼び出し（info.bind がある）は、探し直した結果が承認のときに見せたものと同じ指紋であることもここで比べる
 // （承認後の再判定のあと、ここへ来るまでにページが入れ替わっても押さない）
-// 送信の許し（D-8）: 許されたループバックのページは loopback（ループバックへの送信だけ）、承認された送信は any、ほかは無し。
-// 承認は、持ち主が見ている会話で、Pending の承認（approvedOnce）のときに見せた事前の判定が送信（submits）だったときだけ
+// 送信の許し（D-8）: その実行の開発サーバーのページは loopback（送信の遷移はループバックへだけ）、承認された送信は any、ほかは無し。
+// 承認は、持ち主が見ている会話で、Pending の承認（approvedOnce）のときに見せた事前の判定が送信（submits）だったときだけ。
+// 開発サーバーでない許されたループバックは、公開のページと同じ（R-8）
 function submitPermit(found: Extract<Inspected, { ok: true }>, ctx: ToolContext, info: ExecuteInfo | undefined): SubmitPermit | undefined | 'refuse' {
-  if (found.place === 'loopback') return 'loopback';
+  if (found.place === 'loopback' && devServerPage(found.pageUrl, ctx)) return 'loopback';
   if (!found.submits) return undefined;
   return ctx.kind === 'chat' && info?.approvedOnce === true && info.check?.submits === true ? 'any' : 'refuse';
 }
@@ -310,6 +311,10 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       if (!found.ok) return { content: found.reason, isError: true, noRemoteContent: true };
       if (info?.bind !== undefined && actPreview(kind, input, found, language).bind !== info.bind) {
         return { content: toolText(language, 'pipeline.changed'), isError: true, noRemoteContent: true };
+      }
+      // 秘密に見える文は、その実行の開発サーバーのページにしか入れない（事前の判定と同じ。直接の実行でも外れない）
+      if (secretText(kind, input) && !(found.place === 'loopback' && devServerPage(found.pageUrl, ctx))) {
+        return { content: guardText(language, 'web.secret_text'), isError: true, noRemoteContent: true };
       }
       // 探し直しで送信の部品に変わっていたら、送信として承認されていない呼び出しは押さない
       const permit = submitPermit(found, ctx, info);

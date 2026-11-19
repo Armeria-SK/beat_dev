@@ -130,7 +130,7 @@ export function loopbackVerdict(request: LoopbackRequest): RouteVerdict {
   return from(request.sourceUrl);
 }
 
-// 送信の許し: any = 承認された送信の押す・入れる / loopback = 許されたループバックのページで通った押す・入れる（送ってよいのはループバックへだけ）
+// 送信の許し: any = 承認された送信の押す・入れる / loopback = その実行の開発サーバーのページで通った押す・入れる（送信の遷移はループバックへだけ）
 export type SubmitPermit = 'any' | 'loopback';
 // 送信の守りの種類: attended = 持ち主が見ている実行 / unattended = 人のいない実行（タスク・子の担当）
 export type SendGuard = 'attended' | 'unattended';
@@ -146,16 +146,19 @@ export interface MethodRequest {
   allowed: (url: string) => boolean;
 }
 
-const READ_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
+const READ_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD']);
 
 // D-8: 要素の形で見分けられない送信（type="button" から form.submit() など）の受け皿。
-// GET・HEAD・OPTIONS は通す。行き先が許されたループバックなら通す（この PC の外へ出ない）。
-// 人のいない実行は、ほかの行き先への GET 以外を、遷移でもスクリプトの fetch / XHR / sendBeacon でも断る（許しがあっても）。
+// GET・HEAD は通す。行き先が許されたループバックなら、スクリプトの送信は通し（開発サーバーの画面が動くため）、送信の遷移は許し（loopback / any）があるときだけ通す。
+// 人のいない実行は、ほかの行き先への GET・HEAD 以外を、遷移でもスクリプトの fetch / XHR / sendBeacon でも断る（許しがあっても）。
 // 持ち主が見ている実行は、遷移だけを見て、承認された送信の最中（any）でなければ断る（スクリプトの fetch / XHR は止めない: R-3）
 export function navigationMethodVerdict(request: MethodRequest): RouteVerdict {
   const refuse: RouteVerdict = { allow: false, reason: 'submit' };
   if (READ_METHODS.has(request.method.toUpperCase())) return { allow: true };
-  if (isLoopbackUrl(request.url)) return request.allowed(request.url) ? { allow: true } : refuse;
+  if (isLoopbackUrl(request.url)) {
+    if (!request.allowed(request.url)) return refuse;
+    return !request.navigation || request.permit !== undefined ? { allow: true } : refuse;
+  }
   if (request.guard === 'unattended') return refuse;
   if (!request.navigation) return { allow: true };
   return request.permit === 'any' ? { allow: true } : refuse;

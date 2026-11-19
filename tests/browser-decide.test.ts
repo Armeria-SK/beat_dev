@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { JSDOM } from 'jsdom';
 import type { BrowserContext, Page, Route } from 'playwright-core';
@@ -18,7 +19,9 @@ import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { elementFacts, PlaywrightBrowser, type LaunchOptions, type WorkContextOptions } from '../src/tools/browser/driver.ts';
 import { navigationMethodVerdict, type SendGuard, type SubmitPermit } from '../src/tools/browser/route.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
-import { ownerHostAllows } from '../src/tools/browser/sites.ts';
+import { ownerHostAllows, ownerLoopbackPorts } from '../src/tools/browser/sites.ts';
+import { BackgroundJobs } from '../src/tools/shell/background.ts';
+import { scrubEnv } from '../src/tools/shell/runner.ts';
 import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
 import { outboundOfCall } from '../src/tools/hooks/outbound.ts';
 import { planAllows, runToolCall } from '../src/tools/pipeline.ts';
@@ -35,6 +38,9 @@ import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-
 const LISTED = 'https://example.com/form';
 const UNLISTED = 'https://shop.example.org/form';
 const DEV = 'http://localhost:5173/';
+// 試しの beat のような、許されたループバックだが、その実行の開発サーバーではないポート
+const OTHER_LOOP = 'http://localhost:4900/';
+const SECRET = 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
 const SNAPSHOT = ['- textbox "Search"', '- button "Send"', '- link "More"', '- textbox "Password"'].join('\n');
 // e1 Search / e2 Send（フォームの送信）/ e3 More（送信でない）/ e4 Password
 const site = (over: { moreSubmits?: boolean } = {}): FakeSite => ({
@@ -51,11 +57,13 @@ type Kind = 'chat' | 'task' | 'agent';
 interface RigOptions {
   kind?: Kind;
   product?: boolean;
-  ownerText?: string[];
+  ownerText?: readonly string[];
   judge?: 'allow' | 'ask';
   // 判定役が呼ばれたときに動かす（ページの入れ替えなど）
   onJudge?: () => void;
   parentKind?: 'chat' | 'task';
+  // この会話・タスクの裏のコマンドが出力に出したループバックのポート
+  printed?: readonly number[];
 }
 
 function rig(t: TestContext, options: RigOptions = {}) {
@@ -65,7 +73,7 @@ function rig(t: TestContext, options: RigOptions = {}) {
   config.tools.browser.enabled = true;
   config.tools.browser.sites = ['example.com'];
   const parsed = parseConfig(config);
-  const driver = new FakeBrowserDriver().site(LISTED, site()).site(UNLISTED, site()).site(DEV, site());
+  const driver = new FakeBrowserDriver().site(LISTED, site()).site(UNLISTED, site()).site(DEV, site()).site(OTHER_LOOP, site());
   const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [], canShowWindow: () => true });
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
@@ -81,8 +89,8 @@ function rig(t: TestContext, options: RigOptions = {}) {
   const ctxFor = (over: Partial<ToolContext> = {}): ToolContext => ({
     runId: 'r1', conversationId: kind === 'chat' ? 'c1' : `c-${kind}`, kind, signal: new AbortController().signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
-    services: { browser: session, questions, tasks }, model: { id: 'm', vision: true },
-    ownerText: () => options.ownerText ?? [],
+    services: { browser: session, questions, tasks, background: { printedPorts: () => new Set(options.printed ?? []) } }, model: { id: 'm', vision: true },
+    ownerText: () => [...(options.ownerText ?? [])],
     ...(kind === 'task' ? { task: { id: task.id, control: { kind: 'none' } } } : {}),
     ...(kind === 'agent' ? { parent: { runId: 'rp', conversationId: 'c1', kind: options.parentKind ?? 'task', title: '', ...(options.parentKind === 'chat' ? {} : { taskId: task.id }) } } : {}),
     ...(options.product ? { project: { id: 'p1', root: 'C:\\work\\shop' } } : {}),
@@ -133,9 +141,9 @@ test('順 1: 秘密の欄は、一覧のサイトでも一覧に無いサイト�
 
 // ── 順 2: 許されたループバック（開発サーバー）は、送信も判定役なし ──
 
-test('順 2: 製品の会話・タスクの開発サーバーでは、送信の押すも判定役なしで押せる。許しは loopback（ループバックへだけ送れる）', async t => {
-  for (const kind of ['chat', 'task'] as const) {
-    const r = rig(t, { kind, product: true, judge: 'ask' });
+test('順 2: 製品の会話・タスクの開発サーバー（持ち主が書いたポート・裏のコマンドが出したポート）では、送信の押すも判定役なしで押せる。許しは loopback', async t => {
+  for (const [kind, over] of [['chat', { ownerText: ['http://localhost:5173 を見て'] }], ['task', { ownerText: ['127.0.0.1:5173'] }], ['task', { printed: [5173] }], ['agent', { printed: [5173] }]] as const) {
+    const r = rig(t, { kind, product: true, judge: 'ask', ...over });
     const page = await r.open(DEV);
     const check = await preCheck(browserClick, { ref: 'e2' }, r.ctx);
     assert.deepEqual([check.decision, check.submits, check.sends], ['allow', undefined, undefined], kind);
@@ -145,6 +153,59 @@ test('順 2: 製品の会話・タスクの開発サーバーでは、送信の�
     assert.equal(page.acts[0]!.permit, 'loopback');
     assert.equal(page.permit, undefined, '押し終えたら外す');
     assert.match((await browserRead.execute({}, r.ctx)).content, /dev server on this PC/u, '読んだ結果の終わりに開発サーバーだと書く');
+  }
+});
+
+// ── R-8（審査 9-1b）: その実行の開発サーバーでない許されたループバックは、一覧外の公開のサイトと同じ ──
+
+test('R-8: 持ち主が書いていない・裏のコマンドが出していないループバックのポート（試しの beat など）は、送信でない押すは判定役へ、送信はタスクで断り会話で Pending', async t => {
+  for (const over of [{}, { ownerText: ['http://localhost:5173 を見て'] }, { printed: [5173] }]) {
+    const chat = rig(t, { product: true, judge: 'ask', ...over });
+    await chat.open(OTHER_LOOP);
+    assert.match((await browserRead.execute({}, chat.ctx)).content, /not this run's dev server/u);
+    assert.equal((await chat.call('browser_click', { ref: 'e3' })).decidedBy, 'pending');
+    assert.deepEqual(chat.counts(), { ...NONE, judge: 1, judgeRows: 1, pending: ['judge'], acts: 0 }, JSON.stringify(over));
+    assert.equal((await chat.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+    assert.deepEqual([...chat.counts().pending].sort(), ['judge', 'send']);
+    const task = rig(t, { kind: 'task', product: true, judge: 'allow', ...over });
+    await task.open(OTHER_LOOP);
+    const sent = await task.call('browser_click', { ref: 'e2' });
+    assert.equal(sent.decision, 'deny');
+    assert.deepEqual(task.counts(), { ...NONE, questions: 1, acts: 0 }, JSON.stringify(over));
+    const page = task.pages()[0]!;
+    assert.equal((await task.call('browser_click', { ref: 'e3' })).decision, 'allow', '判定役が allow なら押す');
+    assert.deepEqual([task.counts().judge, page.acts.length, page.acts[0]!.permit], [1, 1, undefined], '開発サーバーでないので送信の許しは立てない');
+  }
+});
+
+// ── 審査 9-1b: 入れる文が API の鍵・トークンに見えるとき ──
+
+test('秘密に見える文: 一覧のサイト・持ち主の URL のサイト・開発サーバーでないループバックへは、会話でもタスクでも判定役なしで断り、押さない', async t => {
+  for (const kind of ['chat', 'task'] as const) {
+    for (const [url, over] of [[LISTED, {}], [UNLISTED, { ownerText: [UNLISTED] }], [OTHER_LOOP, { product: true }]] as const) {
+      const r = rig(t, { kind, judge: 'allow', ...over });
+      await r.open(url);
+      for (const submit of [false, true]) {
+        const outcome = await r.call('browser_type', { ref: 'e1', text: `key ${SECRET}`, submit });
+        assert.equal(outcome.decision, 'deny', `${kind} ${url} ${submit}`);
+      }
+      const counts = r.counts();
+      assert.deepEqual([counts.judge, counts.pending, counts.acts], [0, [], 0], `${kind} ${url}`);
+      const direct = await browserType.execute({ ref: 'e1', text: SECRET }, r.ctx);
+      assert.equal(direct.isError, true, '直接の実行でも入れない');
+      assert.equal(r.counts().acts, 0);
+    }
+  }
+});
+
+test('秘密に見える文: その実行の開発サーバーへは判定役に見せる（聞かずには通さない）。ふつうの文は判定役なし', async t => {
+  for (const kind of ['chat', 'task'] as const) {
+    const r = rig(t, { kind, product: true, judge: 'ask', printed: [5173] });
+    await r.open(DEV);
+    assert.equal((await r.call('browser_type', { ref: 'e1', text: SECRET })).decidedBy, 'pending', kind);
+    assert.deepEqual(r.counts(), { ...NONE, judge: 1, judgeRows: 1, pending: ['judge'], acts: 0 }, kind);
+    assert.equal((await r.call('browser_type', { ref: 'e1', text: 'plain' })).decision, 'allow');
+    assert.equal(r.counts().judge, 1);
   }
 });
 
@@ -331,6 +392,31 @@ test('T14: 添付のファイルの中にだけある URL は持ち主の URL �
   assert.deepEqual([e.judged(), e.clicks()], [1, 0]);
 });
 
+test('審査 9-1b: ask_owner の札への答え（選んだ札の文は AI が書いたもの）は持ち主の文に数えない。札の答えに URL があっても判定役を呼ぶ', async t => {
+  const e = await engine(t);
+  const id = uuid(93);
+  e.s.app.conversations.create({ id, title: '会話' });
+  e.s.adapter().scripts = [callScript('ask_owner', { questions: [{ question: 'Which page?', header: 'Page', options: [{ label: UNLISTED }, { label: 'none' }] }] })];
+  const first = await e.s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ページを選ばせて' });
+  assert.equal(first.status, 202);
+  await settled(e.s.app, first.body.runId);
+  e.s.adapter().scripts = [callScript('browser_open', { url: UNLISTED }), callScript('browser_click', { ref: 'e3' }), async function* () { yield { type: 'text', delta: 'done' }; yield { type: 'done', stop: 'end_turn' as StopReason }; }];
+  const answer = await e.s.json(`/api/conversations/${id}/messages`, 'POST', { text: `Here are my answers:\n- Page: ${UNLISTED}` });
+  assert.equal(answer.status, 202);
+  await settled(e.s.app, answer.body.runId);
+  const users = e.s.app.conversations.messages(id).filter(({ message }) => message.role === 'user').map(({ message }) => (message as { askAnswer?: true }).askAnswer === true);
+  assert.deepEqual(users, [false, true], '札が開いているあいだの発言だけに印');
+  assert.deepEqual([e.judged(), e.clicks()], [1, 0]);
+  // 札に答えたあとに持ち主が自分で書いた発言は、今までどおり持ち主の文
+  e.s.adapter().scripts = [callScript('browser_click', { ref: 'e3' }), async function* () { yield { type: 'text', delta: 'done' }; yield { type: 'done', stop: 'end_turn' as StopReason }; }];
+  const own = await e.s.json(`/api/conversations/${id}/messages`, 'POST', { text: `${UNLISTED} のボタンを押して` });
+  assert.equal(own.status, 202);
+  await settled(e.s.app, own.body.runId);
+  const marks = e.s.app.conversations.messages(id).filter(({ message }) => message.role === 'user').map(({ message }) => (message as { askAnswer?: true }).askAnswer === true);
+  assert.deepEqual(marks, [false, true, false]);
+  assert.deepEqual([e.judged(), e.clicks()], [1, 1]);
+});
+
 async function taskClick(t: TestContext, create: Parameters<TaskStore['create']>[0]) {
   const e = await engine(t);
   const task = e.s.app.tasks.create(create);
@@ -360,10 +446,40 @@ test('ownerRequestText: 題・本文・終わりの条件だけ。計画の抜�
   assert.ok(!plannedText.includes('plan.example') && !plannedText.includes('item.example'), plannedText);
   assert.equal(tasks.ownerRequestText(tasks.create({ title: 'O', body: 'https://o.example/', origin: 'user', ownerRequest: true, ownerPlanOutside: true, ownerPlan: 'x', actor: 'user' }).id), undefined);
   assert.equal(tasks.ownerRequestText(tasks.create({ title: 'AI', body: 'https://ai.example/', origin: 'self', actor: 'beat' }).id), undefined);
+  // 採った提案（AI が書いた題・本文）は、持ち主が承認しても持ち主の文に数えない。判定役の依頼は今までどおり（審査 9-1b）
+  const proposal = tasks.create({ title: 'Check https://proposal.example/', body: 'AI wrote this', origin: 'self', propose: true, actor: 'beat' });
+  tasks.approve(proposal.id);
+  assert.equal(tasks.ownerRequestText(proposal.id), undefined);
+  assert.match(tasks.judgeRequest(proposal.id), /proposal\.example/u);
   const child = tasks.create({ title: 'child https://child.example/', origin: 'user', spawnedBy: plain.id, actor: 'beat' });
   const childText = tasks.ownerRequestText(child.id) ?? '';
   assert.ok(childText.includes('https://a.example/') && !childText.includes('child.example'), childText);
   t.after(() => db.close());
+});
+
+test('ownerLoopbackPorts: localhost / 127.0.0.1 / [::1] にポートを付けた書き方だけ（http:// は有っても無くても）', () => {
+  assert.deepEqual([...ownerLoopbackPorts(['open http://localhost:5173/ and 127.0.0.1:8080 and http://[::1]:3000/x'])].sort(), [3000, 5173, 8080]);
+  assert.deepEqual([...ownerLoopbackPorts(['localhost', 'http://localhost/', 'mylocalhost:5173', 'evil.localhost:5174', 'localhost:99999', 'https://example.com:5175/'])], []);
+  assert.deepEqual([...ownerLoopbackPorts([])], []);
+});
+
+test('BackgroundJobs.printedPorts: 動いている裏のコマンドの出力のループバックの URL のポートを、始めた会話かタスクだけに返す。止まると返さない', async t => {
+  // 落ちたときも、作業フォルダを消す前に裏のコマンドを止める（後片付けは登録した順に走る）
+  let jobs: BackgroundJobs | undefined;
+  t.after(async () => { jobs?.closeAll(); await new Promise(done => setTimeout(done, 200)); });
+  const dir = tempDir(t);
+  jobs = new BackgroundJobs({ logDir: join(dir, 'tool_outputs') });
+  const script = "console.log('  Local:   http://localhost:5173/'); console.log('  Network: http://localhost:\\u001b[1m5174\\u001b[22m/ http://192.168.0.2:5175/'); setInterval(() => {}, 1000);";
+  const started = jobs.start({ conversationId: 'c1', projectId: 'p1', taskId: 't1', command: 'node dev', cwd: dir, file: process.execPath, args: ['-e', script], env: scrubEnv(), fetched: false });
+  assert.ok('id' in started);
+  const deadline = Date.now() + 15_000;
+  while (!jobs.printedPorts({ conversationId: 'c1' }).has(5174) && Date.now() < deadline) await new Promise(done => setTimeout(done, 50));
+  assert.deepEqual([...jobs.printedPorts({ conversationId: 'c1' })].sort(), [5173, 5174]);
+  assert.deepEqual([...jobs.printedPorts({ conversationId: 'c2', taskId: 't1' })].sort(), [5173, 5174], '同じタスクの別の実行');
+  assert.deepEqual([...jobs.printedPorts({ conversationId: 'c2' })], []);
+  assert.deepEqual([...jobs.printedPorts({ conversationId: 'c2', taskId: 't2' })], []);
+  await jobs.stop(started.id, 'owner');
+  assert.deepEqual([...jobs.printedPorts({ conversationId: 'c1' })], [], '止まった裏のコマンドのポートは数えない');
 });
 
 // ── 純関数: ownerHostAllows・navigationMethodVerdict ──
@@ -385,7 +501,11 @@ test('ownerHostAllows: 文の中の http(s):// の URL のホストと完全一�
 test('navigationMethodVerdict: 読む方法は通す。人のいない実行は公開のホストへの送る方法を全部断る。持ち主が見ている実行は遷移だけ any の許しが要る。許されたループバックは通す', () => {
   const allowed = (url: string) => url.startsWith('http://localhost:5173');
   const v = (method: string, url: string, navigation: boolean, guard: SendGuard, permit?: SubmitPermit) => navigationMethodVerdict({ method, url, navigation, guard, permit, allowed }).allow;
-  for (const method of ['GET', 'head', 'OPTIONS']) for (const guard of ['attended', 'unattended'] as const) assert.equal(v(method, UNLISTED, true, guard), true, `${method} ${guard}`);
+  for (const method of ['GET', 'head']) for (const guard of ['attended', 'unattended'] as const) assert.equal(v(method, UNLISTED, true, guard), true, `${method} ${guard}`);
+  // OPTIONS は読む方法に数えない（審査 9-1b）
+  assert.equal(v('OPTIONS', UNLISTED, false, 'unattended'), false, '人のいない実行の OPTIONS');
+  assert.equal(v('OPTIONS', UNLISTED, true, 'attended'), false, '持ち主が見ている実行の OPTIONS の遷移');
+  assert.equal(v('OPTIONS', UNLISTED, false, 'attended'), true, '持ち主が見ている実行のスクリプトは R-3 のまま');
   // 持ち主が見ている実行
   assert.equal(v('POST', UNLISTED, true, 'attended'), false, '許しの無い POST の遷移');
   assert.equal(v('POST', UNLISTED, true, 'attended', 'loopback'), false, 'loopback の許しでは公開へ送れない');
@@ -400,8 +520,10 @@ test('navigationMethodVerdict: 読む方法は通す。人のいない実行は�
   }
   // ループバック
   for (const guard of ['attended', 'unattended'] as const) {
-    assert.equal(v('POST', 'http://localhost:5173/api', true, guard), true, guard);
-    assert.equal(v('POST', 'http://localhost:5173/api', false, guard), true, guard);
+    assert.equal(v('POST', 'http://localhost:5173/api', true, guard), false, `許しの無い送信の遷移 ${guard}`);
+    assert.equal(v('POST', 'http://localhost:5173/api', true, guard, 'loopback'), true, `loopback の許しの送信の遷移 ${guard}`);
+    assert.equal(v('POST', 'http://localhost:5173/api', true, guard, 'any'), true, guard);
+    assert.equal(v('POST', 'http://localhost:5173/api', false, guard), true, `スクリプトの送信 ${guard}`);
     assert.equal(v('POST', 'http://localhost:9999/api', false, guard, 'any'), false, `許しの無いポート ${guard}`);
   }
 });

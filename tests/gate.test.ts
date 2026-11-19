@@ -412,6 +412,9 @@ test('5-3b 確かめ待ちの口: 「確かめた」で持ち主の名で met、
   const fix = s.app.tasks.get(short.body.fix.id)!;
   assert.deepEqual([fix.origin, fix.status, fix.acceptance_items, fix.project_id], ['user', 'ready', '["A-2"]', p.id]);
   assert.match(fix.body, /too terse/u);
+  // 題に受け入れの結果（AI の文）が入るので、ブラウザの持ち主の文には数えない（9-1b の審査）。判定役の依頼は今までどおり
+  assert.equal(s.app.tasks.ownerRequestText(fix.id), undefined);
+  assert.notEqual(s.app.tasks.judgeRequest(fix.id), '');
   assert.equal((await api(`/api/tasks/${task.id}/items/A-2/check`, 'POST', { result: 'insufficient', version: 1 })).body.fix.id, fix.id, '2 回押しても直しは 1 つ');
   assert.equal(s.states(p.id)['A-2'], 'unverified', '項目はそのまま');
   assert.equal(s.app.tasks.get(task.id)!.check_state, 'awaiting');

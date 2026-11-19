@@ -452,7 +452,8 @@ export class QuestionStore {
     const ownerText = ownerWrote || row.tainted === 0 ? answerText : null;
     const task = tasks.create({ title, body, origin: 'user', actor: 'user', projectId: row.project_id, ownerRequest: ownerText !== null, ...(item ? { acceptanceItems: [item] } : {}) });
     if (item) tasks.event(task.id, OWNER_FIX, 'user', JSON.stringify({ question: row.id, item }));
-    if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '' });
+    // 選んだ札の文（AI が書いた選択肢）は、持ち主の頼みにしても持ち主の書いた文には数えない（9-1b の D-7）
+    if (ownerText !== null) tasks.ownerEdited(task.id, { title: ownerText, body: '', aiText: !ownerWrote });
     if (row.tainted === 1) tasks.markUntrusted(task.id, 'question', questionText(language, ownerText === null ? 'untrusted_note' : 'untrusted_note_owner'));
     return task.id;
   }

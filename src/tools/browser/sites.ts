@@ -49,3 +49,17 @@ export function ownerHostAllows(ownerTexts: readonly string[], url: string | URL
   }
   return false;
 }
+
+const OWNER_LOOPBACK = /(?<![\w.-])(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})(?!\d)/giu;
+
+// 持ち主が書いた文にある localhost:<port> / 127.0.0.1:<port> / [::1]:<port>（http:// は有っても無くても）のポート（9-1b の R-8 の (a)）
+export function ownerLoopbackPorts(ownerTexts: readonly string[]): Set<number> {
+  const out = new Set<number>();
+  for (const text of ownerTexts) {
+    for (const match of text.matchAll(OWNER_LOOPBACK)) {
+      const port = Number(match[1]);
+      if (port > 0 && port < 65536) out.add(port);
+    }
+  }
+  return out;
+}

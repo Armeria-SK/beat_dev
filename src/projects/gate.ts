@@ -355,7 +355,8 @@ export function ownerDecide(d: OwnerCheckDeps, task: Task, itemIds: readonly str
   const fix = d.tasks.create({
     title: gateText(d.language, 'fix_title', { id, result: clip(result, 150) }).slice(0, 200),
     body: [gateText(d.language, 'fix_body', { id, result }), ...(note ? [gateText(d.language, 'fix_note', { note })] : [])].join('\n'),
-    origin: 'user', actor: 'user', projectId, acceptanceItems: [id], ownerRequest: !untrusted,
+    // 題に受け入れの結果（AI が書いた文）が入るので、持ち主の書いた文には数えない（9-1b の D-7）
+    origin: 'user', actor: 'user', projectId, acceptanceItems: [id], ownerRequest: !untrusted, ownerAiText: true,
   });
   d.tasks.event(fix.id, OWNER_FIX, 'user', JSON.stringify({ task: task.id, item: id }));
   if (untrusted) d.tasks.markUntrusted(fix.id, 'build', gateText(d.language, 'fix_untrusted'));

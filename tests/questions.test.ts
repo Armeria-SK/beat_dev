@@ -540,7 +540,9 @@ test('答え: 仮の選択 → kept でタスクなし。別の選択肢 → cha
   assert.equal(fix.project_id, shop.id);
   assert.match(fix.title, /Which color\?/u);
   assert.match(fix.body, /Which color\?[\s\S]*blue[\s\S]*green/u);
-  assert.deepEqual(JSON.parse(fix.owner_request!), { title: 'green', body: '', doneCriteria: null });
+  // 選んだ札の文は AI が書いたもの: 判定役の依頼には残し、ブラウザの持ち主の URL には数えない（9-1b）
+  assert.deepEqual(JSON.parse(fix.owner_request!), { title: 'green', body: '', doneCriteria: null, aiText: true });
+  assert.equal(s.app.tasks.ownerRequestText(fix.id), undefined);
   assert.equal(s.app.tasks.judgeRequest(fix.id), 'green');
   assert.ok(!s.app.tasks.judgeRequest(fix.id).includes('Header color'));
   const again = await s.http(`/api/questions/${colors!.id}/answer`, { choice: 0 });
@@ -568,6 +570,7 @@ test('答え: 持ち主が書いた文は owner_request に入る。外を読ん
   const writtenFix = s.app.tasks.get(written.body.fixTaskId)!;
   assert.deepEqual(JSON.parse(writtenFix.owner_request!), { title: 'Use DD.MM', body: '', doneCriteria: null });
   assert.equal(s.app.tasks.judgeRequest(writtenFix.id), 'Use DD.MM');
+  assert.equal(s.app.tasks.ownerRequestText(writtenFix.id), 'Use DD.MM', '持ち主が書いた答えは、ブラウザの持ち主の文に数える（9-1b）');
   assert.equal(s.app.tasks.textTainted(pickedFix.id), true);
   assert.equal(s.app.tasks.textTainted(writtenFix.id), true, '題と本文に外を読んだ実行の質問の文が入るので、持ち主が書いた答えでも直しのタスクは外の印を持つ');
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'a', notify: false }), toolCall('task_complete', { summary: 'b', notify: false }));

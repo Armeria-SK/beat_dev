@@ -71,6 +71,8 @@ export interface CreateTask {
   ownerPlan?: string | undefined;
   ownerItems?: readonly string[] | undefined;
   ownerPlanOutside?: boolean | undefined;
+  // 持ち主の頼みの文が AI の書いたもの（OwnerRequest.aiText）
+  ownerAiText?: boolean | undefined;
   spawnedBy?: string | undefined;
   proposal?: Proposal | undefined;
   scoutRun?: true | undefined;
@@ -135,17 +137,18 @@ const SOURCE_MARK_ACTORS = ['mesh', 'build'] as const;
 export const PLAN_GIST_LABEL = 'Plan the owner approved for this build (excerpt):';
 export const ACCEPTANCE_ITEMS_LABEL = 'Acceptance items the owner approved for this build:';
 export const OUTSIDE_PLAN_NOTE = 'note: this plan or its acceptance items were written by a run that had read text from elsewhere; the owner approved them by starting the build';
-interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string; items?: string[]; outside?: true }
+// aiText: 持ち主が承認・選んだが、文は AI が書いたもの（採った提案・選んだ質問の札・受け入れの結果を写した直しのタスク）。ownerRequestText に入れない（9-1b の D-7）
+interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string; items?: string[]; outside?: true; aiText?: true }
 
 function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefined {
   if (!raw) return undefined;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return undefined; }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const { title, body, doneCriteria, plan, items, outside } = value as Record<string, unknown>;
+  const { title, body, doneCriteria, plan, items, outside, aiText } = value as Record<string, unknown>;
   if (typeof title !== 'string' || typeof body !== 'string' || (doneCriteria !== null && typeof doneCriteria !== 'string')) return undefined;
   const lines = Array.isArray(items) ? items.filter((line): line is string => typeof line === 'string' && line !== '') : [];
-  return { title, body, doneCriteria, ...(typeof plan === 'string' && plan ? { plan } : {}), ...(lines.length ? { items: lines } : {}), ...(outside === true ? { outside: true as const } : {}) };
+  return { title, body, doneCriteria, ...(typeof plan === 'string' && plan ? { plan } : {}), ...(lines.length ? { items: lines } : {}), ...(outside === true ? { outside: true as const } : {}), ...(aiText === true ? { aiText: true as const } : {}) };
 }
 
 function firstLine(text: string | null): string | null {
@@ -303,7 +306,7 @@ export class TaskStore {
     }
     const holder = base.owner_request === null && base.parent_id ? this.get(base.parent_id) : base;
     const owner = ownerRequestOf(holder?.owner_request);
-    if (!owner || !holder || owner.outside) return undefined;
+    if (!owner || !holder || owner.outside || owner.aiText) return undefined;
     return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria].filter(Boolean).join('\n');
   }
 
@@ -330,7 +333,7 @@ export class TaskStore {
     return chain;
   }
 
-  ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined }): void {
+  ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined; aiText?: boolean | undefined }): void {
     const task = this.get(id);
     const current = ownerRequestOf(task?.owner_request);
     if (!task || !current) return;
@@ -345,6 +348,8 @@ export class TaskStore {
       ...(current.plan ? { plan: current.plan } : {}),
       ...(current.items ? { items: current.items } : {}),
       ...(current.outside ? { outside: true as const } : {}),
+      // AI の書いた文の印は、持ち主があとで書き直しても外さない（どこまで書き直したかを見分けないため）
+      ...(current.aiText || patch.aiText === true ? { aiText: true as const } : {}),
     };
     this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
   }
@@ -397,6 +402,7 @@ export class TaskStore {
     const ownerRequest: OwnerRequest | null = input.ownerRequest ? {
       title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}),
       ...(input.ownerItems?.length ? { items: [...input.ownerItems] } : {}), ...(input.ownerPlanOutside ? { outside: true as const } : {}),
+      ...(input.ownerAiText ? { aiText: true as const } : {}),
     } : null;
     this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, proposal, proposed_by, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${input.scoutRun ? `'${SCOUT_RUN}'` : 'NULL'}, ?, ?)`).run(
@@ -571,7 +577,7 @@ export class TaskStore {
 
   #adopt(task: Task): void {
     if (task.origin !== 'user' && task.proposed_by === null) {
-      const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: null } satisfies OwnerRequest);
+      const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: null, aiText: true } satisfies OwnerRequest);
       this.#db.prepare("UPDATE tasks SET origin = 'user', proposed_by = ?, owner_request = ? WHERE id = ?").run(task.origin, request, task.id);
     }
     this.event(task.id, 'approved', 'user');
