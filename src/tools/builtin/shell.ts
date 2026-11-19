@@ -9,7 +9,8 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { redactKeyEcho, redactOpenKey, redactSecrets } from '../../shared/redaction.ts';
 import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals.ts';
 import { ruleShapeField } from '../approval-rules.ts';
-import { selfTouchMarkers } from '../hooks/code-guard.ts';
+import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
+import { selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
@@ -58,6 +59,15 @@ function selfHostsOf(config: AppConfig): string[] {
   return config.server.origins.flatMap(origin => {
     try { return [new URL(origin).hostname]; } catch { return origin.trim() ? [origin.trim()] : []; }
   });
+}
+
+// own: 数字だけでも印を付ける beat 自身のポート。denied: ループバックの書き方の後ろにあれば印を付けるポート（中継・提供元・MCP も）
+function beatPortsOf(ctx: ToolContext): BeatPorts {
+  const browser = ctx.services?.browser;
+  return {
+    own: new Set([...(browser?.selfPorts() ?? []), DEFAULT_BEAT_PORT]),
+    denied: browser?.loopbackDenied() ?? deniedLoopbackPorts(ctx.config, []),
+  };
 }
 
 // 子プロセスの環境。git には、ホーム・システムの設定からコードを動かせる項目を落とした設定だけを読ませる（git-env.ts。実行のたびに新しい置き場所に作る）。
@@ -216,7 +226,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
-  const markers = [...selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config)), ...(peekTouch ? [peekTouch] : [])];
+  const markers = [...selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx)), ...(peekTouch ? [peekTouch] : [])];
   const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   const reasonKeys = [...(markers.length ? ['code.self_touch'] : []), ...verdict.reasonKeys];

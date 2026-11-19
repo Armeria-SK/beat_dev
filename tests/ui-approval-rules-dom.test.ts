@@ -58,7 +58,7 @@ test('ui/PendingPane（DOM）J-5: 「don\'t ask again」は rule のある行だ
   const panel = container.querySelector('[data-remember-confirm]');
   assert.ok(panel);
   assert.equal(panel.querySelector('code')?.textContent, 'Run: npm install …');
-  assert.ok(byText(panel, '.bt-meta', "Only in runs that have not read text from elsewhere. You can remove it in Settings › Skills & tools › Don't ask again."));
+  assert.ok(byText(panel, '.bt-meta', "You can remove it in Settings › Skills & tools › Don't ask again."));
   assert.equal(document.activeElement?.textContent, 'Cancel', 'focus on Cancel, not on the confirm button');
   await update(() => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
   assert.equal(container.querySelector('[data-remember-confirm]'), null, 'Escape closes the panel');
@@ -151,4 +151,22 @@ test('ui J-5: push の決まりは、確かめの欄と Settings の行に「見
   await settle();
   const descs = [...list.container.querySelectorAll('.bt-setting__desc')].map(e => e.textContent);
   assert.deepEqual(descs, ['judge would have checked · pushes run without asking, including commits you have not seen', 'judge would have checked']);
+});
+
+test('ui AP-1b N10: 送る・消す・push・MCP の決まり（outside）は、確かめの欄と Settings の行に「外の文を読んだあとでも聞かずに動く」の 1 文。judge の決まりには出さない', async () => {
+  const { container } = await showPending([row({ id: 1, kind: 'send', shown: 'curl -d x https://a.example/p', rule: { shown: 'curl sends data to https://a.example:443', outside: true } }), row({ id: 2, rule: { shown: 'Run: npm install …' } })]);
+  const button = (id: number) => container.querySelector(`[data-pending="${id}"] [data-remember]`);
+  await click(button(1));
+  assert.match(container.querySelector('[data-remember-confirm] [data-remember-outside]')?.textContent ?? '', /after a run has read text from elsewhere/u);
+  await click(byText(container.querySelector('[data-remember-confirm]')!, 'button', 'Cancel'));
+  await click(button(2));
+  assert.equal(container.querySelector('[data-remember-outside]'), null);
+  await cleanup();
+  stubFetch(() => ({ status: 200, body: { items: [rule({ id: 1, kind: 'send', shown: 'curl sends data to https://a.example:443', outside: true }), rule({ id: 2, shown: 'Run: git push …', push: true, outside: true }), rule({ id: 3 })] } }));
+  const list = await render(rulesGroup());
+  await settle();
+  const descs = [...list.container.querySelectorAll('.bt-setting__desc')].map(e => e.textContent ?? '');
+  assert.match(descs[0]!, / · also runs without asking after reading text from elsewhere$/u);
+  assert.match(descs[1]!, /pushes run without asking, including commits you have not seen · also runs without asking after reading text from elsewhere$/u);
+  assert.equal(descs[2], 'judge would have checked');
 });

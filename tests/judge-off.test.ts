@@ -48,7 +48,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   let checks = 0;
   let ran = 0;
   const probe = (name: string, extra: Partial<ToolDef> = {}): ToolDef => ({
-    name, description: name, input: Type.Object({ v: Type.String() }), effect: 'exec', allowedIn: ['chat', 'task'],
+    name, description: name, input: Type.Object({ v: Type.String() }), effect: 'exec', allowedIn: ['chat', 'task', 'agent'],
     summarize: () => ({ title: 'probe', body: 'probe body' }),
     preCheck: () => {
       checks++;
@@ -209,6 +209,16 @@ test('J-4: Off でも、外を読んだタスクが escalateOnTaint の道具を
   assert.equal((await s.call(task, 'probe_taint')).decidedBy, 'pending');
   assert.equal(waitingKind(s), 'owner');
   assert.equal(s.ran(), 0);
+  // AP-1 review: a sub-agent whose parent is a task is unattended too
+  const sub = setup(t);
+  const agent: ToolContext = { ...sub.ctx, kind: 'agent', parent: { runId: 'r0', conversationId: sub.ctx.conversationId, kind: 'task', title: 'parent task', taskId: 't1' }, taint: { tainted: true, sources: ['web_fetch'] } };
+  assert.equal((await sub.call(agent, 'probe_taint')).decidedBy, 'pending');
+  assert.equal(waitingKind(sub), 'owner');
+  assert.deepEqual([sub.ran(), sub.prompts.length], [0, 0]);
+  // control: a sub-agent of a chat is watched by its owner, so the judge-Off run lets it through
+  const chatSub = setup(t);
+  const watched: ToolContext = { ...chatSub.ctx, kind: 'agent', parent: { runId: 'r0', conversationId: chatSub.ctx.conversationId, kind: 'chat', title: 'parent chat' }, taint: { tainted: true, sources: ['web_fetch'] } };
+  assert.notEqual((await chatSub.call(watched, 'probe_taint')).decidedBy, 'pending');
 });
 
 test('J-4: Off でも、beat 自身に触れるコード（code.self_touch）は判定役の代わりに持ち主の Pending に積む。On では今までどおり判定役が見る', async t => {

@@ -115,6 +115,7 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
           <span className="bt-label">{t('ui.pending.rememberTitle')}</span>
           <code className="ui-pending__code">{row.rule.shown}</code>
           {row.rule.push && <span className="bt-meta" data-remember-push>{t('ui.pending.rememberPush')}</span>}
+          {row.rule.outside && <span className="bt-meta" data-remember-outside>{t('ui.pending.rememberOutside')}</span>}
           <span className="bt-meta">{t('ui.pending.rememberNote')}</span>
           <span className="bt-pending__actions">
             <Button small disabled={locked} onClick={() => onApprove(row, true)}>{t('ui.pending.rememberConfirm')}</Button>

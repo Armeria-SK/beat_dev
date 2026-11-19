@@ -9,7 +9,7 @@ export const pendingJa = {
   'invalid_status': "status は waiting か decided にしてください",
   'invalid_reason': "reason は文にしてください",
   'invalid_remember': "remember は true か false にしてください",
-  'not_rememberable': "Pending の項目 #{id} は決まりにできません: 決まりにできるのは、製品の実行で、よそから来た文を読んでおらず、beat がちょうど同じ形で照らせる項目だけです",
+  'not_rememberable': "Pending の項目 #{id} は決まりにできません: 決まりにできるのは、製品の実行で、beat がちょうど同じ形で照らせる項目だけです",
   'rule_not_found': "決まり #{id} が見つかりません",
   'invalid_rule_id': "決まりの id は正の整数にしてください",
   'unknown_tool': "道具 {tool} が使えないので、Pending に置けません",
