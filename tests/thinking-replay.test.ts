@@ -124,6 +124,17 @@ test('F3 Anthropic: 送り返した考える部分を API が 400 で断った�
   assert.deepEqual(assistantTypes(bodies[2]!), ['text', 'tool_use', 'tool_use']);
 });
 
+test('TE-0 Anthropic: 外して送り直したときだけ replay_rejected を 1 回出す（次の呼び出しと、送り返さない呼び出しでは出さない）', async () => {
+  const rejected = () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'messages.1.content.0: Invalid `signature` in `thinking` block' } }), { status: 400, headers: { 'content-type': 'application/json', 'request-id': 'req_400' } });
+  const { adapter } = capturing([rejected]);
+  const first = await drain(adapter, request('claude-a', history(record())));
+  assert.equal(first.filter(e => e.type === 'replay_rejected').length, 1);
+  const second = await drain(adapter, request('claude-a', history(record())));
+  assert.equal(second.filter(e => e.type === 'replay_rejected').length, 0);
+  const plain = capturing([]);
+  assert.equal((await drain(plain.adapter, request('claude-a', history(record())))).filter(e => e.type === 'replay_rejected').length, 0);
+});
+
 const badRequest = (message: string) => () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }), { status: 400, headers: { 'content-type': 'application/json', 'request-id': 'req_400' } });
 const serverError = () => new Response(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'thinking failed' } }), { status: 500, headers: { 'content-type': 'application/json', 'request-id': 'req_500' } });
 const knownRejection = 'messages.1.content.0: Invalid `signature` in `thinking` block';

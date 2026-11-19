@@ -211,6 +211,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         if (rejected.known) this.#noReplay.add(req.model.model);
         stream = await create(false);
         this.#noReplay.add(req.model.model);
+        yield { type: 'replay_rejected' };
       }
       for await (const event of stream) {
         switch (event.type) {

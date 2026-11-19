@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE } from '../config/schema.ts';
 import { engineText } from '../shared/messages/engine.ts';
@@ -48,6 +49,22 @@ export interface RunFinish {
   flags?: string[];
 }
 
+export type CallPurpose = 'turn' | 'compact' | 'discarded';
+
+export interface ModelCallRecord {
+  runId: string;
+  purpose: CallPurpose;
+  model: string;
+  usage: Usage;
+  estTokens?: number | undefined;
+  removed?: number | undefined;
+  tools: unknown;
+  system: { frozen: string; dynamic: string };
+  startedAt: number;
+}
+
+const shortHash = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
 export class Runs {
   readonly db: DatabaseSync;
   readonly now: () => number;
@@ -71,6 +88,18 @@ export class Runs {
       f.errorKind ?? null, f.errorMessage ?? null, f.stop ?? null, f.iterations ?? 0, f.toolCalls ?? 0,
       f.usage?.inputTokens ?? null, f.usage?.outputTokens ?? null, f.usage?.cacheReadTokens ?? null, f.usage?.cacheWriteTokens ?? null,
       f.estPromptTokens ?? null, JSON.stringify(f.flags ?? []), id,
+    );
+  }
+
+  // モデルの呼び出し 1 回の量（数字と hash だけ。文は持たない）。turn と discarded の合計が engine_runs の量になり、compact は engine_runs に入らない
+  recordCall(c: ModelCallRecord): void {
+    const ended = this.now();
+    this.db.prepare(`
+      INSERT INTO model_calls (run_id, seq, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, est_tokens, removed, tools_hash, frozen_hash, dynamic_hash, started_at, duration_ms)
+      VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM model_calls WHERE run_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      c.runId, c.runId, c.purpose, c.model, c.usage.inputTokens ?? null, c.usage.cacheReadTokens ?? null, c.usage.cacheWriteTokens ?? null, c.usage.outputTokens ?? null,
+      c.estTokens ?? null, c.removed ?? 0, shortHash(JSON.stringify(c.tools)), shortHash(c.system.frozen), shortHash(c.system.dynamic), c.startedAt, Math.max(0, ended - c.startedAt),
     );
   }
 

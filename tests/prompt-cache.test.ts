@@ -9,6 +9,8 @@ import { fenceTail, nextTail, STATUS_LINE, TAIL_TIME_MINUTES } from '../src/engi
 import { anthropicBody, stripsThinkingOnText } from '../src/providers/anthropic.ts';
 import { openAiBody } from '../src/providers/openai-compatible.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
+import type { AcceptanceCheck, AcceptanceDoc } from '../src/projects/acceptance.ts';
+import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import { reply } from './helpers.ts';
@@ -349,4 +351,99 @@ test('古い考えるモデルに考える部分を送り返すときだけ、�
   assert.ok(!JSON.stringify(old.messages).includes('TAIL'), '発言には tail を足さない');
   const noReplay = anthropicBody(request('claude-sonnet-4-5', toolTurn)) as unknown as Json;
   assert.equal(noReplay.messages.at(-1).content.at(-1).text, 'NEW TAIL', '考える部分を送り返さないなら、古いモデルでも発言の後ろ');
+});
+
+// ── TE-0: 前後を比べる場面（数字を出すだけ。合否はまだ付けない）。重みつきの量 = 読み×0.1 + 書き×1.25 + 入力 ──
+const weightedOf = (calls: ReadonlyArray<{ read: number; write: number; input: number }>) => calls.reduce((n, c) => n + c.read * 0.1 + c.write * 1.25 + c.input, 0);
+const shareOf = (c: { read: number; write: number; input: number }) => c.read / Math.max(1, c.read + c.write + c.input);
+const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+
+// 要約の頼み（道具なし）を除いた呼び出しを真似にかけ、全体（2 回目から）・往復の頭（heads の位置）の読みの割合と重みつきの量を返す
+function scene(requests: ModelRequest[], heads: number[], from = 1) {
+  const anthropic = new AnthropicCacheSim();
+  const openai = new OpenAiCacheSim();
+  for (const req of requests) { anthropic.call(anthropicBody(req, replayTarget(req)) as unknown as Json); openai.call(openAiBody(req, {}) as Json); }
+  const part = anthropic.calls.slice(from);
+  return {
+    calls: part.length,
+    readShare: totals(anthropic.calls, from).readShare,
+    weighted: Math.round(weightedOf(part)),
+    heads: heads.filter(i => i > 0).map(i => shareOf(anthropic.calls[i]!)),
+    openAiShare: totals(openai.calls, from).readShare,
+  };
+}
+
+const report = (t: { diagnostic: (m: string) => void }, label: string, s: ReturnType<typeof scene>) =>
+  t.diagnostic(`${label}: calls ${s.calls}, read share ${pct(s.readShare)} (OpenAI prefix ${pct(s.openAiShare)}), weighted ${s.weighted}, turn-head read share ${s.heads.map(pct).join(' / ') || '-'}`);
+
+test('TE-0 場面 (A): 4 往復 × 1 往復 4 / 8 / 14 回の会話（真似の数を出す）', async t => {
+  for (const perTurn of [4, 8, 14]) {
+    const s = await taskApp(t);
+    mkdirSync(s.app.paths.workspace, { recursive: true });
+    writeFileSync(join(s.app.paths.workspace, 'notes.txt'), 'line of the notes file\n'.repeat(40));
+    const heads: number[] = [];
+    for (let turn = 0; turn < 4; turn++) {
+      heads.push(s.adapter().calls.length);
+      s.adapter().scripts.push(...Array.from({ length: perTurn }, (_, i) => async function* (req: ModelRequest) {
+        s.clock.now += MIN;
+        yield* (i === perTurn - 1 ? reply(`done ${turn}`) : toolCall('file_read', { path: 'notes.txt' }))(req);
+      }));
+      await s.chat(`turn ${turn}: read the notes`, C);
+    }
+    const requests = s.adapter().calls.filter(req => req.tools.length > 0);
+    assert.equal(requests.length, 4 * perTurn, '前提: 呼び出しの数');
+    report(t, `(A) ${perTurn} calls/turn`, scene(requests, heads));
+  }
+});
+
+test('TE-0 場面 (B): 製品のタスクを 3 回の実行（2 回目の前に acceptance の数が変わる・2 回目で tool_search で 1 つ読み込む）（真似の数を出す）', async t => {
+  const s = await taskApp(t);
+  const root = join(s.app.paths.data, 'shop');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'notes.txt'), 'line of the notes file\n'.repeat(40));
+  const project = s.app.projects.create({ name: 'Shop', root, rootKey: rootKeyOf(root), checkCommand: null });
+  mkdirSync(join(s.app.paths.projects, project.id), { recursive: true });
+  const look: AcceptanceCheck = { kind: 'look' };
+  const doc: AcceptanceDoc = {
+    schema: 1, version: 1, language: null, taintedRuns: [], notDoing: [],
+    items: ['Lists files', 'Saves files'].map((result, i) => ({ id: `A-${i + 1}`, result, source: { kind: 'owner_edit' as const }, check: look, state: 'open' as const, evidence: [], changedIn: null, removedIn: null })),
+  };
+  s.app.acceptance.freeze(project.id, doc, { plan_hash: null, source: 'build', created_at: s.clock.now }, () => null);
+  const task = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user', projectId: project.id, acceptanceItems: ['A-1', 'A-2'], ownerRequest: true });
+  const heads: number[] = [];
+  const runs: number[] = [];
+  for (let k = 0; k < 3; k++) {
+    if (k === 1) s.app.acceptance.applyOwnerDecision(project.id, [{ op: 'add', item: { result: 'Shows a total', check: look }, source: { kind: 'owner_edit' } }], 'question');
+    heads.push(s.adapter().calls.filter(req => req.tools.length > 0).length);
+    const steps = k === 1 ? [toolCall('file_read', { path: 'notes.txt' }), toolCall('calculate', { expression: '1+1' }), toolCall('file_read', { path: 'notes.txt' }), reply('paused')]
+      : [toolCall('file_read', { path: 'notes.txt' }), toolCall('file_read', { path: 'notes.txt' }), toolCall('file_read', { path: 'notes.txt' }), reply('paused')];
+    s.adapter().scripts.push(...steps.map(step => async function* (req: ModelRequest) { s.clock.now += MIN; yield* step(req); }));
+    s.app.worker.requestRun(task.id);
+    assert.equal(await s.app.worker.tick(), 'ran', `前提: ${k + 1} 回目の実行が走った`);
+    runs.push(s.adapter().calls.filter(req => req.tools.length > 0).length - heads.at(-1)!);
+  }
+  const requests = s.adapter().calls.filter(req => req.tools.length > 0);
+  assert.deepEqual(runs, [4, 4, 4], '前提: 実行ごとの呼び出しの数');
+  assert.ok(requests[heads[1]!]!.system.dynamic.includes('MESH'), '前提: 製品の目次が dynamic にある');
+  assert.ok(requests.slice(heads[1]!, heads[2]!).some(req => req.tools.some(tool => tool.name === 'calculate')), '前提: 2 回目で calculate を読み込んだ');
+  report(t, '(B) product task, 3 runs', scene(requests, heads));
+});
+
+test('TE-0 場面 (C): 容量 20,000 で 60 往復（削りが始まったあとの読みの割合）（真似の数を出す）', async t => {
+  const s = await taskApp(t, config => { config.models[0]!.contextLength = 20_000; });
+  mkdirSync(s.app.paths.workspace, { recursive: true });
+  writeFileSync(join(s.app.paths.workspace, 'notes.txt'), 'line of the notes file\n'.repeat(40));
+  let firstCut = -1;
+  s.adapter().scripts = Array.from({ length: 400 }, () => async function* (req: ModelRequest) {
+    if (req.tools.length === 0) { if (firstCut < 0) firstCut = s.adapter().calls.filter(r => r.tools.length > 0).length; yield* reply('SUMMARY of the earlier turns')(req); return; }
+    s.clock.now += MIN;
+    const last = req.messages.at(-1);
+    yield* (last?.role === 'tool' ? reply('read it') : toolCall('file_read', { path: 'notes.txt' }))(req);
+  });
+  for (let turn = 0; turn < 60; turn++) await s.chat(`turn ${turn}: read the notes`, C);
+  const requests = s.adapter().calls.filter(req => req.tools.length > 0);
+  assert.equal(requests.length, 120, '前提: 1 往復 2 回');
+  assert.ok(firstCut > 0, '前提: 削り（要約）が始まった');
+  report(t, '(C) 60 turns at 20,000, all', scene(requests, []));
+  report(t, `(C) 60 turns at 20,000, from the first summary (call ${firstCut + 1})`, scene(requests, [], firstCut));
 });

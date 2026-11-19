@@ -1295,13 +1295,16 @@ export class ChatEngine {
         const toolCalls: ToolCall[] = [];
         const thoughts: ThinkingBlock[] = [];
         let release: (() => void) | undefined;
+        let callStarted = 0;
         try {
           release = await d.limiter.acquire(provider.id, () => provider.maxParallel, p.signal);
+          callStarted = d.runs.now();
           for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: maxOutput, ...(effort ? { effort } : {}), signal: p.signal })) {
             if (event.type === 'text') { text += event.delta; d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: event.delta }); }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
             else if (event.type === 'tool_call') toolCalls.push(event.call);
             else if (event.type === 'thinking') thoughts.push(event.block);
+            else if (event.type === 'replay_rejected') { if (!p.flags.includes('thinking_replay_rejected')) p.flags.push('thinking_replay_rejected'); }
             else if (event.type === 'done') stop = event.stop;
           }
         } catch (error) {
@@ -1322,6 +1325,7 @@ export class ChatEngine {
           }
           break;
         } finally { release?.(); }
+        const callRecord = { runId: p.runId, model: model.id, usage, estTokens: fitted.estimate.tokens, removed: fitted.removed, tools: apiTools, system, startedAt: callStarted };
 
         // 考えるだけで上限に達し、文も呼び出しも無い返事は、続きを頼んでも続ける元が無い（切れた考える部分は保存も送り返しもしない）。
         // 上げられるなら、捨てて同じ呼び出しを上げた上限でやり直す。上げるのは 1 回の呼び出しで 1 度、上限は planned だけから決まる頭打ち
@@ -1335,6 +1339,7 @@ export class ChatEngine {
             caps.set(model.id, raised);
             this.#outputCap.set(p.runId, caps);
             addUsageTo(spent, usage);
+            d.runs.recordCall({ ...callRecord, purpose: 'discarded' });
             if (!p.flags.includes('output_raised')) p.flags.push('output_raised');
             d.log?.(`[INFO] model ${model.id} used the whole output limit (${maxOutput}) on thinking; retrying the call with ${raised}`);
             attempt--; continue;
@@ -1359,6 +1364,7 @@ export class ChatEngine {
           ? { provider: provider.id, model: model.model, blocks: signed, tokens: Math.max(0, (usage.outputTokens ?? 0) - estimateMessageTokens({ role: 'assistant', content: text, toolCalls })) }
           : undefined;
         // truncated は書き換える前の停止理由で決める（ツール呼び出しが付いても、出力の上限で切れた返事は切れたまま）
+        d.runs.recordCall({ ...callRecord, purpose: 'turn' });
         return { ok: true, index, text, toolCalls, usage: addUsageTo({ ...spent }, usage), stop: toolCalls.length ? 'tool_use' : stop, truncated: stop === 'max_tokens', estimate: fitted.estimate.tokens, ...(thinking ? { thinking } : {}) };
       }
     }
@@ -1650,10 +1656,16 @@ export class ChatEngine {
     try {
       release = await d.limiter.acquire(c.route.provider.id, () => c.route.provider.maxParallel, c.signal);
       let text = '';
+      let usage: Usage = {};
+      const system = { frozen: compactSystem(language), dynamic: '', tail: '' };
+      const startedAt = d.runs.now();
       for await (const event of c.adapter.stream({
-        model: c.route.model, system: { frozen: compactSystem(language), dynamic: '', tail: '' },
-        messages: [{ role: 'user', content: prompt }], tools: [], maxOutputTokens, signal: c.signal,
-      })) if (event.type === 'text') text += event.delta;
+        model: c.route.model, system, messages: [{ role: 'user', content: prompt }], tools: [], maxOutputTokens, signal: c.signal,
+      })) {
+        if (event.type === 'text') text += event.delta;
+        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
+      }
+      d.runs.recordCall({ runId: c.runId, purpose: 'compact', model: c.route.model.id, usage, estTokens: estimateTextTokens(prompt), removed: c.removed.length, tools: [], system, startedAt });
       if (!text.trim()) return false;
       d.conversations.setSummary(c.conversationId, text.trim(), c.removed.at(-1)!.id);
       return true;
