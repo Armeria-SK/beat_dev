@@ -366,6 +366,53 @@ test('8-3（A・安全）: 無視されていても鍵らしい名前のファ�
   }
   const listed = await s.json(`/api/tasks/${two.task.id}/branch`, 'GET');
   assert.ok(listed.body.files.some((f: { path: string }) => f.path === 'config/.env'), '無視されるフォルダの中の鍵も見せる');
+  // 直下の .env.local は status にも名前探しにも出るが、1 度だけ並べて 1 つと数える
+  const top = await s.json(`/api/tasks/${one.task.id}/branch`, 'GET');
+  assert.deepEqual(top.body.files, [{ path: '.env.local', kind: 'ignored' }]);
+  assert.equal(top.body.filesTotal, 1);
+});
+
+test('8-3（A・安全）: 鍵らしい名前は beat の isSecretPath と同じ（秘密鍵・.npmrc・.aws/・.ssh/・secrets/ など）。node_modules の中の secret のフォルダや試験用の鍵では止めない', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  writeFileSync(join(p.root, '.gitignore'), 'node_modules/\nlocal/\n.npmrc\nid_rsa\n*.p12\n*.pfx\n*.keystore\n*.jks\n.aws/\n.ssh/\nsecrets/\n');
+  git(p.root, 'add', '-A');
+  git(p.root, 'commit', '-q', '-m', 'ignore');
+  const deps = await s.branchTask(p, 'Deps only');
+  for (const file of ['node_modules/pkg/secret/index.js', 'node_modules/pkg/secrets/a.js', 'node_modules/pkg/test/fixture.pem', 'node_modules/pkg/.env']) {
+    mkdirSync(join(deps.row.path!, file, '..'), { recursive: true });
+    writeFileSync(join(deps.row.path!, file), 'x\n');
+  }
+  const keys = await s.branchTask(p, 'Keys');
+  const names = ['.npmrc', 'id_rsa', 'local/cert.p12', 'local/cert.pfx', 'local/app.keystore', 'local/app.jks', '.aws/credentials', '.ssh/config', 'secrets/token.txt'];
+  for (const file of names) {
+    mkdirSync(join(keys.row.path!, file, '..'), { recursive: true });
+    writeFileSync(join(keys.row.path!, file), 'only-copy\n');
+  }
+  const local = (await s.app.mergeWatch.localFiles(keys.row))!;
+  assert.equal(local.secrets, names.length, '1 つずつ鍵として数える');
+  for (const file of names) assert.ok(local.files.some(f => f.path === file), file);
+  assert.equal((await s.app.mergeWatch.localFiles(deps.row))!.secrets, 0, 'node_modules の中は数えない');
+  git(p.root, 'merge', '-q', '--no-ff', '-m', 'merge deps', deps.row.branch);
+  git(p.root, 'merge', '-q', '--no-ff', '-m', 'merge keys', keys.row.branch);
+  assert.equal(await s.app.mergeWatch.check(p.id), 1);
+  assert.equal(s.app.worktrees.get(deps.row.id)!.state, 'merged', '依存のフォルダだけなら片づく');
+  assert.equal(s.app.worktrees.get(keys.row.id)!.state, 'branch');
+  for (const file of names) assert.equal(existsSync(join(keys.row.path!, file)), true, file);
+});
+
+test('8-3（A・安全）: 鍵らしい名前の無視されるファイルは、それ 1 つだけでも残す（秘密鍵 id_ed25519）', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  writeFileSync(join(p.root, '.gitignore'), 'id_*\n');
+  git(p.root, 'add', '-A');
+  git(p.root, 'commit', '-q', '-m', 'ignore');
+  const { row } = await s.branchTask(p);
+  writeFileSync(join(row.path!, 'id_ed25519'), 'PRIVATE\n');
+  git(p.root, 'merge', '-q', '--no-ff', '-m', 'merge', row.branch);
+  assert.equal(await s.app.mergeWatch.check(p.id), 0);
+  assert.equal(existsSync(join(row.path!, 'id_ed25519')), true);
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'branch');
 });
 
 test('8-3（B）: 残したファイルのある取り込み済みの行も、Mark merged で消えるものを見せて確かめれば merged で終わる（ブランチは -d）', { skip: !gitAvailable }, async t => {

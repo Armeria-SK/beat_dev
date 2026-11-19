@@ -6,6 +6,7 @@ import type { KV } from '../db/kv.ts';
 import type { Task } from '../tasks/store.ts';
 import { BEAT_BRANCH, HELD_NAME, type RemoveResult, type WorktreeRow, type Worktrees } from './worktree.ts';
 import { withGit } from '../mesh/folders.ts';
+import { inDependencies, isSecretPath } from '../tools/hooks/scope.ts';
 
 // beat 8-3: 取り込み待ち（done のタスク + 作業コピーの行が branch）の見回りと、持ち主の Mark merged / Discard
 export const MERGE_WATCH_MS = 5 * 60_000;
@@ -17,8 +18,15 @@ const PRINT_STAT_MAX = 5000;
 
 const FINISHED = new Set(['done', 'failed', 'cancelled']);
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
-// git が無視するファイルのうち、鍵らしい名前（worktree.ts の HELD_NAME）を探す pathspec。見つけた名前は HELD_NAME で確かめ直す
-const SECRET_SPECS = ['**/.env*', '**/*.env', '**/*.pem', '**/*.key', '**/credentials.json', '**/secrets.*'].map(glob => `:(glob,icase)${glob}`);
+// git が無視するファイルのうち、鍵らしい名前（beat の isSecretPath と worktree.ts の HELD_NAME）を探す pathspec。見つけた名前は heldSecret で確かめ直す。
+// node_modules の中は除く（依存パッケージは試験用の鍵を同梱することがあり、npm で入れ直せる。isSecretPath の歩きも node_modules では止めない）
+const SECRET_SPECS = [
+  '**/.env*', '**/*.env', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx', '**/*.keystore', '**/*.jks',
+  '**/id_rsa*', '**/id_dsa*', '**/id_ecdsa*', '**/id_ed25519*', '**/.netrc', '**/.npmrc', '**/.pypirc', '**/.git-credentials',
+  '**/.ssh/**', '**/.aws/**', '**/.gnupg/**', '**/.docker/**', '**/.kube/**', '**/secret/**', '**/secrets/**',
+  '**/credentials.json', '**/secrets.*',
+].map(glob => `:(glob,icase)${glob}`).concat(':(exclude,glob,icase)**/node_modules/**');
+const heldSecret = (name: string): boolean => !inDependencies(name) && (isSecretPath(name) || HELD_NAME.test(name));
 
 // merged = 取り込まれて作業コピーとブランチを片づけた。kept = Mark merged（squash など）で作業コピーだけ片づけブランチを残した
 // copy_removed = 取り込まれた先端より先にブランチが進んでいたので、作業コピーだけ片づけてブランチを残した（まだ取り込み待ち）
@@ -268,8 +276,10 @@ export class MergeWatch {
       add(entry.slice(3), kind, entry);
     }
     // 無視されるフォルダの中の鍵らしいファイルは status では見えない（フォルダ 1 行にまとまる）ので、名前で探して 1 つずつ数える
-    const secrets = out.secrets.split('\0').filter(name => name !== '' && HELD_NAME.test(name));
-    for (const name of secrets) add(name, 'ignored', `!s ${name}`);
+    // 上の status に同じ名前で出た無視されるファイル（作業コピーの直下の .env.local など）は、数えるだけで 2 度は並べない
+    const secrets = out.secrets.split('\0').filter(name => name !== '' && heldSecret(name));
+    const listed = new Set(parts.filter(entry => entry.startsWith('!! ')).map(entry => entry.slice(3)));
+    for (const name of secrets) if (!listed.has(name)) add(name, 'ignored', `!s ${name}`);
     blocking += secrets.length;
     return { files, total, blocking, secrets: secrets.length, print: hash.digest('hex'), detached: out.head === '-' };
   }
