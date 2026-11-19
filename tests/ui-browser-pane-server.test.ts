@@ -85,7 +85,7 @@ test('view.pointer: locate のあとに押すと、その要素の中心。入�
 });
 
 // 本物の PlaywrightPage.locate: 要素の位置（boundingBox）を box に。読めない・投げるときは box を持たず、事前の判定は今までどおり
-function playwrightPage(boundingBox: () => Promise<{ x: number; y: number; width: number; height: number } | null>) {
+function playwrightPage(boundingBox: (options?: { timeout?: number }) => Promise<{ x: number; y: number; width: number; height: number } | null>) {
   const page = {
     on: () => {},
     getByRole: () => ({
@@ -102,4 +102,7 @@ test('PlaywrightPage.locate: 要素の位置を box に入れる。読めなけ�
   assert.deepEqual(await playwrightPage(async () => ({ x: 1.5, y: 2, width: 30, height: 10 })).locate(UPLOAD), { ...base, box: { x: 1.5, y: 2, width: 30, height: 10 } });
   assert.deepEqual(await playwrightPage(async () => null).locate(UPLOAD), base);
   assert.deepEqual(await playwrightPage(async () => { throw new Error('detached'); }).locate(UPLOAD), base, '位置が読めなくても事前の判定を落とさない');
+  const asked: Array<{ timeout?: number } | undefined> = [];
+  await playwrightPage(async options => { asked.push(options); return null; }).locate(UPLOAD);
+  assert.deepEqual(asked, [{ timeout: 1000 }], '位置の読みは 1 秒で諦める（事前の判定を待たせない）');
 });

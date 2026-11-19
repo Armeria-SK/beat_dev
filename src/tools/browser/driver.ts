@@ -289,6 +289,7 @@ export async function frameSource(frame: Frame): Promise<string | undefined> {
 // 押したあと、遷移や新しい窓が起きるのを少し待つ（長くは待たない）
 const SETTLE_MS = 250;
 const SETTLE_LOAD_MS = 1000;
+const BOX_TIMEOUT_MS = 1000;
 
 class PlaywrightPage implements PageHandle {
   readonly page: Page;
@@ -346,7 +347,7 @@ class PlaywrightPage implements PageHandle {
     if (!one) return undefined;
     const attrs = await one.evaluate(elementFacts);
     let box: ElementBox | null = null;
-    try { box = await one.boundingBox(); } catch { box = null; }
+    try { box = await one.boundingBox({ timeout: BOX_TIMEOUT_MS }); } catch { box = null; }
     return {
       ...(box ? { box: { x: box.x, y: box.y, width: box.width, height: box.height } } : {}),
       visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined,

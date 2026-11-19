@@ -131,7 +131,7 @@ export function BrowserPane({ productId }: { productId: string }) {
   if (view === undefined) return <div className="ui-browser" />;
   if (view === null) return <div className="ui-browser"><EmptyState title={t('ui.browser.empty')} text={t('ui.browser.emptyText')} /></div>;
 
-  const shown = frame && frame.tab === view.tab ? frame : null;
+  const shown = frame && frame.tab === view.tab && view.seq > 0 ? frame : null;
   const status = view.driving ? actionText(view.action) : view.at === null ? t('ui.browser.noFrame') : t('ui.browser.lastFrame', agoShort(now - view.at));
   const stage = { '--ui-browser-w': view.viewport.width, '--ui-browser-h': view.viewport.height } as CSSProperties;
   return (

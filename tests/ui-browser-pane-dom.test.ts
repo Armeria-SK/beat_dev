@@ -13,6 +13,14 @@ const { BrowserPane, pointerStyle, agoShort } = await loadTsx<{
   agoShort: (ms: number) => string;
 }>('../web/src/ui/panes/BrowserPane.tsx', import.meta.url);
 const panes = await import('../web/src/ui/panes.ts');
+const feedback = await import('../web/src/feedback.ts');
+const { usePanes } = await loadTsx<{ usePanes: (productId: string | null) => { views: string[]; shown: Array<{ view: string }>; openPane: (view: 'browser' | 'terminal') => void } }>('../web/src/ui/Panes.tsx', import.meta.url);
+
+function probe<T>(use: () => T): { current: T | null; node: ReturnType<typeof createElement> } {
+  const out: { current: T | null } = { current: null };
+  function Probe() { out.current = use(); return null; }
+  return Object.assign(out, { node: createElement(Probe) });
+}
 
 const realFetch = globalThis.fetch;
 afterEach(async () => {
@@ -195,4 +203,44 @@ test('ui/panes: Browser は製品の会話だけ、Terminal の後ろ。数の�
   assert.ok(!panes.openable({ productId: 'p', narrow: true }).includes('browser'));
   assert.ok(panes.openable({ productId: 'p', narrow: true }).includes('terminal'), 'ほかの欄は狭くても出す');
   assert.deepEqual(panes.parseLayout(JSON.stringify([{ view: 'browser', width: 500 }])), [{ view: 'browser', width: 500 }]);
+});
+
+test('ui/BrowserPane（DOM）: Stop の時にもう実行が終わっていたら、その旨を知らせる', async () => {
+  const server: Server = { view: viewOf({ runId: 'run-gone' }), frames: { 3: PNG_A }, calls: [], stopped: false };
+  const toasts: string[] = [];
+  const unsubscribe = feedback.subscribe(item => toasts.push(item.title));
+  try {
+    const { container } = await show(server);
+    await click(byText(container, '.bt-pane__bar button', 'Stop'));
+    await settle();
+    assert.ok(server.calls.includes('POST /api/runs/run-gone/stop'));
+    assert.deepEqual(toasts, ['That run had already ended']);
+    server.stopped = true;
+    await click(byText(container, '.bt-pane__bar button', 'Stop'));
+    await settle();
+    assert.deepEqual(toasts, ['That run had already ended', 'Stopped the run that was driving the browser']);
+  } finally { unsubscribe(); }
+});
+
+test('ui/BrowserPane（DOM）: beat が起き直してタブの番号が t1 から振り直されても、前の画像を新しいタブに出さない（seq 0 の間は画像なし）', async () => {
+  const server: Server = { view: viewOf(), frames: { 3: PNG_A }, calls: [] };
+  const { container } = await show(server);
+  assert.ok(container.querySelector('.ui-browser__stage > img'));
+  server.view = viewOf({ seq: 0, at: null, driving: true, action: { kind: 'open', target: 'localhost:5173' } });
+  await tick();
+  assert.equal(container.querySelector('.ui-browser__stage > img'), null, '同じ t1 でも、まだ撮っていなければ前の画像は出さない');
+  assert.equal(container.querySelector('.bt-browser__url')?.textContent, 'localhost:5173/upload');
+});
+
+test('ui/Panes: 760px より狭いと（matchMedia が当たる）Browser は開ける欄に無く、開こうとしても開かない', async t => {
+  const g = globalThis as { matchMedia?: unknown };
+  const realMatch = g.matchMedia;
+  g.matchMedia = () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+  t.after(() => { g.matchMedia = realMatch; });
+  const hook = probe(() => usePanes('prod01'));
+  await render(hook.node);
+  assert.ok(!hook.current!.views.includes('browser'), JSON.stringify(hook.current!.views));
+  assert.ok(hook.current!.views.includes('terminal'));
+  await update(() => hook.current!.openPane('browser'));
+  assert.deepEqual(hook.current!.shown, []);
 });
