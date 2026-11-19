@@ -603,7 +603,7 @@ export class App {
   }
 
   // beat 8-3: 取り込み待ちのブランチが片づいた・残った。タスクの経過に 1 行書き、画面の Kanban へ知らせる
-  #branchChanged(taskId: string | null, branch: string, outcome: 'merged' | 'kept' | 'discarded', by: 'beat' | 'user'): void {
+  #branchChanged(taskId: string | null, branch: string, outcome: 'merged' | 'kept' | 'copy_removed' | 'discarded', by: 'beat' | 'user'): void {
     const task = taskId ? this.tasks.get(taskId) : undefined;
     if (!task) return;
     this.tasks.event(task.id, 'worktree', by, taskText(languageOf(this.config()), `event.branch_${outcome}`, { branch }));

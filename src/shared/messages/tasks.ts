@@ -62,6 +62,7 @@ const en = {
   'event.branch_merged': 'The branch {branch} is in the product folder now, so beat removed its working copy and the branch',
   'event.branch_kept': 'Marked merged: beat removed the working copy and kept the branch {branch} (the product folder does not contain its commits as they are, for example after a squash merge)',
   'event.branch_discarded': 'Discarded the branch {branch} and its working copy',
+  'event.branch_copy_removed': 'The branch {branch} was merged into the product folder, but it has newer commits that are not there yet, so beat removed only its working copy and kept the branch',
   'reason.preempted':'Paused to give priority to the conversation with the user (it will resume from where it left off)',
   'reason.checkpoint': 'Saved its progress, so it continues now in a new run',
   'reason.no_progress': 'The run ended without progress, so it continues now in a new run (it stops after {limit} such runs in a row)',

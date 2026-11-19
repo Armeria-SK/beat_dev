@@ -138,8 +138,22 @@ function Deviations({ rows }: { rows: readonly DeviationRow[] }) {
   );
 }
 
-type Discarding = { state: 'loading' } | { state: 'ready'; data: BranchCommits };
+// discard = ブランチと作業コピーを捨てる。merge = 取り込み済みにして、作業コピーに残るものを見せてから片づける
+type PanelMode = 'discard' | 'merge';
+type Discarding = { mode: PanelMode; state: 'loading' } | { mode: PanelMode; state: 'ready'; data: BranchCommits };
 type DiscardResult = 'done' | 'stale' | 'failed';
+type MergeResult = DiscardResult | 'dirty';
+
+function CommitList({ commits, more, attr }: { commits: BranchCommits['commits']; more: number; attr?: string }) {
+  const t = useT();
+  if (commits.length === 0) return null;
+  return (
+    <ul className="ui-card__commits" {...(attr ? { [attr]: '' } : {})}>
+      {commits.map(c => <li key={c.sha} className="bt-meta"><code>{c.sha.slice(0, 7)}</code> {c.subject}</li>)}
+      {more > 0 && <li className="bt-meta">{t('ui.kanban.commitsMore', more)}</li>}
+    </ul>
+  );
+}
 
 const FILE_KIND = { changed: 'ui.kanban.file.changed', untracked: 'ui.kanban.file.untracked', ignored: 'ui.kanban.file.ignored' } as const;
 
@@ -151,13 +165,12 @@ function DiscardPanel({ task, discarding, busy, onConfirm, onCancel }: { task: T
     <div className="bt-card__reason" data-discard={task.id} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); } }}>
       {!data ? <p className="bt-meta" role="status">{t('ui.set.loading')}</p> : (
         <>
-          <p className="bt-meta">{t('ui.kanban.discardAsk', data.branch, data.commits.length + data.more, data.filesTotal)}</p>
-          {data.commits.length > 0 && (
-            <ul className="ui-card__commits">
-              {data.commits.map(c => <li key={c.sha} className="bt-meta"><code>{c.sha.slice(0, 7)}</code> {c.subject}</li>)}
-              {data.more > 0 && <li className="bt-meta">{t('ui.kanban.commitsMore', data.more)}</li>}
-            </ul>
-          )}
+          <p className="bt-meta">{discarding.mode === 'merge'
+            ? t('ui.kanban.mergeAsk', data.path ?? '', data.filesTotal, data.headCommits.length + data.headMore)
+            : t('ui.kanban.discardAsk', data.branch, data.commits.length + data.more + data.headCommits.length + data.headMore, data.filesTotal)}</p>
+          {discarding.mode === 'discard' && <CommitList commits={data.commits} more={data.more} attr="data-discard-commits" />}
+          {data.headCommits.length > 0 && <p className="bt-meta">{t('ui.kanban.headCommits')}</p>}
+          <CommitList commits={data.headCommits} more={data.headMore} attr="data-discard-head" />
           {data.filesTotal > 0 && data.path && <p className="bt-meta ui-card__path" data-discard-path><code>{data.path}</code></p>}
           {data.filesTotal > 0 && (
             <ul className="ui-card__commits" data-discard-files>
@@ -168,7 +181,7 @@ function DiscardPanel({ task, discarding, busy, onConfirm, onCancel }: { task: T
         </>
       )}
       <div className="ui-card__reasonrow">
-        <Button variant="danger" small disabled={busy || !data} onClick={() => { if (data) onConfirm(data.tip, data.print); }}>{t('ui.kanban.discardBranch')}</Button>
+        <Button variant="danger" small disabled={busy || !data} onClick={() => { if (data) onConfirm(data.tip, data.print); }}>{t(discarding.mode === 'merge' ? 'ui.kanban.removeCopy' : 'ui.kanban.discardBranch')}</Button>
         <Button variant="ghost" small autoFocus onClick={onCancel}>{t('ui.cancel')}</Button>
       </div>
     </div>
@@ -199,7 +212,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
   card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null; pending: number; questions: number; list: Acceptance | null; wait: WaitReason | undefined;
   deviations: readonly DeviationRow[];
   onApprove: () => void; onReject: (reason: string) => void; onRejecting: (on: boolean) => void; onChecked: () => void;
-  onMerged: () => void; onDiscard: (tip: string, files: string) => Promise<DiscardResult>; onOpenChanges?: (() => void) | undefined;
+  onMerged: (confirmed?: { tip: string; files: string }) => Promise<MergeResult>; onDiscard: (tip: string, files: string) => Promise<DiscardResult>; onOpenChanges?: (() => void) | undefined;
 }) {
   const t = useT();
   const { task, column } = card;
@@ -217,13 +230,15 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
     : merge ? t('ui.kanban.mergeIt') : column === 'check' ? t('ui.kanban.checkIt') : column === 'done' && mergedBranch(task) ? t('ui.kanban.merged') : t('ui.kanban.task');
   const reasons = [checking && t('ui.kanban.reason.check'), merge && t(held ? 'ui.kanban.reason.held' : 'ui.kanban.reason.merge')].filter((r): r is string => Boolean(r));
   const note = branchy && task.worktree?.note && task.worktree.note in NOTE_KEY ? t(NOTE_KEY[task.worktree.note as keyof typeof NOTE_KEY]) : null;
-  const startDiscard = async () => {
-    setDiscarding({ state: 'loading' });
+  const startDiscard = async (mode: PanelMode = 'discard') => {
+    setDiscarding({ mode, state: 'loading' });
     try {
       const data = await api.branchCommits(task.id);
-      setDiscarding(current => (current ? { state: 'ready', data } : current));
+      setDiscarding(current => (current ? { mode: current.mode, state: 'ready', data } : current));
     } catch (failure) { setDiscarding(null); reportOpError(failure); }
   };
+  // Mark merged: 残すファイルがあると分かっていれば（held）、またはサーバーが branch_dirty で断ったら、消えるものを見せる欄を開く
+  const markMerged = () => { if (held) void startDiscard('merge'); else void onMerged().then(result => { if (result === 'dirty') void startDiscard('merge'); }); };
   const stopDiscard = () => { setDiscarding(null); requestAnimationFrame(() => discardButton.current?.focus()); };
   const right = column === 'proposed' ? <span className="bt-meta">{formatRelative(task.created_at, now)}</span>
     : running ? <Pill tone="running">{t('ui.kanban.running')}</Pill>
@@ -258,7 +273,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       {questions > 0 && <a className="bt-tool__link bt-meta" href={routeHash(questionsRoute(task))} data-questions={questions}>{t('ui.task.questions', questions)}</a>}
       {column === 'check' && (
         <div className="bt-card__actions">
-          {merge && <Button variant="primary" small disabled={busy} onClick={onMerged}>{t('ui.kanban.markMerged')}</Button>}
+          {merge && <Button variant="primary" small disabled={busy} onClick={markMerged}>{t('ui.kanban.markMerged')}</Button>}
           {checking && <Button variant={merge ? undefined : 'primary'} small disabled={busy || !list} onClick={onChecked}>{t('ui.check.markChecked')}</Button>}
           {onOpenChanges && <Button small onClick={onOpenChanges}>{t('ui.kanban.openChanges')}</Button>}
           {merge ? <Button ref={discardButton} variant="ghost" small disabled={busy} data-discard-open={task.id} onClick={() => void startDiscard()}>{t('ui.kanban.discard')}</Button>
@@ -267,13 +282,14 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       )}
       {column === 'failed' && branchy && (
         <div className="bt-card__actions">
-          <Button small disabled={busy} onClick={onMerged}>{t('ui.kanban.markMerged')}</Button>
+          <Button small disabled={busy} onClick={markMerged}>{t('ui.kanban.markMerged')}</Button>
           {onOpenChanges && <Button small onClick={onOpenChanges}>{t('ui.kanban.openChanges')}</Button>}
           <Button ref={discardButton} variant="ghost" small disabled={busy} data-discard-open={task.id} onClick={() => void startDiscard()}>{t('ui.kanban.discard')}</Button>
         </div>
       )}
       {branchy && discarding && <DiscardPanel task={task} discarding={discarding} busy={busy} onCancel={stopDiscard}
-        onConfirm={(tip, files) => void onDiscard(tip, files).then(result => { if (result === 'done') setDiscarding(null); else if (result === 'stale') void startDiscard(); })} />}
+        onConfirm={(tip, files) => void (discarding.mode === 'merge' ? onMerged({ tip, files }) : onDiscard(tip, files))
+          .then(result => { if (result === 'done') setDiscarding(null); else if (result === 'stale') void startDiscard(discarding.mode); })} />}
       {column === 'proposed' && (
         <div className="bt-card__actions">
           <Button variant="primary" small disabled={busy} onClick={onApprove}>{t('ui.kanban.approve')}</Button>
@@ -459,7 +475,24 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
         onRejecting={on => setRejecting(on ? task.id : null)}
         list={(task.project_id && data?.lists.get(task.project_id)) || null}
         deviations={(task.project_id && data?.deviations.get(task.project_id)?.filter(row => row.by === 'task' && row.task === task.id)) || []}
-        onMerged={() => void act(task.id, async () => { try { const done = await api.markMerged(task.id); toast({ kind: 'done', icon: 'check', title: t(done.outcome === 'kept' ? 'ui.kanban.toast.mergedKept' : 'ui.kanban.toast.merged'), body: task.title }); } catch (failure) { reportOpError(failure); } return true; })}
+        onMerged={async confirmed => {
+          let result: MergeResult = 'failed';
+          await act(task.id, async () => {
+            try {
+              const done = await api.markMerged(task.id, confirmed);
+              result = 'done';
+              toast({ kind: 'done', icon: 'check', title: t(done.outcome === 'kept' ? 'ui.kanban.toast.mergedKept' : done.outcome === 'copy_removed' ? 'ui.kanban.toast.copyRemoved' : 'ui.kanban.toast.merged'), body: task.title });
+            } catch (failure) {
+              const code = failure instanceof ApiError ? failure.body?.code : null;
+              // 作業コピーにファイルが残る: 断りのトーストではなく、消えるものを見せる欄を開く
+              if (code === 'http.branch_dirty' && !confirmed) { result = 'dirty'; return true; }
+              if (code === 'http.branch_moved' || code === 'http.branch_changed') result = 'stale';
+              reportOpError(failure);
+            }
+            return true;
+          });
+          return result;
+        }}
         onDiscard={async (tip, files) => {
           let result: DiscardResult = 'failed';
           await act(task.id, async () => {

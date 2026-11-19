@@ -297,6 +297,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
         throw problem(409, 'task', done.reason === 'no_branch' ? 'no_branch' : done.reason === 'busy' ? 'branch_busy' : done.reason === 'moved' ? 'branch_moved' : 'branch_changed');
       }
       if ((done.reason === 'dirty' || done.reason === 'locked') && done.path) throw problem(409, 'task', 'branch_dirty', { params: { path: done.path } });
+      if (done.reason === 'unreadable' && done.path) throw problem(409, 'task', 'branch_unreadable', { params: { path: done.path } });
       throw problem(409, 'task', 'branch_failed');
     }
     sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task), outcome: done.outcome });
@@ -305,21 +306,29 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const task = ownerTask(params[0]!);
     const row = branchRow(task);
     const project = task.project_id ? app.projects.get(task.project_id) : undefined;
-    const listed = row.state === 'branch' && project ? await app.mergeWatch.preview(row, project.root) : null;
-    if (!listed) throw problem(409, 'task', 'no_branch');
-    sendJson(res, 200, { branch: row.branch, base: row.base, ...listed });
+    const listed = project ? await app.mergeWatch.preview(row, project.root) : { ok: false as const, reason: 'no_branch' as const };
+    if (!listed.ok) {
+      // 作業コピーが読めない（.git のファイルが無いなど）: 何が残っているか見せられないので、場所を出して持ち主に任せる
+      if (listed.reason === 'unreadable' && listed.path) throw problem(409, 'task', 'branch_unreadable', { params: { path: listed.path } });
+      throw problem(409, 'task', 'no_branch');
+    }
+    sendJson(res, 200, { branch: row.branch, base: row.base, ...listed.preview });
   });
   router.add('POST', '/api/tasks/:id/merged', async ({ req, res, params }) => {
     const task = ownerTask(params[0]!);
-    requireObject(await readJson(req));
-    branchDone(res, task, await app.mergeWatch.markMerged(branchRow(task).id));
+    const body = requireObject(await readJson(req));
+    // 作業コピーに残るファイルを見せて確かめたときだけ、見せた先端と指紋が付く（Discard と同じ確かめ）
+    const tip = requireString(body, 'tip', { optional: true, max: 64 });
+    const files = requireString(body, 'files', { optional: true, max: 64 });
+    if ((tip === undefined) !== (files === undefined)) throw problem(400, 'task', 'branch_confirm_pair');
+    branchDone(res, task, await app.mergeWatch.markMerged(branchRow(task).id, tip !== undefined && files !== undefined ? { tip, print: files } : undefined));
   });
   router.add('POST', '/api/tasks/:id/discard', async ({ req, res, params }) => {
     const task = ownerTask(params[0]!);
     const body = requireObject(await readJson(req));
     const tip = requireString(body, 'tip', { max: 64 })!;
     const files = requireString(body, 'files', { max: 64 })!;
-    branchDone(res, task, await app.mergeWatch.discard(branchRow(task).id, tip, files));
+    branchDone(res, task, await app.mergeWatch.discard(branchRow(task).id, { tip, print: files }));
   });
 
   // ── ワーカー ──

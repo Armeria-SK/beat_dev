@@ -572,6 +572,7 @@ export const EXPLAIN_KEYS = [
   'ui.kanban.branchNote.not_on_branch',
   'ui.kanban.branchNote.in_progress',
   'ui.kanban.branchNote.missing',
+  'ui.kanban.mergeAsk',
   'ui.kanban.discardAsk',
   'ui.changes.hiddenNote',
   'ui.changes.noLines',

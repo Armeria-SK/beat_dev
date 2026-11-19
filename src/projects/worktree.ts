@@ -117,7 +117,7 @@ const STALE_CREATING_MS = 10 * 60 * 1000;
 const MAX_ADMIN_FILE = 4096;
 const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'BISECT_LOG'];
 // 仕上げのコミットに入れない新しいファイルの名前（.env* と *.env・鍵・credentials.json・secrets.*。名前に secret を含むだけのソースは入れる）
-const HELD_NAME = /(?:^|\/)(?:\.env[^/]*|[^/]+\.env|[^/]+\.(?:pem|key)|credentials\.json|secrets\.[^/]+)$/iu;
+export const HELD_NAME = /(?:^|\/)(?:\.env[^/]*|[^/]+\.env|[^/]+\.(?:pem|key)|credentials\.json|secrets\.[^/]+)$/iu;
 const NO_MAINTENANCE = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
 const WINDOWS = process.platform === 'win32';
 const fold = (p: string): string => (WINDOWS ? p.toLowerCase() : p);

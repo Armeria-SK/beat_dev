@@ -130,6 +130,7 @@ test('ui/Kanban（DOM）: Discard はブランチのコミットを見せてか�
   board(() => (gone ? { awaiting: [], finished: [task({ worktree: worktree('discarded') })] } : { awaiting: [task({ worktree: worktree('branch') })], finished: [] }), (path, method) => {
     if (path === '/api/tasks/t1/branch') {
       return { branch: BRANCH, base: BASE, tip: TIP, commits: [{ sha: TIP, subject: 'Restore the queue' }, { sha: BASE.replace('1', '9'), subject: 'wip' }], more: 3,
+        headCommits: [{ sha: 'feedfacefeedfacefeedfacefeedfacefeedface', subject: 'Detached work' }], headMore: 0,
         path: 'C:/wt/a1b2c3d4', files: [{ path: 'notes.txt', kind: 'untracked' }, { path: 'debug.log', kind: 'ignored' }], filesTotal: 2, print: 'p'.repeat(64) };
     }
     if (path === '/api/tasks/t1/discard' && method === 'POST') { gone = true; return { task: task({ worktree: worktree('discarded') }), outcome: 'discarded' }; }
@@ -143,8 +144,9 @@ test('ui/Kanban（DOM）: Discard はブランチのコミットを見せてか�
   await settle();
   assert.ok(card().classList.contains('is-rejecting'), '確かめの欄を開く（操作のボタンは隠れる）');
   const panel = card().querySelector('[data-discard="t1"]')!;
-  assert.match(panel.textContent!, new RegExp(`Delete ${BRANCH} and its working copy\\? This deletes 5 commits that are only on that branch and 2 files that are only in the working copy`, 'u'));
-  assert.deepEqual([...panel.querySelectorAll('.ui-card__commits:not([data-discard-files]) li')].map(li => li.textContent), ['abcdefa Restore the queue', '9234567 wip', '3 more']);
+  assert.match(panel.textContent!, new RegExp(`Delete ${BRANCH} and its working copy\\? This deletes 6 commits that are only on that branch and 2 files that are only in the working copy`, 'u'));
+  assert.deepEqual([...panel.querySelectorAll('[data-discard-commits] li')].map(li => li.textContent), ['abcdefa Restore the queue', '9234567 wip', '3 more']);
+  assert.deepEqual([...panel.querySelectorAll('[data-discard-head] li')].map(li => li.textContent), ['feedfac Detached work'], 'HEAD が外れた先のコミットも見せる');
   assert.equal(panel.querySelector('[data-discard-path]')?.textContent, 'C:/wt/a1b2c3d4', '作業コピーの場所');
   assert.deepEqual([...panel.querySelectorAll('[data-discard-files] li')].map(li => li.textContent), ['notes.txt not tracked', 'debug.log ignored by git'], '消えるファイルも全部見せる');
   assert.equal(document.activeElement?.textContent, 'Cancel', '危ないボタンには最初に合わせない');
@@ -213,7 +215,7 @@ test('ui/Kanban（DOM）: 失敗・取り消しのタスクに作業コピーの
 test('ui/Kanban（DOM）: Discard が「見たあとで変わった」（409 branch_changed）で断られたら、欄を読み直して見せ直す。自分では送り直さない', async () => {
   let lists = 0;
   board(() => ({ awaiting: [task({ worktree: worktree('branch') })], finished: [] }), (path, method) => {
-    if (path === '/api/tasks/t1/branch') { lists++; return { branch: BRANCH, base: BASE, tip: TIP, commits: [], more: 0, path: 'C:/wt', files: Array.from({ length: lists }, (_, i) => ({ path: `f${i}.txt`, kind: 'untracked' })), filesTotal: lists, print: String(lists).repeat(64) }; }
+    if (path === '/api/tasks/t1/branch') { lists++; return { branch: BRANCH, base: BASE, tip: TIP, commits: [], more: 0, headCommits: [], headMore: 0, path: 'C:/wt', files: Array.from({ length: lists }, (_, i) => ({ path: `f${i}.txt`, kind: 'untracked' })), filesTotal: lists, print: String(lists).repeat(64) }; }
     return undefined;
   });
   const realFetchInner = globalThis.fetch;
@@ -248,4 +250,51 @@ test('ui: Awaiting check の数は、全体の数（countChecks）と欄の札�
   ];
   assert.equal(countChecks(marks, new Set([PRODUCT])), 2);
   assert.equal(kanbanPaneCount(marks, PRODUCT), 2);
+});
+
+test('ui/Kanban（DOM）: 残したファイルで止まっているカードの Mark merged は、消えるファイルを見せてから確かめ、見せた tip と形（files）を送る', async () => {
+  let merged = false;
+  board(() => (merged ? { awaiting: [], finished: [task({ worktree: worktree('merged') })] } : { awaiting: [task({ worktree: { ...worktree('branch'), held: { path: 'C:/wt/a1b2c3d4', files: 1 } } })], finished: [] }), (path, method) => {
+    if (path === '/api/tasks/t1/branch') return { branch: BRANCH, base: BASE, tip: TIP, commits: [], more: 0, headCommits: [], headMore: 0, path: 'C:/wt/a1b2c3d4', files: [{ path: 'notes.txt', kind: 'untracked' }], filesTotal: 1, print: 'q'.repeat(64) };
+    if (path === '/api/tasks/t1/merged' && method === 'POST') { merged = true; return { task: task({ worktree: worktree('merged') }), outcome: 'merged' }; }
+    return undefined;
+  });
+  const { container } = await render(createElement(Kanban, props()));
+  await settle();
+  const card = () => container.querySelector('[data-col="check"] .bt-card')!;
+  await click(byText(card(), 'button', 'Mark merged'));
+  await settle();
+  assert.deepEqual(sent.filter(x => x.method === 'POST'), [], '見せる前には送らない');
+  const panel = card().querySelector('[data-discard="t1"]')!;
+  assert.match(panel.textContent!, /Remove the working copy at C:\/wt\/a1b2c3d4\? This deletes 1 file that is only there/u);
+  assert.deepEqual([...panel.querySelectorAll('[data-discard-files] li code')].map(c => c.textContent), ['notes.txt']);
+  await click(byText(panel, 'button', 'Remove working copy'));
+  await settle();
+  assert.deepEqual(sent.filter(x => x.method === 'POST'), [{ method: 'POST', path: '/api/tasks/t1/merged', body: { tip: TIP, files: 'q'.repeat(64) } }]);
+  assert.ok(byText(container.querySelector('[data-col="done"]')!, '.bt-label', 'Task · merged'));
+});
+
+test('ui/Kanban（DOM）: 印の無いカードでも Mark merged が 409 branch_dirty で断られたら、通知を出さずに確かめの欄を開く', async () => {
+  board(() => ({ awaiting: [task({ worktree: worktree('branch') })], finished: [] }), path => {
+    if (path === '/api/tasks/t1/branch') return { branch: BRANCH, base: BASE, tip: TIP, commits: [], more: 0, headCommits: [], headMore: 0, path: 'C:/wt', files: [{ path: 'edit.txt', kind: 'changed' }], filesTotal: 1, print: 'r'.repeat(64) };
+    return undefined;
+  });
+  const realFetchInner = globalThis.fetch;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    if (String(path) === '/api/tasks/t1/merged') {
+      sent.push({ method: 'POST', path: String(path), body: JSON.parse(String(init?.body)) as unknown });
+      return new Response(JSON.stringify({ error: 'task', code: 'http.branch_dirty', message: 'dirty' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+    }
+    return realFetchInner(path, init);
+  }) as typeof fetch;
+  const { container } = await render(createElement(Kanban, props()));
+  await settle();
+  const card = () => container.querySelector('[data-col="check"] .bt-card')!;
+  await click(byText(card(), 'button', 'Mark merged'));
+  await settle();
+  await settle();
+  assert.deepEqual(sent, [{ method: 'POST', path: '/api/tasks/t1/merged', body: {} }]);
+  assert.ok(card().querySelector('[data-discard="t1"]'), '確かめの欄が開く');
+  assert.deepEqual([...card().querySelectorAll('[data-discard-files] li code')].map(c => c.textContent), ['edit.txt']);
+  assert.equal(container.querySelector('.bt-toast'), null, '断りを通知にしない');
 });

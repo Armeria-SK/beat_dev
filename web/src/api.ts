@@ -226,6 +226,7 @@ export type DiffFlags =
   | { checked: true; since: 'build' | 'head'; testsDeleted: string[]; testsDeletedMore: number; checkChanged: CheckFileChange[]; checkChangedMore: number };
 export interface BranchCommits {
   branch: string; base: string; tip: string; commits: Array<{ sha: string; subject: string }>; more: number;
+  headCommits: Array<{ sha: string; subject: string }>; headMore: number;
   path: string | null; files: Array<{ path: string; kind: 'changed' | 'untracked' | 'ignored' }>; filesTotal: number; print: string;
 }
 export interface SessionCheck { conversation_id: string; changed_at: number; checked_at: number | null }
@@ -446,7 +447,7 @@ export const api = {
   checkItem: (id: string, item: string, body: { result: 'checked' | 'insufficient'; version: number; note?: string }) =>
     call<{ task: Task; fix?: Task }>(`/api/tasks/${encodeURIComponent(id)}/items/${encodeURIComponent(item)}/check`, { method: 'POST', body: JSON.stringify(body) }),
   branchCommits: (id: string) => call<BranchCommits>(`/api/tasks/${encodeURIComponent(id)}/branch`),
-  markMerged: (id: string) => call<{ task: Task; outcome: string }>(`/api/tasks/${encodeURIComponent(id)}/merged`, { method: 'POST', body: '{}' }),
+  markMerged: (id: string, confirmed?: { tip: string; files: string }) => call<{ task: Task; outcome: string }>(`/api/tasks/${encodeURIComponent(id)}/merged`, { method: 'POST', body: JSON.stringify(confirmed ?? {}) }),
   discardBranch: (id: string, tip: string, files: string) => call<{ task: Task; outcome: string }>(`/api/tasks/${encodeURIComponent(id)}/discard`, { method: 'POST', body: JSON.stringify({ tip, files }) }),
   checkBranches: (projectId: string) => call<{ changed: number }>(`/api/projects/${encodeURIComponent(projectId)}/branches/check`, { method: 'POST', body: '{}' }),
   sessionChecks: (project?: string) => call<{ sessions: SessionCheck[] }>(`/api/session-checks${inProject(project, '?')}`),
