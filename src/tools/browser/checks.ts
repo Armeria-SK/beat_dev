@@ -91,6 +91,7 @@ export type ActRoute = 'loopback' | 'submit' | 'listed' | 'owner_url' | 'judge';
 export function actRoute(found: { place: 'public' | 'loopback'; submits: boolean; pageUrl: string }, sites: readonly string[], ownerTexts: readonly string[], devServer: boolean): ActRoute {
   if (found.place === 'loopback' && devServer) return 'loopback';
   if (found.submits) return 'submit';
+  // 127.0.0.10 のようなループバックはホストの決めに残るので、一覧・持ち主の URL より前で止める
   if (found.place === 'loopback') return 'judge';
   if (siteAllows(sites, found.pageUrl)) return 'listed';
   if (ownerHostAllows(ownerTexts, found.pageUrl)) return 'owner_url';

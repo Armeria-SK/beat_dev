@@ -16,6 +16,7 @@ import { PendingStore } from '../src/pending/store.ts';
 import { QuestionStore } from '../src/questions/store.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { actRoute } from '../src/tools/browser/checks.ts';
 import { elementFacts, PlaywrightBrowser, type LaunchOptions, type WorkContextOptions } from '../src/tools/browser/driver.ts';
 import { navigationMethodVerdict, type SendGuard, type SubmitPermit } from '../src/tools/browser/route.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
@@ -461,6 +462,11 @@ test('ownerLoopbackPorts: localhost / 127.0.0.1 / [::1] にポートを付けた
   assert.deepEqual([...ownerLoopbackPorts(['open http://localhost:5173/ and 127.0.0.1:8080 and http://[::1]:3000/x'])].sort(), [3000, 5173, 8080]);
   assert.deepEqual([...ownerLoopbackPorts(['localhost', 'http://localhost/', 'mylocalhost:5173', 'evil.localhost:5174', 'localhost:99999', 'https://example.com:5175/'])], []);
   assert.deepEqual([...ownerLoopbackPorts([])], []);
+});
+
+test('actRoute: 開発サーバーでないループバックは、持ち主の文や一覧にそのホストがあっても判定役へ（127.0.0.10 のようにホストの決めに残る書き方）', () => {
+  assert.equal(actRoute({ place: 'loopback', submits: false, pageUrl: 'http://127.0.0.10:9999/' }, [], ['http://127.0.0.10:8080/'], false), 'judge');
+  assert.equal(actRoute({ place: 'loopback', submits: false, pageUrl: 'http://127.0.0.10:9999/' }, ['127.0.0.10'], [], false), 'judge');
 });
 
 test('BackgroundJobs.printedPorts: 動いている裏のコマンドの出力のループバックの URL のポートを、始めた会話かタスクだけに返す。止まると返さない', async t => {
