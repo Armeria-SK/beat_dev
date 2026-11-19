@@ -573,7 +573,7 @@ export const ja = {
   'ui.kanban.branchNote.not_on_branch': '作業コピーが自分のブランチから外れていたので、残っていたものはコミットしていません。取り込む前に作業コピーを確かめてください。',
   'ui.kanban.branchNote.in_progress': '作業コピーで merge か rebase が途中だったので、残っていたものはコミットしていません。',
   'ui.kanban.branchNote.missing': 'タスクが終わったとき作業コピーが無くなっていました。残っているのはブランチだけです。',
-  'ui.kanban.discardAsk': (branch: string, n: number) => `${branch} と作業コピーを消しますか？ このブランチにだけある ${n} 個のコミットが失われます。`,
+  'ui.kanban.discardAsk': (branch: string, n: number, files: number) => `${branch} と作業コピーを消しますか？ このブランチにだけある ${n} 個のコミット${files > 0 ? `と、作業コピーにだけある ${files} 個のファイル` : ''}が消えます（ご自分で足したものも含みます）。`,
   'ui.changes.hiddenNote': '秘密の情報らしいファイルなので、中身は出さず、ここでは元に戻せません。',
   'ui.changes.noLines': '大きすぎるか文字のファイルでないので、行は出しません。',
   'ui.changes.more': (n: number) => `ほかに ${n} 個のファイルは出していません。`,

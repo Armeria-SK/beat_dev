@@ -252,13 +252,15 @@ export function registerProjectRoutes(router: Router, app: App): void {
     sendJson(res, 200, { version: { ...rest, content: JSON.parse(content) as unknown } });
   });
 
-  router.add('GET', '/api/projects/:id/deviations', async ({ res, params }) => {
+  router.add('GET', '/api/projects/:id/deviations', async ({ res, params, url }) => {
     const project = projectOr404(params[0]!);
     let log;
     try { log = { ...readDeviations(app.paths.projects, project.id), unusable: false }; } catch (error) {
       if (!(error instanceof DeviationError)) throw error;
       log = { rows: [], unreadable: 0, unusable: true };
     }
+    // beat 8-3: Kanban のカードは行だけ使う（差分の印の git を走らせない）
+    if (url.searchParams.get('rows') === '1') { sendJson(res, 200, { deviations: log }); return; }
     const since = app.acceptance.versions(project.id)[0]?.created_at ?? null;
     const flags = folderMissing(project) ? { checked: false as const, reason: 'folder_missing' as const } : await diffFlags(project.root, project.check_command, app.paths.data, since);
     sendJson(res, 200, { deviations: log, flags });

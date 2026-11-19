@@ -57,7 +57,6 @@ export const taskJa = {
   'event.branch_merged': "ブランチ {branch} が製品のフォルダに取り込まれたので、作業コピーとブランチを片づけました",
   'event.branch_kept': "取り込み済みにしました: 作業コピーを片づけ、ブランチ {branch} は残しました（squash などで、製品のフォルダにそのままのコミットが無いため）",
   'event.branch_discarded': "ブランチ {branch} と作業コピーを捨てました",
-  'event.branch_discard_kept': "作業コピーは片づけましたが、ブランチ {branch} は残しました: beat が作っていないコミットがあります",
   'event.main_changed': "このタスクが別の作業コピーで動いているあいだに、製品のフォルダの git の状態が変わりました（{parts}）。元に戻してはいません。製品のフォルダを確かめてください（ほかのタスクや持ち主が変えた場合もあります）",
   'event.main_changed_others': "このタスクが別の作業コピーで動いているあいだに、製品のフォルダの git の状態が変わりました（{parts}）。同じ時間に製品のフォルダで動いたほかのタスクが変えたのかもしれません: {names}。元に戻してはいません",
   'notify.main_changed': "「{title}」が作業コピーで動いているあいだに、製品のフォルダの git の状態が変わりました（{parts}）",

@@ -33,13 +33,15 @@ export function markSessionChecked(kv: KV, conversationId: string, now: number):
 interface Window { conversation: string; start: number; end: number }
 
 // git の製品: 書きかけ（status）のファイルの変えた時刻と、HEAD に近いコミットの時刻が、どの実行の時間に入るか
-async function gitTouches(root: string, dataDir: string, windows: readonly Window[]): Promise<Set<string>> {
+// 読めなかった（git が動かない・時間切れ）ときは null。そのときは見た印（seen）を進めず、次にもう一度見る
+async function gitTouches(root: string, dataDir: string, windows: readonly Window[]): Promise<Set<string> | null> {
   const hit = new Set<string>();
   if (!windows.length) return hit;
   const since = Math.min(...windows.map(w => w.start));
   const times = await withGit(root, dataDir, async git => {
     const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
     const log = await git(['log', '-n', '200', `--since=@${Math.floor(since / 1000) - 2}`, '--format=%ct', 'HEAD', '--']);
+    if (status === null || (log === null && (await git(['rev-parse', '-q', '--verify', 'HEAD'])) !== null)) return null;
     const out: number[] = [];
     if (status) {
       const parts = status.toString('utf8').split('\0');
@@ -55,7 +57,8 @@ async function gitTouches(root: string, dataDir: string, windows: readonly Windo
     if (log) for (const line of log.toString('utf8').split('\n')) if (/^\d+$/u.test(line)) out.push(Number(line) * 1000);
     return out;
   });
-  for (const at of times ?? []) {
+  if (!times) return null;
+  for (const at of times) {
     for (const w of windows) if (at >= w.start - SLACK_MS && at <= w.end + SLACK_MS) hit.add(w.conversation);
   }
   return hit;
@@ -93,14 +96,17 @@ export async function sessionChecks(deps: { db: DatabaseSync; kv: KV; dataDir: s
     const touched = row && !folderMissing(row) && gitFolder(row.root) ? await gitTouches(row.root, deps.dataDir, windows) : new Set<string>();
     for (const w of windows) {
       const mark = marks.get(w.conversation)!;
-      if (touched.has(w.conversation) && w.end > (mark.changedAt ?? 0)) { mark.changedAt = w.end; dirty.add(w.conversation); }
-      if (w.end > mark.seen) { mark.seen = w.end; dirty.add(w.conversation); }
+      if (touched?.has(w.conversation) && w.end > (mark.changedAt ?? 0)) { mark.changedAt = w.end; dirty.add(w.conversation); }
+      if (touched && w.end > mark.seen) { mark.seen = w.end; dirty.add(w.conversation); }
     }
   }
   const out: SessionCheck[] = [];
-  for (const [id, mark] of marks) {
+  for (const [id, found] of marks) {
     const at = recorded.get(id);
-    if (at !== undefined && at > (mark.changedAt ?? 0)) { mark.changedAt = at; dirty.add(id); }
+    if (at !== undefined && at > (found.changedAt ?? 0)) { found.changedAt = at; dirty.add(id); }
+    // git を待つあいだに持ち主が Mark checked を押していれば、その印を消さない（書く直前に読み直して重ねる）
+    const current = markOf(deps.kv, id);
+    const mark: SessionMark = { changedAt: Math.max(found.changedAt ?? 0, current.changedAt ?? 0) || null, checkedAt: current.checkedAt, seen: Math.max(found.seen, current.seen) };
     if (dirty.has(id)) deps.kv.setJson(keyOf(id), mark);
     if (mark.changedAt !== null && mark.changedAt > (mark.checkedAt ?? 0)) out.push({ conversation_id: id, changed_at: mark.changedAt, checked_at: mark.checkedAt });
   }

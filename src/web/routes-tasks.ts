@@ -293,9 +293,11 @@ export function registerTaskRoutes(router: Router, app: App): void {
   };
   const branchDone = (res: Parameters<typeof sendJson>[0], task: Task, done: BranchAction) => {
     if (!done.ok) {
-      if (done.reason === 'no_branch' || done.reason === 'busy' || done.reason === 'moved') throw problem(409, 'task', done.reason === 'no_branch' ? 'no_branch' : done.reason === 'busy' ? 'branch_busy' : 'branch_moved');
-      if (done.reason === 'dirty' || done.reason === 'locked') throw problem(409, 'task', 'branch_dirty');
-      throw problem(409, 'task', 'branch_failed', { params: { reason: done.reason } });
+      if (done.reason === 'no_branch' || done.reason === 'busy' || done.reason === 'moved' || done.reason === 'changed') {
+        throw problem(409, 'task', done.reason === 'no_branch' ? 'no_branch' : done.reason === 'busy' ? 'branch_busy' : done.reason === 'moved' ? 'branch_moved' : 'branch_changed');
+      }
+      if ((done.reason === 'dirty' || done.reason === 'locked') && done.path) throw problem(409, 'task', 'branch_dirty', { params: { path: done.path } });
+      throw problem(409, 'task', 'branch_failed');
     }
     sendJson(res, 200, { task: withItems(app.tasks.get(task.id) ?? task), outcome: done.outcome });
   };
@@ -303,7 +305,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const task = ownerTask(params[0]!);
     const row = branchRow(task);
     const project = task.project_id ? app.projects.get(task.project_id) : undefined;
-    const listed = row.state === 'branch' && project ? await app.mergeWatch.commits(row, project.root) : null;
+    const listed = row.state === 'branch' && project ? await app.mergeWatch.preview(row, project.root) : null;
     if (!listed) throw problem(409, 'task', 'no_branch');
     sendJson(res, 200, { branch: row.branch, base: row.base, ...listed });
   });
@@ -314,8 +316,10 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
   router.add('POST', '/api/tasks/:id/discard', async ({ req, res, params }) => {
     const task = ownerTask(params[0]!);
-    const tip = requireString(requireObject(await readJson(req)), 'tip', { max: 64 })!;
-    branchDone(res, task, await app.mergeWatch.discard(branchRow(task).id, tip));
+    const body = requireObject(await readJson(req));
+    const tip = requireString(body, 'tip', { max: 64 })!;
+    const files = requireString(body, 'files', { max: 64 })!;
+    branchDone(res, task, await app.mergeWatch.discard(branchRow(task).id, tip, files));
   });
 
   // ── ワーカー ──

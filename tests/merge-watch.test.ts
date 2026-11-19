@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import { MERGE_WATCH_MS } from '../src/projects/merge-watch.ts';
+import { MERGE_WATCH_MS, MergeWatch } from '../src/projects/merge-watch.ts';
+import { markSessionChecked, sessionChecks } from '../src/projects/session-check.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad } from './helpers.ts';
@@ -41,7 +42,7 @@ async function rig(t: Parameters<typeof startApp>[0], options: { now?: () => num
     return { id: made.body.project.id as string, root };
   };
   // 作業コピーで動いて終わったタスク（8-2 のワーカーの終わりと同じ: 書きかけをコミットして branch、タスクは done）
-  const branchTask = async (p: { id: string; root: string }, title = 'Restore the queue', status: 'done' | 'cancelled' = 'done') => {
+  const branchTask = async (p: { id: string; root: string }, title = 'Restore the queue', status: 'done' | 'cancelled' | 'failed' = 'done') => {
     const task = s.app.tasks.create({ title, origin: 'user', actor: 'user', projectId: p.id, ownerRequest: true });
     const made = await s.app.worktrees.createWorktree({ projectId: p.id, root: p.root, kind: 'task', taskId: task.id, title });
     assert.ok(made.ok, JSON.stringify(made));
@@ -154,12 +155,13 @@ test('8-3: Discard は見せたコミット（GET /branch の tip）のままの
   assert.deepEqual(listed.body.commits.map((c: { subject: string }) => c.subject), ['Restore the queue'], 'base..tip のコミットを見せる');
   assert.equal(listed.body.more, 0);
 
-  const stale = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: row.base });
+  assert.deepEqual(listed.body.files, [], '作業コピーにしか無いファイルは無い');
+  const stale = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: row.base, files: listed.body.print });
   assert.equal(stale.status, 409);
   assert.equal(stale.body.code, 'http.branch_moved');
   assert.equal(hasBranch(p.root, row.branch), true);
 
-  const gone = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: listed.body.tip });
+  const gone = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: listed.body.tip, files: listed.body.print });
   assert.equal(gone.status, 200, JSON.stringify(gone.body));
   assert.equal(gone.body.outcome, 'discarded');
   assert.equal(s.app.worktrees.get(row.id)!.state, 'discarded');
@@ -169,18 +171,16 @@ test('8-3: Discard は見せたコミット（GET /branch の tip）のままの
   assert.deepEqual(s.events(task.id), [`user: Discarded the branch ${row.branch} and its working copy`]);
 });
 
-test('8-3（安全）: Mark merged・Discard が触るのは、そのタスクの表の行だけ。行の無いタスク・動いているタスク・持ち主のブランチには触らない', { skip: !gitAvailable }, async t => {
+test('8-3（安全）: Mark merged・Discard が触るのは、そのタスクの表の行だけ。行の無いタスク・動いているタスク・開き直したタスクには触らない', { skip: !gitAvailable }, async t => {
   const s = await rig(t);
   const p = await s.product('shop');
   const plain = s.app.tasks.create({ title: 'No branch', origin: 'user', actor: 'user', projectId: p.id, ownerRequest: true });
   s.app.tasks.finish(plain.id, 'done', 'x', 'beat');
-  git(p.root, 'branch', 'beat/owner-made-0001');
-  for (const [path, body] of [[`/api/tasks/${plain.id}/merged`, {}], [`/api/tasks/${plain.id}/discard`, { tip: 'a'.repeat(40) }]] as const) {
+  for (const [path, body] of [[`/api/tasks/${plain.id}/merged`, {}], [`/api/tasks/${plain.id}/discard`, { tip: 'a'.repeat(40), files: 'b'.repeat(64) }]] as const) {
     const refused = await s.json(path, 'POST', body);
     assert.equal(refused.status, 409);
     assert.equal(refused.body.code, 'http.no_branch');
   }
-  assert.equal(hasBranch(p.root, 'beat/owner-made-0001'), true, '表に無い beat/ の名前のブランチは残る');
 
   // まだ動いているタスクの作業コピー（active）は Mark merged でも見回りでも触らない
   const live = s.app.tasks.create({ title: 'Still running', origin: 'user', actor: 'user', projectId: p.id, ownerRequest: true });
@@ -194,6 +194,15 @@ test('8-3（安全）: Mark merged・Discard が触るのは、そのタスク�
   git(p.root, 'merge', '-q', '--no-ff', '-m', 'merge', row.branch);
   await s.app.mergeWatch.check(p.id);
   assert.equal(s.app.worktrees.get(row.id)!.state, 'branch', '動くかもしれないタスクの行は片づけない');
+  // 持ち主の Mark merged・Discard も、開き直したタスクの行には触らない（#owned の中の #settled）
+  const listed = { tip: git(p.root, 'rev-parse', `refs/heads/${row.branch}`), files: (await s.app.mergeWatch.localFiles(row))!.print };
+  for (const [path, body] of [[`/api/tasks/${task.id}/merged`, {}], [`/api/tasks/${task.id}/discard`, listed]] as const) {
+    const refused = await s.json(path, 'POST', body);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal(refused.body.code, 'http.no_branch', path);
+  }
+  assert.equal(existsSync(row.path!), true);
+  assert.equal(hasBranch(p.root, row.branch), true);
 });
 
 test('8-3: 確かめる項目が残るタスクは、取り込んでも Awaiting check のまま（理由が 1 つ減る）。項目が済めば Done', { skip: !gitAvailable }, async t => {
@@ -254,4 +263,162 @@ test('8-3（Q-P8-12）: 製品のファイルを変えた会話だけが Session
   const again = await s.json(`/api/conversations/${wrote.conversation}/messages`, 'POST', { text: 'more', projectId: plain.id, permissionMode: 'auto' });
   await settled(s.app, again.body.runId);
   assert.deepEqual(await sessions(plain.id), [wrote.conversation]);
+});
+
+test('8-3（安全）: 取り込まれても作業コピーに追っていないファイル（notes.txt）があれば、見回りも Mark merged も消さない。行は branch のまま Awaiting check に残り、理由と場所を出す。見回りの WARN は形が変わるまで 1 回', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  const { task, row } = await s.branchTask(p);
+  writeFileSync(join(row.path!, 'notes.txt'), 'my notes\n');
+  git(p.root, 'merge', '-q', '--no-ff', '-m', 'merge', row.branch);
+  assert.equal((await s.json(`/api/projects/${p.id}/branches/check`, 'POST', {})).body.changed, 0);
+  // 同じ形のあいだは、見回りは消しに行かない（やり直さない）
+  const real = s.app.worktrees.removeWorktree.bind(s.app.worktrees);
+  let tries = 0;
+  s.app.worktrees.removeWorktree = (async (...args: Parameters<typeof real>) => { tries++; return real(...args); }) as typeof real;
+  await s.app.mergeWatch.check(p.id);
+  assert.equal(tries, 0, '2 回目の見回りは消しに行かない');
+  assert.equal(existsSync(join(row.path!, 'notes.txt')), true, 'notes.txt は残る');
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'branch', 'merged と偽らない');
+  assert.equal(s.logs.filter(l => l.includes(`[WARN] The beat branch ${row.branch} is merged`)).length, 1, '同じ形のあいだは 1 回だけ');
+  const waiting = await s.awaiting(p.id) as unknown as Array<{ id: string; worktree: { held: { path: string; files: number } | null } }>;
+  assert.deepEqual(waiting.map(w => w.id), [task.id], 'Awaiting check に残る');
+  assert.deepEqual(waiting[0]!.worktree.held, { path: row.path, files: 1 });
+
+  const marked = await s.json(`/api/tasks/${task.id}/merged`, 'POST', {});
+  assert.equal(marked.status, 409);
+  assert.equal(marked.body.code, 'http.branch_dirty');
+  assert.ok(String(marked.body.message).includes(row.path!), '場所を出す');
+  assert.equal(existsSync(join(row.path!, 'notes.txt')), true, 'Mark merged でも残る');
+  assert.equal(hasBranch(p.root, row.branch), true);
+  assert.equal(s.logs.filter(l => l.includes(`[WARN] The beat branch ${row.branch} is merged`)).length, 1, 'Mark merged で断っても、形が同じなら WARN を重ねない');
+
+  // 持ち主が片づければ、次の見回りで片づく（形が変わったのでやり直す）
+  rmSync(join(row.path!, 'notes.txt'));
+  assert.equal(await s.app.mergeWatch.check(p.id), 1);
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'merged');
+  assert.equal(hasBranch(p.root, row.branch), false);
+});
+
+test('8-3（安全）: squash のあとの Mark merged も、作業コピーに書きかけがあれば消さない', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  const { task, row } = await s.branchTask(p);
+  writeFileSync(join(row.path!, 'Restorethequeue.txt'), 'edited after the task\n');
+  git(p.root, 'merge', '-q', '--squash', row.branch);
+  git(p.root, 'commit', '-q', '-m', 'squashed');
+  const marked = await s.json(`/api/tasks/${task.id}/merged`, 'POST', {});
+  assert.equal(marked.status, 409);
+  assert.equal(marked.body.code, 'http.branch_dirty');
+  assert.equal(existsSync(join(row.path!, 'Restorethequeue.txt')), true);
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'branch');
+});
+
+test('8-3（安全）: git が無視するファイル（debug.log）だけが残る作業コピーも、見回りは黙って消さない', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  writeFileSync(join(p.root, '.gitignore'), '*.log\n');
+  git(p.root, 'add', '-A');
+  git(p.root, 'commit', '-q', '-m', 'ignore logs');
+  const { task, row } = await s.branchTask(p);
+  writeFileSync(join(row.path!, 'debug.log'), 'trace\n');
+  git(p.root, 'merge', '-q', '--no-ff', '-m', 'merge', row.branch);
+  assert.equal(await s.app.mergeWatch.check(p.id), 0);
+  assert.equal(existsSync(join(row.path!, 'debug.log')), true);
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'branch');
+  const listed = await s.json(`/api/tasks/${task.id}/branch`, 'GET');
+  assert.deepEqual(listed.body.files, [{ path: 'debug.log', kind: 'ignored' }], 'Discard の前に無視されるファイルも見せる');
+});
+
+test('8-3（安全）: Discard は持ち主のコミットと追っていないファイルも見せ、見せたとおりなら消す。見たあとでファイルが変われば断って何も消さない。2 回目は no_branch', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  const { task, row } = await s.branchTask(p);
+  writeFileSync(join(row.path!, 'mine.txt'), 'owner work\n');
+  git(row.path!, 'add', 'mine.txt');
+  git(row.path!, 'commit', '-q', '-m', 'Owner commit');
+  writeFileSync(join(row.path!, 'owner.txt'), 'not committed\n');
+  const listed = await s.json(`/api/tasks/${task.id}/branch`, 'GET');
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+  assert.deepEqual(listed.body.commits.map((c: { subject: string }) => c.subject), ['Owner commit', 'Restore the queue'], '持ち主のコミットも見せる');
+  assert.deepEqual(listed.body.files, [{ path: 'owner.txt', kind: 'untracked' }]);
+  assert.equal(listed.body.path, row.path);
+
+  writeFileSync(join(row.path!, 'owner.txt'), 'changed after the owner looked at it\n');
+  const stale = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: listed.body.tip, files: listed.body.print });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.code, 'http.branch_changed');
+  assert.equal(existsSync(join(row.path!, 'owner.txt')), true, '見せていない形のファイルは消さない');
+  assert.equal(hasBranch(p.root, row.branch), true);
+
+  const again = await s.json(`/api/tasks/${task.id}/branch`, 'GET');
+  const gone = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: again.body.tip, files: again.body.print });
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  assert.equal(gone.body.outcome, 'discarded');
+  assert.equal(hasBranch(p.root, row.branch), false, '見せた持ち主のコミットごと消える');
+  assert.equal(existsSync(row.path!), false);
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'discarded');
+  const twice = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: again.body.tip, files: again.body.print });
+  assert.equal(twice.status, 409);
+  assert.equal(twice.body.code, 'http.no_branch', '繰り返しても回り続けない');
+  assert.deepEqual(s.events(task.id), [`user: Discarded the branch ${row.branch} and its working copy`]);
+});
+
+test('8-3: 早送り（fast-forward）の取り込みも見つけて片づける', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  const { row } = await s.branchTask(p);
+  git(p.root, 'merge', '-q', '--ff-only', row.branch);
+  assert.equal(await s.app.mergeWatch.check(p.id), 1);
+  assert.equal(s.app.worktrees.get(row.id)!.state, 'merged');
+  assert.equal(hasBranch(p.root, row.branch), false);
+  assert.equal(existsSync(row.path!), false);
+});
+
+test('8-3（安全）: 消す直前にタスクが開き直されたら、Discard は消しかけにせず何も消さない（行を読み直して removing にする）', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  const { task, row } = await s.branchTask(p);
+  const real = s.app.worktrees;
+  const watch = new MergeWatch({
+    db: s.app.db, kv: s.app.kv, dataDir: s.app.paths.data,
+    worktrees: {
+      get: id => real.get(id), isMerged: (id, o) => real.isMerged(id, o), tipOf: id => real.tipOf(id),
+      // 確かめたあと、消し始める前に持ち主がタスクを開き直した
+      removeWorktree: async (id, o) => { s.app.db.prepare("UPDATE tasks SET status = 'ready' WHERE id = ?").run(task.id); return real.removeWorktree(id, o); },
+    },
+  });
+  const tip = (await real.tipOf(row.id))!;
+  const done = await watch.discard(row.id, tip, (await watch.localFiles(row))!.print);
+  assert.deepEqual(done, { ok: false, reason: 'busy', path: row.path });
+  assert.equal(real.get(row.id)!.state, 'branch');
+  assert.equal(existsSync(row.path!), true);
+  assert.equal(hasBranch(p.root, row.branch), true);
+});
+
+test('8-3: 失敗したタスクの作業コピーのブランチも Discard で片づけられる（取り込み待ちの列には入らない）', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop');
+  const { task, row } = await s.branchTask(p, 'Broke halfway', 'failed');
+  assert.deepEqual(await s.awaiting(p.id), []);
+  const listed = await s.json(`/api/tasks/${task.id}/branch`, 'GET');
+  assert.equal(listed.status, 200);
+  const gone = await s.json(`/api/tasks/${task.id}/discard`, 'POST', { tip: listed.body.tip, files: listed.body.print });
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  assert.equal(hasBranch(p.root, row.branch), false);
+});
+
+test('8-3（Q-P8-12）: 会話を調べている途中で持ち主が Mark checked を押しても、その印を上書きしない', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const plain = await s.product('plain', false);
+  s.adapter().scripts = [call('file_write', { path: 'a.txt', content: 'two\n' }), reply('done')];
+  const conversation = uuid(1);
+  const sent = await s.json(`/api/conversations/${conversation}/messages`, 'POST', { text: 'work', projectId: plain.id, permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  const out = await sessionChecks({
+    db: s.app.db, kv: s.app.kv, dataDir: s.app.paths.data, now: Date.now(),
+    projects: { get: id => { markSessionChecked(s.app.kv, conversation, Date.now() + 60_000); return s.app.projects.get(id); } },
+  }, plain.id);
+  assert.deepEqual(out, [], '押した Mark checked が効いたまま');
+  assert.ok((s.app.kv.getJson<{ checkedAt: number | null }>(`session-check:${conversation}`)?.checkedAt ?? 0) > 0);
 });

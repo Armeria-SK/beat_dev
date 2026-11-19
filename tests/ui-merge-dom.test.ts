@@ -72,7 +72,7 @@ function board(tasks: () => { awaiting: Task[]; finished: Task[] }, extra: (path
     if (path === '/api/runs?limit=500') return { runs, total: 0, judged: {} };
     if (path === '/api/session-checks') return { sessions: sessions.map(id => ({ conversation_id: id, changed_at: 5, checked_at: null })) };
     if (path === `/api/projects/${PRODUCT}/acceptance`) return { acceptance };
-    if (path === `/api/projects/${PRODUCT}/deviations`) {
+    if (path === `/api/projects/${PRODUCT}/deviations?rows=1`) {
       return { deviations: { rows: [
         { item: 'A-1', what: 'Kept the old retry count', why: 'the API caps it', task: 't1', date: '2026-11-19', by: 'task', external: false },
         { item: null, what: 'Another task note', why: 'x', task: 'other', date: null, by: 'task', external: false },
@@ -128,7 +128,10 @@ test('ui/Kanban（DOM）: 項目も残る取り込み待ちは理由を 2 つと
 test('ui/Kanban（DOM）: Discard はブランチのコミットを見せてから確かめ、見せた先端（tip）を送る。Cancel では何も送らない', async () => {
   let gone = false;
   board(() => (gone ? { awaiting: [], finished: [task({ worktree: worktree('discarded') })] } : { awaiting: [task({ worktree: worktree('branch') })], finished: [] }), (path, method) => {
-    if (path === '/api/tasks/t1/branch') return { branch: BRANCH, base: BASE, tip: TIP, commits: [{ sha: TIP, subject: 'Restore the queue' }, { sha: BASE.replace('1', '9'), subject: 'wip' }], more: 3 };
+    if (path === '/api/tasks/t1/branch') {
+      return { branch: BRANCH, base: BASE, tip: TIP, commits: [{ sha: TIP, subject: 'Restore the queue' }, { sha: BASE.replace('1', '9'), subject: 'wip' }], more: 3,
+        path: 'C:/wt/a1b2c3d4', files: [{ path: 'notes.txt', kind: 'untracked' }, { path: 'debug.log', kind: 'ignored' }], filesTotal: 2, print: 'p'.repeat(64) };
+    }
     if (path === '/api/tasks/t1/discard' && method === 'POST') { gone = true; return { task: task({ worktree: worktree('discarded') }), outcome: 'discarded' }; }
     return undefined;
   });
@@ -140,8 +143,11 @@ test('ui/Kanban（DOM）: Discard はブランチのコミットを見せてか�
   await settle();
   assert.ok(card().classList.contains('is-rejecting'), '確かめの欄を開く（操作のボタンは隠れる）');
   const panel = card().querySelector('[data-discard="t1"]')!;
-  assert.match(panel.textContent!, new RegExp(`Delete ${BRANCH} and its working copy\\? These 5 commits are only on that branch`, 'u'));
-  assert.deepEqual([...panel.querySelectorAll('.ui-card__commits li')].map(li => li.textContent), ['abcdefa Restore the queue', '9234567 wip', '3 more']);
+  assert.match(panel.textContent!, new RegExp(`Delete ${BRANCH} and its working copy\\? This deletes 5 commits that are only on that branch and 2 files that are only in the working copy`, 'u'));
+  assert.deepEqual([...panel.querySelectorAll('.ui-card__commits:not([data-discard-files]) li')].map(li => li.textContent), ['abcdefa Restore the queue', '9234567 wip', '3 more']);
+  assert.equal(panel.querySelector('[data-discard-path]')?.textContent, 'C:/wt/a1b2c3d4', '作業コピーの場所');
+  assert.deepEqual([...panel.querySelectorAll('[data-discard-files] li')].map(li => li.textContent), ['notes.txt not tracked', 'debug.log ignored by git'], '消えるファイルも全部見せる');
+  assert.equal(document.activeElement?.textContent, 'Cancel', '危ないボタンには最初に合わせない');
   await click(byText(panel, 'button', 'Cancel'));
   assert.equal(card().querySelector('[data-discard]'), null);
   assert.deepEqual(sent, []);
@@ -149,7 +155,7 @@ test('ui/Kanban（DOM）: Discard はブランチのコミットを見せてか�
   await settle();
   await click(byText(card(), 'button', 'Discard branch'));
   await settle();
-  assert.deepEqual(sent, [{ method: 'POST', path: '/api/tasks/t1/discard', body: { tip: TIP } }]);
+  assert.deepEqual(sent, [{ method: 'POST', path: '/api/tasks/t1/discard', body: { tip: TIP, files: 'p'.repeat(64) } }]);
   assert.equal(container.querySelector('[data-col="check"] .bt-card'), null);
 });
 
@@ -179,4 +185,67 @@ test('ui/Kanban（DOM）: 製品のファイルを変えた会話は Awaiting ch
   await settle();
   assert.deepEqual(sent, [{ method: 'POST', path: '/api/conversations/c-changed/checked', body: {} }]);
   assert.ok(container.querySelector('[data-col="done"] [data-session="c-changed"]'), '確かめたら Done へ移る');
+});
+
+test('ui/Kanban（DOM）: 取り込まれたのに作業コピーにファイルが残るカードは「Merged — the working copy still has files」と場所を出し、Awaiting check に残る', async () => {
+  board(() => ({ awaiting: [task({ worktree: { ...worktree('branch'), held: { path: 'C:/wt/a1b2c3d4', files: 1 } } })], finished: [] }));
+  const { container } = await render(createElement(Kanban, props()));
+  await settle();
+  const card = container.querySelector('[data-col="check"] .bt-card')!;
+  assert.equal(card.querySelector('[data-reasons]')?.textContent, 'Merged — the working copy still has files');
+  assert.equal(card.querySelector('[data-held-path]')?.textContent, 'C:/wt/a1b2c3d4');
+  assert.deepEqual([...card.querySelectorAll('.bt-card__actions .bt-btn')].map(b => b.textContent), ['Mark merged', 'Discard']);
+});
+
+test('ui/Kanban（DOM）: 失敗・取り消しのタスクに作業コピーのブランチが残っていれば、Failed のカードにブランチの行と Mark merged・Discard を出す', async () => {
+  board(() => ({ awaiting: [], finished: [task({ status: 'failed', result_summary: 'Broke halfway', worktree: worktree('branch') }), task({ id: 't2', title: 'Plain failure', status: 'failed', worktree: null })] }));
+  const { container } = await render(createElement(Kanban, props()));
+  await settle();
+  const failed = container.querySelector('[data-col="failed"] [data-task="t1"]')!;
+  assert.ok(failed, '失敗のカードは Failed の列');
+  assert.ok(failed.querySelector(`[data-branch="${BRANCH}"]`), 'ブランチの行');
+  assert.deepEqual([...failed.querySelectorAll('.bt-card__actions .bt-btn')].map(b => b.textContent), ['Mark merged', 'Discard']);
+  const plain = container.querySelector('[data-col="failed"] [data-task="t2"]')!;
+  assert.equal(plain.querySelector('[data-branch]'), null);
+  assert.equal(plain.querySelector('[data-discard-open]'), null, 'ブランチの無い失敗には出さない');
+});
+
+test('ui/Kanban（DOM）: Discard が「見たあとで変わった」（409 branch_changed）で断られたら、欄を読み直して見せ直す。自分では送り直さない', async () => {
+  let lists = 0;
+  board(() => ({ awaiting: [task({ worktree: worktree('branch') })], finished: [] }), (path, method) => {
+    if (path === '/api/tasks/t1/branch') { lists++; return { branch: BRANCH, base: BASE, tip: TIP, commits: [], more: 0, path: 'C:/wt', files: Array.from({ length: lists }, (_, i) => ({ path: `f${i}.txt`, kind: 'untracked' })), filesTotal: lists, print: String(lists).repeat(64) }; }
+    return undefined;
+  });
+  const realFetchInner = globalThis.fetch;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    if (String(path) === '/api/tasks/t1/discard') {
+      sent.push({ method: 'POST', path: String(path), body: JSON.parse(String(init?.body)) as unknown });
+      return new Response(JSON.stringify({ error: 'task', code: 'http.branch_changed', message: 'changed' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+    }
+    return realFetchInner(path, init);
+  }) as typeof fetch;
+  const { container } = await render(createElement(Kanban, props()));
+  await settle();
+  const card = () => container.querySelector('[data-col="check"] .bt-card')!;
+  await click(byText(card(), 'button', 'Discard'));
+  await settle();
+  await click(byText(card(), 'button', 'Discard branch'));
+  await settle();
+  await settle();
+  assert.equal(sent.length, 1, '1 回だけ送る');
+  assert.equal(lists, 2, '欄を読み直した');
+  assert.deepEqual([...card().querySelectorAll('[data-discard-files] li code')].map(c => c.textContent), ['f0.txt', 'f1.txt'], '新しいファイルを見せ直す');
+});
+
+test('ui: Awaiting check の数は、全体の数（countChecks）と欄の札（kanbanPaneCount）で同じ決まり（項目の待ちか取り込み待ち）', async () => {
+  const { countChecks } = await import('../web/src/ui/agent-state.ts');
+  const { kanbanPaneCount } = await import('../web/src/ui/kanban.ts');
+  const marks = [
+    { status: 'done' as const, checkState: 'awaiting' as const, projectId: PRODUCT },
+    { status: 'done' as const, merge: true, projectId: PRODUCT },
+    { status: 'done' as const, projectId: PRODUCT },
+    { status: 'failed' as const, merge: true, projectId: PRODUCT },
+  ];
+  assert.equal(countChecks(marks, new Set([PRODUCT])), 2);
+  assert.equal(kanbanPaneCount(marks, PRODUCT), 2);
 });

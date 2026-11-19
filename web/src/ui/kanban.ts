@@ -15,6 +15,9 @@ export const awaitsCheck = (task: Pick<Task, 'status' | 'check_state'>): boolean
 // beat 8-3: 取り込み待ち（終わったタスクのブランチが、持ち主の merge を待っている）と、取り込まれたブランチ
 export const awaitsMerge = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'worktree'>>): boolean => task.status === 'done' && task.worktree?.state === 'branch';
 
+// 作業コピーのブランチが残っている終わったタスク（done は取り込み待ち、failed・cancelled も持ち主が Mark merged / Discard で片づける）
+export const branchLeft = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'worktree'>>): boolean => (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') && task.worktree?.state === 'branch';
+
 export const mergedBranch = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'worktree'>>): boolean => task.status === 'done' && task.worktree?.state === 'merged';
 
 export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state' | 'cancelled_from'> & Partial<Pick<Task, 'worktree'>>): ColumnId | null {
