@@ -940,7 +940,8 @@ export class Worker {
     try {
       const result = await started.done;
       this.#finalize(task, result, started.control.value, started.runId);
-      if (placed?.kind === 'worktree') await this.#closeWorktree(task, placed.row.id);
+      // 生んだタスクから引き継いだ作業コピーは閉じない（ほかの子と生んだタスクがまだ使う）
+      if (placed?.kind === 'worktree' && placed.row.task_id === task.id) await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
     return 'ran';
   }
@@ -949,8 +950,13 @@ export class Worker {
   #stranded(): Array<{ id: string; task_id: string }> {
     if (!this.#d.worktrees) return [];
     const runningTasks = new Set([...this.#running.values()].flatMap(r => (r.kind === 'task' ? [r.taskId] : [])));
-    return (this.#d.db.prepare(`SELECT w.id AS id, w.task_id AS task_id FROM worktrees w JOIN tasks t ON t.id = w.task_id
+    const rows = (this.#d.db.prepare(`SELECT w.id AS id, w.task_id AS task_id FROM worktrees w JOIN tasks t ON t.id = w.task_id
       WHERE w.kind = 'task' AND w.state = 'active' AND t.status IN ('done', 'failed', 'cancelled')`).all() as Array<{ id: string; task_id: string }>).filter(row => !runningTasks.has(row.task_id) && !this.#closeTried.has(row.id));
+    if (rows.length === 0) return rows;
+    // 動いているタスク（生んだタスクの作業コピーを引き継ぐ子も）が使っている行は閉じない
+    const places = this.#d.places;
+    const used = new Set(this.#d.tasks.list({ statuses: ['running'], limit: 10_000 }).flatMap(t => { const id = places?.rowOf(t.id)?.id; return id ? [id] : []; }));
+    return rows.filter(row => !used.has(row.id));
   }
 
   async #closeStranded(rows: ReadonlyArray<{ id: string; task_id: string }>): Promise<void> {

@@ -156,15 +156,15 @@ test('8-2 D-12: 通さない git の形はどれも wt.git_shared、自分のブ
     const check = await shellPreCheck({ command }, r.ctx);
     assert.equal(check.decision, 'deny', command);
     // 今までの見張りがもう断る形（シェルの字句で読めない変数など）は、その鍵のまま
-    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.deepEqual(check.reasonKeys, ['wt.git_shared'], command);
+    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.deepEqual(check.reasonKeys, [/GIT_/u.test(command) ? 'wt.git_env' : 'wt.git_shared'], command);
   }
-  for (const command of ['git add -A', 'git commit -m x', 'git commit -am x', 'git reset --hard HEAD~1', 'git status', 'git log --oneline -5', 'git diff --stat', 'git branch', 'git stash list', 'git worktree list', 'git checkout -- a.txt', 'git checkout main -- a.txt', 'git config --get user.name', 'git push origin HEAD', 'git fetch origin', 'git merge feature', 'git rebase main', 'git rebase --onto main HEAD~1']) {
+  for (const command of ['git add -A', 'git commit -m x', 'git commit -am x', 'git commit -F msg.txt', 'git commit --file=msg.txt', 'git commit --fixup HEAD', 'git add -N new.txt', 'git add --intent-to-add new.txt', 'git reset --hard HEAD~1', 'git status', 'git log --oneline -5', 'git diff --stat', 'git branch', 'git stash list', 'git worktree list', 'git checkout -- a.txt', 'git checkout main -- a.txt', 'git config --get user.name', 'git push origin HEAD', 'git fetch origin', 'git merge feature', 'git rebase main', 'git rebase --onto main HEAD~1']) {
     const check = await shellPreCheck({ command }, r.ctx);
     assert.ok(!(check.reasonKeys ?? []).some(k => k.startsWith('wt.')), `${command}: ${check.reasons.join(' / ')}`);
   }
   for (const command of REFUSED_GIT(r.product)) {
     const check = await shellPreCheck({ command }, r.mainCtx);
-    assert.ok(!(check.reasonKeys ?? []).includes('wt.git_shared'), `本体の会話では効かない: ${command}`);
+    assert.ok(!(check.reasonKeys ?? []).some(k => k.startsWith('wt.') && k !== 'wt.push_beat'), `本体の会話では効かない: ${command}`);
   }
 });
 
@@ -561,7 +561,7 @@ test('8-2 見直し MEDIUM: 作業コピーの中のジャンクションから�
   assert.equal((await shellPreCheck({ command: write }, r.ctx)).decision, 'deny');
   assert.deepEqual((await shellPreCheck({ command: 'cd link; git commit -m x' }, r.ctx)).reasonKeys, ['wt.git_shared']);
   for (const command of [`tar -xf x.tar -C "${r.product}"`, `node -e "require('fs').writeFileSync('${r.product.replaceAll('\\', '/')}/a.txt','x')"`]) {
-    assert.deepEqual((await shellPreCheck({ command }, r.ctx)).reasonKeys, ['wt.write_main'], command);
+    assert.deepEqual((await shellPreCheck({ command }, r.ctx)).reasonKeys, ['wt.main_path'], command);
   }
   assert.equal(readFileSync(join(r.product, 'a.txt'), 'utf8'), 'one\n');
 });
@@ -656,5 +656,120 @@ test('8-2 見直し HIGH 2: 作業フォルダを決められない（cd の先�
   const st = (cwd: string | null) => ({ program: 'git', words: [word('git'), word('status')], env: [], gitGlobal: [], cwd, cwds: ['/w/copy'], inner: null }) as unknown as StatementFacts;
   const place = { worktree: '/w/copy', productRoot: '/w/main', cwd: '/w/copy' };
   assert.equal(worktreeGitRefusal([st('/w/copy')], place), undefined);
-  assert.equal(worktreeGitRefusal([st(null)], place), 'git status');
+  assert.deepEqual(worktreeGitRefusal([st(null)], place), { key: 'wt.git_shared', cmd: 'git status' });
+});
+
+// 2026-11-19 の再見直しの試験
+
+test('8-2 再見直し HIGH: 生んだタスクの作業コピーで動く子が 2 つあるとき、1 つ目が終わっても作業コピーは閉じず、2 つ目も同じ作業コピーで動く', { skip: !gitAvailable }, async t => {
+  const s = await appRig(t);
+  const busy = await mainBusy(s);
+  const b = s.task('Split the work');
+  s.adapter().scripts.push(
+    toolCall('task_create', { title: 'child one' }), toolCall('task_create', { title: 'child two' }), toolCall('task_complete', { summary: 'split', notify: false }),
+    toolCall('file_write', { path: 'c1.txt', content: 'one\n' }), toolCall('task_complete', { summary: 'c1', notify: false }),
+    toolCall('file_write', { path: 'c2.txt', content: 'two\n' }), toolCall('task_complete', { summary: 'c2', notify: false }),
+  );
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const [row] = s.rows();
+  assert.equal(row!.task_id, b.id);
+  assert.equal(row!.state, 'active');
+  const children = s.app.tasks.list({ statuses: ['ready'] }).filter(c => c.spawned_by === b.id);
+  assert.equal(children.length, 2);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.worktrees.get(row!.id)!.state, 'active', '1 つ目の子が終わっても閉じない');
+  assert.equal(await s.app.worker.tick(), 'ran');
+  for (const c of children) assert.equal(s.app.tasks.get(c.id)!.status, 'done', s.app.tasks.get(c.id)!.result_summary ?? '');
+  assert.equal(readFileSync(join(row!.path!, 'c1.txt'), 'utf8'), 'one\n');
+  assert.equal(readFileSync(join(row!.path!, 'c2.txt'), 'utf8'), 'two\n', '2 つ目の子も生んだタスクの作業コピーで動いた');
+  assert.equal(existsSync(join(s.root, 'c2.txt')), false);
+  busy.gate.release();
+  await busy.first;
+});
+
+test('8-2 再見直し HIGH: 子ができる前に閉じた、生んだタスクの古い作業コピーの行は見ない', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  await r.worktrees.removeWorktree(r.wt.id, { keepBranch: false, state: 'gone', discardLocal: true });
+  await new Promise(resolve => setTimeout(resolve, 15));
+  const child = new TaskStore(r.db, Date.now).create({ title: 'child', origin: 'self', actor: 'beat', projectId: r.row.id, spawnedBy: r.task.id });
+  assert.equal((await r.places.decide(child)).kind, 'main');
+});
+
+test('8-2 再見直し MEDIUM: 見回りは、動いている子が使っている作業コピーを（生んだタスクが取り消されても）閉じない', { skip: !gitAvailable }, async t => {
+  const s = await appRig(t, c => { c.worker.maxParallel = 3; });
+  const busy = await mainBusy(s);
+  const b = s.task('Parent');
+  s.adapter().scripts.push(toolCall('task_create', { title: 'child' }), toolCall('task_complete', { summary: 'split', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const [row] = s.rows();
+  const child = s.app.tasks.list({ statuses: ['ready'] }).find(c => c.spawned_by === b.id)!;
+  const gate = gated();
+  s.adapter().scripts.push(toolCall('file_write', { path: 'child.txt', content: 'x\n' }), gate.script);
+  const running = s.app.worker.tick();
+  await waitFor(() => existsSync(join(row!.path!, 'child.txt')), '子が作業コピーで動き出す');
+  s.app.tasks.finish(b.id, 'cancelled', null, 'user');
+  assert.equal(s.app.tasks.get(child.id)!.status, 'running');
+  await s.app.worker.tick();
+  assert.equal(s.app.worktrees.get(row!.id)!.state, 'active', '子が動いているあいだは閉じない');
+  gate.release();
+  await running;
+  await waitFor(() => s.app.tasks.get(child.id)!.status === 'done', '子が終わる');
+  busy.gate.release();
+  await busy.first;
+});
+
+test('8-2 再見直し: 浅い取得（--depth など）・何を動かすか読めない文・環境を読めない形で変える文は断る', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  const expect = async (command: string, key: string, c: ToolContext = r.ctx): Promise<void> => {
+    const check = await shellPreCheck({ command }, c);
+    assert.equal(check.decision, 'deny', command);
+    if ((await shellPreCheck({ command }, { ...r.mainCtx, config: c.config })).decision !== 'deny') assert.deepEqual(check.reasonKeys, [key], `${command}: ${check.reasons.join(' / ')}`);
+  };
+  for (const command of ['git fetch --depth=1 origin main', 'git fetch --depth 1 origin', 'git fetch --deepen=1 origin', 'git fetch --unshallow origin', 'git fetch --shallow-since=2020-01-01 origin', 'git fetch --shallow-exclude=main origin', 'git fetch --update-shallow origin']) await expect(command, 'wt.git_shared');
+  for (const command of ['git commit -m "handle GIT_DIR in tests"', 'git grep -n "GIT_DIR"', 'git log -S GIT_CONFIG_COUNT']) await expect(command, 'wt.git_env');
+  const ps = WINDOWS;
+  const opaque = ps
+    ? ["$g='git'; & $g stash pop", "& ('gi'+'t') stash pop", "iex 'git stash pop'", "Invoke-Expression 'git checkout main'", ". ./env.ps1; git reset --hard HEAD~1", './env.ps1; git status', "New-Item -Path env: -Name ('GI'+'T_DIR') -Value x; git status", "Push-Location env:; Write-Output x | Out-Null; git status",
+      "$n='GI'+'T_DIR'; Set-Item \"env:$n\" x; git status", "[Environment]::SetEnvironmentVariable('GI'+'T_DIR','x'); git status"]
+    : ['G=git; $G stash pop', '$(echo git) checkout main', '. ./env.sh; git reset --hard HEAD~3', 'source ./env.sh; git status', 'eval "git stash pop"', 'A=GIT; export ${A}_DIR=x; git status'];
+  for (const command of opaque) await expect(command, 'wt.opaque');
+  const bash = { ...r.ctx, config: { ...r.ctx.config, tools: { ...r.ctx.config.tools, shell: { ...r.ctx.config.tools.shell, shell: 'bash' } } } } as ToolContext;
+  if (ps && spawnSync('bash', ['--version']).status === 0) {
+    for (const command of ['G=git; $G stash pop', '$(echo git) checkout main', '. ./env.sh; git reset --hard HEAD~3', 'source ./env.sh; git status', 'eval "git stash pop"', 'A=GIT; export ${A}_DIR=x; git status']) await expect(command, 'wt.opaque', bash);
+  }
+  for (const command of ['git status', 'git commit -m x', 'git fetch origin']) {
+    assert.ok(!((await shellPreCheck({ command }, r.ctx)).reasonKeys ?? []).some(k => k.startsWith('wt.')), command);
+  }
+});
+
+test('8-2 再見直し: 本体を相対パス・引用の中で名指す文も断り（wt.main_path）、読むだけの文にも同じ鍵を付ける。作業コピーの中の相対パスは断らない', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  const rel = relative(r.wtPath, r.product).replaceAll('\\', '/');
+  for (const command of [`tar -xf x.tar -C ${rel}`, `unzip -o x.zip -d ${rel}`, `node -e "require('fs').writeFileSync('${rel}/a.txt','x')"`,
+    WINDOWS ? `Get-Content ${rel}/a.txt` : `cat ${rel}/a.txt`, `node --out=${rel}/z.txt x.js`]) {
+    const check = await shellPreCheck({ command }, r.ctx);
+    assert.equal(check.decision, 'deny', command);
+    assert.deepEqual(check.reasonKeys, ['wt.main_path'], `${command}: ${check.reasons.join(' / ')}`);
+    assert.match(check.reasons.join(' '), /not used from this task.*git show/su);
+  }
+  for (const command of ['tar -xf x.tar -C out', `node -e "require('fs').writeFileSync('sub/a.txt','x')"`, WINDOWS ? 'Get-Content ./a.txt' : 'cat ./a.txt', 'node ../x.js']) {
+    assert.ok(!((await shellPreCheck({ command }, r.ctx)).reasonKeys ?? []).some(k => k.startsWith('wt.')), command);
+  }
+  for (const command of [`tar -xf x.tar -C ${rel}`]) assert.ok(!((await shellPreCheck({ command }, r.mainCtx)).reasonKeys ?? []).some(k => k.startsWith('wt.')), `本体の会話では効かない: ${command}`);
+});
+
+test('8-2 再見直し LOW: 仕上げのコミットで [a].env を外しても、追跡中の a.env は残る（パスを文字どおりに読む）', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  writeFileSync(join(r.wtPath, 'a.env'), 'tracked\n');
+  gitIn(r.wtPath, 'add', 'a.env');
+  gitIn(r.wtPath, 'commit', '-q', '-m', 'track a.env');
+  writeFileSync(join(r.wtPath, '[a].env'), 'k\n');
+  writeFileSync(join(r.wtPath, 'work.txt'), 'done\n');
+  const done = await r.worktrees.finishWorktree(r.wt.id, { commitLeftovers: true, message: 'x' });
+  assert.ok(done.ok, JSON.stringify(done));
+  assert.deepEqual(done.ok && done.held, ['[a].env']);
+  const files = gitIn(r.product, 'ls-tree', '-r', '--name-only', r.wt.branch).split('\n');
+  assert.ok(files.includes('a.env'), files.join(','));
+  assert.ok(files.includes('work.txt'));
+  assert.ok(!files.includes('[a].env'));
 });

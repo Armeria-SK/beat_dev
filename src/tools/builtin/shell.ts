@@ -15,7 +15,7 @@ import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts'
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
-import { broadPush, mainWrites, namesMain, worktreeGitRefusal, WT_GIT_SHARED, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
+import { broadPush, mainWrites, namesMain, worktreeGitRefusal, WT_MAIN_PATH, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
 import { installTouchOf, protectedTouchOf } from '../hooks/protected-touch.ts';
 import { selfTarget } from '../hooks/self-port.ts';
@@ -164,14 +164,15 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     const wtGit = gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: place.worktree }) : undefined;
     const once = <T>(fn: () => T): (() => T) => { let done = false; let value: T; return () => { if (!done) { value = fn(); done = true; } return value; }; };
     const refused = worktreeGitRefusal(verdict.statements, {
-      ...place, command: input.command,
+      ...place, command: input.command, powershell,
       remotes: once(() => wtGit?.(place.worktree, ['remote'])?.split(/\r?\n/u).map(line => line.trim()).filter(Boolean)),
       sharedConfig: once(() => wtGit?.(place.worktree, ['config', '--list'])),
     });
-    if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_GIT_SHARED, { cmd: refused })], reasonKeys: [WT_GIT_SHARED] };
+    if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.cmd })], reasonKeys: [refused.key] };
     const main = mainWrites([...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], place);
-    const named = main.length ? main[0] : namesMain(input.command, place);
-    if (named !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: named })], reasonKeys: [WT_WRITE_MAIN] };
+    if (main.length) return { decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: main[0]! })], reasonKeys: [WT_WRITE_MAIN] };
+    const named = namesMain(input.command, verdict.statements, place);
+    if (named !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_MAIN_PATH, { path: named })], reasonKeys: [WT_MAIN_PATH] };
   }
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),

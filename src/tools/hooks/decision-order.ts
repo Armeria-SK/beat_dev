@@ -12,7 +12,7 @@ const REFUSED = [
   'list.winargs', 'list.winargs_ps',
   'web.secret_text', 'web.long_query', 'web.fetch_off', 'web.search_off', 'web.scout_fetch_limit',
   'file.outside', 'file.root_write', 'file.root_read', 'file.root_sep', 'file.readonly', 'file.symlink',
-  'wt.git_shared', 'wt.write_main', 'wt.push_beat',
+  'wt.git_shared', 'wt.write_main', 'wt.push_beat', 'wt.main_path', 'wt.opaque', 'wt.git_env',
 ] as const;
 
 const OWNER = [

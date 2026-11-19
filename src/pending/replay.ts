@@ -97,7 +97,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       const found = deps.projects?.get(row.project_id);
       if (!found || found.archived_at !== null) return end('cancelled', pendingText('en', 'cancelled_project'));
       if (folderMissing(found)) return end('failed', pendingText('en', 'project_missing'));
-      project = { id: found.id, root: found.root, productRoot: found.root };
+      project = { id: found.id, root: found.root };
       const placeRoot = deps.places?.placeRoot();
       const parkedInCopy = placeRoot !== undefined && row.cwd !== null && isInside(placeRoot, row.cwd);
       const copy = row.task_id ? deps.places?.rowOf(row.task_id) : undefined;

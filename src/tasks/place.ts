@@ -58,11 +58,13 @@ export class TaskPlaces {
     return this.#ancestorRow(task) === undefined;
   }
 
-  // 生んだタスク（spawned_by をたどる。自分は含めない）の作業コピーの行。状態は問わない（片づいた行も、子が本体へ移らない印になる）
+  // 生んだタスク（spawned_by をたどる。自分は含めない）の作業コピーのうち、このタスクができたときに開いていた行。
+  // いまは片づいていても、子が本体へ移らない印になる。子ができる前に閉じた行は見ない
   #ancestorRow(task: Task): WorktreeRow | undefined {
     let id: string | null = task.spawned_by;
     for (let i = 0; id && i < CHAIN_MAX; i++) {
-      const row = this.#d.db.prepare("SELECT * FROM worktrees WHERE task_id = ? AND kind = 'task' ORDER BY created_at DESC, id DESC LIMIT 1").get(id) as WorktreeRow | undefined;
+      const row = this.#d.db.prepare(`SELECT * FROM worktrees WHERE task_id = ? AND kind = 'task' AND created_at <= ? AND (state IN ${LIVE} OR updated_at >= ?)
+        ORDER BY created_at DESC, id DESC LIMIT 1`).get(id, task.created_at, task.created_at) as WorktreeRow | undefined;
       if (row) return row;
       id = this.#d.tasks.get(id)?.spawned_by ?? null;
     }

@@ -8,6 +8,12 @@ import { isInside, realish } from './scope.ts';
 export const WT_GIT_SHARED = 'wt.git_shared';
 export const WT_WRITE_MAIN = 'wt.write_main';
 export const WT_PUSH_BEAT = 'wt.push_beat';
+// 本体のフォルダを名指す（読むだけかもしれない）・何を動かすか読めない・GIT_… の名前を含む
+export const WT_MAIN_PATH = 'wt.main_path';
+export const WT_OPAQUE = 'wt.opaque';
+export const WT_GIT_ENV = 'wt.git_env';
+
+export interface WorktreeRefusal { key: typeof WT_GIT_SHARED | typeof WT_OPAQUE | typeof WT_GIT_ENV; cmd: string }
 
 type Kind = 'b' | 's' | 'opt';
 type Flags = ReadonlyMap<string, Kind>;
@@ -32,11 +38,12 @@ const READ_FLAGS = new Map<string, { flags: Flags; numeric: boolean }>([
 // 今のブランチの上で動く書く形。ブランチを作る・移る・消すオプションは外す。merge / rebase の -s は戦略（任意のプログラム名）なので外す
 const ON_BRANCH_DROP = ['-b', '-B', '--detach', '-d', '-D', '--rebase', '--no-rebase', '--list', '-l', '--include-untracked', '-k', '--keep-index'];
 const ON_BRANCH = new Map<string, Flags>(['add', 'commit', 'rm', 'mv', 'restore', 'apply', 'am', 'reset', 'merge', 'rebase', 'cherry-pick', 'revert']
-  .map(sub => [sub, flagTable(WRITE_FLAGS, sub === 'merge' || sub === 'rebase' ? [...ON_BRANCH_DROP, '-s'] : ON_BRANCH_DROP)]));
+  .map(sub => [sub, flagTable(WRITE_FLAGS, sub === 'merge' || sub === 'rebase' ? [...ON_BRANCH_DROP, '-s'] : ON_BRANCH_DROP, sub === 'commit' ? '-F:s --file:s --fixup:s' : sub === 'add' ? '-N --intent-to-add' : '')]));
 // 共有の設定で自動の stash・ほかのブランチの書き換えをするもの（持ち主の設定で、ふつうの rebase / merge / pull が本体の stash やブランチを変える）
 const AUTO_SHARED = /^(?:rebase\.updaterefs|rebase\.autostash|merge\.autostash|pull\.rebase)=(.*)$/u;
 const CHECKOUT_FLAGS = flagTable('--ours --theirs -f --force -q --quiet');
-const FETCH_FLAGS = flagTable('-q --quiet -v --verbose --dry-run --no-tags --depth:n');
+// --depth・--deepen・--shallow-*・--unshallow・--update-shallow は共有の .git/shallow を書くので入れない
+const FETCH_FLAGS = flagTable('-q --quiet -v --verbose --dry-run --no-tags');
 const PULL_FLAGS = flagTable('-q --quiet -v --verbose --ff-only --ff --no-ff --no-edit --no-rebase');
 // -u は共有の設定（branch.<名前>.merge）を書く。--all は beat のブランチも送る
 const PUSH_TABLE = flagTable(PUSH_FLAGS, ['-u', '--set-upstream', '--all', '--force-with-lease'], '--force-with-lease:opt');
@@ -47,6 +54,11 @@ const BRANCH_LIST = /^(?:-a|--all|-r|--remotes|-v|-vv|--verbose|--list|-l|--show
 const REMOTE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/u;
 // 変数名 GIT_… をどこかで書く・渡す形（export・set・$env:・[Environment]・env など、どれでも）
 const GIT_VARIABLE = /(?<![A-Za-z0-9_])GIT_[A-Za-z0-9_]+/iu;
+// ほかの文を読み込む・評価する（中で git も環境も変えうる）。作業コピーの実行ではいつも断る
+const EVALUATES = new Set(['.', 'source', 'eval', 'iex', 'invoke-expression', 'invoke-command', 'icm']);
+// 環境を変えるもの。名前が変数・env: の場所を書く形は、何を変えるか読めない
+const ENV_SETTERS = new Set(['export', 'set', 'declare', 'typeset', 'readonly', 'local', 'setx', 'env', 'set-item', 'si', 'new-item', 'ni', 'set-variable', 'sv', 'set-content', 'sc', 'add-content', 'ac', 'copy-item', 'cpi', 'move-item', 'mi', 'rename-item', 'rni']);
+const DOTNET_ENV = /SetEnvironmentVariable|\[\s*(?:System\.)?Environment\s*\]/iu;
 
 export interface WorktreeGitPlace {
   worktree: string;
@@ -54,6 +66,8 @@ export interface WorktreeGitPlace {
   cwd: string;
   // コマンド全体の文（GIT_… の変数の設定を探す）
   command?: string;
+  // PowerShell（スクリプトのファイルを同じプロセスで動かし、環境の変更が後の git に残る）
+  powershell?: boolean;
   // 共有の設定に書いた宛先の名前（読めなければ undefined）
   remotes?: () => readonly string[] | undefined;
   // `git config --list` の出力（rebase / merge / pull の自動の設定を探す。読めなければ undefined）
@@ -106,58 +120,72 @@ const insideCopy = (worktree: string, path: string): boolean => isInside(worktre
 
 const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
 
-// 断る git の文（作業コピーのタスク）。通すなら undefined
-export function worktreeGitRefusal(statements: readonly StatementFacts[], place: WorktreeGitPlace): string | undefined {
+const shownOf = (st: StatementFacts): string => st.words.map(w => w.text).join(' ').slice(0, 200);
+
+// 断る文（作業コピーのタスク）と、その理由の鍵。通すなら undefined
+export function worktreeGitRefusal(statements: readonly StatementFacts[], place: WorktreeGitPlace): WorktreeRefusal | undefined {
   const all = flatten(statements);
+  // 動かすプログラムが変数・式から決まる文と、ほかの文を読み込む・評価する文は、git かもしれないので断る（中を読めない）
+  const opaque = all.find(st => st.programDynamic || st.programOdd || EVALUATES.has(st.program.toLowerCase()));
+  if (opaque) return { key: WT_OPAQUE, cmd: shownOf(opaque) || opaque.program };
   const gits = all.filter(st => st.program === 'git');
   if (gits.length === 0) return undefined;
-  const assigns = all.find(st => st.env.some(name => /^git_/iu.test(name)) || st.words.some(w => GIT_VARIABLE.test(w.text)));
-  if (assigns || (place.command !== undefined && GIT_VARIABLE.test(place.command))) return (assigns ?? gits[0]!).words.map(w => w.text).join(' ').slice(0, 200);
+  const command = place.command ?? '';
+  const envSetter = all.find(st => (ENV_SETTERS.has(st.program.toLowerCase()) && st.words.slice(1).some(w => w.dynamic || /(?:^|[^A-Za-z0-9_])env:/iu.test(w.text)))
+    // PowerShell のスクリプトのファイル（. を付けなくても同じプロセスで動く）
+    || (place.powershell === true && st.program !== 'git' && /[/\\]|\.ps(?:m?1|d1)$/iu.test(st.words[0]?.text ?? '')));
+  // env: のドライブを名前で書く形（Set-Item "env:$n"・New-Item -Path env:）は、$env:NAME の形と違って何を変えるか読めない
+  if (envSetter || DOTNET_ENV.test(command) || (place.powershell === true && /(?<![$\w])env:/iu.test(command))) return { key: WT_OPAQUE, cmd: envSetter ? shownOf(envSetter) : command.slice(0, 200) };
+  // GIT_… の名前は、git の引数の文字（-m "… GIT_DIR …"）でも断る。数えて通す形は、読めない書き方（エスケープ・.NET の呼び出し）を開けてしまう
+  const assigns = all.find(st => st.env.some(name => /^(?:env:)?git_/iu.test(name)) || st.words.some(w => GIT_VARIABLE.test(w.text)));
+  if (assigns || GIT_VARIABLE.test(command)) return { key: WT_GIT_ENV, cmd: assigns ? shownOf(assigns) || assigns.env.join(' ') : command.slice(0, 200) };
   for (const st of gits) {
-    const shown = st.words.map(w => w.text).join(' ').slice(0, 200);
-    if (st.cwd === null) return shown;
-    const cwds = [...new Set([...(st.cwds ?? []), st.cwd])];
-    if (cwds.some(dir => !insideCopy(place.worktree, dir))) return shown;
-    const at = st.gitGlobal.length + 1;
-    const globals = st.words.slice(1, at);
-    for (let i = 0; i < globals.length; i++) {
-      const w = globals[i]!;
-      if (w.dynamic) return shown;
-      if (w.text === '--no-pager' || w.text === '-P' || w.text === '--no-optional-locks') continue;
-      if (w.text === '-c' && !globals[i + 1]?.dynamic && /^user\.(?:name|email)=[^\r\n]*$/iu.test(globals[i + 1]?.text ?? '')) { i++; continue; }
-      if (w.text === '-C') {
-        const dir = globals[i + 1];
-        if (!dir || dir.dynamic) return shown;
-        if (!insideCopy(place.worktree, isAbsolute(dir.text) ? resolve(dir.text) : resolve(st.cwd, dir.text))) return shown;
-        i++;
-        continue;
-      }
-      return shown;
-    }
-    const subWord = st.words[at];
-    if (!subWord || subWord.dynamic) return shown;
-    const args = st.words.slice(at + 1);
-    // 変数の引数は、何になるか（オプションか、ブランチか）決められない
-    if (args.some(w => w.dynamic)) return shown;
-    const sub = subWord.text.toLowerCase();
-    const texts = args.map(w => w.text);
-    const read = READ_FLAGS.get(sub);
-    if (read) {
-      if (!parseArgs(texts, read.flags, read.numeric).ok) return shown;
-      continue;
-    }
-    const onBranch = ON_BRANCH.get(sub);
-    if (onBranch) {
-      const p = parseArgs(texts, onBranch, true);
-      if (!p.ok) return shown;
-      // git rebase <upstream> <branch> は先に <branch> へ移る（-- のあとも数える）
-      if (sub === 'rebase' && p.pos.length + p.afterDd.length >= 2) return shown;
-      if ((sub === 'rebase' || sub === 'merge') && autoShared(place)) return shown;
-      continue;
-    }
-    if (refusedOther(sub, texts, place)) return shown;
+    const refused = gitRefusal(st, place);
+    if (refused !== undefined) return { key: WT_GIT_SHARED, cmd: refused };
   }
   return undefined;
+}
+
+function gitRefusal(st: StatementFacts, place: WorktreeGitPlace): string | undefined {
+  const shown = shownOf(st);
+  if (st.cwd === null) return shown;
+  const cwds = [...new Set([...(st.cwds ?? []), st.cwd])];
+  if (cwds.some(dir => !insideCopy(place.worktree, dir))) return shown;
+  const at = st.gitGlobal.length + 1;
+  const globals = st.words.slice(1, at);
+  for (let i = 0; i < globals.length; i++) {
+    const w = globals[i]!;
+    if (w.dynamic) return shown;
+    if (w.text === '--no-pager' || w.text === '-P' || w.text === '--no-optional-locks') continue;
+    if (w.text === '-c' && !globals[i + 1]?.dynamic && /^user\.(?:name|email)=[^\r\n]*$/iu.test(globals[i + 1]?.text ?? '')) { i++; continue; }
+    if (w.text === '-C') {
+      const dir = globals[i + 1];
+      if (!dir || dir.dynamic) return shown;
+      if (!insideCopy(place.worktree, isAbsolute(dir.text) ? resolve(dir.text) : resolve(st.cwd, dir.text))) return shown;
+      i++;
+      continue;
+    }
+    return shown;
+  }
+  const subWord = st.words[at];
+  if (!subWord || subWord.dynamic) return shown;
+  const args = st.words.slice(at + 1);
+  // 変数の引数は、何になるか（オプションか、ブランチか）決められない
+  if (args.some(w => w.dynamic)) return shown;
+  const sub = subWord.text.toLowerCase();
+  const texts = args.map(w => w.text);
+  const read = READ_FLAGS.get(sub);
+  if (read) return parseArgs(texts, read.flags, read.numeric).ok ? undefined : shown;
+  const onBranch = ON_BRANCH.get(sub);
+  if (onBranch) {
+    const p = parseArgs(texts, onBranch, true);
+    if (!p.ok) return shown;
+    // git rebase <upstream> <branch> は先に <branch> へ移る（-- のあとも数える）
+    if (sub === 'rebase' && p.pos.length + p.afterDd.length >= 2) return shown;
+    if ((sub === 'rebase' || sub === 'merge') && autoShared(place)) return shown;
+    return undefined;
+  }
+  return refusedOther(sub, texts, place) ? shown : undefined;
 }
 
 function autoShared(place: WorktreeGitPlace): boolean {
@@ -234,20 +262,28 @@ export function mainWrites(paths: readonly string[], place: Pick<WorktreeGitPlac
   });
 }
 
-// コマンドの文に本体のフォルダのパスが書いてあるか（見張りが中を読めない書き手〔tar -C・node -e など〕も、本体を名指せば断る）
-export function namesMain(command: string, place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree'>): string | undefined {
-  const norm = (s: string): string => s.replaceAll('\\', '/').toLowerCase();
-  const text = norm(command);
-  for (const root of new Set([place.productRoot, realish(place.productRoot)])) {
-    const r = norm(root).replace(/\/+$/u, '');
-    if (!r) continue;
-    let from = 0;
-    for (;;) {
-      const at = text.indexOf(r, from);
-      if (at === -1) break;
-      const next = text[at + r.length];
-      if (next === undefined || /[\s/"'`;|&)<>,]/u.test(next)) return root;
-      from = at + 1;
+// コマンドに書かれたパスらしい字句（相対・引用の中・key=value の右も）を文のフォルダから解き、本体の中を指すものがあれば返す。
+// 見張りが中を読めない書き手（tar -C・unzip -d・node -e など）も、本体を名指せば断る。読むだけの形も含む
+export function namesMain(command: string, statements: readonly StatementFacts[], place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree' | 'cwd'>): string | undefined {
+  const all = flatten(statements);
+  const bases = [...new Set([place.cwd, ...all.flatMap(st => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])])])];
+  const texts = [command, ...all.flatMap(st => st.words.map(w => w.text))];
+  const tokens = new Set<string>();
+  for (const text of texts) {
+    for (const raw of text.split(/[\s"'`;|&()<>,={}[\]]+/u)) {
+      if (!raw || /^[a-z][a-z0-9+.-]*:\/\//iu.test(raw) || /^[^/\\:]+@[^/\\:]+:/u.test(raw)) continue;
+      for (const t of [raw, raw.replace(/^-[A-Za-z]/u, '')]) {
+        if (/[/\\]/u.test(t) || /^\.\.?$/u.test(t) || /^[A-Za-z]:/u.test(t)) tokens.add(t);
+      }
+    }
+  }
+  for (const t of tokens) {
+    // Git Bash の /d/... は D:/... のこと
+    const msys = process.platform === 'win32' ? /^\/([A-Za-z])(\/.*)?$/u.exec(t) : null;
+    const absolute = isAbsolute(t) || /^[A-Za-z]:/u.test(t);
+    const candidates = [...(absolute ? [resolve(t)] : bases.map(base => resolve(base, t))), ...(msys ? [resolve(`${msys[1]}:${msys[2] ?? '/'}`)] : [])];
+    for (const p of candidates) {
+      if (mainWrites([p], place).length) return p;
     }
   }
   return undefined;
