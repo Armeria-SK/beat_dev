@@ -31,18 +31,23 @@ function fakeTools(runs: string[]): ToolDef[] {
     name: 'fake_work', description: 'Test tool: plain work.', input: Type.Object({ text: Type.String() }), effect: 'read', allowedIn: ['task'],
     async execute(input) { return { content: `worked ${input.text}` }; },
   };
-  return [park as unknown as ToolDef, work as unknown as ToolDef];
+  const broken: ToolDef<{ text: string }> = {
+    name: 'fake_fail', description: 'Test tool: always fails.', input: Type.Object({ text: Type.String() }), effect: 'read', allowedIn: ['task'],
+    async execute() { return { content: 'failed', isError: true }; },
+  };
+  return [park as unknown as ToolDef, work as unknown as ToolDef, broken as unknown as ToolDef];
 }
 
-async function setup(t: Parameters<typeof startApp>[0], agents = false) {
+async function setup(t: Parameters<typeof startApp>[0], agents = false, edit?: (c: ReturnType<typeof testConfig>) => void) {
   const clock = { now: START };
   const runs: string[] = [];
   const s = await startApp(t, {
     models: [fakeModel('m1')], tools: [...builtinTools(), ...fakeTools(runs)], now: () => clock.now,
     configure: c => {
-      c.tools.policies = { fake_park: 'ask', fake_work: 'allow', ...(agents ? { agent_run: 'allow' as const } : {}) };
+      c.tools.policies = { fake_park: 'ask', fake_work: 'allow', fake_fail: 'allow', ...(agents ? { agent_run: 'allow' as const } : {}) };
       c.memory.review = false;
       if (agents) { c.tools.agent.enabled = true; c.tools.agent.inTasks = true; }
+      edit?.(c);
     },
   });
   const task = (title = 'Build') => s.app.tasks.create({ title, origin: 'user', actor: 'user' }).id;
@@ -159,6 +164,33 @@ test('5-P Reject・取り消し・古くなった（stale）のどれでも、�
   }
 });
 
+test('5-P 預けるだけの回（Pending に積んで task_checkpoint）を繰り返す Build は、1 回目で承認待ちになり、上限 1 でも行は 1 つのまま回らない', async t => {
+  const s = await setup(t, false, c => { c.worker.maxRunsPerHour = 1; });
+  const id = s.app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user', acceptanceItems: ['A-1'] }).id;
+  for (let i = 0; i < 3; i++) {
+    s.adapter().scripts = [call('fake_park', { text: `commit ${i}` }), checkpoint()];
+    const result = await s.app.worker.tick();
+    if (i === 0) assert.equal(result, 'ran');
+    const task = s.app.tasks.get(id)!;
+    assert.deepEqual([task.status, task.waiting_kind], ['waiting', 'approval'], `${i + 1} 回目の tick のあと`);
+    assert.deepEqual(s.rows(id).map(r => r.status), ['waiting'], `${i + 1} 回目の tick のあと: 待ちの行は 1 つ`);
+  }
+  assert.deepEqual(s.runs, [], '預けた呼び出しは動いていない');
+  assert.equal(s.app.kv.get(`task-idle:${id}`), undefined, '承認待ちは進展なしに数えない');
+});
+
+test('仕事は結果で数える: 動いたが誤りで終わった呼び出しだけの task_checkpoint は進展なしに数える', async t => {
+  const s = await setup(t);
+  const id = s.task();
+  s.adapter().scripts = [call('fake_fail', { text: 'x' }), checkpoint()];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(id)!.status, 'ready');
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${id}`), 1);
+  s.adapter().scripts = [call('fake_work', { text: 'x' }), checkpoint()];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.kv.get(`task-idle:${id}`), undefined, '対照: 誤りなく終わった呼び出しは仕事');
+});
+
 test('5-P 行が 2 つあれば、最初の決めで起きる', async t => {
   const s = await setup(t);
   const id = s.task();
@@ -166,8 +198,7 @@ test('5-P 行が 2 つあれば、最初の決めで起きる', async t => {
   assert.equal(await s.app.worker.tick(), 'ran');
   const parked = s.rows(id);
   assert.equal(parked.length, 2);
-  s.clock.now += 31 * MIN;
-  await s.idleRun();
+  assert.equal(s.app.tasks.get(id)!.waiting_kind, 'approval', '預けただけの回は仕事に数えないので、その回で承認待ちになる');
   assert.equal(s.app.tasks.get(id)!.waiting_text, `#${parked[0]!.id}, #${parked[1]!.id}`);
   s.app.pending.reject(parked[1]!.id);
   assert.equal(s.app.tasks.get(id)!.status, 'ready');

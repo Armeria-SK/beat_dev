@@ -848,7 +848,7 @@ export class ChatEngine {
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
-    const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0 };
+    const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0, workDone: 0 };
     let index = 0;
     let invalidStreak = 0;
     // 切れた呼び出しが続けて何回目か（invalidStreak とは別に数える）
@@ -916,7 +916,7 @@ export class ChatEngine {
       if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
-      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workCalls: counters.workCalls, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split } : {}) };
+      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workCalls: counters.workCalls, workDone: counters.workDone, iterations: counters.iterations, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split } : {}) };
     };
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
@@ -937,6 +937,10 @@ export class ChatEngine {
       judgeLimits: d.judgeLimits,
       conversationTainted: () => d.conversations.everTainted(conversationId),
     }, truncated);
+    // 実際に動いて誤りなく終わった道具の呼び出しだけを「仕事」に数える（Pending に預けた・断られた・引数の誤り・誤りの結果・task_ / tool_search / question_add は数えない）
+    const countDone = (name: string, outcome: { output: { isError?: boolean }; decision: string; invalidArguments?: boolean }) => {
+      if (outcome.decision === 'allow' && !outcome.output.isError && !outcome.invalidArguments && !name.startsWith('task_') && name !== 'tool_search' && name !== 'question_add') counters.workDone++;
+    };
     if (kind === 'task' && tools) {
       let inner = false;
       ctx.runTool = async (name, input) => {
@@ -945,7 +949,9 @@ export class ChatEngine {
         try {
           counters.toolCalls++;
           if (!name.startsWith('task_')) counters.workCalls++;
-          const { output, decision, decidedBy, gate } = await callTool({ id: `code_${randomUUID()}`, name, arguments: input });
+          const outcome = await callTool({ id: `code_${randomUUID()}`, name, arguments: input });
+          const { output, decision, decidedBy, gate } = outcome;
+          countDone(name, outcome);
           recordTaint();
           return { output, decision, decidedBy, ...(gate ? { gate } : {}) };
         } finally { inner = false; }
@@ -953,13 +959,17 @@ export class ChatEngine {
     }
 
     const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
+    // 長さの区切りは、この実行の中でやり取りが育ったときだけ。始めから超えていた実行は区切らず、縮める・あふれるの今の道に任せる（区切っても同じ始まりを繰り返すだけ）
+    const splits = Boolean(task) && kind === 'task' && !scout;
+    let startedOver = false;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       this.#injectNotes(runId, conversationId, ctx);
       recordTaint();
-      if (task && kind === 'task' && !scout && counters.iterations >= 2
-        && this.#exchangeTooLong({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject })) {
+      const budgetArgs = { runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject };
+      if (splits && counters.iterations === 1) startedOver = this.#exchangeTooLong(budgetArgs);
+      else if (splits && !startedOver && this.#exchangeTooLong(budgetArgs)) {
         flags.push('context_split');
         return finishOk('', 'other', 'context');
       }
@@ -1044,6 +1054,7 @@ export class ChatEngine {
         ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
         const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
         recordTaint();
+        countDone(toolCall.name, outcome);
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),

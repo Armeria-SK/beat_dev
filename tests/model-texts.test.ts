@@ -251,7 +251,7 @@ const EN_TASK_HOW = [
   '# How to proceed',
   '- Make progress with your tools and keep going until the task is done. If the run grows long, beat continues it in a new run right away',
   '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
-  '- To leave a record of your progress at a milestone, call task_checkpoint (what you tried, the result, the next step); beat continues in a new run right away. If something has to be checked later, create a task for that time with task_create (when) and end this run',
+  '- To leave a record of your progress at a milestone, call task_checkpoint (what you tried, the result, the next step); beat continues in a new run right away. If something has to be checked later, create a task for that time with task_create (when), then end this run with task_complete (it waits until the tasks you created finish) or task_checkpoint. While tasks you created are open, this task runs again only after they finish',
   '- If something is unclear, record it with question_add and keep going with the option you assume. Set blocking only when no assumption is safe',
   '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
   "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",

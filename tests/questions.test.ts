@@ -286,18 +286,19 @@ test('実行の途中の答え: 返事だけで終わっても、進展なしと
   assert.equal(s.app.tasks.list().length, 1);
 });
 
-test('実行の途中に答えが無ければ、終わり方は答えの無い形（task_checkpoint は進み具合の区切り・返事だけは進展なし。どちらも休まない）', async t => {
+test('実行の途中に答えが無ければ、終わり方は答えの無い形（question_add だけの task_checkpoint・返事だけは、どちらも進展なし。どちらも休まない）', async t => {
   const s = await setup(t);
   const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
   s.adapter().scripts.push(toolCall('question_add', ask), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now]);
-  assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content, 'Saved its progress, so it continues now in a new run');
+  assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content, 'The run ended without progress, so it continues now in a new run (it stops after 3 such runs in a row)', 'question_add は仕事に数えない');
+  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 1);
   s.clock.now += 60 * 60_000;
   s.adapter().scripts.push(reply('thinking'));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now]);
-  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 1);
+  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 2);
   assert.equal(s.app.questions.list({ status: 'open' }).length, 1);
 });
 

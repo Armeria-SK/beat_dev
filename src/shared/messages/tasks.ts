@@ -75,7 +75,7 @@ const en = {
   'stuck.question': '"{title}" ran {strikes} times in a row without making progress, so it was stopped. Run the task again?',
   'stuck.why': 'Each of those runs either ended with a reply only (without task_complete, task_checkpoint or a question), or ended without using any tool other than the task tools.',
   'stuck.reason': 'Stopped after {strikes} runs in a row without progress. The owner is asked in Questions.',
-  'split.long_body': '"{title}" has run {runs} times in a row ({max} rounds of tool calls each) without finishing. It keeps going; cancel it if it is stuck',
+  'split.long_body': '"{title}" has run {runs} times in a row without finishing (each run ended at a checkpoint or was split). It keeps going; cancel it if it is stuck',
 
   'title.review': 'Review: {label}',
   'title.review_running': 'Review ({label})',

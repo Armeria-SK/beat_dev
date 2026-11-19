@@ -72,7 +72,7 @@ function budgetOf(app: App, req: ModelRequest) {
   return { system, fixed, available, room: available - fixed, exchange };
 }
 
-test('A-6 タスクの実行は、いまのやり取りが余裕の 6 割を超えたら次の往復の頭で区切り（context）、ワーカーがすぐ続け、長く続いているの知らせには数えない', async t => {
+test('A-6 タスクの実行は、いまのやり取りが余裕の 6 割を超えたら次の往復の頭で区切り（context）、ワーカーがすぐ続け、続けての区切りの数に入れる', async t => {
   const s = await setup(t, { capacity: 32_000 });
   const task = s.app.tasks.create({ title: 'Long survey', origin: 'user', actor: 'user' });
   s.adapter().scripts = Array.from({ length: 40 }, () => big(6000));
@@ -86,7 +86,7 @@ test('A-6 タスクの実行は、いまのやり取りが余裕の 6 割を超�
   assert.equal(after.status, 'ready');
   assert.equal(after.run_at, s.clock.now, '休まずにすぐ続ける');
   assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')?.content, CONTEXT_REASON);
-  assert.equal(s.app.kv.get(`task-split:${task.id}`), undefined, '長さの区切りは SPLIT_LIMIT の数に入れない');
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 1, '長さの区切りも続けての区切りに数える（SPLIT_LIMIT 回目に知らせる）');
   assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '道具を使った区切りは進展なしに数えない');
   assert.equal(s.app.notifications.list().filter(n => n.kind === 'info').length, 0);
 
@@ -115,13 +115,19 @@ test('A-6 タスクの実行は、いまのやり取りが余裕の 6 割を超�
   assert.throws(() => fitMessages({ system: e.system, messages: unsplit, tools: end.tools, available: e.available }), ContextOverflow);
 });
 
-test('A-6 1 往復目では区切らない（始めの発言だけで余裕の 6 割を超えても、モデルを 1 回は呼ぶ）。区切るのは 2 往復目の頭', async t => {
-  const s = await setup(t, { capacity: 32_000 });
+// 始めの発言だけで余裕の 6 割を超える Build（conductor ruling 2026-11-19: 始めから超えていた実行は区切らない）
+async function bigBrief(t: { after: (fn: () => void) => void }, edit?: (c: AppConfig) => void) {
+  const s = await setup(t, { capacity: 32_000, ...(edit ? { edit } : {}) });
   s.app.tasks.create({ title: 'Probe', origin: 'user', actor: 'user' });
   s.adapter().scripts = [call('task_complete', { summary: 'ok', notify: false })];
   assert.equal(await s.app.worker.tick(), 'ran');
   const probe = budgetOf(s.app, s.adapter().calls[0]!);
   const body = 'word '.repeat(Math.floor(probe.room * 0.75 * 3.5 / 5 / 1.1));
+  return { s, body };
+}
+
+test('A-6 始めの発言だけで余裕の 6 割を超えていた実行は、区切らずに続ける（区切っても同じ始まりを繰り返すだけ）', async t => {
+  const { s, body } = await bigBrief(t);
   const task = s.app.tasks.create({ title: 'Big brief', body, origin: 'user', actor: 'user' });
   const before = s.adapter().calls.length;
   s.adapter().scripts = [big(100), big(100), call('task_complete', { summary: 'ok', notify: false })];
@@ -129,11 +135,23 @@ test('A-6 1 往復目では区切らない（始めの発言だけで余裕の 6
   const req = s.adapter().calls[before]!;
   const b = budgetOf(s.app, req);
   assert.ok(b.exchange(req.messages) > SPLIT_EXCHANGE_RATIO * b.room && b.exchange(req.messages) < b.room, `始めの発言は余裕の 6 割〜10 割: ${b.exchange(req.messages)} / ${b.room}`);
-  assert.equal(s.adapter().calls.length - before, 1, 'モデルは 1 回だけ呼ばれる');
+  assert.equal(s.adapter().calls.filter(c => c.tools.length > 0).length - before, 3, '3 回とも呼ぶ');
   const run = s.lastRun();
-  assert.deepEqual(JSON.parse(run.flags), ['context_split']);
-  assert.equal(run.iterations, 2);
-  assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
+  assert.ok(!JSON.parse(run.flags).includes('context_split'), run.flags);
+  assert.equal(run.iterations, 3);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
+test('A-6 始めから長い Build を上限 1 で回しても、2 往復目で区切って回り続けない（続けるか、STAGNATION_LIMIT で止まる）', async t => {
+  const { s, body } = await bigBrief(t, c => { c.worker.maxRunsPerHour = 1; });
+  const task = s.app.tasks.create({ title: 'Big build', body, origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
+  s.adapter().scripts = Array.from({ length: 20 }, () => big(100));
+  for (let i = 0; i < 4; i++) await s.app.worker.tick();
+  const runs = s.app.db.prepare("SELECT r.iterations, r.flags FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id WHERE r.kind = 'task' AND t.id = ? ORDER BY r.rowid").all(task.id) as Array<{ iterations: number; flags: string }>;
+  const early = runs.filter(r => (JSON.parse(r.flags) as string[]).includes('context_split') && r.iterations <= 2);
+  const stopped = s.app.tasks.get(task.id)!.status === 'failed' && runs.length === 3;
+  assert.ok(early.length === 0 || stopped, `2 往復目の区切りが続いた: ${JSON.stringify(runs)}`);
+  assert.ok(runs.length >= 1 && runs[0]!.iterations > 2 || stopped, `続けるか止まる: ${JSON.stringify(runs)}`);
 });
 
 test('A-6 容量 32k のモデルで固定の分が使える量の 4 割を超えていても、最初の数往復では区切らない（使える量の 6 割では決めない）', async t => {

@@ -74,7 +74,7 @@ export const taskJa = {
   'stuck.question': "「{title}」は進みの無い実行が {strikes} 回続いたので止めました。もう一度実行しますか?",
   'stuck.why': "どの実行も、task_complete・task_checkpoint・質問のどれも無く返事だけで終わったか、タスクの道具のほかに道具を 1 つも使わずに終わりました。",
   'stuck.reason': "進みの無い実行が {strikes} 回続いたので止めました。持ち主に Questions で聞いています。",
-  'split.long_body': "「{title}」は終わらないまま {runs} 回続けて動きました（1 回あたり道具を使う往復 {max} 回）。このまま続けます。行き詰まっているなら取り消してください",
+  'split.long_body': "「{title}」は終わらないまま {runs} 回続けて動きました（どの回も途中経過か区切りで終わりました）。このまま続けます。行き詰まっているなら取り消してください",
   'title.review': "振り返り: {label}",
   'title.review_running': "振り返り（{label}）",
   'title.skill_review': "スキルの振り返り: {label}",

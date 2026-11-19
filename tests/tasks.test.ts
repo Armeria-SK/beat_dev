@@ -275,6 +275,17 @@ test('A-3 道具を使わない task_checkpoint が 3 回続くと行き詰ま�
   assert.equal(await s.app.worker.tick(), 'idle', 'もう動かない');
 });
 
+test('仕事は結果で数える: 引数の誤りで動かなかった呼び出しだけの task_checkpoint は進展なしに数える（動いて誤りなく終わった呼び出しは数え直す）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('引数を間違える');
+  s.adapter().scripts.push(toolCall('history_search', { wrong: 1 }), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${task.id}`), 1, '動かなかった呼び出しは仕事でない');
+  s.adapter().scripts.push(work(), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '動いた呼び出しは仕事');
+});
+
 test('A-3 道具を使わない区切り（100 往復）も進展なしに数え、3 回で行き詰まる', async t => {
   const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
   const task = s.userTask('task の道具だけ');
@@ -389,11 +400,49 @@ test('区切りが 3 回続いても止めず、題つきで 1 回だけ知ら�
     else {
       assert.equal(notes.length, 1, `${i} 回目: 知らせはちょうど 1 つ`);
       assert.equal(notes[0]!.title, 'Taking a long time: 終わらない調べもの');
-      assert.equal(notes[0]!.body, '"終わらない調べもの" has run 3 times in a row (100 rounds of tool calls each) without finishing. It keeps going; cancel it if it is stuck');
+      assert.equal(notes[0]!.body, '"終わらない調べもの" has run 3 times in a row without finishing (each run ended at a checkpoint or was split). It keeps going; cancel it if it is stuck');
       assert.equal(notes[0]!.link, `#/tasks/${task.id}`);
     }
   }
   assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 4);
+});
+
+test('R3 仕事をした task_checkpoint も区切りと同じに続けて数え、区切りと混ざっても 3 回目に 1 回だけ知らせる（止めない）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('区切りながら進む');
+  const saved = () => s.adapter().scripts.push(work(), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  saved();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  splitRun(s);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 2);
+  assert.equal(longNotes(s).length, 0, 'まだ知らせない');
+  saved();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready', '止めない');
+  assert.equal(longNotes(s).length, 1, '3 回目に知らせる');
+  assert.equal(longNotes(s)[0]!.title, 'Taking a long time: 区切りながら進む');
+  s.clock.now += 25 * HOUR;
+  saved();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(longNotes(s).length, 1, '4 回目は知らせない');
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '仕事をした区切りは進展なしに数えない');
+});
+
+test('自分が作った子のタスクを待つ間の、仕事の道具を使わない task_checkpoint は進展なしに数えない（子が終わるたびに続き、3 回でも止まらない）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const parent = s.userTask('子を待つ');
+  for (let i = 0; i < 3; i++) {
+    s.adapter().scripts.push(toolCall('task_create', { title: `あとで確かめる ${i}`, when: new Date(s.clock.now + HOUR).toISOString() }), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+    assert.equal(await s.app.worker.tick(), 'ran', `${i + 1} 回目`);
+    assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', `${i + 1} 回目: 止めない`);
+    const child = s.app.db.prepare('SELECT id FROM tasks WHERE spawned_by = ? AND status = ?').get(parent.id, 'ready') as { id: string } | undefined;
+    assert.ok(child, `${i + 1} 回目: 子がある`);
+    assert.equal(s.app.worker.waitReason(s.app.tasks.get(parent.id)!), null);
+    s.app.tasks.finish(child.id, 'done', 'checked', 'beat');
+  }
+  assert.equal(s.app.kv.get(`task-idle:${parent.id}`), undefined);
+  assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 0);
 });
 
 test('区切りでない終わり・持ち主の操作（run-now・PATCH・answer・取り消し・取り消しを戻す・完了）で、続けての区切りの数は 0 に戻る', async t => {
@@ -403,9 +452,9 @@ test('区切りでない終わり・持ち主の操作（run-now・PATCH・answe
   const splitKey = `task-split:${task.id}`;
   for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
   assert.equal(s.app.kv.getJson<number>(splitKey), 2);
-  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  s.adapter().scripts.push(reply('考え中'));
   await s.app.worker.tick();
-  assert.equal(s.app.kv.get(splitKey), undefined, '途中経過で終わった実行は数を消す');
+  assert.equal(s.app.kv.get(splitKey), undefined, '区切りでない終わり（返事だけ）は数を消す');
   s.clock.now += MIN;
   for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
   assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
