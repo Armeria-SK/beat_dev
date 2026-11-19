@@ -26,7 +26,7 @@ const en = {
   'branch_busy': 'beat is already handling this branch. Try again in a moment',
   'branch_moved': 'The branch changed after you looked at it. Look at its commits again before discarding it',
   'branch_changed': 'The files in the working copy changed after you looked at them. Look at them again before discarding it',
-  'branch_dirty': 'The working copy at {path} still has files that are not on the branch, so beat left it in place. Commit, move or delete them there, or use Discard to see and delete them',
+  'branch_dirty': 'The working copy at {path} still has files that are not on the branch, so it was left in place. Commit, move or delete them there, or use Discard to see and delete them',
   'branch_failed': 'beat could not clean up this branch and its working copy. Look at the branch and the working copy yourself before you try again',
   'branch_unreadable': 'beat could not read the working copy at {path} (for example, its .git file is missing), so it cannot show what would be lost. Look at that folder yourself and delete it by hand if you no longer need it',
   'branch_confirm_pair': 'Send both the branch tip and the file fingerprint you were shown, or neither',

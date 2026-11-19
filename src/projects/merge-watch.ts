@@ -138,7 +138,7 @@ export class MergeWatch {
     const held = this.#d.kv.getJson<HeldMark>(heldKey(row.id));
     if (!held || held.tip !== tip || held.print !== local.print) {
       this.#d.kv.setJson(heldKey(row.id), { tip, print: local.print, files: local.total } satisfies HeldMark);
-      this.#d.log?.(`[WARN] The beat branch ${row.branch} is merged, but its working copy ${row.path} still has ${local.blocking} file(s) beat does not delete by itself, so beat left it in place`);
+      this.#d.log?.(`[WARN] The beat branch ${row.branch} is merged, but its working copy ${row.path} still has ${local.blocking} file(s) beat does not delete by itself, so it was left in place`);
     }
     return { ok: false, reason: 'dirty', path: row.path };
   }

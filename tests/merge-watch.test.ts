@@ -81,7 +81,7 @@ test('8-3: 終わった作業コピーのタスクは Awaiting check（取り込
   const view = (await s.json(`/api/tasks/${task.id}`, 'GET')).body.task;
   assert.equal(view.status, 'done');
   assert.equal(view.worktree.state, 'merged', 'カードは Done の「Task · merged」');
-  assert.deepEqual(s.events(task.id), [`beat: The branch ${row.branch} is in the product folder now, so beat removed its working copy and the branch`]);
+  assert.deepEqual(s.events(task.id), [`beat: The branch ${row.branch} is in the product folder now, so its working copy and the branch were removed`]);
 });
 
 test('8-3: 見回りは 5 分に 1 回（due）で、片づけたあとタスクの知らせ（task.changed）を出す。直す実行の行（タスクなし・作業コピーなし）もブランチだけ片づける', { skip: !gitAvailable }, async t => {
@@ -142,7 +142,7 @@ test('8-3: squash で取り込むと見回りでは残り、Mark merged で作�
   assert.equal(existsSync(row.path!), false, '作業コピーは消える');
   assert.equal(hasBranch(p.root, row.branch), true, 'ブランチは残る');
   assert.deepEqual(await s.awaiting(p.id), []);
-  assert.match(s.events(task.id)[0]!, /^user: Marked merged: beat removed the working copy and kept the branch /u);
+  assert.match(s.events(task.id)[0]!, /^user: Marked merged: the working copy was removed and the branch \S+ was kept /u);
   assert.equal((await s.json(`/api/tasks/${task.id}/merged`, 'POST', {})).status, 409, '2 回目は取り込み待ちのブランチが無い');
 });
 
@@ -434,7 +434,7 @@ test('8-3（B）: 残したファイルのある取り込み済みの行も、Ma
   assert.equal(s.app.worktrees.get(row.id)!.state, 'merged');
   assert.equal(hasBranch(p.root, row.branch), false);
   assert.equal(existsSync(row.path!), false);
-  assert.deepEqual(s.events(task.id), [`user: The branch ${row.branch} is in the product folder now, so beat removed its working copy and the branch`]);
+  assert.deepEqual(s.events(task.id), [`user: The branch ${row.branch} is in the product folder now, so its working copy and the branch were removed`]);
   assert.deepEqual(await s.awaiting(p.id), []);
 });
 
