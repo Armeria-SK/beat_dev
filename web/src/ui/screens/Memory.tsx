@@ -117,7 +117,7 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
   const askDelete = () => { confirmOpener.current = document.activeElement; setConfirming(true); };
   const toRead = () => leave(() => { setMode('read'); setBase(null); setError(''); });
   const startEdit = () => { if (file && parts) { setBase({ hash: file.hash, title: parts.title, body: parts.body }); setMode('edit'); } };
-  // 409（見ていた版が古い）: 確かめの行を閉じて読み直す。Edit の版を進めるのは Save のときだけ（ほかの操作は、見ていない版を消したり印を外したりしない）
+  // 409（見ていた版が古い）: 確かめの行を閉じて読み直す。Edit の版を進めるのは Save が memfile.changed で断られたときだけ（memfile.unchanged やほかの操作は、見ていない版を消したり印を外したりしない）
   const run = async (work: (hash: string) => Promise<void>, saving = false) => {
     const hash = mode === 'edit' ? base?.hash : file?.hash;
     if (busy || !hash) return;
@@ -125,7 +125,7 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
     try { await work(hash); } catch (failure) {
       const stale = failure instanceof ApiError && failure.status === 409;
       if (stale) { setConfirming(false); onChanged(); }
-      if (stale && saving && mode === 'edit') { rebaseFrom.current = file; setError(t('ui.memory.saveConflict')); }
+      if (stale && saving && mode === 'edit' && failure.body?.code === 'store.memfile.changed') { rebaseFrom.current = file; setError(t('ui.memory.saveConflict')); }
       else setError(failText(failure, t));
     } finally { setBusy(false); }
   };

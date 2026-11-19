@@ -61,7 +61,8 @@ function fakeServer(seed: Record<string, { text: string; events: Array<Partial<M
     s.events.unshift({ id: nextId++, action, actor: 'owner', summary: null, tainted: false, before, after, created_at: NOW });
     s.text = action === 'forget' ? null : after;
   };
-  const fail = (status: number, code: string) => ({ status, body: { code, message: code } });
+  const hooks: { unchanged?: () => void } = {};
+  const fail = (status: number, code: string) => ({ status, body: { code: `store.${code}`, message: code } });
   globalThis.fetch = (async (raw: string | URL | Request, init: RequestInit = {}) => {
     const url = new URL(String(raw), 'http://localhost/');
     const method = init.method ?? 'GET';
@@ -84,8 +85,10 @@ function fakeServer(seed: Record<string, { text: string; events: Array<Partial<M
       else if (name && m[3] === 'history') reply = { status: 200, body: { events: s!.events } };
       else if (name && !m[3] && method === 'GET') reply = current === null ? fail(404, 'memfile.bad_name') : { status: 200, body: { note: note(name), text: current } };
       else if (name && !m[3] && method === 'PUT') {
+        const next = `# ${String(body!.title)}\n\n${String(body!.content).trim()}\n`;
         if (!baseOk(body!.baseHash)) reply = fail(409, 'memfile.changed');
-        else { add(name, 'update', current, `# ${String(body!.title)}\n\n${String(body!.content).trim()}\n`); reply = { status: 200, body: { note: note(name), text: notes.get(name)!.text } }; }
+        else if (next === current) { reply = fail(409, 'memfile.unchanged'); hooks.unchanged?.(); }
+        else { add(name, 'update', current, next); reply = { status: 200, body: { note: note(name), text: notes.get(name)!.text } }; }
       } else if (name && !m[3] && method === 'DELETE') {
         if (!baseOk(url.searchParams.get('baseHash'))) reply = fail(409, 'memfile.changed');
         else { add(name, 'forget', current, null); reply = { status: 200, body: { ok: true } }; }
@@ -105,7 +108,7 @@ function fakeServer(seed: Record<string, { text: string; events: Array<Partial<M
   // beat が書いた版（履歴の行つき）と、beat の外での書き換え（履歴の行なし）
   const beatWrites = (name: string, text: string) => { const s = notes.get(name)!; s.events.unshift({ id: nextId++, action: 'update', actor: 'beat', summary: null, tainted: false, before: s.text, after: text, created_at: NOW }); s.text = text; };
   const outside = (name: string, text: string | null) => { notes.get(name)!.text = text; };
-  return { calls, writes, notes, beatWrites, outside, hashOf: (name: string) => hashOf(notes.get(name)!.text!) };
+  return { calls, writes, notes, hooks, beatWrites, outside, hashOf: (name: string) => hashOf(notes.get(name)!.text!) };
 }
 
 const settle = (ms = 220) => update(() => new Promise(resolve => setTimeout(resolve, ms)));
@@ -310,10 +313,29 @@ test('Memory（DOM）: Edit のあいだに beat が書き直して画面が読�
   assert.deepEqual(server.writes().map(c => [c.method, c.body?.baseHash]), [['PUT', hashOf(V2)]]);
   assert.equal(server.notes.get('test-commands')!.text, NEWER, '新しい版は上書きされない');
   assert.equal(container.querySelector<HTMLTextAreaElement>('.ui-mem__edit textarea')?.value, 'My draft.', '書きかけが残る');
-  assert.equal(container.querySelector('[role="alert"]')?.textContent, 'beat changed this note while you were editing. Save again to replace that version; it stays in History.');
+  assert.equal(container.querySelector('[role="alert"]')?.textContent, 'This note was changed while you were editing (by beat or outside beat). Save again to replace that version; it stays in History.');
   await click(byText(container, '.bt-pane__bar button', 'Save'));
   await settle();
   assert.deepEqual(server.writes()[1]!.body, { title: 'Test commands', content: 'My draft.', baseHash: hashOf(NEWER) });
+});
+
+test('Memory（DOM）: 空白だけの書き換えの Save は memfile.unchanged の 409。書き直しの文を出さず、Edit の版も進めない', async () => {
+  const server = fakeServer(SEED);
+  const { container } = await mounted(PID);
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  const area = container.querySelector<HTMLTextAreaElement>('.ui-mem__edit textarea')!;
+  await input(area, `${area.value}  `);
+  const NEWER = '# Test commands\n\nNewer.\n';
+  server.hooks.unchanged = () => server.beatWrites('test-commands', NEWER);
+  await click(byText(container, '.bt-pane__bar button', 'Save'));
+  await settle();
+  const alert = container.querySelector('[role="alert"]')?.textContent ?? '';
+  assert.ok(alert !== '' && !alert.includes('Save again'), alert);
+  await input(container.querySelector('.ui-mem__edit textarea'), 'Other draft.');
+  await click(byText(container, '.bt-pane__bar button', 'Save'));
+  await settle();
+  assert.deepEqual(server.writes().map(c => [c.method, c.body?.baseHash]), [['PUT', hashOf(V2)], ['PUT', hashOf(V2)]]);
+  assert.equal(server.notes.get('test-commands')!.text, NEWER);
 });
 
 test('Memory（DOM）: Edit のあいだは Delete も Edit を始めた版の baseHash で送る（新しい版を見ずに消さない）', async () => {
