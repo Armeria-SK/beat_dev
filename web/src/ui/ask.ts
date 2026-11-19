@@ -5,7 +5,9 @@ export interface AskQuestion { question: string; header: string; options: AskOpt
 export interface OpenAsk { key: string; questions: AskQuestion[] }
 export interface AskPick { labels: string[]; other: boolean; text: string }
 
-const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null);
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const visible = (value: string): string => value.replace(/[\t\n\r\p{Zl}\p{Zp}]/gu, ' ').replace(HIDDEN, '');
+const text = (value: unknown): string | null => (typeof value === 'string' && visible(value).trim() ? visible(value) : null);
 
 export function parseAsk(input: string): AskQuestion[] | null {
   let value: unknown;
@@ -24,7 +26,7 @@ export function parseAsk(input: string): AskQuestion[] | null {
       const label = raw && typeof raw === 'object' ? text((raw as Record<string, unknown>)['label']) : null;
       if (!label) return null;
       const description = (raw as Record<string, unknown>)['description'];
-      options.push({ label, description: typeof description === 'string' ? description : '' });
+      options.push({ label, description: typeof description === 'string' ? visible(description) : '' });
     }
     questions.push({ question, header, options, multiSelect: q['multiSelect'] === true });
   }

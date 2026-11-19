@@ -7,7 +7,8 @@ export interface AskOption { label: string; description?: string }
 export interface AskQuestion { question: string; header: string; options: AskOption[]; multiSelect?: boolean }
 export interface AskOwnerInput { questions: AskQuestion[] }
 
-const OTHER_LABELS = new Set(['other', 'others', 'something else']);
+const OTHER_LABELS = new Set(['other', 'others', 'something else', 'その他', 'そのほか', 'ほか', '他']);
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const key = (text: string): string => text.trim().toLowerCase();
 const otherLabel = (label: string): boolean => OTHER_LABELS.has(key(label).replace(/[.:]+$/u, '').trim());
 
@@ -35,6 +36,13 @@ export const askOwner: ToolDef<AskOwnerInput> = {
     const language = languageOf(ctx.config);
     if (ctx.kind !== 'chat') return { content: questionText(language, 'ask_not_in_chat'), isError: true };
     if (asked.has(ctx)) return { content: questionText(language, 'ask_once'), isError: true };
+    for (const q of input.questions) {
+      const shown: Array<[string, string]> = [['question', q.question], ['header', q.header], ...q.options.map((o): [string, string] => ['label', o.label])];
+      for (const [field, value] of shown) if (!value.trim()) return { content: questionText(language, 'ask_blank', { field }), isError: true };
+      for (const [field, value] of [...shown, ...q.options.map((o): [string, string] => ['description', o.description ?? ''])]) {
+        if (HIDDEN.test(value)) return { content: questionText(language, 'ask_hidden', { field }), isError: true };
+      }
+    }
     const seen = new Set<string>();
     for (const q of input.questions) {
       if (seen.has(key(q.question))) return { content: questionText(language, 'ask_duplicate_question', { question: q.question }), isError: true };

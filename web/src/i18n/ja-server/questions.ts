@@ -48,5 +48,7 @@ export const questionJa = {
   'ask_not_in_chat': "ask_owner は持ち主との会話の中でだけ使えます",
   'ask_duplicate_question': "同じ文の質問が 2 つあります: {question}",
   'ask_duplicate_label': "質問「{header}」に同じ選択肢が 2 つあります: {label}",
+  'ask_hidden': "{field} に見えない文字・制御文字（改行を含む）があります。見える文字だけで書いてください",
+  'ask_blank': "{field} が空です。見える文字で書いてください",
   'ask_other_label': "選択肢「{label}」を外してください。カードには自由に書ける「その他」がいつも付きます",
 } satisfies JaTable<typeof questionText>;

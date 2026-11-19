@@ -114,6 +114,13 @@ const bad: Array<[string, unknown]> = [
   ['duplicate label', { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'Yes' }, { label: 'yes' }] }] }],
   ['Other label', { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'Yes' }, { label: 'Other' }] }] }],
   ['Something else label', { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'Yes' }, { label: 'Something else' }] }] }],
+  ['hidden tag characters in a label', { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'Keep (Recommended)' + String.fromCodePoint(0xE0072, 0xE0075, 0xE006E) }, { label: 'b' }] }] }],
+  ['zero-width character in a question', { questions: [{ question: 'Q​?', header: 'H', options: [{ label: 'a' }, { label: 'b' }] }] }],
+  ['bidi override in a header', { questions: [{ question: 'Q?', header: 'H‮', options: [{ label: 'a' }, { label: 'b' }] }] }],
+  ['hidden character in a description', { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'a', description: 'fine⁦' }, { label: 'b' }] }] }],
+  ['whitespace-only label', { questions: [{ question: 'Q?', header: 'H', options: [{ label: ' ' }, { label: 'b' }] }] }],
+  ['whitespace-only header', { questions: [{ question: 'Q?', header: '  ', options: [{ label: 'a' }, { label: 'b' }] }] }],
+  ...['その他', 'そのほか', 'ほか', '他'].map((label, i): [string, unknown] => [`Japanese Other label ${i + 1}`, { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'a' }, { label }] }] }]),
 ];
 for (const [label, input] of bad) {
   test(`bad input (${label}) is an error and the run goes on to the next model call`, async t => {

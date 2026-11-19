@@ -76,6 +76,20 @@ test('ui/ask: single choice replaces; multiSelect toggles and keeps the option o
   assert.deepEqual(m.labels, ['Settings']);
 });
 
+test('ui/ask: invisible or control characters never reach the card or the answer text', () => {
+  const tag = String.fromCodePoint(0xE0072, 0xE0075, 0xE006E);
+  const hidden = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+  const qs = parseAsk(JSON.stringify({ questions: [{ question: 'Which​ one?', header: 'H‮', options: [{ label: `Keep (Recommended)${tag}`, description: 'one\nfile⁦' }, { label: 'b' }] }] }))!;
+  assert.ok(qs, 'still shown');
+  for (const value of [qs[0]!.question, qs[0]!.header, ...qs[0]!.options.flatMap(o => [o.label, o.description])]) assert.ok(!hidden.test(value), JSON.stringify(value));
+  assert.equal(qs[0]!.options[0]!.label, 'Keep (Recommended)');
+  assert.equal(qs[0]!.options[0]!.description, 'one file');
+  const text = answerText(qs, [{ labels: [qs[0]!.options[0]!.label], other: false, text: '' }], 'Answers:');
+  assert.ok(!/[\p{Cf}]/u.test(text), JSON.stringify(text));
+  assert.equal(text, 'Answers:\n- H: Keep (Recommended)');
+  assert.equal(parseAsk(JSON.stringify({ questions: [{ question: 'Q?', header: 'H', options: [{ label: '​' }, { label: 'b' }] }] })), null, 'a label that is only hidden characters');
+});
+
 test('ui/ask: answerText is a lead line and one line per question, labels as written', () => {
   const qs = parseAsk(JSON.stringify(INPUT))!;
   const text = answerText(qs, [{ labels: ['SQLite (Recommended)'], other: false, text: '' }, { labels: ['List', 'Detail'], other: true, text: 'a map\nview ' }], 'Answers:');
