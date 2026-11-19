@@ -263,6 +263,10 @@ export class Conversations {
     return rows.map(({ parts, ...row }) => ({ ...row, message: JSON.parse(parts) as ChatMessage }));
   }
 
+  setTail(messageId: number, tail: string): void {
+    this.db.prepare("UPDATE messages SET parts = json_set(parts, '$.tail', ?) WHERE id = ? AND role != 'assistant'").run(tail, messageId);
+  }
+
   setSummary(id: string, summary: string, upto: number): void {
     this.db.prepare('UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ?').run(summary, upto, id);
   }

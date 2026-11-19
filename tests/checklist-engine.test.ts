@@ -164,14 +164,28 @@ test('外から読んでいない実行が書いた一覧は、あとの実行�
   assert.equal(s.app.runs.get(second)!.tainted, 0);
 });
 
-test('一覧を空にすると印も消える: 外から読んだ一覧を、印付きで始まった実行が空で書き直したあとの実行は、確かめなしで書ける', async t => {
+test('一覧を空にしたあとの実行は確かめなしで書ける。ただし外から読んだ一覧を載せた tail が送る範囲にあるあいだは「外から読んだ」で始まる（TE-1）', async t => {
   const s = await setup(t);
   await run(s, [call('web_fetch', FETCH), call('checklist_write', LIST), reply('書きました')]);
   assert.equal(readChecklist(s.app.kv, C)?.tainted, true, '前提');
   const clearing = await run(s, [call('checklist_write', { items: [] }), reply('消しました')]);
   assert.equal(s.app.runs.get(clearing)!.tainted, 1, '前提: 空にした実行そのものは、印付きで始まった');
   assert.equal(readChecklist(s.app.kv, C), undefined, '前提: 一覧は消えた');
-  await expectWritten(s, send(s, '書いて', [call('file_write', WRITE), reply('書きました')]));
+  const third = send(s, '書いて', [call('file_write', WRITE), reply('書きました')]);
+  await expectWritten(s, third);
+  assert.equal(s.app.runs.get(third)!.tainted, 1, '前の一覧は保存した tail のまま送るので、印は残る');
+});
+
+test('TE-1: 外から読んだ一覧を載せて保存した tail が送る範囲にあるあいだは、一覧を全部済ませても次の実行は「外から読んだ」で始まる', async t => {
+  const s = await setup(t);
+  await run(s, [call('web_fetch', FETCH), call('checklist_write', { items: [{ text: 'EVIL', status: 'in_progress' }] }), reply('書きました')]);
+  assert.equal(readChecklist(s.app.kv, C)?.tainted, true, '前提: 外から読んだ実行が書いた一覧');
+  assert.ok(s.app.conversations.messages(C).some(m => m.message.role !== 'assistant' && m.message.tail?.includes('EVIL')), '前提: 一覧を載せた tail を保存した');
+  writeChecklist(s.app.kv, C, [{ text: 'EVIL', status: 'done' }], false, 2);
+  const second = send(s, 'next', [call('shell_run', PROBE), reply('done')]);
+  await expectAsked(s, second);
+  // 前の実行は返事を書いて終わったので印を持ち越さない。添付も無い。残る理由は、送り続ける tail の一覧だけ（taint.checklist）
+  assert.equal(s.app.runs.get(second)!.tainted, 1, '2 回目の実行は「外から読んだ」で始まった');
 });
 
 test('やり直し（retry）も、印付きの一覧が残っていれば「外から読んだ」で始まる', async t => {

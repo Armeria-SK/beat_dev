@@ -35,8 +35,8 @@ export interface ImageRef {
   data: string;
 }
 
-// tail: その実行でこの発言に付けて送った、毎回変わる部分（時刻・Checklist・裏のコマンド）。実行のあいだだけエンジンが付け、DB には書かない。
-// 一度送った tail は、同じ実行の以後の呼び出しでも同じ文で同じ場所に送る（前の発言を変えると、考える部分の送り返しとキャッシュが崩れる）
+// tail: この発言に付けて送った、毎回変わる部分（時刻・Checklist・裏のコマンド）。エンジンだけが付け、発言の parts に保存する（text と検索の索引には入れない。TE-1）。
+// 一度送った tail は、次の実行でも同じ文で同じ場所に送る（前の発言を変えると、考える部分の送り返しとキャッシュが崩れる）。いまの会話の印で囲まれていない tail は送らない
 export type ChatMessage =
   // askAnswer: ask_owner の札が開いているあいだに届いた発言（札の答え。選んだ札の文は AI が書いたものなので、持ち主の文〔ToolContext.ownerText〕に数えない。9-1b）
   | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true; note?: 'pending' | 'continue'; fetched?: true; tail?: string; askAnswer?: true }

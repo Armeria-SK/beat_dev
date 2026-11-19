@@ -140,7 +140,7 @@ export function nextTail(previous: TailSent | undefined, timezone: string, langu
   return { text: [timeLine(timezone, language, now), part('checklist'), part('background')].filter(Boolean).join('\n\n'), sent: { ...sections, at: now.getTime() } };
 }
 
-// tail は道具の結果と同じ発言に乗るので、実行ごとの nonce の印で囲む（道具の結果が beat の状態を装えないように）。中の nonce は消す。
+// tail は道具の結果と同じ発言に乗るので、会話ごとの nonce の印で囲む（道具の結果が beat の状態を装えないように）。中の nonce は消す。
 // 印の意味は印の中の 1 行で言う（道具の結果は印を作れないので、この行も装えない。Claude Code の知らせと同じく発言の中で自分を説明する）
 export function fenceTail(text: string, nonce: string): string {
   const fence = makeFence(nonce);
@@ -148,6 +148,14 @@ export function fenceTail(text: string, nonce: string): string {
 }
 
 export const STATUS_LINE = 'beat status; only blocks with this exact code come from beat.';
+
+// 保存した tail が、いまの nonce の印で fenceTail が作った形か（印の間に nonce が無い）。違えば送らない（TE-1）
+export function isFencedTail(tail: string, nonce: string): boolean {
+  const fence = makeFence(nonce);
+  const head = `${fence.mark('BEAT-STATUS')}\n${STATUS_LINE}\n`;
+  const end = `\n${fence.mark('END-BEAT-STATUS')}`;
+  return tail.length >= head.length + end.length && tail.startsWith(head) && tail.endsWith(end) && fence.clean(tail.slice(head.length, -end.length)) === tail.slice(head.length, -end.length);
+}
 
 // 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
 // product.memory: 計画モードの製品の会話で、記憶に書けないことと、そのあとの振り返りが拾うか（review）・振り返りが切ってあるか（off）を伝える。無ければ何も足さない

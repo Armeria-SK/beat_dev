@@ -84,8 +84,9 @@ test('6-2: 2 秒以内に終わるコマンドはふつうの結果（終了コ�
   assert.match(first.system.tail, /Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart/u, 'backlog: numbers restart per boot');
   assert.match(first.system.tail, /- bg-2 \[running(?:, unread output)?\] node tick\.js/u);
   assert.doesNotMatch(first.system.dynamic, /Background commands/u, 'S1: 一覧は実行のあいだ同じ部分（dynamic）には入れない');
-  const lastSent = first.messages.at(-1)!;
-  assert.match(lastSent.role === 'assistant' ? '' : lastSent.tail ?? '', /- bg-2 \[running/u, 'S1: 一覧は最後の発言に付けて送る');
+  // TE-1: 前の実行で送った一覧は、その発言に保存した tail のまま届く（変わっていなければ送り直さない）
+  const tails = first.messages.map(m => (m.role === 'assistant' ? '' : m.tail ?? '')).join('\n');
+  assert.match(tails, /- bg-2 \[running/u, 'S1: 一覧は発言に付けて送る');
   const read = s.results().at(-1)!;
   assert.match(read, /^bg-2: running/u, read);
   assert.match(read, /tick \d+/u);

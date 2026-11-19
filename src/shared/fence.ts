@@ -13,8 +13,11 @@ export function makeFence(nonce: string = newNonce()): { nonce: string; mark: (n
   return { nonce, mark: name => `<<${name}-${nonce}>>`, clean: text => strip(text, nonce) };
 }
 
+// 大文字・小文字を区別せずに消す（印を大文字で書いても、印と読まれうるので）
 function strip(text: string, nonce: string): string {
+  if (!nonce) return text;
+  const pattern = new RegExp(nonce.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'giu');
   let current = text;
-  for (let next = current.replaceAll(nonce, ''); next !== current; next = current.replaceAll(nonce, '')) current = next;
+  for (let next = current.replace(pattern, ''); next !== current; next = current.replace(pattern, '')) current = next;
   return current;
 }
