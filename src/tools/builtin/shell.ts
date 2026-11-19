@@ -15,6 +15,7 @@ import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts'
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
+import { broadPush, gitWithOutsidePath, linkOutOfCopy, mainWrites, namesMain, worktreeGitRefusal, WT_MAIN_PATH, WT_OUTSIDE_PATH, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
 import { installTouchOf, protectedTouchOf } from '../hooks/protected-touch.ts';
 import { selfTarget } from '../hooks/self-port.ts';
@@ -72,6 +73,15 @@ function childEnvFor(shell: AppConfig['tools']['shell'], cwd: string, powershell
   return { env: base, gitIsolated: true, ...(gitExe ? { gitExe } : {}) };
 }
 
+// beat の作業ブランチがあるリポジトリで、それをまとめて送る・消しうる push（D-6・8-1 の申し送り）。git が動かせなければ見ない（push も同じ git で動く）
+function beatBranchPush(statements: readonly StatementFacts[], git: (dir: string, args: string[]) => string | undefined, cwd: string): string | undefined {
+  const beat = git(cwd, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/beat/']);
+  if (!beat?.trim()) return undefined;
+  const settings = git(cwd, ['config', '--get-regexp', '^(push\\.default|remote\\..*\\.mirror)$']) ?? '';
+  const lines = settings.split('\n').map(line => line.trim().toLowerCase());
+  return broadPush(statements, { matching: lines.includes('push.default matching'), mirror: lines.some(line => /^remote\..*\.mirror true$/u.test(line)) });
+}
+
 interface Peeked { preview: PreviewFile; fingerprint: string; content?: string }
 
 // 確かめの札で見せるファイルを読む。指紋は、承認のあとで中身が変わったかを調べるためのもの
@@ -116,6 +126,7 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
   if (!statements.length) return { kind: 'send', reason: outboundText(language, 'send.unknown_command', { cmd: command.trim().slice(0, 80) }), targets: [] };
   const outEnv = gitOutboundEnv({
     productRoot: ctx.project?.root, remotes: remotesOf(ctx), dataDir: ctx.paths.data, env, gitExe: gitExe ?? '', language,
+    ...(ctx.place && ctx.project?.root ? { workspaceRoots: [ctx.project.root] } : {}),
     isCreated: path => {
       let yes = false;
       try { yes = ctx.isCreated?.(path) === true; } catch { yes = false; }
@@ -148,6 +159,29 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;
   const self = verdict.decision === 'deny' ? undefined : selfTarget(input.command, ctx.config.server);
   if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'] };
+  const place = ctx.place && ctx.project?.root ? { worktree: ctx.project.root, productRoot: ctx.place.productRoot, cwd: cwd.cwd } : undefined;
+  // 作業コピーのタスクは、本体のフォルダ（作業コピーの外）を作業フォルダにして動かさない（files.ts の checkFilePath のシェル版）
+  if (place && mainWrites([cwd.cwd], place).length) return { decision: 'deny', reasons: [guardText(language, WT_MAIN_PATH, { path: cwd.cwd })], reasonKeys: [WT_MAIN_PATH] };
+  if (place && verdict.decision !== 'deny') {
+    const wtGit = gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: place.worktree }) : undefined;
+    const once = <T>(fn: () => T): (() => T) => { let done = false; let value: T; return () => { if (!done) { value = fn(); done = true; } return value; }; };
+    const refused = worktreeGitRefusal(verdict.statements, {
+      ...place, command: input.command, powershell,
+      remotes: once(() => wtGit?.(place.worktree, ['remote'])?.split(/\r?\n/u).map(line => line.trim()).filter(Boolean)),
+      sharedConfig: once(() => wtGit?.(place.worktree, ['config', '--list'])),
+    });
+    if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.cmd, path: refused.path ?? refused.cmd })], reasonKeys: [refused.key] };
+    // git の文があるコマンドで、見張りが作業コピーの外（または決められない場所）を指すパスを見つけたら、git ごと断る（字句の読み違いの受け止め）
+    const outside = gitWithOutsidePath(verdict.statements, verdict.paths, place);
+    if (outside !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_OUTSIDE_PATH, { path: outside })], reasonKeys: [WT_OUTSIDE_PATH] };
+    // 書く場所が決められない（変数で組んだパス）・先の決まらないリンクは、本体かもしれないので断る
+    const unknownWrite = verdict.paths.find(p => p.write && !p.path)?.input ?? (verdict.reasonKeys.includes('list.write_dynamic') ? input.command.slice(0, 200) : linkOutOfCopy(verdict.statements, place));
+    if (unknownWrite !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: unknownWrite })], reasonKeys: [WT_WRITE_MAIN] };
+    const main = mainWrites([...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], place);
+    if (main.length) return { decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: main[0]! })], reasonKeys: [WT_WRITE_MAIN] };
+    const named = namesMain(input.command, verdict.statements, place);
+    if (named !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_MAIN_PATH, { path: named })], reasonKeys: [WT_MAIN_PATH] };
+  }
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
     place: guardText(language, p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? 'shell.place.write' : 'shell.place.read')
@@ -160,6 +194,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const places = placesOf(verdict.statements, cwd.cwd);
   const pushes = pushesOf(verdict.statements, verdict.reasonKeys);
   if (input.background === true && pushes.length) return { decision: 'deny', reasons: [guardText(language, 'shell.background_push')] };
+  const beatPush = pushes.length && gitExe && verdict.decision !== 'deny' ? beatBranchPush(verdict.statements, isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }), cwd.cwd) : undefined;
+  if (beatPush !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_PUSH_BEAT, { cmd: beatPush })], reasonKeys: [WT_PUSH_BEAT] };
   const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
   const run = ctx.project?.root && verdict.decision === 'ask' ? productRunOf({
     root: ctx.project.root, verdict,
@@ -191,6 +227,17 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   };
 }
 
+// 作業コピーの実行: git が作業コピーの置き場より上のリポジトリ（beat 自身など）を見つけないように
+// 作業コピーの実行の git は、共通の .git で自動の片づけ（gc・maintenance）をしない（8-1 の NO_MAINTENANCE と同じ。本体の packed-refs などを書き換えないため）
+function placeEnv(ctx: ToolContext, env: Record<string, string>): Record<string, string> {
+  if (!ctx.place) return env;
+  const count = Number(env.GIT_CONFIG_COUNT ?? 0) || 0;
+  const extra: Array<[string, string]> = [['gc.auto', '0'], ['maintenance.auto', 'false']];
+  const out: Record<string, string> = { ...env, GIT_CEILING_DIRECTORIES: ctx.place.ceiling, GIT_CONFIG_COUNT: String(count + extra.length) };
+  extra.forEach(([key, value], i) => { out[`GIT_CONFIG_KEY_${count + i}`] = key; out[`GIT_CONFIG_VALUE_${count + i}`] = value; });
+  return out;
+}
+
 interface BackgroundRun { cwd: string; shell: ReturnType<typeof resolveShell>; child: ReturnType<typeof childEnvFor>; settings: AppConfig['tools']['shell'] }
 
 async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteInfo | undefined, run: BackgroundRun): Promise<ToolOutput> {
@@ -209,7 +256,7 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
   try {
     started = jobs.start({
       conversationId: ctx.conversationId, projectId: project.id, ...(ctx.task ? { taskId: ctx.task.id } : {}),
-      command: input.command, cwd, file: shell.file, args: shell.args(input.command), env: { ...child.env, ...gitRun?.env },
+      command: input.command, cwd, file: shell.file, args: shell.args(input.command), env: placeEnv(ctx, { ...child.env, ...gitRun?.env }),
       ...(shell.stdin ? { stdin: shell.stdin(input.command) } : {}), fetched, ...(ctx.taint.tainted ? { tainted: true } : {}), onExit: cleanup,
     });
   } catch (error) {
@@ -313,7 +360,7 @@ export const shellRun: ToolDef<ShellInput> = {
     let pushRefused = false;
     try {
       result = await runProcess(shell.file, shell.args(input.command), {
-        cwd: cwd.cwd, env: { ...child.env, ...gitRun?.env }, timeoutMs: timeoutSec * 1000, signal: ctx.signal,
+        cwd: cwd.cwd, env: placeEnv(ctx, { ...child.env, ...gitRun?.env }), timeoutMs: timeoutSec * 1000, signal: ctx.signal,
         maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
         ...(shell.stdin ? { input: shell.stdin(input.command) } : {}),
       });

@@ -36,8 +36,12 @@ import { needsSnapshot, SNAPSHOT_EVENT, snapshotBeforeBuild, snapshotLine } from
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
 import { decidedDuring, openPendingIds } from './pending-wake.ts';
+import type { TaskPlaces } from './place.ts';
+import { mainGitChanges, mainGitPrint, type MainGitPrint, type Worktrees } from '../projects/worktree.ts';
+import type { BackgroundJobs } from '../tools/shell/background.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
+const mayBranch = (c: AppConfig): boolean => c.worker.worktrees !== false && c.worker.maxParallel >= 2;
 const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
@@ -73,6 +77,9 @@ export interface WorkerDeps {
   pendingWake?: (() => unknown) | undefined;
   plans?: PlanStore | undefined;
   onScoutChange?: ((projectId: string) => void) | undefined;
+  places?: TaskPlaces | undefined;
+  worktrees?: Pick<Worktrees, 'finishWorktree' | 'removeWorktree'> | undefined;
+  background?: Pick<BackgroundJobs, 'stopWhere'> | undefined;
 }
 
 export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
@@ -165,6 +172,8 @@ export class Worker {
   #nextWakeAt: number | undefined;
   // 動いている裏の実行（キーは runId）。入れた順 = 始めた順。worker.maxParallel 本まで
   readonly #running = new Map<string, WorkerRunning>();
+  // 閉じようとして閉じられなかった作業コピーの行（このプロセスでは毎回は試し直さない）
+  readonly #closeTried = new Set<string>();
   #forced = new Set<string>();
   readonly #scoutStops = new Map<string, ScoutMessageKey>();
   // Think now で頼まれた製品（押した回数ではなく「1 回動かす」の印。動き出したら外す）と、その頼みで動いている実行
@@ -303,9 +312,14 @@ export class Worker {
     if (this.#d.tasks.openChildren(task.id) > 0) return null;
     if (hold) return { kind: hold };
     if (budgetAt !== undefined && !this.#forced.has(task.id)) return { kind: 'budget', at: budgetAt };
-    if (this.#d.tasks.productBusy(task)) return { kind: 'product' };
+    if (this.#busy(task)) return { kind: 'product' };
     if (this.#running.size >= c.worker.maxParallel || !room) return { kind: 'slots' };
     return null;
+  }
+
+  // そのタスクの置き場（本体か作業コピー）が埋まっているか（beat 8-2。置き場を見ないときは今までどおり本体だけ）
+  #busy(task: Task): boolean {
+    return this.#d.places ? this.#d.places.busy(task) : this.#d.tasks.productBusy(task);
   }
 
   status() {
@@ -350,12 +364,14 @@ export class Worker {
       };
       const own = c.worker.enabled;
       const eligible = (t: Task): boolean => own || this.#ownerWork(t);
-      const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t) });
+      const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t), ...(this.#d.places ? { placeFree: (t: Task) => !this.#busy(t) } : {}) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
 
       // 予定から実行用のタスクを作る（モデルは呼ばない）
       tasks.spawnDueSchedules();
+      const stranded = this.#stranded();
+      if (stranded.length) await this.#closeStranded(stranded);
       this.#d.pendingWake?.();
       if (own) this.#detectReviewTriggers(c, now);
       const skillOn = this.skillReviewsOn(c);
@@ -373,7 +389,7 @@ export class Worker {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
         // 提供元が満杯のあいだは覚えておく（空けば、終わった実行の onRunEnd で拾う）
-        if (!roomFor() || tasks.productBusy(forced)) continue;
+        if (!roomFor() || this.#busy(forced)) continue;
         this.#forced.delete(id);
         task = forced;
         break;
@@ -425,7 +441,7 @@ export class Worker {
           reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
-        reschedule(Math.min(tasks.nextWakeAt() ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
+        reschedule(Math.min(tasks.nextWakeAt({ mayBranch: mayBranch(c) }) ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
         return reviewWait !== undefined ? 'no_model' : held ? 'budget' : 'idle';
       }
       const outcome = await this.#run(task, release);
@@ -600,7 +616,7 @@ export class Worker {
     if (c.models.length) this.#d.tasks.spawnDueSchedules();
     this.#guardScout(c);
     if (this.#stopped || this.#d.autoSchedule === false || !this.#scoutRunning()) return;
-    const at = Math.min(this.#d.tasks.nextWakeAt() ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
+    const at = Math.min(this.#d.tasks.nextWakeAt({ mayBranch: mayBranch(c) }) ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
     this.#schedule(Math.max(1000, at - now));
   }
 
@@ -897,14 +913,27 @@ export class Worker {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}`, projectId: task.project_id });
       return 'folder_missing';
     }
+    const placed = this.#d.places && task.project_id ? await this.#d.places.decide(tasks.get(task.id) ?? task) : undefined;
+    if (placed?.kind === 'gone') {
+      tasks.finish(task.id, 'failed', taskText(language, 'reason.worktree_gone'), 'beat');
+      if (placed.row.task_id === task.id && placed.row.state === 'active') await this.#closeWorktree(task, placed.row.id);
+      return 'idle';
+    }
+    if (placed?.kind === 'wait') {
+      tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.worktree_unavailable') });
+      return 'busy';
+    }
     const project = this.#d.projects && needsSnapshot(this.#d.db, task) ? this.#d.projects.get(task.project_id!) : undefined;
     if (project) {
       const dataDir = dirname(this.#d.projects!.dir);
       tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dataDir, c.tools.deny.map(p => resolveConfigPath(p, dataDir)))));
       if (tasks.get(task.id)?.status !== 'running') return 'idle';
     }
+    const mainRoot = placed?.kind === 'worktree' ? this.#d.projects?.get(task.project_id!)?.root : undefined;
+    const since = this.#now();
+    const mainBefore = mainRoot ? await mainGitPrint(mainRoot, dirname(this.#d.projects!.dir), this.#d.places?.placeRoot()) : undefined;
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
-    const started = engine.runTask(task, conversationId, prompt);
+    const started = engine.runTask(task, conversationId, prompt, placed ? { place: placed.kind === 'worktree' ? placed.row.id : null } : {});
     if (!started.ok) {
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.no_model', { detail: started.errorMessage.split('\n')[0]! }) });
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-tasks' });
@@ -916,8 +945,75 @@ export class Worker {
     try {
       const result = await started.done;
       this.#finalize(task, result, started.control.value, started.runId);
+      if (mainRoot && mainBefore) await this.#mainChanged(task, mainRoot, mainBefore, since);
+      // 生んだタスクから引き継いだ作業コピーは閉じない（ほかの子と生んだタスクがまだ使う）
+      if (placed?.kind === 'worktree' && placed.row.task_id === task.id) await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
     return 'ran';
+  }
+
+  // 作業コピーで動いた実行の前後で、本体の git（HEAD・ブランチ・参照・stash・共有の設定）が変わっていたら、タスクの経過と知らせで持ち主に伝える（止めも戻しもしない）
+  // 同じ製品で、その間に本体で動いた（動いている）ほかのタスクがあれば、そちらの変化かもしれないので名前を書き、知らせは出さない
+  async #mainChanged(task: Task, root: string, before: MainGitPrint, since: number): Promise<void> {
+    const after = await mainGitPrint(root, dirname(this.#d.projects!.dir), this.#d.places?.placeRoot());
+    const changed = after ? mainGitChanges(before, after) : ['unreadable'];
+    if (changed.length === 0) return;
+    const language = this.#language();
+    const parts = changed.join(', ');
+    const onMain = (this.#d.db.prepare(`SELECT id, title FROM tasks t WHERE project_id = ? AND id != ? AND (status = 'running' OR COALESCE(completed_at, 0) >= ?
+      OR EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = 'run' AND e.created_at >= ?)) AND NOT EXISTS (SELECT 1 FROM worktrees w WHERE w.task_id = t.id AND w.kind = 'task')`)
+      .all(task.project_id, task.id, since, since) as Array<{ id: string; title: string }>).filter(other => this.#d.places?.rowOf(other.id)?.state !== 'active');
+    if (onMain.length) {
+      this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.main_changed_others', { parts, names: onMain.slice(0, 5).map(o => `“${o.title.slice(0, 80)}”`).join(', ') }));
+      return;
+    }
+    this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.main_changed', { parts }));
+    this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.main_changed', { title: task.title, parts }), link: `#/p/${task.project_id}`, dedupKey: `main-changed:${task.id}`, projectId: task.project_id });
+  }
+
+  // 動いていないあいだに終わった（取り消し・失敗）作業コピーのタスクの行を閉じる（active のまま残さない。開いた数にも数えない）
+  #stranded(): Array<{ id: string; task_id: string }> {
+    if (!this.#d.worktrees) return [];
+    const runningTasks = new Set([...this.#running.values()].flatMap(r => (r.kind === 'task' ? [r.taskId] : [])));
+    const rows = (this.#d.db.prepare(`SELECT w.id AS id, w.task_id AS task_id FROM worktrees w JOIN tasks t ON t.id = w.task_id
+      WHERE w.kind = 'task' AND w.state = 'active' AND t.status IN ('done', 'failed', 'cancelled')`).all() as Array<{ id: string; task_id: string }>).filter(row => !runningTasks.has(row.task_id) && !this.#closeTried.has(row.id));
+    if (rows.length === 0) return rows;
+    // 動いているタスク（生んだタスクの作業コピーを引き継ぐ子も）が使っている行は閉じない
+    const places = this.#d.places;
+    const used = new Set(this.#d.tasks.list({ statuses: ['running'], limit: 10_000 }).flatMap(t => { const id = places?.rowOf(t.id)?.id; return id ? [id] : []; }));
+    return rows.filter(row => !used.has(row.id));
+  }
+
+  async #closeStranded(rows: ReadonlyArray<{ id: string; task_id: string }>): Promise<void> {
+    for (const row of rows) {
+      const task = this.#d.tasks.get(row.task_id);
+      if (!task) continue;
+      this.#closeTried.add(row.id);
+      await this.#closeWorktree(task, row.id);
+    }
+  }
+
+  // 作業コピーのタスクが終わった（完了・失敗・取り消し）: 書きかけを 1 つのコミットにしてブランチに残す。変わったものが無ければ片づける。
+  // 区切り・yield・質問待ちなどで ready / waiting に戻ったときは、次の実行も同じ作業コピーで続けるので何もしない（D-13）
+  async #closeWorktree(task: Task, rowId: string): Promise<void> {
+    const status = this.#d.tasks.get(task.id)?.status;
+    const wt = this.#d.worktrees;
+    if (!wt || (status !== 'done' && status !== 'failed' && status !== 'cancelled')) return;
+    const language = this.#language();
+    try {
+      // 裏で動いているコマンドを先に止める（止める前にコミットすると、そのあとの書き込みが作業コピーに残る）
+      await this.#d.background?.stopWhere({ taskId: task.id });
+      const done = await wt.finishWorktree(rowId, { commitLeftovers: true, message: `beat: ${task.title.replace(/[\r\n]+/gu, ' ').slice(0, 200)}` });
+      if (done.ok && done.held?.length) this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.worktree_held', { names: done.held.slice(0, 10).join(', ') }));
+      if (done.ok && !done.changed) {
+        const removed = await wt.removeWorktree(rowId, { keepBranch: false, state: 'gone' });
+        if (!removed.ok) this.#d.log(`[WARN] Could not clean up the working copy of task ${task.id} (${removed.reason})`);
+      } else if (!done.ok) {
+        this.#d.log(`[WARN] Could not finish the working copy of task ${task.id} (${done.reason})`);
+      }
+    } catch (error) {
+      this.#d.log(`[WARN] Could not finish the working copy of task ${task.id}: ${(error as Error).message}`);
+    }
   }
 
   #followUpAnswers(taskId: string, runId: string): void {

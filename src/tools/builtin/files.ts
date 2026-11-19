@@ -10,6 +10,7 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { approvalPaths } from '../approvals.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import { isToolConfigPath } from '../hooks/tool-config.ts';
+import { mainWrites, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { askBeforeRegister, growSkills } from '../skills/store.ts';
 import { isUnderDownloads } from './downloads-core.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
@@ -35,6 +36,10 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   const paths = approvalPaths([{ input, path: abs, placement }]);
   const result = (check: PreCheck): { abs: string; check: PreCheck } => ({ abs, check: { ...check, paths, ...(need === 'write' ? { writes: [abs] } : {}) } });
   if (placement.kind === 'deny') return result({ decision: 'deny', reasons: [placement.reason] });
+  // 作業コピーで動く実行（beat 8-2 D-12）は、本体の中へ書かない（許可フォルダが本体を含んでいても。書いたパスと実体のパスの両方で見る）
+  if (need === 'write' && ctx.place && ctx.project?.root && mainWrites([abs], { productRoot: ctx.place.productRoot, worktree: ctx.project.root }).length) {
+    return result({ decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: abs })], reasonKeys: [WT_WRITE_MAIN] });
+  }
   if (placement.kind === 'outside') {
     return result({ decision: 'deny', reasons: [guardText(language, 'file.outside', { path: abs, roots: ctx.policy.roots.map(r => guardText(language, r.mode === 'write' ? 'file.root_write' : 'file.root_read', { path: r.path })).join(guardText(language, 'file.root_sep')) })] });
   }

@@ -17,6 +17,7 @@ const en = {
   'cancelled_project': 'Not run: the product it came from was archived or removed',
   'project_missing': 'Not run: the folder of the product it came from could not be found',
   'cwd_missing': 'Not run: the working folder {path} no longer exists',
+  'worktree_gone': "Not run: it was asked for in the task's separate working copy, which is no longer in use",
   'tool_missing': 'Not run: the tool {tool} is no longer available',
   'tool_blocked': 'Not run: {tool} is set to Block in Settings',
   'browser_off': 'Not run: the browser is turned off in Settings',

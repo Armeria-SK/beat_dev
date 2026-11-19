@@ -123,7 +123,7 @@ export function recordToolWrite(ctx: ToolContext, abs: string, next: string | Ui
       try {
         const now = Date.now();
         insertChange(db, {
-          project_id: project.id, place: null, run_id: ctx.runId, conversation_id: ctx.conversationId, task_id: ctx.task?.id ?? ctx.parent?.taskId ?? null, batch: null,
+          project_id: project.id, place: ctx.place?.id ?? null, run_id: ctx.runId, conversation_id: ctx.conversationId, task_id: ctx.task?.id ?? ctx.parent?.taskId ?? null, batch: null,
           path: rel, action: st ? 'modify' : 'create', before_hash: before, after_hash: after, size, kept, created_at: now,
         });
         pruneChangesSoon(db, dir, now);
