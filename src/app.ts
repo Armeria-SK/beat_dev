@@ -13,7 +13,8 @@ import { ChatEngine } from './engine/chat.ts';
 import { HealthMonitor } from './engine/health.ts';
 import { ModelStatus } from './engine/status.ts';
 import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
-import { buildDynamic, buildSnapshot, ensureWorkspace } from './engine/workspace.ts';
+import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, fenceTail } from './engine/workspace.ts';
+import { PLACEHOLDER_NONCE } from './shared/fence.ts';
 import type { AppPaths } from './paths.ts';
 import { languageOf } from './shared/language.ts';
 import { engineText } from './shared/messages/engine.ts';
@@ -474,7 +475,7 @@ export class App {
     const full = this.tools?.forRun('chat', { exclude: tool => exclude(tool) || tool.name === 'tool_search' }) ?? [];
     const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : full.length ? estimateToolTokens(ToolRegistry.specs(full, config)) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
-      + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
+      + estimateTextTokens(buildDynamic(config.timezone, language)) + estimateTextTokens(fenceTail(buildTail(config.timezone, language), PLACEHOLDER_NONCE)) + 64;
   }
 
   // 記憶を全部入れたときの見積もり。必要な長さには、各モデルの available の 12% までだけが数えられる（requiredContext）

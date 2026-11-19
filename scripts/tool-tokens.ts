@@ -15,7 +15,8 @@ import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/provider
 const USAGE = 'usage: node scripts/tool-tokens.ts [--config <path to config.json>] [--json]';
 
 const PROVIDER: ProviderConfig = { id: 'measure', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
-export const MEASURE_MODEL: ModelConfig = { id: 'measure', provider: 'measure', model: 'measure', contextLength: 98_304, maxOutputTokens: 80_716, vision: false };
+// 推奨の下限の 64k のローカルのモデル（返事の上限は自動）。持ち主の決め 2026-11-19「推奨は 128k 以上～下限 64k」
+export const MEASURE_MODEL: ModelConfig = { id: 'measure', provider: 'measure', model: 'measure', contextLength: 65_536, vision: false };
 
 export const MODES = ['product plan', 'plan (no product)', 'chat (no product)', 'chat (product)', 'task', 'review', 'agent child'] as const;
 export type Mode = typeof MODES[number];
@@ -53,7 +54,7 @@ export function measureConfig(source: AppConfig): AppConfig {
 }
 
 const rowOf = (mode: Mode, request: ModelRequest, available: number): ModeRow => {
-  const { tokens } = estimateRequest(`${request.system.frozen}\n${request.system.dynamic}`, [], request.tools);
+  const { tokens } = estimateRequest(`${request.system.frozen}\n${request.system.dynamic}`, [], request.tools, 1, request.system.tail);
   return { mode, tools: request.tools.length, toolTokens: request.tools.length ? estimateToolTokens(request.tools) : 0, request: tokens, percent: Math.round((tokens / available) * 1000) / 10 };
 };
 

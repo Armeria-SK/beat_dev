@@ -509,7 +509,7 @@ test('3-1c contextUsage: 目次を同じ長さの仮の印で囲んで数え、�
   await s.send(uuid(1), { text: 'second' });
   assert.ok(seen);
   assert.match(seen.system.dynamic, /now: \(AI note\) measuring/u);
-  const sent = estimateRequest(`${seen.system.frozen}\n${seen.system.dynamic}`, seen.messages.slice(0, -1), seen.tools);
+  const sent = estimateRequest(`${seen.system.frozen}\n${seen.system.dynamic}`, seen.messages.slice(0, -1), seen.tools, 1, seen.system.tail);
   assert.equal(usage.ok && usage.tokens, sent.tokens);
 });
 

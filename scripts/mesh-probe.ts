@@ -260,7 +260,7 @@ async function callModel(adapter: ProviderAdapter, model: ModelConfig, system: {
   let text = '';
   const calls: ToolCall[] = [];
   let inputTokens: number | undefined;
-  for await (const event of adapter.stream({ model, system, messages, tools, maxOutputTokens: Math.min(maxTokens, maxOutputFor(model, model.contextLength ?? Infinity)), signal })) {
+  for await (const event of adapter.stream({ model, system: { ...system, tail: '' }, messages, tools, maxOutputTokens: Math.min(maxTokens, maxOutputFor(model, model.contextLength ?? Infinity)), signal })) {
     if (event.type === 'text') text += event.delta;
     else if (event.type === 'tool_call') calls.push(event.call);
     else if (event.type === 'usage' && event.usage.inputTokens !== undefined) inputTokens = event.usage.inputTokens;

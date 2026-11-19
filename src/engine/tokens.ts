@@ -34,8 +34,12 @@ export function estimateMessageTokens(message: ChatMessage): number {
   } else {
     tokens += 8 + estimateTextTokens(message.content) + (message.images?.length ?? 0) * IMAGE_TOKENS;
   }
+  if (message.role !== 'assistant' && message.tail) tokens += tailTokens(message.tail);
   return tokens;
 }
+
+// 発言に付ける tail（ChatMessage.tail）1 つ分。まだ付けていない次の tail（estimateRequest の tail）も同じ数え方にして、付けたあとと数を合わせる
+export const tailTokens = (tail: string): number => (tail ? 4 + estimateTextTokens(tail) : 0);
 
 export function estimateToolTokens(tools: readonly ToolSpec[]): number {
   return tools.reduce((sum, t) => sum + 12 + Math.ceil(JSON.stringify(t).length / 3.5), 0);
@@ -46,7 +50,8 @@ export interface Estimate {
   tokens: number;
 }
 
-export function estimateRequest(system: string, messages: readonly ChatMessage[], tools: readonly ToolSpec[], factor = 1): Estimate {
-  const raw = 16 + estimateTextTokens(system) + messages.reduce((s, m) => s + estimateMessageTokens(m), 0) + estimateToolTokens(tools);
+// tail: まだどの発言にも付けていない、次に送る tail（S1）。発言に付けた tail は estimateMessageTokens が数える
+export function estimateRequest(system: string, messages: readonly ChatMessage[], tools: readonly ToolSpec[], factor = 1, tail = ''): Estimate {
+  const raw = 16 + estimateTextTokens(system) + messages.reduce((s, m) => s + estimateMessageTokens(m), 0) + estimateToolTokens(tools) + tailTokens(tail);
   return { raw, tokens: Math.ceil(raw * factor * SAFETY_MARGIN) };
 }

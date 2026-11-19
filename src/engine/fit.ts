@@ -32,19 +32,20 @@ export interface Fitted {
 
 // fitMessages がどれだけ古い発言を外しても残る、いちばん小さい送信量（system・道具の仕様・最後のやり取り 1 つ）。
 // これが available を超えると fitMessages は ContextOverflow を投げる。逆に、available との差が、いま道具の結果などを足せる余裕
-export function irreducibleEstimate(input: { system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; factor?: number }): Estimate {
-  return estimateRequest(input.system, groupExchanges(input.messages).at(-1) ?? [], input.tools, input.factor ?? 1);
+// tail: まだ発言に付けていない、次に送る tail（estimateRequest と同じ）
+export function irreducibleEstimate(input: { system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; factor?: number; tail?: string }): Estimate {
+  return estimateRequest(input.system, groupExchanges(input.messages).at(-1) ?? [], input.tools, input.factor ?? 1, input.tail);
 }
 
 export function fitMessages(input: {
-  system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; available: number; factor?: number;
+  system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; available: number; factor?: number; tail?: string;
 }): Fitted {
   const factor = input.factor ?? 1;
   let groups = groupExchanges(input.messages);
   const total = input.messages.length;
   for (;;) {
     const messages = groups.flat();
-    const estimate = estimateRequest(input.system, messages, input.tools, factor);
+    const estimate = estimateRequest(input.system, messages, input.tools, factor, input.tail);
     if (estimate.tokens <= input.available) return { messages, removed: total - messages.length, estimate };
     if (groups.length <= 1) throw new ContextOverflow(estimate.tokens, input.available);
     groups = groups.slice(1);

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFi
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
+import type { ModelConfig } from '../src/config/schema.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { estimateRequest, estimateTextTokens } from '../src/engine/tokens.ts';
 import { AcceptanceStore, applyChanges, frozenHash, type AcceptanceDoc, type ChangeOp } from '../src/projects/acceptance.ts';
@@ -13,7 +14,9 @@ import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
-const SMALL = { contextLength: 98_304, maxOutputTokens: 80_716 };
+// T-1 の量の線の基準: 推奨の下限の 64k（65,536）のローカルのモデルで、返事の上限は自動（使える量 45,875）。
+// 持ち主の決め 2026-11-19「推奨は 128k 以上～下限 64k」。使える量 12,672 の形（98,304 で返事の上限 80,716）は気にしなくてよい
+const MIN_LOCAL = (): ModelConfig => { const model = fakeModel('small', { contextLength: 65_536 }); delete model.maxOutputTokens; return model; };
 
 const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
@@ -148,9 +151,9 @@ const SHAPES: Array<[string, (config: { tools: { browser: { enabled: boolean }; 
   ['browser+agent', c => { c.tools.browser.enabled = true; c.tools.agent.enabled = true; }],
 ];
 
-test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,672）で、製品の計画モードの最初の頼み（system と道具の説明）は、一覧が下書きでも固定のあとでも、文書の言語が自動でも ja でも、既定・ブラウザオン・ブラウザ + agent オンの設定でも 40% 以下（T-1）', async t => {
+test('3-3-s 量の線: 推奨の下限の 64k のモデル（使える量 45,875）で、製品の計画モードの最初の頼み（system・道具の説明・最初の発言の tail）は、一覧が下書きでも固定のあとでも、文書の言語が自動でも ja でも、既定・ブラウザオン・ブラウザ + agent オンの設定でも 40% 以下（T-1）', async t => {
   for (const [shape, configure] of SHAPES) for (const [language, locked] of [[null, false], ['ja', false], [null, true], ['ja', true]] as const) {
-    const s = await setup(t, { models: [fakeModel('small', SMALL)], configure });
+    const s = await setup(t, { models: [MIN_LOCAL()], configure });
     const demo = await s.product('Demo');
     if (language) await s.json(`/api/projects/${demo.id}`, 'PATCH', { docLanguage: language });
     if (locked) {
@@ -161,10 +164,11 @@ test('3-3-s 量の線: 持ち主の手元のモデルの形（使える量 12,67
     await s.send(uuid(1), { text: 'x', projectId: demo.id, permissionMode: 'plan' });
     assert.ok(s.adapter().calls.at(-1)!.tools.some(tool => tool.name === (locked ? 'acceptance_change' : 'acceptance_write')));
     const last = s.adapter().calls.at(-1)!;
+    // 送る分を数える: system（frozen + dynamic）・道具の説明・最初の発言に付く tail（build-quality S1）
     const { tokens } = estimateRequest(`${last.system.frozen}
-${last.system.dynamic}`, [], last.tools);
+${last.system.dynamic}`, [], last.tools, 1, last.system.tail);
     const available = (await s.json(`/api/conversations/${uuid(1)}/context?modelId=small`, 'GET')).body.available as number;
-    assert.equal(available, 12_672);
+    assert.equal(available, 45_875);
     assert.ok(tokens <= available * 0.4, `${shape} ${language ?? 'auto'} ${locked ? 'locked' : 'draft'}: ${tokens} > ${available * 0.4}`);
   }
 });

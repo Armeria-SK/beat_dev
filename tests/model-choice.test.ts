@@ -247,7 +247,7 @@ test('providers: effort があれば要求に reasoning_effort を入れ、無�
   const server = await fakeServer((_req, _body, res) => sse(res, [{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]));
   t.after(() => server.close());
   const adapter = new OpenAiCompatibleAdapter(compat(`${server.url}/v1`), {});
-  const base = { model: model(), system: { frozen: '', dynamic: '' }, messages: [{ role: 'user' as const, content: 'hi' }], tools: [], maxOutputTokens: 64, signal: new AbortController().signal };
+  const base = { model: model(), system: { frozen: '', dynamic: '', tail: '' }, messages: [{ role: 'user' as const, content: 'hi' }], tools: [], maxOutputTokens: 64, signal: new AbortController().signal };
   for await (const _ of adapter.stream({ ...base, effort: 'xhigh' })) void _;
   for await (const _ of adapter.stream(base)) void _;
   assert.equal(server.requests[0]!.body.reasoning_effort, 'xhigh');
