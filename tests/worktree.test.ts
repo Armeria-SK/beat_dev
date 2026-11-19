@@ -504,26 +504,26 @@ test('worktree: 作業コピーの .git のファイルが本体の管理フォ�
   assert.equal(s.wt.get(row.id)!.state, 'active');
 });
 
-test('removeLinksInside: 根がリンクなら何もせず false。中のリンクはリンクだけ外し、先は残る', t => {
+test('removeLinksInside: 根がリンクなら何もせず false。中のリンクはリンクだけ外し、先は残る', async t => {
   const base = realpathSync.native(tempDir(t));
   const target = join(base, 'target');
   mkdirSync(join(target, 'sub'), { recursive: true });
   writeFileSync(join(target, 'keep.txt'), 'keep\n');
   link(join(target, 'sub'), join(target, 'innerlink'));
   link(target, join(base, 'root-link'));
-  assert.equal(removeLinksInside(join(base, 'root-link')), false);
+  assert.equal(await removeLinksInside(join(base, 'root-link')), false);
   assert.ok(lstatSync(join(target, 'innerlink')).isSymbolicLink(), '根のリンクの先へ入らない');
   const root = join(base, 'root');
   mkdirSync(join(root, 'a', 'b'), { recursive: true });
   writeFileSync(join(root, 'a', 'file.txt'), 'x\n');
   link(target, join(root, 'a', 'b', 'deep'));
   link(target, join(root, '.git'));
-  assert.equal(removeLinksInside(root), true);
+  assert.equal(await removeLinksInside(root), true);
   assert.equal(existsSync(join(root, 'a', 'b', 'deep')), false);
   assert.ok(existsSync(join(root, 'a', 'file.txt')));
   assert.ok(lstatSync(join(root, '.git')).isSymbolicLink(), '根の .git はそのまま（git に任せる）');
   assert.ok(existsSync(join(target, 'keep.txt')) && lstatSync(join(target, 'innerlink')).isSymbolicLink());
-  assert.equal(removeLinksInside(join(base, 'missing')), false);
+  assert.equal(await removeLinksInside(join(base, 'missing')), false);
 });
 
 test('worktree: 本体の .git に、ほかの worktree の管理フォルダの印やリンクがあれば dirty_git_dir', { skip: !gitAvailable }, async t => {
@@ -941,7 +941,7 @@ test('worktree: ブランチの名前（日本語の題・空の題・長い題�
   assert.notEqual(one.path, two.path);
 });
 
-test('removeTree: ジャンクションはリンクだけ外し、under の外（大文字・8.3・末尾の .・途中のリンク）と under 自身は断る', t => {
+test('removeTree: ジャンクションはリンクだけ外し、under の外（大文字・8.3・末尾の .・途中のリンク）と under 自身は断る', async t => {
   const base = realpathSync.native(tempDir(t));
   const under = join(base, 'under');
   const outside = join(base, 'outside-long-folder-name');
@@ -952,18 +952,18 @@ test('removeTree: ジャンクションはリンクだけ外し、under の外�
   writeFileSync(join(under, 'tree', 'ro.txt'), 'x', { mode: 0o444 });
   link(outside, join(under, 'tree', 'deep', 'linked'));
   for (const variant of [outside, ...(WINDOWS ? [outside.toUpperCase(), `${outside}.`, shortName(outside)].filter((v): v is string => Boolean(v)) : [])]) {
-    assert.deepEqual(removeTree(variant, { under }), { ok: false, reason: 'outside' }, variant);
+    assert.deepEqual(await removeTree(variant, { under }), { ok: false, reason: 'outside' }, variant);
   }
   link(outside, join(under, 'via'));
-  assert.deepEqual(removeTree(join(under, 'via', 'sentinel.txt'), { under }), { ok: false, reason: 'outside' }, '途中のリンクの先');
-  assert.deepEqual(removeTree(under, { under }), { ok: false, reason: 'outside' });
-  assert.deepEqual(removeTree(join(under, '..', 'outside-long-folder-name'), { under }), { ok: false, reason: 'outside' });
-  assert.deepEqual(removeTree(join(under, 'tree'), { under }), { ok: true });
+  assert.deepEqual(await removeTree(join(under, 'via', 'sentinel.txt'), { under }), { ok: false, reason: 'outside' }, '途中のリンクの先');
+  assert.deepEqual(await removeTree(under, { under }), { ok: false, reason: 'outside' });
+  assert.deepEqual(await removeTree(join(under, '..', 'outside-long-folder-name'), { under }), { ok: false, reason: 'outside' });
+  assert.deepEqual(await removeTree(join(under, 'tree'), { under }), { ok: true });
   assert.equal(existsSync(join(under, 'tree')), false);
   assert.equal(readFileSync(join(outside, 'sentinel.txt'), 'utf8'), 'keep\n');
-  assert.deepEqual(removeTree(join(under, 'via'), { under }), { ok: true }, 'リンク自身はリンクだけ外す');
+  assert.deepEqual(await removeTree(join(under, 'via'), { under }), { ok: true }, 'リンク自身はリンクだけ外す');
   assert.equal(readFileSync(join(outside, 'sentinel.txt'), 'utf8'), 'keep\n');
-  assert.deepEqual(removeTree(join(under, 'missing'), { under }), { ok: true });
+  assert.deepEqual(await removeTree(join(under, 'missing'), { under }), { ok: true });
 });
 
 test('worktree: beat/ のブランチを足しても Pending の push の指紋は変わらず、先端は push の確かめの一覧に入る', { skip: !gitAvailable }, async t => {

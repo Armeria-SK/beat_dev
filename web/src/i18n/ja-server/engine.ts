@@ -9,6 +9,7 @@ export const engineJa = {
   'send.task_running': "このタスクの会話は動いています",
   'send.review_running': "この振り返りは動いています",
   'run.preempted': "持ち主との会話を先にするため、一時止めました",
+  'run.place_changed': "始めていません: タスクの置き場（作業コピー）が、置き場を決めてから実行を始めるまでのあいだに変わりました",
   'run.restart_interrupted': "アプリの再起動で中断しました",
   'run.internal': "内部エラー: {detail}",
   'run.no_model': "動かせるモデルがありませんでした",

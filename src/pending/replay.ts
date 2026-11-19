@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { rmSync, statSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import type { AppConfig } from '../config/schema.ts';
@@ -11,11 +11,12 @@ import { previewJson } from '../shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import { runCommandHook } from '../tools/hooks/command-hook.ts';
-import { placePath, windowsNames } from '../tools/hooks/scope.ts';
+import { isInside, placePath, windowsNames } from '../tools/hooks/scope.ts';
+import type { TaskPlaces } from '../tasks/place.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
-import type { PreCheck, RunKind, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
+import type { PreCheck, RunKind, RunPlace, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import { outboundOfCall } from '../tools/hooks/outbound.ts';
 import { hookPaths } from '../tools/pipeline.ts';
 import { identityOf } from '../projects/created.ts';
@@ -34,6 +35,8 @@ export interface ReplayDeps {
   services?: (() => ToolContext['services']) | undefined;
   signal?: AbortSignal | undefined;
   log?: ((line: string) => void) | undefined;
+  // beat 8-2: 作業コピーで積んだ行は、同じ作業コピーで動かす
+  places?: Pick<TaskPlaces, 'rowOf' | 'placeRoot'> | undefined;
 }
 
 export interface ReplayOutcome {
@@ -88,12 +91,21 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
   try {
     const config = deps.config();
     if (!deps.conversationExists(row.conversation_id)) return end('cancelled', pendingText('en', 'cancelled_conversation'));
-    let project: { id: string; root: string } | undefined;
+    let project: NonNullable<ToolContext['project']> & { root: string } | undefined;
+    let place: RunPlace | undefined;
     if (row.project_id) {
       const found = deps.projects?.get(row.project_id);
       if (!found || found.archived_at !== null) return end('cancelled', pendingText('en', 'cancelled_project'));
       if (folderMissing(found)) return end('failed', pendingText('en', 'project_missing'));
       project = { id: found.id, root: found.root };
+      const placeRoot = deps.places?.placeRoot();
+      const parkedInCopy = placeRoot !== undefined && row.cwd !== null && isInside(placeRoot, row.cwd);
+      const copy = row.task_id ? deps.places?.rowOf(row.task_id) : undefined;
+      if (parkedInCopy || copy?.state === 'active') {
+        if (!copy || copy.state !== 'active' || !copy.path || !row.cwd || !isInside(copy.path, row.cwd) || !statSync(copy.path, { throwIfNoEntry: false })?.isDirectory()) return end('stale', pendingText('en', 'worktree_gone'));
+        project = { id: found.id, root: copy.path, productRoot: found.root, worktree: { branch: copy.branch } };
+        place = { kind: 'worktree', id: copy.id, productRoot: found.root, branch: copy.branch, base: copy.base, ceiling: dirname(dirname(copy.path)) };
+      }
     }
     if (!row.cwd || !statSync(row.cwd, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: row.cwd ?? '' }));
     const state = JSON.parse(row.state ?? '{}') as PendingState;
@@ -133,6 +145,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace,
       home: defaultWorkspace(buildPolicy(config, deps.paths, undefined, productRoots), deps.paths),
       ...(project ? { project } : {}),
+      ...(place ? { place } : {}),
       taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
       conversationTainted,
       isCreated: stillCreated,
