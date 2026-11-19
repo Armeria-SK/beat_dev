@@ -249,7 +249,8 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const [moreBusy, setMoreBusy] = useState(false);
   const [tab, setTab] = useState<ColumnId>('proposed');
-  const tabbed = useMedia(COLUMN_TABS_MEDIA);
+  const narrow = useMedia(COLUMN_TABS_MEDIA);
+  const tabbed = pane || narrow;
   const order = (columns: Column[]): Column[] => (tabbed ? NARROW_COLUMNS.flatMap(id => columns.filter(c => c.id === id)) : columns);
   const loads = useRef(latestOnly());
   const wanted = useRef(KANBAN_PAGE);

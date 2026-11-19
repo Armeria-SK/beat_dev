@@ -201,6 +201,30 @@ test('ui/KanbanPane（DOM）: on a narrow screen the columns come in the order P
   assert.equal(container.querySelectorAll('.ui-coltabs [role="tab"]').length, 6);
 });
 
+test('ui/KanbanPane（DOM）: on a wide screen the side pane still shows one column at a time under column tabs with counts (owner request 2026-11-19: the board did not fit the pane); a tab switches the column; the full Kanban screen keeps all columns side by side', async () => {
+  serve({ active: [task('Idea', 'inbox'), task('Queued', 'ready', { origin: 'user' })] }, null);
+  const { container } = await pane();
+  await settle();
+  const tabs = [...container.querySelectorAll<HTMLButtonElement>('.ui-coltabs [role="tab"]')];
+  assert.deepEqual(tabs.map(t => t.id), ['ui-coltab-proposed', 'ui-coltab-check', 'ui-coltab-progress', 'ui-coltab-approved', 'ui-coltab-done', 'ui-coltab-failed'], 'what waits first, as on a narrow screen');
+  assert.deepEqual(tabs.map(t => t.querySelector('.bt-count__n')?.textContent), ['1', '0', '0', '1', '0', '0']);
+  const shown = () => [...container.querySelectorAll('.bt-board > .bt-col:not(.ui-col--off)')].map(c => c.id);
+  assert.deepEqual(shown(), ['ui-col-proposed']);
+  assert.equal(column(container, 'proposed').getAttribute('role'), 'tabpanel');
+  await click(tabs[3]);
+  assert.deepEqual(shown(), ['ui-col-approved']);
+  assert.ok(byText(column(container, 'approved'), '.bt-card__title', 'Queued'));
+  await cleanup();
+
+  const { Kanban } = await loadTsx<{ Kanban: ComponentType<Omit<PaneProps, 'productId'>> }>('../web/src/ui/screens/Kanban.tsx', import.meta.url);
+  serve({ active: [task('Idea', 'inbox')] }, null);
+  const screen = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project()], pendingByTask: new Map(), questionsByTask: new Map() }));
+  await settle();
+  assert.equal(screen.container.querySelector('[data-kanban]')?.getAttribute('data-kanban'), 'screen');
+  assert.deepEqual([...screen.container.querySelectorAll('.bt-board > .bt-col')].map(c => c.id), ['ui-col-proposed', 'ui-col-approved', 'ui-col-progress', 'ui-col-check', 'ui-col-done', 'ui-col-failed'], 'the full screen keeps the board order');
+  assert.equal(screen.container.querySelector('[role="tabpanel"]'), null, 'no tab panels on the wide full screen');
+});
+
 test.after(() => { g.matchMedia = realMatch; });
 
 test('ui/Task and ProductHome（DOM）: a thinking run ("scout") is not "another task is running": Run now on the task screen and Retry on the product home say "Task started"; a task run still makes them "Runs next"', async () => {
