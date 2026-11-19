@@ -72,7 +72,7 @@ export const taskJa = {
   'note.memo': "メモ: {text}",
   'note.memo_truncated': "メモ（返事が出力の上限で切れたので、途中までです）: {text}",
   'stuck.question': "「{title}」は進みの無い実行が {strikes} 回続いたので止めました。もう一度実行しますか?",
-  'stuck.why': "どの実行も、task_complete・task_checkpoint・質問のどれも無く返事だけで終わったか、タスクの道具のほかに道具を 1 つも使わずに終わりました。",
+  'stuck.why': "どの実行も、task_complete・task_checkpoint・質問のどれも無く返事だけで終わったか、実際に動いた道具の呼び出しが 1 つも無いまま終わったか（Pending に預けた・断られた・入力の誤りの呼び出し、タスクの道具、question_add は数えません）、読むだけで長くなって区切られました。",
   'stuck.reason': "進みの無い実行が {strikes} 回続いたので止めました。持ち主に Questions で聞いています。",
   'split.long_body': "「{title}」は終わらないまま {runs} 回続けて動きました（どの回も途中経過か区切りで終わりました）。このまま続けます。行き詰まっているなら取り消してください",
   'title.review': "振り返り: {label}",

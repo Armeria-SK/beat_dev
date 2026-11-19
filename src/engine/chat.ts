@@ -848,7 +848,7 @@ export class ChatEngine {
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
-    const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0, workDone: 0 };
+    const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0, workDone: 0, changeDone: 0 };
     let index = 0;
     let invalidStreak = 0;
     // 切れた呼び出しが続けて何回目か（invalidStreak とは別に数える）
@@ -916,7 +916,7 @@ export class ChatEngine {
       if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
-      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workCalls: counters.workCalls, workDone: counters.workDone, iterations: counters.iterations, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split } : {}) };
+      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workDone: counters.workDone, changeDone: counters.changeDone, iterations: counters.iterations, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split } : {}) };
     };
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
@@ -937,9 +937,13 @@ export class ChatEngine {
       judgeLimits: d.judgeLimits,
       conversationTainted: () => d.conversations.everTainted(conversationId),
     }, truncated);
-    // 実際に動いて誤りなく終わった道具の呼び出しだけを「仕事」に数える（Pending に預けた・断られた・引数の誤り・誤りの結果・task_ / tool_search / question_add は数えない）
-    const countDone = (name: string, outcome: { output: { isError?: boolean }; decision: string; invalidArguments?: boolean }) => {
-      if (outcome.decision === 'allow' && !outcome.output.isError && !outcome.invalidArguments && !name.startsWith('task_') && name !== 'tool_search' && name !== 'question_add') counters.workDone++;
+    // 実際に動いた道具の呼び出しを「仕事」に数える（結果が誤りでも数える。Pending に預けた・断られた・引数の誤り・task_ / tool_search / question_add は数えない）。
+    // そのうち効果が write / exec の道具は、書き換え・実行の仕事（changeDone）にも数える
+    const countDone = (name: string, outcome: { decision: string; invalidArguments?: boolean }) => {
+      if (outcome.decision !== 'allow' || outcome.invalidArguments || name.startsWith('task_') || name === 'tool_search' || name === 'question_add') return;
+      counters.workDone++;
+      const effect = tools?.registry.get(name)?.effect;
+      if (effect === 'write' || effect === 'exec') counters.changeDone++;
     };
     if (kind === 'task' && tools) {
       let inner = false;
@@ -959,7 +963,8 @@ export class ChatEngine {
     }
 
     const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
-    // 長さの区切りは、この実行の中でやり取りが育ったときだけ。始めから超えていた実行は区切らず、縮める・あふれるの今の道に任せる（区切っても同じ始まりを繰り返すだけ）
+    // 長さの区切りは、この実行の中でやり取りが育ったときだけ。始めから超えていた実行は区切らず、縮める・あふれるの今の道に任せる（区切っても同じ始まりを繰り返すだけ）。
+    // 見るのは 3 往復目の頭から（モデルは、最初の道具の結果を見たあと必ず 1 回は動ける）
     const splits = Boolean(task) && kind === 'task' && !scout;
     let startedOver = false;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
@@ -969,7 +974,7 @@ export class ChatEngine {
       recordTaint();
       const budgetArgs = { runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject };
       if (splits && counters.iterations === 1) startedOver = this.#exchangeTooLong(budgetArgs);
-      else if (splits && !startedOver && this.#exchangeTooLong(budgetArgs)) {
+      else if (splits && counters.iterations >= 3 && !startedOver && this.#exchangeTooLong(budgetArgs)) {
         flags.push('context_split');
         return finishOk('', 'other', 'context');
       }

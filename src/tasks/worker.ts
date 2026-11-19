@@ -46,7 +46,8 @@ const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
 // 区切り（人のいない実行の回数の上限）が続いたとき、持ち主に 1 回だけ知らせる数。止めはしない
-const SPLIT_LIMIT = 3;
+// 終わり方を決めずに区切りで終わった回がこの数だけ続いたら、1 回だけ知らせる
+const LONG_RUN_NOTICE = 10;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 const SKILL_REVIEW_IDLE_MS = 5 * 60_000;
@@ -1033,20 +1034,18 @@ export class Worker {
     }
   }
 
-  // 終わり方を決めずに区切り（task_checkpoint・split のどれも）で終わった回を続けて数え、SPLIT_LIMIT 回目に 1 回だけ知らせる（止めない。止めるのは持ち主）
+  // 終わり方を決めずに区切り（task_checkpoint・split のどれも）で終わった回を続けて数え、LONG_RUN_NOTICE 回目に 1 回だけ知らせる（止めない。止めるのは持ち主）
   #continued(task: Task): void {
     const runs = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
     this.#d.kv.setJson(splitKey(task.id), runs);
-    if (runs !== SPLIT_LIMIT) return;
+    if (runs !== LONG_RUN_NOTICE) return;
     const language = this.#language();
-    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT }), link: `#/tasks/${task.id}`, dedupKey: `split:${task.id}`, projectId: task.project_id });
+    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: LONG_RUN_NOTICE }), link: `#/tasks/${task.id}`, dedupKey: `split:${task.id}`, projectId: task.project_id });
   }
 
-  // 進展の無い回を 1 つ数える。STAGNATION_LIMIT 回に来たら行き詰まり（failed + stuck の質問 + 知らせ）にして true。
-  // 自分が作った子のタスクが開いている間は数えない（子を待っているだけで、子が終わるまで選ばれない）
+  // 進展の無い回を 1 つ数える。STAGNATION_LIMIT 回に来たら行き詰まり（failed + stuck の質問 + 知らせ）にして true
   #noProgress(task: Task, runId: string): boolean {
     const { tasks, notifications } = this.#d;
-    if (tasks.openChildren(task.id) > 0) return false;
     const idleKey = `task-idle:${task.id}`;
     const strikes = (this.#d.kv.getJson<number>(idleKey) ?? 0) + 1;
     if (strikes < STAGNATION_LIMIT) {
@@ -1075,6 +1074,8 @@ export class Worker {
     const projectId = task.project_id;
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
+    // 仕事をした回は、このタスクを生んだ親の進展なしの数も消す（子が仕事をしている親は止めない。何もしない子ばかりなら親は 3 回で止まる）
+    if (result.ok && result.workDone > 0 && task.spawned_by) this.#d.kv.delete(`task-idle:${task.spawned_by}`);
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
     const status = tasks.get(task.id)?.status;
     if (status !== 'running') {
@@ -1152,9 +1153,9 @@ export class Worker {
     }
     if (result.ok && result.split) {
       // 区切り: すぐ続ける。道具を使った区切りは進展なしの数（idleKey）を増やしも消しもしない（区切りと返事だけの終わりが交互に続くタスクも、今までどおり相談に届く）。
-      // 仕事をせず、答えも Pending の決めも読んでいない区切りは進展なしに数える。2 往復目までに長さで区切れた回も同じ（育つ前に区切れた＝始まりが長すぎる）
-      const early = result.split === 'context' && result.iterations <= 2;
-      if ((result.workDone === 0 || early) && !answered && !decidedDuring(this.#d.db, task.id, runId) && this.#noProgress(task, runId)) return;
+      // 仕事をせず、答えも Pending の決めも読んでいない区切りは進展なしに数える。長さの区切りは、書き換え・実行の仕事（changeDone）をしていなければ進展なし（読むだけで長くなる回は回りっぱなしになる）
+      const idle = result.split === 'context' ? result.changeDone === 0 : result.workDone === 0;
+      if (idle && !answered && !decidedDuring(this.#d.db, task.id, runId) && this.#noProgress(task, runId)) return;
       this.#continued(task);
       tasks.setReady(task.id, { runAt: now, reason: result.split === 'context' ? taskText(language, 'reason.context_split') : taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
       return;

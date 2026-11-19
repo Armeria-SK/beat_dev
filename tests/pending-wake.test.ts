@@ -179,16 +179,17 @@ test('5-P 預けるだけの回（Pending に積んで task_checkpoint）を繰�
   assert.equal(s.app.kv.get(`task-idle:${id}`), undefined, '承認待ちは進展なしに数えない');
 });
 
-test('仕事は結果で数える: 動いたが誤りで終わった呼び出しだけの task_checkpoint は進展なしに数える', async t => {
+test('仕事は動いたかで数える: 誤りで終わった呼び出し（失敗したコマンドなど）も仕事。前の回の Pending が残っていても承認待ちにせず、すぐ続ける', async t => {
   const s = await setup(t);
   const id = s.task();
+  s.adapter().scripts = [call('fake_park', { text: 'commit' }), call('fake_work', { text: 'x' }), checkpoint()];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual(s.rows(id).map(r => r.status), ['waiting'], '前提: 前の回の行が残る');
   s.adapter().scripts = [call('fake_fail', { text: 'x' }), checkpoint()];
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.tasks.get(id)!.status, 'ready');
-  assert.equal(s.app.kv.getJson<number>(`task-idle:${id}`), 1);
-  s.adapter().scripts = [call('fake_work', { text: 'x' }), checkpoint()];
-  assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.kv.get(`task-idle:${id}`), undefined, '対照: 誤りなく終わった呼び出しは仕事');
+  const task = s.app.tasks.get(id)!;
+  assert.deepEqual([task.status, task.waiting_kind, task.run_at], ['ready', null, START], '承認待ちにしない');
+  assert.equal(s.app.kv.get(`task-idle:${id}`), undefined, '誤りで終わった呼び出しも仕事');
 });
 
 test('5-P 行が 2 つあれば、最初の決めで起きる', async t => {

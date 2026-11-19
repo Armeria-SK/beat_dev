@@ -149,7 +149,7 @@ test('進まないタスク: 3 回続けて決められなければ失敗にし�
   assert.equal(stuck.result_summary, 'Stopped after 3 runs in a row without progress. The owner is asked in Questions.');
   const [question] = s.app.questions.list({ status: 'open', taskId: task.id });
   assert.equal(question!.question, '"Vague job" ran 3 times in a row without making progress, so it was stopped. Run the task again?');
-  assert.equal(question!.why, 'Each of those runs either ended with a reply only (without task_complete, task_checkpoint or a question), or ended without using any tool other than the task tools.');
+  assert.equal(question!.why, 'Each of those runs either ended with a reply only (without task_complete, task_checkpoint or a question), or ended without any tool call that actually ran (calls held in Pending, refused or with invalid input, the task tools and question_add do not count), or grew too long while only reading.');
   assert.deepEqual(s.app.notifications.list().map(n => n.title).slice(0, 2).sort(), ['Question recorded', 'Task failed: Vague job']);
   assert.match(stuck.body, /- Note: thought 0/u);
 });

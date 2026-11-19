@@ -23,6 +23,21 @@ const bigTool: ToolDef<{ n: number }> = {
   async execute(input) { return { content: 'lorem ipsum dolor '.repeat(Math.ceil(input.n / 18)).slice(0, input.n) }; },
 };
 
+const edits: string[] = [];
+const editTool: ToolDef<{ text: string }> = {
+  name: 'fake_edit', description: 'Test tool: edits a file.', input: Type.Object({ text: Type.String() }), effect: 'write', allowedIn: ['task'],
+  async execute(input) { edits.push(input.text); return { content: 'edited' }; },
+};
+
+// 1 往復で道具を並べて呼ぶ
+const calls = (list: Array<[string, unknown]>): Script => async function* (req) {
+  for (const [name, args] of list) {
+    const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
+    for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
+  }
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
+
 const call = (name: string, args: unknown): Script => async function* (req) {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
   for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
@@ -44,7 +59,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { capacity
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   config.worker.maxRunsPerHour = 50;
-  config.tools.policies = { fake_big: 'allow' };
+  config.tools.policies = { fake_big: 'allow', fake_edit: 'allow' };
   options.edit?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   // 固定の system を大きくする（32k のモデルで、固定の分が使える量の 4 割を超える形）
@@ -54,7 +69,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { capacity
   }
   const clock = { now: Date.parse('2026-11-19T01:00:00Z') };
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, tools: [...builtinTools(), bigTool as unknown as ToolDef], adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, tools: [...builtinTools(), bigTool as unknown as ToolDef, editTool as unknown as ToolDef], adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   const lastRun = (kind = 'task') => app.db.prepare('SELECT * FROM engine_runs WHERE kind = ? ORDER BY rowid DESC LIMIT 1').get(kind) as { id: string; flags: string; iterations: number; ok: number; error_kind: string | null };
@@ -87,7 +102,7 @@ test('A-6 タスクの実行は、いまのやり取りが余裕の 6 割を超�
   assert.equal(after.run_at, s.clock.now, '休まずにすぐ続ける');
   assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')?.content, CONTEXT_REASON);
   assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 1, '長さの区切りも続けての区切りに数える（SPLIT_LIMIT 回目に知らせる）');
-  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '道具を使った区切りは進展なしに数えない');
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${task.id}`), 1, '読むだけで長くなった区切りは進展なしに数える');
   assert.equal(s.app.notifications.list().filter(n => n.kind === 'info').length, 0);
 
   // 境目: 最後に呼んだときのやり取りは余裕の 6 割以下、そのあと道具の結果を足したやり取り（区切った頭で見たもの）は 6 割を超える
@@ -126,6 +141,22 @@ async function bigBrief(t: { after: (fn: () => void) => void }, edit?: (c: AppCo
   return { s, body };
 }
 
+test('A-6 長さの区切りは 3 往復目の頭から: 最初の往復で大きく読んでも、次の往復で書き換えができ、止まらずに終わる', async t => {
+  const { s } = await bigBrief(t);
+  const probe = budgetOf(s.app, s.adapter().calls[0]!);
+  const task = s.app.tasks.create({ title: 'Read then edit', origin: 'user', actor: 'user' });
+  const n = Math.floor(probe.room * 0.25 * 3.5);
+  edits.length = 0;
+  const before = s.adapter().calls.length;
+  s.adapter().scripts = [calls([['fake_big', { n }], ['fake_big', { n }], ['fake_big', { n }]]), call('fake_edit', { text: 'fix' }), call('task_complete', { summary: 'done', notify: false })];
+  for (let i = 0; i < 4 && s.app.tasks.get(task.id)!.status === 'ready'; i++) await s.app.worker.tick();
+  const second = s.adapter().calls[before + 1]!;
+  const b = budgetOf(s.app, second);
+  assert.ok(b.exchange(second.messages) > SPLIT_EXCHANGE_RATIO * b.room, `前提: 2 往復目の頭で余裕の 6 割を超える: ${b.exchange(second.messages)} / ${b.room}`);
+  assert.deepEqual(edits, ['fix'], '書き換えが動く');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done', '止められずに終わる');
+});
+
 test('A-6 始めの発言だけで余裕の 6 割を超えていた実行は、区切らずに続ける（区切っても同じ始まりを繰り返すだけ）', async t => {
   const { s, body } = await bigBrief(t);
   const task = s.app.tasks.create({ title: 'Big brief', body, origin: 'user', actor: 'user' });
@@ -142,16 +173,16 @@ test('A-6 始めの発言だけで余裕の 6 割を超えていた実行は、�
   assert.equal(s.app.tasks.get(task.id)!.status, 'done');
 });
 
-test('A-6 始めから長い Build を上限 1 で回しても、2 往復目で区切って回り続けない（続けるか、STAGNATION_LIMIT で止まる）', async t => {
+test('A-6 始めから長い Build を上限 1 で回しても、読むだけの区切りで回り続けない（区切らずに続けるか、STAGNATION_LIMIT で止まる）', async t => {
   const { s, body } = await bigBrief(t, c => { c.worker.maxRunsPerHour = 1; });
   const task = s.app.tasks.create({ title: 'Big build', body, origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
   s.adapter().scripts = Array.from({ length: 20 }, () => big(100));
   for (let i = 0; i < 4; i++) await s.app.worker.tick();
   const runs = s.app.db.prepare("SELECT r.iterations, r.flags FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id WHERE r.kind = 'task' AND t.id = ? ORDER BY r.rowid").all(task.id) as Array<{ iterations: number; flags: string }>;
-  const early = runs.filter(r => (JSON.parse(r.flags) as string[]).includes('context_split') && r.iterations <= 2);
+  const split = runs.filter(r => (JSON.parse(r.flags) as string[]).includes('context_split'));
   const stopped = s.app.tasks.get(task.id)!.status === 'failed' && runs.length === 3;
-  assert.ok(early.length === 0 || stopped, `2 往復目の区切りが続いた: ${JSON.stringify(runs)}`);
-  assert.ok(runs.length >= 1 && runs[0]!.iterations > 2 || stopped, `続けるか止まる: ${JSON.stringify(runs)}`);
+  assert.ok(runs.length >= 1, '動いた');
+  assert.ok(split.length === 0 || stopped, `読むだけの区切りが続いた: ${JSON.stringify(runs)}`);
 });
 
 test('A-6 容量 32k のモデルで固定の分が使える量の 4 割を超えていても、最初の数往復では区切らない（使える量の 6 割では決めない）', async t => {
