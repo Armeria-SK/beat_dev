@@ -215,7 +215,7 @@ export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
   }
 }
 
-function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
+export function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
   const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir', ...REPO_PARTS.flatMap(part => ['--git-path', part])])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   if (places?.length !== 3 + REPO_PARTS.length || !places.every(place => inside(root, resolve(dir, place)))) return false;
   return [...new Set([places[1]!, places[2]!].map(place => resolve(dir, place)))].every(place => gitDirLinkFree(place));

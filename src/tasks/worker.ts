@@ -9,7 +9,7 @@ import { UNATTENDED_ITERATION_CEILING, type ChatEngine } from '../engine/chat.ts
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
-import { bookPressureText, conversationWindow, isNoProposal, productMemoryBudget, productMemoryText, reviewPrompt, reviewUptoKey, reviewWindowLimits, seedSkillUpto, SKILL_REVIEW_TOOLS, skillUpto, skillUptoKey, TIDY_FORBIDDEN_TOOLS, TRIGGER_TEXT, type ReviewJob, type ReviewJobs, type ReviewKind, type WindowLimits } from '../memory/review.ts';
+import { bookPressureText, conversationWindow, isNoProposal, productMemoryBudget, productMemoryText, reviewEvidence, reviewPrompt, reviewUptoKey, type ReviewEvidence, reviewWindowLimits, seedSkillUpto, SKILL_REVIEW_TOOLS, skillUpto, skillUptoKey, TIDY_FORBIDDEN_TOOLS, TRIGGER_TEXT, type ReviewJob, type ReviewJobs, type ReviewKind, type WindowLimits } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { ProductMemory } from '../memory/files.ts';
 import type { Notifications } from '../notify/notifications.ts';
@@ -461,7 +461,7 @@ export class Worker {
 
   #reviewLimits(): WindowLimits { return reviewWindowLimits(this.#d.backgroundAvailable?.()); }
 
-  #reviewInput(job: ReviewJob): { prompt?: string; upto?: number | undefined } {
+  #reviewInput(job: ReviewJob): { prompt?: string; upto?: number | undefined; evidence?: ReviewEvidence | undefined } {
     const { db, tasks, memory, kv } = this.#d;
     const language = languageOf(this.#d.config());
     const skillsAutoRegister = !askBeforeRegister(this.#d.config());
@@ -478,7 +478,8 @@ export class Worker {
     if (job.trigger === 'task') {
       const task = job.task_id ? tasks.get(job.task_id) : undefined;
       if (!task) return {};
-      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents: tasks.events(task.id, 30), forgotten, productMemory: productMemory(), fileMemory: projectId !== null, language, skillsAutoRegister, kind }) };
+      const taskEvents = tasks.events(task.id, 30);
+      return { prompt: reviewPrompt({ trigger: job.trigger, task, taskEvents, forgotten, productMemory: productMemory(), fileMemory: projectId !== null, language, skillsAutoRegister, kind }), evidence: projectId !== null ? reviewEvidence({ task, taskEvents }, language) : undefined };
     }
     if (!job.conversation_id) return {};
     // 前回振り返った発言より後だけを渡す（同じ発言を二度振り返らない）
@@ -486,7 +487,10 @@ export class Worker {
     const window = conversationWindow(db, job.conversation_id, upto, this.#reviewLimits(), language, kind, this.#d.secrets?.() ?? []);
     const owner = window.messages.some(m => m.message.role === 'user' && m.message.note === undefined);
     if (!owner && (kind === 'memory' || !window.messages.some(m => m.role === 'tool'))) return { upto: window.lastId };
-    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, productMemory: productMemory(), fileMemory: projectId !== null, language, skillsAutoRegister, kind }), upto: window.lastId };
+    // 持ち主の言葉は、チャットの会話の持ち主の発言だけ（タスクの会話の user の発言は beat が作った依頼文。beat の注記・beat が作った発言も外す）
+    const ownerMessages = this.#d.conversations.get(job.conversation_id)?.kind === 'chat'
+      ? window.messages.filter(m => m.role === 'user' && m.message.role === 'user' && m.message.note === undefined && !m.message.generated).map(m => m.text) : [];
+    return { prompt: reviewPrompt({ trigger: job.trigger, transcript: window.transcript, forgotten, productMemory: productMemory(), fileMemory: projectId !== null, language, skillsAutoRegister, kind }), upto: window.lastId, evidence: projectId !== null ? reviewEvidence({ transcript: window.transcript, ownerMessages }, language) : undefined };
   }
 
   #reviewed(conversationId: string, upto: number | undefined, kind: ReviewKind): void {
@@ -509,7 +513,7 @@ export class Worker {
     const language = this.#language();
     if (job.trigger === 'book_full' && !this.#d.botMemory) { reviews.finish(job.id, 'done', taskText(language, 'review.tidy_skipped')); return 'idle'; }
     if (job.kind === 'memory' && !this.#d.botMemory && this.#productOf({ conversationId: job.conversation_id, taskId: job.task_id }) === null) { reviews.finish(job.id, 'done', taskText(language, 'review.memory_nothing')); return 'idle'; }
-    const { prompt, upto } = this.#reviewInput(job);
+    const { prompt, upto, evidence } = this.#reviewInput(job);
     if (!prompt) {
       reviews.finish(job.id, 'done', taskText(language, 'review.nothing'));
       if (upto !== undefined && job.conversation_id) this.#reviewed(job.conversation_id, upto, job.kind);
@@ -528,7 +532,7 @@ export class Worker {
     const skill = job.kind === 'skill';
     const label = TRIGGER_TEXT[language][job.kind][job.trigger];
     const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, skill ? 'title.skill_review' : 'title.review', { label }), source, projectId: (job.conversation_id ? conversations.projectOf(job.conversation_id) : null) ?? (job.task_id ? this.#d.tasks.get(job.task_id)?.project_id : null) });
-    const started = engine.runReview(conversation.id, prompt, skill ? { onlyTools: SKILL_REVIEW_TOOLS } : { forbidTools: job.trigger === 'book_full' ? TIDY_FORBIDDEN_TOOLS : ['skill_draft'] });
+    const started = engine.runReview(conversation.id, prompt, skill ? { onlyTools: SKILL_REVIEW_TOOLS } : { forbidTools: job.trigger === 'book_full' ? TIDY_FORBIDDEN_TOOLS : ['skill_draft'], evidence });
     if (!started.ok) { this.#noReviewModel(started.errorMessage, language); return 'no_model'; }
     reviews.claim(job.id, started.runId, conversation.id);
     this.#running.set(started.runId, { kind: 'review', reviewKind: job.kind, taskId: job.task_id, runId: started.runId, title: taskText(language, skill ? 'title.skill_review_running' : 'title.review_running', { label }) });

@@ -35,6 +35,7 @@ import { projectOfSql, projectWhere, registerReviewRoutes, todayCount, todayStar
 import type { RunRow } from '../db/runs.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { registerPendingRoutes } from './routes-pending.ts';
+import { registerRuleRoutes } from './routes-rules.ts';
 import { registerQuestionRoutes } from './routes-questions.ts';
 import { registerGrowthRoutes } from './routes-growth.ts';
 import { registerMemoryRoutes } from './routes-memory.ts';
@@ -443,6 +444,7 @@ export function createWebServer(app: App): WebServer {
   // ── タスク・ワーカー・通知・プロフィール ──
   registerTaskRoutes(router, app);
   registerPendingRoutes(router, app);
+  registerRuleRoutes(router, app);
   registerBackgroundRoutes(router, app);
   registerQuestionRoutes(router, app);
   registerGrowthRoutes(router, app);

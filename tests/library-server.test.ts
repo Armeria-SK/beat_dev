@@ -288,12 +288,16 @@ test('4-3a Runs の口は判定役の件数を数える: 通した・積んだ�
   const park = app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, status, created_at) VALUES ('shell_run', '{}', 'x', ?, 'r', 'r1', 'chat', 'c1', 'waiting', ?)");
   for (const [id, decision, by, at] of [['a1', 'allow', 'auto-mode', now], ['a2', 'allow', 'auto-mode', start], ['a3', 'allow', 'auto-mode', start - 1], ['a4', 'deny', 'auto-mode', now], ['a5', 'allow', 'policy', now], ['n1', 'ask', 'not-parked', now], ['n2', 'ask', 'not-parked', start - 1]] as const) call.run(id, decision, by, at);
   for (const [kind, at] of [['judge', now], ['judge', start], ['judge_failed', now], ['send', now], ['owner', start - 1]] as const) park.run(kind, at);
-  assert.deepEqual((await api('/api/runs')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1 });
+  app.db.prepare("INSERT INTO projects (id, name, root, root_key, archived_at, created_at, updated_at) VALUES ('rules01', 'r', '/x/rules', '/x/rules', 1, 1, 1)").run();
+  const rule = app.db.prepare("INSERT INTO approval_rules (project_id, kind, tool, base, base_key, keys, shown, created_at) VALUES ('rules01', 'send', 'shell_run', '{}', 'k', '[]', 'x', 1) RETURNING id").get() as { id: number };
+  const ruled = app.db.prepare("INSERT INTO tool_calls (id, run_id, tool, input, decision, decided_by, approval_id, created_at) VALUES (?, 'r', 'shell_run', '{}', 'allow', 'owner-rule', ?, ?)");
+  ruled.run('o1', `rule:${rule.id}`, now); ruled.run('o2', 'rule:999', now); ruled.run('o3', `rule:${rule.id}`, start - 1);
+  assert.deepEqual((await api('/api/runs')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1, ruled: { send: 1, removed: 1 } }, 'J-5: allowed by a rule is counted apart from the judge and from Pending');
   app.db.prepare("INSERT INTO conversations (id, title, created_at, last_message_at, project_id) VALUES ('cp', 'p', ?, ?, 'shop01')").run(now, now);
   app.db.prepare("INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, created_at) VALUES ('pa', 'r', 'cp', 'shell_run', '{}', 'allow', 'auto-mode', ?)").run(now);
   app.db.prepare("INSERT INTO pending_actions (tool, input, shown, kind, reason, run_id, run_kind, conversation_id, project_id, status, created_at) VALUES ('shell_run', '{}', 'x', 'owner', 'r', 'r1', 'chat', 'cp', 'shop01', 'waiting', ?)").run(now);
-  assert.deepEqual((await api('/api/runs?project=shop01')).body.judged, { allowed: 1, parked: { owner: 1 }, notParked: 0 }, '製品で絞る');
-  assert.deepEqual((await api('/api/runs?project=none')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1 }, '製品に属さないもの');
+  assert.deepEqual((await api('/api/runs?project=shop01')).body.judged, { allowed: 1, parked: { owner: 1 }, notParked: 0, ruled: {} }, '製品で絞る');
+  assert.deepEqual((await api('/api/runs?project=none')).body.judged, { allowed: 2, parked: { judge: 2, judge_failed: 1, send: 1 }, notParked: 1, ruled: { send: 1, removed: 1 } }, '製品に属さないもの');
 });
 
 test('1-5s Runs の件数: 設定のタイムゾーンが正しくない名前でも 500 にならず、UTC の 0 時から数える', async t => {

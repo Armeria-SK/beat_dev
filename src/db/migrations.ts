@@ -634,6 +634,21 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_worktrees_task ON worktrees (task_id) WHERE task_id IS NOT NULL;
   `,
   `
+  CREATE TABLE approval_rules (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('judge', 'send', 'delete', 'policy')),
+    tool TEXT NOT NULL,
+    base TEXT NOT NULL,
+    base_key TEXT NOT NULL,
+    keys TEXT NOT NULL,
+    shown TEXT NOT NULL,
+    from_pending INTEGER,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX ix_approval_rules_lookup ON approval_rules (project_id, kind, base_key);
+  `,
+  `
   CREATE TABLE file_changes (
     id INTEGER PRIMARY KEY,
     project_id TEXT NOT NULL,
