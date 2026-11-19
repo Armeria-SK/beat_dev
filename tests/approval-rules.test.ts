@@ -1190,7 +1190,7 @@ test('AP-1f N10: 提供元・中継のポートの数字が、ループバック
     c.providers.push(
       { ...c.providers[0]!, id: 'lmstudio', baseUrl: 'http://127.0.0.1:1234/v1' },
       { ...c.providers[0]!, id: 'vllm', baseUrl: 'http://localhost:8000/v1' },
-      { ...c.providers[0]!, id: 'relay', baseUrl: 'http://127.0.0.1:3000/v1' },
+      { ...c.providers[0]!, id: 'local3000', baseUrl: 'http://127.0.0.1:3000/v1' },
     );
   });
   const denied = deniedLoopbackPorts(r.ctx.config, []);
@@ -1217,7 +1217,25 @@ test('AP-1f N10: 提供元・中継のポートの数字が、ループバック
   }
 });
 
-test('AP-1f T-G8 前のポート: 設定のポートを変えて反映する前も、起動したときのポート（ブラウザの見た beat のポート）に印が付く', async t => {
+test('AP-1f N10 中継のポート: ブラウザの中継のポートは数だけなら印が付かず、localhost:<中継> には付く', async t => {
+  const r = rig(t);
+  const relay = 9555;
+  class RelaySession extends BrowserSession {
+    override loopbackDenied(): ReadonlySet<number> { return new Set([...super.loopbackDenied(), relay]); }
+  }
+  const session = new RelaySession({ driver: {} as BrowserDriver, config: () => r.ctx.config, paths: { browserProfile: join(r.ws, 'profile') } });
+  assert.ok(session.loopbackDenied().has(relay) && !session.selfPorts().has(relay), '前提: 中継のポートは断る組にだけある');
+  const withRelay = { ...r.ctx, services: { browser: session } } as unknown as ToolContext;
+  const bare = await loopbackScript(r, 'relay-bare', `await page.waitForTimeout(${relay});`, withRelay);
+  assert.deepEqual(bare.pre.reasonKeys?.filter(key => key === 'code.self_touch') ?? [], [], JSON.stringify(bare.pre.reasonKeys));
+  assert.ok(bare.pre.productRun !== undefined, '順 4 に乗る');
+  assert.equal(bare.out.decidedBy, bare.pre.productRun, bare.out.output.content);
+  const loop = await loopbackScript(r, 'relay-loopback', `await fetch('http://localhost:${relay}/');`, withRelay);
+  assert.ok(loop.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(loop.pre.reasonKeys));
+  assert.equal(loop.out.decidedBy, 'pending');
+});
+
+test('AP-1f T-G8 前のポート:設定のポートを変えて反映する前も、起動したときのポート（ブラウザの見た beat のポート）に印が付く', async t => {
   const r = rig(t, c => { c.server.port = 4888; });
   let current: AppConfig = r.ctx.config;
   const session = new BrowserSession({ driver: {} as BrowserDriver, config: () => current, paths: { browserProfile: join(r.ws, 'profile') } });
