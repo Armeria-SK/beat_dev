@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type Project, type ProjectPatch } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { useT } from '../../i18n/index.ts';
+import { ModeSwitch } from '../ModeSwitch.tsx';
 import { autoLabel, hasDocLanguage, LANGUAGES, languageName, languagePatch, languagePick, OTHER } from '../doc-language.ts';
 import { Button } from '../parts.tsx';
 import { followProduct } from '../product-meta.ts';
@@ -100,6 +101,11 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
         )}
         <div className="ui-np__actions"><Button type="submit" variant="primary" disabled={!dirty || busy || !name.trim() || langChange === 'invalid'}>{t('ui.ps.save')}</Button></div>
       </form>
+
+      <section className="bt-section" data-scout-mode>
+        <div className="bt-section__head"><span className="bt-label">{t('ui.scout.mode')}</span></div>
+        <ModeSwitch project={project} onProject={onProject} />
+      </section>
 
       <section className="bt-section">
         <div className="bt-section__head">

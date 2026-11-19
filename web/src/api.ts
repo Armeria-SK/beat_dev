@@ -224,7 +224,8 @@ export interface Task {
   items?: TaskItems;
   proposal?: Proposal | null;
 }
-export interface Proposal { kind: 'feature' | 'bug'; why: string; area: string[]; size: 'S' | 'M' | 'L'; goal: string | null; evidence: string | null; ledger: string | null }
+export interface Proposal { kind: 'feature' | 'bug'; why: string; area: string[]; size: 'S' | 'M' | 'L'; goal: string | null; evidence: string | null; ledger: string | null; prefix?: PreFix | null }
+export interface PreFix { branch: string; base: string; checks: 'passed'; files: number; added: number; removed: number; diff: string[] }
 export type ScoutMode = 'off' | 'research' | 'fix';
 export interface ScoutState { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null }
 export interface ChatBuild {

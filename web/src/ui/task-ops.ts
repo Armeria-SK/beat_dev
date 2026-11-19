@@ -6,7 +6,7 @@ import { routeHash } from './routes.ts';
 
 export type TaskOp = SheetAction | 'reject' | 'restore' | 'stop';
 
-export interface TaskOpOptions { reason?: string; runId?: string | undefined; busyWithOther?: boolean }
+export interface TaskOpOptions { reason?: string; runId?: string | undefined; busyWithOther?: boolean; prefixBranch?: string | undefined }
 
 export interface TaskOpDeps {
   api: Pick<typeof api, 'taskAction' | 'unapproveTask' | 'cancelTask' | 'answerTask' | 'stop'>;
@@ -31,12 +31,13 @@ export async function runTaskOp(op: TaskOp, task: Pick<Task, 'id' | 'title'>, op
     switch (op) {
       case 'approve':
         await deps.api.taskAction(task.id, 'approve');
+        if (options.prefixBranch) { deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.prefixApproved'), body: t('ui.task.toast.prefixReady', options.prefixBranch) }); return true; }
         deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.approved'), body: task.title, action: undo(() => deps.api.unapproveTask(task.id), deps) });
         return true;
       case 'reject': {
         const reason = options.reason?.trim() ?? '';
         await deps.api.cancelTask(task.id, reason);
-        deps.toast({ icon: 'x', title: t('ui.task.toast.rejected'), body: reason ? t('ui.task.toast.reason', reason) : task.title, action: uncancel });
+        deps.toast({ icon: 'x', title: t('ui.task.toast.rejected'), body: reason ? t('ui.task.toast.reason', reason) : task.title, ...(options.prefixBranch ? {} : { action: uncancel }) });
         return true;
       }
       case 'cancel':

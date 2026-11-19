@@ -1,5 +1,6 @@
-import type { ChecklistItem, Conversation, Proposal, RunRow, Task, TaskStatus } from '../api.ts';
+import type { ChecklistItem, Conversation, PreFix, Proposal, RunRow, Task, TaskStatus } from '../api.ts';
 import { checklistStep } from './agent-state.ts';
+import type { DiffLine } from './changes.ts';
 import type { Route } from './routes.ts';
 
 export type ColumnId = 'proposed' | 'approved' | 'progress' | 'check' | 'done' | 'failed';
@@ -177,6 +178,14 @@ export function tabStep(current: number, count: number, key: string): number | n
 }
 
 export const proposalOf = (task: Pick<Task, 'proposal'>): Proposal | null => task.proposal ?? null;
+
+export const PREFIX_DIFF_LINES = 6;
+
+export const prefixOf = (task: Pick<Task, 'proposal'>): PreFix | null => task.proposal?.prefix ?? null;
+
+export const prefixDiff = (lines: readonly string[]): DiffLine[] => lines.slice(0, PREFIX_DIFF_LINES).map(line => (
+  line.startsWith('+') ? { kind: 'add', text: `+ ${line.slice(1)}` } : line.startsWith('-') ? { kind: 'del', text: `− ${line.slice(1)}` } : { kind: 'same', text: `  ${line}` }
+));
 
 export function firstSentences(text: string, count = 2): string {
   const t = text.trim();
