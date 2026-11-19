@@ -1,5 +1,6 @@
 import { MCP_NAME_PREFIX } from '../../../src/mcp/names.ts';
 import { lineDelta } from '../../../src/shared/line-delta.ts';
+import { toolText } from '../../../src/shared/messages/tools.ts';
 import { isSensitiveName, redactSecrets } from '../../../src/shared/redaction.ts';
 import { en } from '../i18n/en.ts';
 import { t, type PlainKey } from '../i18n/index.ts';
@@ -221,6 +222,11 @@ export function toolVerb(name: string): ToolVerb {
 const num = (text: string): number => Number(text.replace(/,/gu, ''));
 
 export const emptyOutput = (text: string): boolean => /^\s*(?:\[E-\d+\]\s*)?$/u.test(text);
+
+const MODEL_HINT = toolText('en', 'pipeline.denied').split('\n').at(-1)!;
+const MODEL_HINT_AT_END = new RegExp(`\\s*${MODEL_HINT.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, 'gmu');
+
+export const shownOutput = (text: string): string => text.replace(MODEL_HINT_AT_END, '');
 
 function editMeta(name: string, args: Record<string, unknown> | null, result: ToolResult): ToolMeta {
   if (name === 'file_write') {

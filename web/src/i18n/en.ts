@@ -505,7 +505,6 @@ export const en = {
   'ui.notice.undoFailed': 'could not undo',
   'ui.notice.stopped': 'Stopped',
   'ui.notice.switched': (to: string) => `Switched to a fallback model: ${to}`,
-  'ui.notice.denied': (tool: string) => `Not run: ${tool}`,
   'ui.notice.contextHigh': (n: number) => `Context ${n}% full · older messages will be summarised`,
   'ui.notice.disconnected': 'Disconnected',
   'ui.notice.reconnect': 'Reconnect',

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { AppPaths } from '../paths.ts';
+import { gitFolder } from '../projects/work-folder.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 
 export const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'CURIOSITY.md'] as const;
@@ -36,6 +37,10 @@ export function readTemplate(paths: AppPaths, name: TemplateName): string {
 }
 
 export const REQUIREMENTS_COMPACT_BELOW = 32_000;
+
+export const PLAN_BUTTON = { git: 'Build with this plan', other: 'Start with this plan' } as const;
+
+export const planButton = (root: string): string => PLAN_BUTTON[gitFolder(root) ? 'git' : 'other'];
 
 export function requirementsText(paths: AppPaths, available: number): string {
   return readIfExists(join(paths.templates, available < REQUIREMENTS_COMPACT_BELOW ? 'requirements.compact.md' : 'requirements.md')).replace(/\r\n/gu, '\n');
@@ -110,5 +115,5 @@ export function buildDynamic(timezone: string, language: Language = DEFAULT_LANG
   const text = DYNAMIC[language];
   const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
   const planMemory = mode === 'plan' && product?.memory ? [text.planMemory[product.memory]] : [];
-  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), ...(product?.docLanguage ? [text.docLanguage(product.docLanguage)] : []), text.reply, ...planMemory, ...(mode === 'plan' ? [product && requirements ? requirements : text.plan] : [])].join('\n');
+  return [text.time(formatted, timezone), ...(product ? [text.product(product.name, product.root)] : []), ...(product?.docLanguage ? [text.docLanguage(product.docLanguage)] : []), text.reply, ...planMemory, ...(mode === 'plan' ? [product && requirements ? requirements.replaceAll('{build_button}', planButton(product.root)) : text.plan] : [])].join('\n');
 }

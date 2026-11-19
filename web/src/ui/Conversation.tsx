@@ -63,7 +63,6 @@ export function noticeText(t: T, n: RunNotice): string {
     case 'switch': return t('ui.notice.switched', n.to);
     case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getExplainLanguage());
     case 'compaction': return t('ui.notice.compacted', n.summarized);
-    case 'denied': return n.detail ? `${t('ui.notice.denied', n.tool)} · ${n.detail}` : t('ui.notice.denied', n.tool);
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
     case 'stopped': return t('ui.notice.stopped');
     case 'interrupted': return t('ui.notice.interrupted');
@@ -420,7 +419,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         rename: api.renameConversation, cancelPending: api.cancelPending,
         send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice, undefined, product !== undefined), sendOptions(id, product?.id, interrupt)),
         isGone: error => error instanceof ApiError && error.status === 404,
-        clearNotices: onClearNotices, interrupt: onInterrupt,
+        interrupt: onInterrupt,
       });
       switch (out.kind) {
         case 'ignored':
