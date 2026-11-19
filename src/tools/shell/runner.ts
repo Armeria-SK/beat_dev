@@ -130,6 +130,7 @@ export interface RunOptions {
   input?: string;
   tailBytes?: number;
   settleOnExit?: boolean;
+  onSpawn?: (child: ChildProcess) => void;
 }
 
 export interface RunResult {
@@ -160,6 +161,7 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
       resolve({ exitCode: null, stdout: '', stderr: '', truncated: false, totalBytes: 0, timedOut: false, aborted: false, durationMs: 0, spawnError: (error as Error).message });
       return;
     }
+    opts.onSpawn?.(child);
     let stdout = ''; let stderr = ''; let kept = 0; let total = 0; let truncated = false;
     let full: WriteStream | undefined; let fullPath: string | undefined;
     const backlog: Array<[string, Buffer]> = [];

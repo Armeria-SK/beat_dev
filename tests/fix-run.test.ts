@@ -11,6 +11,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
@@ -19,6 +20,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { copyGitSafe, fingerprintMain, mainPrintChanges } from '../src/scout/fix-copy.ts';
 import { runFix } from '../src/scout/fix-run.ts';
+import { openRunJob } from '../src/os/run-job.ts';
 import type { Task } from '../src/tasks/store.ts';
 import { fixShellRefusal } from '../src/tools/hooks/fix-guard.ts';
 import { cannotJudge, cannotPark, runToolCall } from '../src/tools/pipeline.ts';
@@ -44,6 +46,8 @@ function makeProduct(dir: string): string {
   writeFileSync(join(dir, 'a.txt'), 'bug\n');
   writeFileSync(join(dir, 'check.js'), CHECK_JS);
   writeFileSync(join(dir, 'tests', 'a.test.js'), 'ok\n');
+  // 製品のコードが、切り離した孫を残して終わる形（孫は 120 秒眠る。孫の pid を写しの外の linger.pid に書く。Windows では孫がシェルの出力の管を受け継ぐので、シェルの呼び出しは timeoutSec で切って戻す）
+  writeFileSync(join(dir, 'linger.js'), "const { spawn } = require('child_process');\nconst path = require('path');\nconst child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: 'ignore', cwd: path.join(__dirname, '..') });\nchild.unref();\nrequire('fs').writeFileSync(path.join(__dirname, '..', 'linger.pid'), String(child.pid));\n");
   writeFileSync(join(dir, 'check-mod.js'), "const fs = require('fs');\nconst ok = fs.readFileSync('a.txt', 'utf8').includes('fixed');\nfs.appendFileSync('a.txt', 'x');\nprocess.exit(ok ? 0 : 1);\n");
   gitIn(dir, 'add', '-A');
   gitIn(dir, 'commit', '-q', '-m', 'first');
@@ -106,6 +110,7 @@ const sh = (command: string, extra: Record<string, unknown> = {}): Script => too
 const editFix = (): Script => toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' });
 // パイプのある文（製品のコードの段 4 に当たらず、判定役へ行く）
 const PIPE = 'node -e "console.log(1)" | node check.js';
+const pidAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const fixId = (s: { app: App }): string => (s.app.db.prepare("SELECT id FROM worktrees WHERE kind = 'fix'").get() as { id: string }).id;
 const branchesOf =(product: string): string[] => gitIn(product, 'for-each-ref', '--format=%(refname)', 'refs/heads/').split('\n').filter(Boolean);
 
@@ -151,6 +156,10 @@ test('8-6a: 本体は持ち主の取り込みまで変わらない — 本体へ
     sh('git push'),
     sh('curl https://example.com/'),
     sh('node check.js', { background: true }),
+    sh(WINDOWS ? 'Start-Process -FilePath node -ArgumentList check.js' : 'setsid node check.js'),
+    sh('npx --yes vitest run'),
+    sh('nslookup a.example.com'),
+    sh('npm exec vitest'),
     toolCall('web_fetch', { url: 'https://example.com/' }),
     editFix(),
     reply('Changed bug to fixed in a.txt.'),
@@ -160,11 +169,13 @@ test('8-6a: 本体は持ち主の取り込みまで変わらない — 本体へ
   assert.ok(result.ok, JSON.stringify(result));
   assert.ok(result.result.kept, JSON.stringify(result.result));
   const calls = s.calls();
-  const refused = calls.slice(0, 9);
-  assert.deepEqual(refused.map(c => c.decision), Array(9).fill('deny'), JSON.stringify(calls));
-  assert.equal(calls[9]!.tool, 'file_edit');
-  assert.equal(calls[9]!.decision, 'allow');
-  assert.deepEqual(refused.slice(1, 8).map(c => /fix run in a private copy/u.test(c.out)), Array(7).fill(true), JSON.stringify(refused));
+  const refused = calls.slice(0, 13);
+  assert.deepEqual(refused.map(c => c.decision), Array(13).fill('deny'), JSON.stringify(calls));
+  assert.equal(calls[13]!.tool, 'file_edit');
+  assert.equal(calls[13]!.decision, 'allow');
+  assert.deepEqual(refused.slice(1, 12).map(c => /fix run in a private copy/u.test(c.out)), Array(11).fill(true), JSON.stringify(refused));
+  assert.match(refused[8]!.out, /background commands/u, 'Start-Process は裏のコマンドとして断る');
+  assert.deepEqual(refused.slice(9, 12).map(c => /with no network/u.test(c.out)), [true, true, true], 'npx・nslookup・npm exec は通信として断る');
   assert.equal(s.count('judge_calls'), 0, '判定役は 1 度も呼ばれない');
   assert.equal(s.model.judged.length, 0);
   assert.equal(s.count('pending_actions'), 0, 'Pending に積まない');
@@ -269,9 +280,13 @@ test('8-6a: 試験のファイルを消した直しは tests_removed、大きす
     yield* editFix()(req);
   };
   s.model.scripts.push(remove, reply('done'));
+  const before = mainContent(s.product);
   const result = await s.run();
   assert.ok(result.ok);
   assert.equal(!result.result.kept && result.result.reason, 'tests_removed', JSON.stringify([result.result, s.calls()]));
+  // 差分の印は本体に取ってきた中身で見る。落とした直しの参照は本体に作らない
+  assert.deepEqual(changedKeys(before, mainContent(s.product)), []);
+  assert.match(!result.result.kept ? result.result.detail : '', /unreferenced/u);
 
   const big = await fixApp(t);
   const lines = Array.from({ length: 401 }, (_, i) => `line ${i}`).join('\n');
@@ -374,6 +389,133 @@ test('8-6a: 起動の見回りは、作りかけ・使いかけで残った写�
   assert.equal((await fresh.finishFixCopy(made.row.id, { check: 'node check.js' })).kept, false);
 });
 
+test('8-6a: 直す実行のシェルと確かめのコマンドが残した切り離した孫は、本体と比べる前に止まる（Windows のジョブ）', { skip: !gitAvailable || !WINDOWS }, async t => {
+  for (const by of ['shell', 'check'] as const) {
+    const s = await fixApp(t, by === 'check' ? { check: 'node linger.js' } : {});
+    let aliveDuringRun: boolean | undefined;
+    // 前提の確かめ: シェルのあと、実行の途中では孫は生きている（止めたのが入れ物だと分かるように）
+    const look: Script = async function* (req) {
+      aliveDuringRun = pidAlive(Number(readFileSync(join(s.fixRoot(), 'linger.pid'), 'utf8')));
+      yield* editFix()(req);
+    };
+    s.model.scripts.push(...(by === 'shell' ? [sh('node linger.js', { timeoutSec: 3 }), look] : [editFix()]), reply('done'));
+    const result = await s.run();
+    assert.ok(result.ok, JSON.stringify(result));
+    if (by === 'shell') {
+      assert.equal(s.calls()[0]!.decision, 'allow', JSON.stringify(s.calls()[0]));
+      assert.equal(aliveDuringRun, true, '前提: 実行の途中では孫は生きている');
+    }
+    assert.ok(result.result.kept, JSON.stringify(result.result));
+    const pid = Number(readFileSync(join(s.fixRoot(), 'linger.pid'), 'utf8'));
+    assert.ok(Number.isSafeInteger(pid) && pid > 0, `孫の pid: ${pid}`);
+    t.after(() => { if (pidAlive(pid)) process.kill(pid); });
+    assert.equal(pidAlive(pid), false, `${by}: 孫は本体と比べる前に止まっている`);
+  }
+  // finishFixCopy 自身が、確かめのあと（本体と比べる前）に入れ物を閉じる（runFix の最後の片づけを待たない）
+  const s = await fixApp(t);
+  const made = await s.app.fixes.createFixCopy({ projectId: s.project.id, root: s.product, proposalId: s.proposal.id, title: 'direct' });
+  assert.ok(made.ok);
+  writeFileSync(join(made.row.path!, 'a.txt'), 'fixed\n');
+  const job = await openRunJob();
+  assert.ok(!('failed' in job));
+  t.after(() => job.close());
+  const finished = await s.app.fixes.finishFixCopy(made.row.id, { check: 'node linger.js', job });
+  assert.ok(finished.kept, JSON.stringify(finished));
+  const pid = Number(readFileSync(join(s.fixRoot(), 'linger.pid'), 'utf8'));
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, `孫の pid: ${pid}`);
+  const alive = pidAlive(pid);
+  if (alive) process.kill(pid);
+  assert.equal(alive, false, 'finishFixCopy が閉じた');
+});
+
+test('8-6a: 本体の fetch.prune・fetch.pruneTags が入っていても、取ってくるときに本体のタグを消さない', { skip: !gitAvailable }, async t => {
+  const s = await fixApp(t);
+  gitIn(s.product, 'config', 'fetch.prune', 'true');
+  gitIn(s.product, 'config', 'fetch.pruneTags', 'true');
+  gitIn(s.product, 'tag', 'v1');
+  s.model.scripts.push(editFix(), reply('done'));
+  const before = mainContent(s.product);
+  const result = await s.run();
+  assert.ok(result.ok && result.result.kept, JSON.stringify(result));
+  assert.equal(gitIn(s.product, 'tag', '--list'), 'v1');
+  const branch = result.result.branch;
+  assert.deepEqual(changedKeys(before, mainContent(s.product)), [`git:logs/refs/heads/${branch}`, `git:refs/heads/${branch}`]);
+});
+
+test('8-6a: 写しの .git の logs/refs/heads/beat をジャンクションに替えると、beat は写しで git を動かさず failed にする', { skip: !gitAvailable || !WINDOWS }, async t => {
+  const s = await fixApp(t);
+  const outside = join(s.dir, 'logs-outside');
+  mkdirSync(outside);
+  const tamper: Script = async function* (req) {
+    const beatLogs = join(s.app.fixes.get(fixId(s))!.path!, '.git', 'logs', 'refs', 'heads', 'beat');
+    rmSync(beatLogs, { recursive: true, force: true });
+    symlinkSync(outside, beatLogs, 'junction');
+    yield* editFix()(req);
+  };
+  s.model.scripts.push(tamper, reply('done'));
+  const result = await s.run();
+  assert.ok(result.ok);
+  assert.equal(!result.result.kept && result.result.reason, 'failed', JSON.stringify(result.result));
+  assert.deepEqual(readdirSync(outside), [], 'ジャンクションの先には何も書かない');
+});
+
+test('8-6a: 写しの中のジャンクションの先のファイルはコミットに入らず、リンク（120000）を足す直しは残さない', { skip: !gitAvailable || !WINDOWS }, async t => {
+  const s = await fixApp(t);
+  const outside = join(s.dir, 'outside-secret');
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'secret.txt'), 'secret\n');
+  const link: Script = async function* (req) {
+    symlinkSync(outside, join(s.app.fixes.get(fixId(s))!.path!, 'link'), 'junction');
+    yield* editFix()(req);
+  };
+  s.model.scripts.push(link, reply('done'));
+  const commitsBefore = gitIn(s.product, 'log', '--all', '--format=%H').split('\n').length;
+  const result = await s.run();
+  assert.ok(result.ok, JSON.stringify(result));
+  // Windows の git add -A はジャンクションをたどる。リンクの下のファイルが入る直しはコミットせずに落とす
+  assert.equal(!result.result.kept && result.result.reason, 'has_links', JSON.stringify(result.result));
+  assert.equal(branchesOf(s.product).some(b => b.startsWith('refs/heads/beat/')), false);
+  assert.equal(gitIn(s.product, 'log', '--all', '--format=%H').split('\n').length, commitsBefore, '本体の参照から届くコミットは増えない');
+
+  const l = await fixApp(t);
+  const addLink: Script = async function* (req) {
+    const copy = l.app.fixes.get(fixId(l))!.path!;
+    writeFileSync(join(copy, 'lnk'), 'a.txt');
+    const blob = gitIn(copy, 'hash-object', '-w', 'lnk');
+    gitIn(copy, 'update-index', '--add', '--cacheinfo', `120000,${blob},lnk`);
+    yield* editFix()(req);
+  };
+  l.model.scripts.push(addLink, reply('done'));
+  const before = mainContent(l.product);
+  const linked = await l.run();
+  assert.ok(linked.ok);
+  assert.equal(!linked.result.kept && linked.result.reason, 'has_links', JSON.stringify(linked.result));
+  assert.match(!linked.result.kept ? linked.result.detail : '', /unreferenced/u, '取ってきた中身が残ることを言う');
+  assert.deepEqual(changedKeys(before, mainContent(l.product)), [], '参照は増えない');
+});
+
+test('8-6a: 本体の指紋は objects の中身の置き場で、足すのはよく、消す・大きさが変わるのは名前を出す。objects/info は中身で比べ、.git のファイルが多すぎれば指紋を取らない', { skip: !gitAvailable }, async t => {
+  const s = await fixApp(t);
+  const a = (await fingerprintMain(s.product, s.paths.data))!;
+  writeFileSync(join(s.dir, 'blob.txt'), 'new object\n');
+  gitIn(s.product, 'hash-object', '-w', join(s.dir, 'blob.txt'));
+  const b = (await fingerprintMain(s.product, s.paths.data))!;
+  assert.deepEqual(mainPrintChanges(a, b), [], '足しただけ');
+  const loose = readdirSync(join(s.product, '.git', 'objects')).find(name => /^[0-9a-f]{2}$/u.test(name))!;
+  const file = readdirSync(join(s.product, '.git', 'objects', loose))[0]!;
+  rmSync(join(s.product, '.git', 'objects', loose, file), { force: true });
+  const c = (await fingerprintMain(s.product, s.paths.data))!;
+  assert.deepEqual(mainPrintChanges(b, c), [`.git/objects/${loose}/${file}`]);
+  mkdirSync(join(s.product, '.git', 'objects', 'info'), { recursive: true });
+  writeFileSync(join(s.product, '.git', 'objects', 'info', 'alternates'), join(s.dir, 'x'));
+  const d = (await fingerprintMain(s.product, s.paths.data))!;
+  assert.deepEqual(mainPrintChanges(c, d), ['.git/objects/info/alternates']);
+  const many = join(s.product, '.git', 'many');
+  mkdirSync(many);
+  for (let i = 0; i <= 20_001; i++) writeFileSync(join(many, `f${i}`), '');
+  assert.equal(await fingerprintMain(s.product, s.paths.data), undefined, '上限を超えたら比べない');
+});
+
 test('8-6a: 本体の指紋は作業の木・HEAD・index・.git の中のファイルの違いに名前を付ける', { skip: !gitAvailable }, async t => {
   const s = await fixApp(t);
   const a = (await fingerprintMain(s.product, s.paths.data))!;
@@ -415,6 +557,28 @@ test('8-6a D-11 (1): 直す実行では、外へ出る道具（効果 network）
   assert.equal(ran, 1);
 });
 
+test('8-6a: 直す実行でプロセスの入れ物（ジョブが無ければ）が無いと、シェルは何も動かさない', async t => {
+  const dir = realpathSync.native(tempDir(t));
+  const paths = resolvePaths(join(dir, 'beat'));
+  const config = parseConfig(testConfig());
+  const marker = join(dir, 'ran.txt');
+  writeFileSync(join(dir, 'w.js'), `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x');\n`);
+  const ctx: ToolContext = {
+    runId: 'r1', conversationId: 'c1', kind: 'task', signal: new AbortController().signal, config, paths, policy: buildPolicy(config, paths, { root: dir }, [dir]), workspace: dir,
+    taint: { tainted: true, sources: [] }, log: () => undefined, permissionMode: 'auto', project: { id: 'p', root: dir, productRoot: dir }, fix: true,
+  };
+  const out = await shellRun.execute({ command: 'node w.js' }, ctx, undefined as never);
+  assert.equal(out.isError, true);
+  assert.match(out.content, /container/u);
+  assert.equal(existsSync(marker), false);
+  const job = await openRunJob();
+  assert.ok(!('failed' in job));
+  t.after(() => job.close());
+  const ran = await shellRun.execute({ command: 'node w.js' }, { ...ctx, fixJob: job }, undefined as never);
+  assert.notEqual(ran.isError, true, ran.content);
+  assert.equal(existsSync(marker), true, '対照: 入れ物があれば動く');
+});
+
 test('8-6a D-11: Pending に積めない実行と判定役を呼べない実行の分け方', () => {
   assert.equal(cannotPark({ kind: 'task', fix: true }), true);
   assert.equal(cannotJudge({ kind: 'task' }), false);
@@ -437,6 +601,13 @@ test('8-6a D-11 (1): fixShellRefusal は写しの外・解けないパス・GIT_
   assert.equal(fixShellRefusal({ ...base, fetched: true })?.key, 'fix.network');
   assert.equal(fixShellRefusal({ ...base, askKinds: ['egress'] })?.key, 'fix.network');
   assert.equal(fixShellRefusal({ ...base, sends: true })?.key, 'fix.network');
+  assert.equal(fixShellRefusal({ ...base, statements: [st({ reasonKeys: ['code.spawn'] })] })?.key, 'fix.background', '切り離したプロセス（Start-Process など）');
+  assert.equal(fixShellRefusal({ ...base, reasonKeys: ['code.spawn'] })?.key, 'fix.background');
+  const run = (...words: string[]) => st({ program: words[0], words: words.map(text => ({ text, dynamic: false })) });
+  for (const words of [['npx', '--yes', 'vitest'], ['bunx', 'x'], ['npm', 'exec', 'vitest'], ['npm', 'x', 'y'], ['pnpm', 'dlx', 'y'], ['yarn', 'dlx', 'y'], ['bun', 'x', 'y'], ['nslookup', 'a.example.com'], ['test-netconnection', 'a.example.com']]) {
+    assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] })?.key, 'fix.network', words.join(' '));
+  }
+  assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'test')] }), undefined, 'npm test は通信に数えない');
   assert.equal(fixShellRefusal({ ...base, command: 'git status -m GIT_DIR' })?.key, 'fix.outside');
   assert.equal(fixShellRefusal({ ...base, statements: [st({ cwd: null })] })?.key, 'fix.outside');
   assert.equal(fixShellRefusal({ ...base, statements: [st({ cwd: join(copy, '..') })] })?.key, 'fix.outside');

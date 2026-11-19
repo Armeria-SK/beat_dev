@@ -170,6 +170,8 @@ export interface ToolContext {
   scoutFetches?: { n: number } | undefined;
   // beat 8-6a: 人のいない直す実行（その回だけの製品の写しで動く。place.kind は 'fix'）。Pending に積めないが、判定役は呼べる（D-11）
   fix?: true | undefined;
+  // 直す実行のプロセスの入れ物（os/run-job.ts）。シェルが起こしたプロセスを入れる。直す実行でこれが無ければシェルは動かさない
+  fixJob?: { add(child: import('node:child_process').ChildProcess): void } | undefined;
 }
 
 export interface RunPlace { kind: 'worktree' | 'fix'; id: string; productRoot: string; branch: string; base: string; ceiling: string }

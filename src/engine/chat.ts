@@ -61,6 +61,7 @@ import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './
 import { buildDynamic, buildSnapshot, buildTail, fenceTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { ownWords, stripAttachments } from '../uploads/store.ts';
+import type { RunJob } from '../os/run-job.ts';
 
 export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
 export const TRUNCATION_RATIO = 0.6;
@@ -140,7 +141,7 @@ export const SCOUT_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list
 export const FIX_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list', 'file_search', 'file_write', 'file_edit', 'table_write', 'shell_run', 'mesh_read', 'mesh_search', 'calculate', 'date_calc']);
 class FixAllow extends AllBut {}
 // 直す実行の置き場（写しの行）。root は写し、productRoot は本体
-export interface FixPlace { id: string; path: string; productRoot: string; branch: string; base: string; ceiling: string }
+export interface FixPlace { id: string; path: string; productRoot: string; branch: string; base: string; ceiling: string; job?: RunJob }
 export const SCOUT_AGENT_TIMEOUT_MS = 1_800_000;
 export type ScoutEnd = 'agents_busy' | 'agents_used';
 export interface ScoutRoute { modelId: string; providerId: string; local: boolean; room: boolean; available: number | undefined }
@@ -932,7 +933,7 @@ export class ChatEngine {
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'auto' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
       ...(scout ? { scout: true as const, scoutFetches: agent?.parent.scoutFetches ?? { n: 0 } } : {}),
-      ...(fix ? { fix: true as const } : {}),
+      ...(fix ? { fix: true as const, ...(fixPlace?.job ? { fixJob: fixPlace.job } : {}) } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);

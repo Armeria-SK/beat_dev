@@ -1,6 +1,7 @@
 // beat 8-6a D-10: 直す実行の、その回だけの製品の写し（git clone --shared）。写しは本体の .git と参照・設定・stash・フックの置き場・worktree の登録を
 // 分け合わず、本体の中身（objects）を読むだけ。beat が本体の .git に書くのは finishFixCopy の最後の 2 つ（beat が確かめたコミットを取ってくる fetch と、
 // 無いときだけ作る update-ref）だけで、その前後に本体の指紋を比べる。写しは通っても落ちてもすぐ消す（表 worktrees の kind = 'fix' の行が記録）
+import type { ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -11,21 +12,23 @@ import type { AppPaths } from '../paths.ts';
 import { CHECK_TIMEOUT_MS, runProductCheck } from '../projects/check-run.ts';
 import { changedScripts, flagsFrom, parseNameStatus } from '../projects/diff-flags.ts';
 import { folderMissing, type ProjectStore } from '../projects/store.ts';
-import { BEAT_BRANCH, branchSlug, HELD_NAME, placeUnsafe, removeTree, type Worktrees, type WorktreeRow } from '../projects/worktree.ts';
+import { BEAT_BRANCH, branchSlug, HELD_NAME, mainGitSafe, placeUnsafe, removeTree, type Worktrees, type WorktreeRow } from '../projects/worktree.ts';
+import type { RunJob } from '../os/run-job.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside, isSecretPath } from '../tools/hooks/scope.ts';
 
 export const FIX_LIMITS = { files: 20, lines: 400 } as const;
 export const FIX_DIFF_LINES = 6;
 
-export type FixReason = 'check_failed' | 'check_changed_files' | 'tests_removed' | 'check_touched' | 'too_large' | 'not_descendant' | 'main_changed' | 'no_changes' | 'failed';
+export type FixReason = 'check_failed' | 'check_changed_files' | 'tests_removed' | 'check_touched' | 'has_links' | 'too_large' | 'not_descendant' | 'main_changed' | 'no_changes' | 'failed';
 export type FixCreate = { ok: true; row: WorktreeRow } | { ok: false; reason: 'not_git' | 'unsafe' | 'unsafe_place' | 'no_commit' | 'failed' };
 export type FixFinish =
   | { kept: true; branch: string; tip: string; files: number; added: number; removed: number; diff: string[]; unexpected?: string[] }
   | { kept: false; reason: FixReason; detail: string };
 
 // 本体の指紋: 作業の木（status）・HEAD・.git/index・.git の中のファイル（objects/ を除く）の名前と中身のハッシュ
-export interface MainPrint { status: string; head: string; index: string; files: ReadonlyMap<string, string> }
+// objects は中身の置き場のファイルの名前と大きさ（あとの指紋は前の全部を同じ大きさで持っていなければならない。足すのはよい）
+export interface MainPrint { status: string; head: string; index: string; files: ReadonlyMap<string, string>; objects: ReadonlyMap<string, number> }
 
 const WINDOWS = process.platform === 'win32';
 const fold = (p: string): string => (WINDOWS ? p.toLowerCase() : p);
@@ -45,25 +48,33 @@ const text = (out: Buffer | null | undefined): string | undefined => (out === nu
 const NO_MAINTENANCE = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'fetch.writeCommitGraph=false'];
 const MAX_GIT_FILES = 20_000;
 
-// .git の中のファイル（objects/ と、別に比べる index を除く）。リンクと特殊なファイルは種類だけ（たどらない・読まない）
-function gitDirFiles(gitDir: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const walk = (dir: string, rel: string): void => {
+const MAX_OBJECT_FILES = 200_000;
+// 中身の置き場（objects・submodule の objects・LFS の objects）。中のファイルは名前と大きさだけ（足すだけなら変わったに数えない）。objects/info は中身で比べる
+const objectStore = (key: string): boolean => key === 'objects' || key === 'lfs/objects' || /^modules\/(?:.+\/)?objects$/u.test(key);
+
+// .git の中のファイル（別に比べる index を除く）。リンクと特殊なファイルは種類だけ（たどらない・読まない）。数が上限を超えたら undefined（見落とさないよう、比べない）
+function gitDirFiles(gitDir: string): { files: Map<string, string>; objects: Map<string, number> } | undefined {
+  const files = new Map<string, string>();
+  const objects = new Map<string, number>();
+  let over = false;
+  const walk = (dir: string, rel: string, store: string | null): void => {
     let names: string[];
-    try { names = readdirSync(dir).sort(); } catch { out.set(rel || '.', 'unreadable'); return; }
+    try { names = readdirSync(dir).sort(); } catch { files.set(rel || '.', 'unreadable'); return; }
     for (const name of names) {
-      if (out.size > MAX_GIT_FILES) { out.set('(too many files)', 'yes'); return; }
+      if (files.size > MAX_GIT_FILES || objects.size > MAX_OBJECT_FILES) { over = true; return; }
       const key = rel ? `${rel}/${name}` : name;
-      if (!rel && (name === 'objects' || name === 'index')) continue;
+      if (key === 'index') continue;
       const path = join(dir, name);
       const st = lstatOf(path);
-      if (st?.isDirectory() && !st.isSymbolicLink()) walk(path, key);
-      else if (st?.isFile()) { try { out.set(key, sha(readFileSync(path))); } catch { out.set(key, 'unreadable'); } }
-      else out.set(key, st?.isSymbolicLink() ? 'link' : st ? 'special' : 'gone');
+      const inStore = store !== null && !key.startsWith(`${store}/info/`);
+      if (st?.isDirectory() && !st.isSymbolicLink()) walk(path, key, store ?? (objectStore(key) ? key : null));
+      else if (st?.isFile() && inStore) objects.set(key, st.size);
+      else if (st?.isFile()) { try { files.set(key, sha(readFileSync(path))); } catch { files.set(key, 'unreadable'); } }
+      else files.set(key, st?.isSymbolicLink() ? 'link' : st ? 'special' : 'gone');
     }
   };
-  walk(gitDir, '');
-  return out;
+  walk(gitDir, '', null);
+  return over ? undefined : { files, objects };
 }
 
 // 本体の指紋。.git がふつうのフォルダでない・git を安全に動かせない（withGit が断る）なら undefined
@@ -77,7 +88,9 @@ export async function fingerprintMain(root: string, dataDir: string): Promise<Ma
   if (!read || read.status === undefined) return undefined;
   let index = 'none';
   try { index = sha(readFileSync(join(real, '.git', 'index'))); } catch { index = lstatOf(join(real, '.git', 'index')) === undefined ? 'none' : 'unreadable'; }
-  return { status: sha(read.status + statusContents(real, read.status)), head: read.head, index, files: gitDirFiles(join(real, '.git')) };
+  const git = gitDirFiles(join(real, '.git'));
+  if (!git) return undefined;
+  return { status: sha(read.status + statusContents(real, read.status)), head: read.head, index, files: git.files, objects: git.objects };
 }
 
 // status に出た（変更・追っていない）ファイルの中身のハッシュ。status の行は同じでも中身だけ変わった、を見落とさないため
@@ -109,6 +122,7 @@ export function mainPrintChanges(before: MainPrint, after: MainPrint): string[] 
   for (const key of [...new Set([...before.files.keys(), ...after.files.keys()])].sort()) {
     if (before.files.get(key) !== after.files.get(key)) out.push(`.git/${key}`);
   }
+  for (const [key, size] of before.objects) if (after.objects.get(key) !== size) out.push(`.git/${key}`);
   return out;
 }
 
@@ -116,7 +130,8 @@ export function mainPrintChanges(before: MainPrint, after: MainPrint): string[] 
 // 続き（alternates）が本体の objects の 1 行だけ。写しの中のコードはこれを書き換えうるので、beat が写しで git を動かすたびに見る
 export function copyGitSafe(copy: string, mainObjects: string): boolean {
   const gitDir = join(copy, '.git');
-  if (!plainDir(gitDir) || lstatOf(join(gitDir, 'commondir')) !== undefined || lstatOf(join(gitDir, 'gitdir')) !== undefined) return false;
+  // 本体の .git と同じ確かめ（refs・logs・beat の置き場・objects の直下にリンクが無い、commondir・gitdir が無い）に、写しだけの確かめを足す
+  if (!plainDir(gitDir) || !mainGitSafe(gitDir)) return false;
   if (!['objects', 'objects/info', 'refs'].every(name => plainDir(join(gitDir, ...name.split('/'))))) return false;
   if (!plainDirOrNone(join(gitDir, 'refs', 'heads'))) return false;
   const file = join(gitDir, 'objects', 'info', 'alternates');
@@ -127,6 +142,54 @@ export function copyGitSafe(copy: string, mainObjects: string): boolean {
   const target = lines.length === 1 ? realOrNull(resolve(join(gitDir, 'objects'), lines[0]!)) : null;
   const main = realOrNull(mainObjects);
   return target !== null && main !== null && samePath(target, main);
+}
+
+// 写しの中の相対パス name の親のフォルダ（name 自身は含めない）のどれかがリンク・ジャンクションか。読めない所もリンク扱い
+function underLink(root: string, name: string): boolean {
+  const parts = name.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const st = lstatOf(join(root, ...parts.slice(0, i)));
+    // 無い（消したファイルのフォルダ）ならその先も無い
+    if (st === undefined) return false;
+    if (st === null || st.isSymbolicLink() || !st.isDirectory()) return true;
+  }
+  return false;
+}
+
+// 本体に取ってきた base..tip の合否（本体の git で）: リンク・submodule を足していない → 試験の削除・確かめに関わる変更 → 大きさ → 子孫か。通れば大きさと 6 行の見本
+async function judgeFix(git: Git, base: string, tip: string, check: string, limits: { files: number; lines: number }): Promise<{ reason: FixReason; detail: string } | { files: number; added: number; removed: number; diff: string[] }> {
+  const raw = text(await git(['diff', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff', base, tip, '--']));
+  if (raw === undefined) return { reason: 'failed', detail: 'git diff failed in the product folder' };
+  // --raw -z: ":<元の型> <新しい型> <元> <新> <状態>\0<パス>\0"。新しい型が 120000（リンク）・160000（submodule）なら残さない
+  const fields = raw.split('\0');
+  const linked: string[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const mode = fields[i]!.split(' ')[1];
+    if (mode === '120000' || mode === '160000') linked.push(fields[i + 1]!);
+  }
+  if (linked.length) return { reason: 'has_links', detail: linked.slice(0, 10).join(', ') };
+  const listed = text(await git(['diff', '--name-status', '-z', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules', '--find-renames', base, tip, '--']));
+  if (listed === undefined) return { reason: 'failed', detail: 'git diff failed in the product folder' };
+  const entries = parseNameStatus(listed);
+  const blob = async (rev: string, path: string): Promise<string | undefined> => text(await git(['cat-file', 'blob', `${rev}:${path}`]));
+  const scripts = new Map<string, string[]>();
+  for (const entry of entries) {
+    if (entry.path.toLowerCase() === 'package.json' && (entry.status === 'M' || entry.status === 'T')) scripts.set(entry.path, changedScripts(await blob(base, entry.path), await blob(tip, entry.path), check));
+  }
+  const flags = flagsFrom(entries, check, path => scripts.get(path) ?? []);
+  if (flags.testsDeleted.length) return { reason: 'tests_removed', detail: flags.testsDeleted.join(', ') };
+  if (flags.checkChanged.length) return { reason: 'check_touched', detail: flags.checkChanged.map(c => c.path).join(', ') };
+  const numstat = text(await git(['diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv', base, tip, '--']));
+  if (numstat === undefined) return { reason: 'failed', detail: 'git diff failed in the product folder' };
+  const lines = numstat.split('\n').filter(Boolean);
+  const num = (s: string | undefined): number => (s && /^\d+$/u.test(s) ? Number(s) : 0);
+  const added = lines.reduce((n, l) => n + num(l.split('\t')[0]), 0);
+  const removed = lines.reduce((n, l) => n + num(l.split('\t')[1]), 0);
+  if (lines.length > limits.files || added + removed > limits.lines) return { reason: 'too_large', detail: `${lines.length} files, ${added + removed} changed lines` };
+  if (text(await git(['merge-base', base, tip]))?.trim() !== base) return { reason: 'not_descendant', detail: 'the fix does not build on the commit it started from' };
+  const patch = text(await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=0', base, tip, '--'])) ?? '';
+  const diff = patch.split('\n').filter(line => /^[+-]/u.test(line) && !/^(?:\+\+\+|---) /u.test(line)).slice(0, FIX_DIFF_LINES).map(line => redactSecrets(line).slice(0, 200));
+  return { files: lines.length, added, removed, diff };
 }
 
 export interface FixCopyDeps {
@@ -140,7 +203,8 @@ export interface FixCopyDeps {
   random?: (bytes: number) => string;
 }
 
-export interface FixFinishOptions { check: string; limits?: { files: number; lines: number }; signal?: AbortSignal; timeoutMs?: number }
+// job: 直す実行のプロセスの入れ物。確かめのコマンドもここへ入れ、確かめが終わったら閉じる（残ったプロセスを止めてから比べる）
+export interface FixFinishOptions { check: string; limits?: { files: number; lines: number }; signal?: AbortSignal; timeoutMs?: number; job?: RunJob }
 
 type Git = (args: string[]) => Promise<Buffer | null>;
 
@@ -265,6 +329,10 @@ export class FixCopies {
       for (let i = 0; i < held.length; i += 100) if (await git(['--literal-pathspecs', 'rm', '--cached', '-q', '--', ...held.slice(i, i + 100)]) === null) return null;
       const staged = text(await git(['diff', '--cached', '--name-only', '-z']));
       if (staged === undefined) return null;
+      // Windows の git はジャンクションをたどって先のファイルを足す。リンクの下のファイルが入るならコミットしない（写しの外の中身を本体へ持ち込まない）
+      const copyRoot = this.#ownCopy(row)!.path;
+      const viaLink = staged.split('\0').filter(Boolean).find(name => underLink(copyRoot, name));
+      if (viaLink !== undefined) return { links: viaLink };
       if (staged !== '') {
         const message = ['-m', 'beat: fix from an unattended run', ...(row.task_id ? ['-m', `Beat-Task: ${row.task_id}`] : [])];
         if (await git(['-c', 'user.name=beat', '-c', 'user.email=beat@localhost', 'commit', '-q', '--no-verify', '--no-gpg-sign', ...message]) === null) return null;
@@ -275,78 +343,70 @@ export class FixCopies {
       return head && status !== undefined ? { tip: head, status } : null;
     });
     if (committed === 'not_on_branch') return this.#fail(row, 'failed', 'the copy is not on its branch');
+    if (committed && 'links' in committed) return this.#fail(row, 'has_links', `a file would come in through a link: ${committed.links}`.slice(0, 300));
     if (!committed) return this.#fail(row, 'failed', 'beat could not commit in the copy (its git folder or settings were changed)');
     const { tip, status: leftover } = committed;
     this.#set(id, { tip, own_tip: tip });
     if (tip === row.base) return this.#fail(row, 'no_changes', 'the run changed nothing');
 
-    // 2. 確かめのコマンド（持ち主が書いたもの。見張りを通さずに、写しの中で）
+    // 2. 確かめのコマンド（持ち主が書いたもの。見張りを通さずに、写しの中で。直す実行のプロセスの入れ物に入れる）
+    const job = options.job;
     const check = await runProductCheck({ command: options.check, root: this.#ownCopy(row)!.path, ceiling: dirname(this.#ownCopy(row)!.path) }, {
       config: this.#d.config(), dataDir: this.#d.paths.data, signal: options.signal ?? new AbortController().signal, timeoutMs: options.timeoutMs ?? CHECK_TIMEOUT_MS,
+      ...(job ? { onSpawn: (child: ChildProcess) => job.add(child) } : {}),
     });
+    // 直す実行と確かめが起こして残ったプロセスを、ここで全部止める（このあと写しと本体を比べる）
+    await job?.close();
     if (!check.ok) return this.#fail(row, 'check_failed', check.reason === 'aborted' ? 'the check was stopped' : `${check.reason}${check.exitCode !== null ? ` (exit ${check.exitCode})` : ''}: ${check.tail}`.slice(0, 2000));
 
-    // 3〜6. 作業の木と HEAD・差分の印・大きさ・子孫かを、写しの git で
-    const limits = options.limits ?? FIX_LIMITS;
-    type Judged = { reason: FixReason; detail: string } | { files: number; added: number; removed: number; diff: string[] };
-    const judged = await this.#inCopy(row, async (git): Promise<Judged> => {
+    // 3. 確かめが写しの作業の木と HEAD を変えていないか（写しの git で）
+    const moved = await this.#inCopy(row, async (git): Promise<{ reason: FixReason; detail: string } | 'same'> => {
       const head = text(await git(['rev-parse', '--verify', '-q', 'HEAD^{commit}']))?.trim();
       const branchNow = text(await git(['symbolic-ref', '-q', 'HEAD']))?.trim();
       const status = text(await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']));
       if (head === undefined || status === undefined) return { reason: 'failed', detail: 'git status failed in the copy' };
       if (head !== tip || branchNow !== ref || status !== leftover) return { reason: 'check_changed_files', detail: status.split('\0').filter(Boolean).slice(0, 10).map(line => line.slice(3)).join(', ') || 'HEAD moved' };
-      const listed = text(await git(['diff', '--name-status', '-z', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules', '--find-renames', row.base, tip, '--']));
-      if (listed === undefined) return { reason: 'failed', detail: 'git diff failed in the copy' };
-      const entries = parseNameStatus(listed);
-      const blob = async (rev: string, path: string): Promise<string | undefined> => text(await git(['cat-file', 'blob', `${rev}:${path}`]));
-      const scripts = new Map<string, string[]>();
-      for (const entry of entries) {
-        if (entry.path.toLowerCase() === 'package.json' && (entry.status === 'M' || entry.status === 'T')) scripts.set(entry.path, changedScripts(await blob(row.base, entry.path), await blob(tip, entry.path), options.check));
-      }
-      const flags = flagsFrom(entries, options.check, path => scripts.get(path) ?? []);
-      if (flags.testsDeleted.length) return { reason: 'tests_removed', detail: flags.testsDeleted.join(', ') };
-      if (flags.checkChanged.length) return { reason: 'check_touched', detail: flags.checkChanged.map(c => c.path).join(', ') };
-      const numstat = text(await git(['diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv', row.base, tip, '--']));
-      if (numstat === undefined) return { reason: 'failed', detail: 'git diff failed in the copy' };
-      const lines = numstat.split('\n').filter(Boolean);
-      const num = (s: string | undefined): number => (s && /^\d+$/u.test(s) ? Number(s) : 0);
-      const added = lines.reduce((n, l) => n + num(l.split('\t')[0]), 0);
-      const removed = lines.reduce((n, l) => n + num(l.split('\t')[1]), 0);
-      if (lines.length > limits.files || added + removed > limits.lines) return { reason: 'too_large', detail: `${lines.length} files, ${added + removed} changed lines` };
-      if (text(await git(['merge-base', row.base, tip]))?.trim() !== row.base) return { reason: 'not_descendant', detail: 'the fix does not build on the commit it started from' };
-      const patch = text(await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=0', row.base, tip, '--'])) ?? '';
-      const diff = patch.split('\n').filter(line => /^[+-]/u.test(line) && !/^(?:\+\+\+|---) /u.test(line)).slice(0, FIX_DIFF_LINES).map(line => redactSecrets(line).slice(0, 200));
-      return { files: lines.length, added, removed, diff };
+      return 'same';
     });
-    if (!judged) return this.#fail(row, 'failed', "the copy's git folder or settings were changed");
-    if ('reason' in judged) return this.#fail(row, judged.reason, judged.detail);
+    if (!moved) return this.#fail(row, 'failed', "the copy's git folder or settings were changed");
+    if (moved !== 'same') return this.#fail(row, moved.reason, moved.detail);
 
-    // 7. 本体の指紋: 写しを作る前と同じか（持ち主が自分で変えたことも多い。変わった所の名前だけを返す）
+    // 4. 本体の指紋: 写しを作る前と同じか（持ち主が自分で変えたことも多い。変わった所の名前だけを返す）
     const now = await fingerprintMain(repo, this.#d.paths.data);
     if (!now) return this.#fail(row, 'main_changed', 'the product folder could not be read safely');
     const changed = mainPrintChanges(before, now);
     if (changed.length) return this.#fail(row, 'main_changed', changed.slice(0, 10).join(', '));
 
-    // 8. 取ってくる直前に、写しのブランチがまだ確かめたコミットか（写しの .git もここでもう一度見る）
+    // 5. 取ってくる直前に、写しのブランチがまだ確かめたコミットか（写しの .git もここでもう一度見る）
     const copyTip = await this.#inCopy(row, async git => text(await git(['rev-parse', '--verify', '-q', `${ref}^{commit}`]))?.trim());
     if (copyTip !== tip) return this.#fail(row, 'failed', 'the copy changed after the check');
 
-    // 9. 本体へ: 確かめたコミットを取ってきて、ブランチが無いときだけ作る
+    // 6. 本体へ: 確かめたコミットの中身だけを取ってくる（参照は作らない）→ 本体の git で差分の印・大きさ・子孫か → 通ればブランチが無いときだけ作る。
+    //    差分は写しの中身でなく、本体に入った中身で見る（写しの置き換え〔refs/replace〕や中身の置き場に左右されない）
     const copyPath = this.#ownCopy(row)!.path;
-    const fetched = await withGit(repo, this.#d.paths.data, async git => {
-      const run = (args: string[]): Promise<Buffer | null> => git([...NO_MAINTENANCE, ...args]);
+    const limits = options.limits ?? FIX_LIMITS;
+    type Judged = { reason: FixReason; detail: string } | { files: number; added: number; removed: number; diff: string[] };
+    let arrived = false;
+    const kept = await withGit(repo, this.#d.paths.data, async (git): Promise<Judged | string> => {
+      const run = (args: string[]): Promise<Buffer | null> => git(['--no-replace-objects', ...NO_MAINTENANCE, ...args]);
       const refs = text(await run(['for-each-ref', '--format=%(refname)', 'refs/heads/']));
       if (refs === undefined) return 'git failed';
       if (refs.split('\n').some(name => name.toLowerCase() === ref.toLowerCase())) return 'the branch name is taken';
-      if (await run(['fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--no-auto-gc', '--no-auto-maintenance', '--', copyPath, ref]) === null) return 'git fetch failed';
+      if (await run(['fetch', '--no-tags', '--no-prune', '--no-prune-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--no-auto-gc', '--no-auto-maintenance', '--', copyPath, ref]) === null) return 'git fetch failed';
       if (await run(['cat-file', '-e', `${tip}^{commit}`]) === null) return 'the checked commit did not arrive';
-      if (text(await run(['merge-base', row.base, tip]))?.trim() !== row.base) return 'the checked commit does not build on the start';
+      arrived = true;
+      const judged = await judgeFix(run, row.base, tip, options.check, limits);
+      if ('reason' in judged) return judged;
       if (await run(['update-ref', '-m', `beat: fix ${row.id}`, ref, tip, '']) === null) return 'git update-ref failed';
-      return 'ok';
+      return judged;
     });
-    if (fetched !== 'ok') return this.#fail(row, 'failed', fetched ?? 'beat could not run git in the product folder');
+    // 落としたときに取ってきた中身は、どの参照からも指されないまま本体に残る（足しただけ。git gc がいずれ消す）
+    const leftObjects = arrived ? ' (the fetched objects stay in the product repository, unreferenced, until git gc removes them)' : '';
+    if (kept === undefined || typeof kept === 'string') return this.#fail(row, 'failed', `${kept ?? 'beat could not run git in the product folder'}${leftObjects}`);
+    if ('reason' in kept) return this.#fail(row, kept.reason, `${kept.detail}${leftObjects}`);
+    const judged = kept;
 
-    // 10. 取ってきたあとの本体の違いは、そのブランチとその記録だけのはず（違えば知らせる。ブランチは残す）
+    // 7. 取ってきたあとの本体の違いは、そのブランチとその記録だけのはず（違えば知らせる。ブランチは残す）
     const after = await fingerprintMain(repo, this.#d.paths.data);
     const own = new Set([`.git/${ref}`, `.git/logs/${ref}`]);
     const unexpected = after ? mainPrintChanges(now, after).filter(name => !own.has(name)) : ['the product folder could not be read safely'];

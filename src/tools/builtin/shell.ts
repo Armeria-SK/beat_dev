@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -367,6 +368,8 @@ export const shellRun: ToolDef<ShellInput> = {
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
     if (input.background === true && ctx.fix) return { content: guardText(language, 'fix.background', { cmd: input.command.slice(0, 200) }), isError: true };
+    const fixJob = ctx.fixJob;
+    if (ctx.fix && !fixJob) return { content: guardText(language, 'fix.no_job', {}), isError: true };
     if (input.background === true) return runBackground(input, ctx, info, { cwd: cwd.cwd, shell, child, settings });
     const ownerHooks = info?.approvedOnce === true ? info.check?.ownHooksDir : undefined;
     const pushCheck = info?.pushCheck;
@@ -383,6 +386,7 @@ export const shellRun: ToolDef<ShellInput> = {
         cwd: cwd.cwd, env: placeEnv(ctx, { ...child.env, ...gitRun?.env }), timeoutMs: timeoutSec * 1000, signal: ctx.signal,
         maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
         ...(shell.stdin ? { input: shell.stdin(input.command) } : {}),
+        ...(fixJob ? { onSpawn: (spawned: ChildProcess) => fixJob.add(spawned) } : {}),
       });
       pushRefused = gitRun?.refused?.() === true;
     } finally { gitRun?.cleanup(); }

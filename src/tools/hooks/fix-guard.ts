@@ -1,6 +1,8 @@
 // beat 8-6a D-11 (1): 直す実行（その回だけの製品の写しで動く、人のいない実行）のシェルで、判定役にも Pending にも回さずに断る文。純粋な関数。
-// 断るのは 4 つだけ: 裏のコマンド / git push / 通信・取得 / 写しの外に解けるパス（解けないものも）。残りは今の見張りの順（4 の形・判定役）に任せる
+// 断るのは 4 つだけ: 裏のコマンド・切り離したプロセス / git push / 通信・取得（npx の仲間・名前引きも） / 写しの外に解けるパス（解けないものも）。残りは今の見張りの順（4 の形・判定役）に任せる
 import { resolve } from 'node:path';
+import { NPX_TOOLS } from './code-guard.ts';
+import { LOOKUP } from './outbound.ts';
 import type { StatementFacts } from './shell-facts.ts';
 import { flatten, GIT_VARIABLE, insideCopy, pathCandidates, stripProvider } from './worktree-git.ts';
 
@@ -36,13 +38,26 @@ export interface FixRefusal { key: FixKey; detail: string }
 const GIT_PLACE_FLAG = /^(?:-C|--git-dir|--work-tree)$/u;
 const GIT_PLACE_EQ = /^--(?:git-dir|work-tree)=(.*)$/u;
 
+// 裏に残る・切り離されたプロセスを起こす印（& / Start-Process / start / Start-Job / setsid / at / systemd-run / wsl など。code-guard.ts の SPAWNERS）
+const DETACHING = new Set(['shape.background', 'code.spawn']);
+// パッケージを取ってきて動かす（npm exec / npm x / pnpm dlx / yarn dlx / bun x）
+const FETCH_AND_RUN: Record<string, ReadonlySet<string>> = { npm: new Set(['exec', 'x']), pnpm: new Set(['dlx']), yarn: new Set(['dlx']), bun: new Set(['x']) };
+
+// 名前だけで外へ出る文: npx の仲間、パッケージを取ってきて動かす文、名前を引く・届くかを見る文（宛先が字のままでも）
+function reachesNetwork(st: StatementFacts): boolean {
+  const program = st.program.toLowerCase();
+  if (NPX_TOOLS.has(program) || LOOKUP.has(program)) return true;
+  const sub = st.words.slice(1).find(w => !w.text.startsWith('-'))?.text.toLowerCase();
+  return sub !== undefined && FETCH_AND_RUN[program]?.has(sub) === true;
+}
+
 export function fixShellRefusal(f: FixShellFacts): FixRefusal | undefined {
   const shown = f.command.trim().slice(0, 200);
-  if (f.background || f.reasonKeys.includes('shape.background')) return { key: FIX_BACKGROUND, detail: shown };
-  if (f.pushes > 0) return { key: FIX_PUSH, detail: shown };
-  if (f.fetched || f.sends || f.askKinds.includes('egress')) return { key: FIX_NETWORK, detail: shown };
-  // GIT_DIR・GIT_WORK_TREE などは git を写しの外のリポジトリへ向けられる。名前がどこにあっても断る
   const all = flatten(f.statements);
+  if (f.background || f.reasonKeys.some(key => DETACHING.has(key)) || all.some(st => st.reasonKeys.some(key => DETACHING.has(key)))) return { key: FIX_BACKGROUND, detail: shown };
+  if (f.pushes > 0) return { key: FIX_PUSH, detail: shown };
+  if (f.fetched || f.sends || f.askKinds.includes('egress') || all.some(reachesNetwork)) return { key: FIX_NETWORK, detail: shown };
+  // GIT_DIR・GIT_WORK_TREE などは git を写しの外のリポジトリへ向けられる。名前がどこにあっても断る
   if (GIT_VARIABLE.test(f.command) || all.some(st => st.env.some(name => /^(?:env:)?git_/iu.test(name)))) return { key: FIX_OUTSIDE, detail: shown };
   const outside = (path: string): boolean => !insideCopy(f.copy, stripProvider(path));
   for (const st of all) {

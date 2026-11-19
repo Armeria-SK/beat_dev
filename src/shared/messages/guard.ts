@@ -204,6 +204,7 @@ const en = {
   'fix.network': 'This is an unattended fix run in a private copy of the product, with no network: {cmd}. Do not download, install or fetch anything; work with the files already in this copy',
   'fix.outside': 'This is an unattended fix run in a private copy of the product; only paths inside this copy can be used, and this command names a path outside it or one that cannot be worked out before it runs: {cmd}. Use relative paths inside this copy and write commands out directly',
   'fix.no_judge': 'This unattended fix run can only go ahead with what the safety judge allows, and the judge is turned off',
+  'fix.no_job': 'This unattended fix run could not set up the container that stops leftover processes, so shell commands cannot run here',
   'shell.background_push':'git push cannot run in the background: beat checks a push by waiting for it to end. Run it without background',
   'shell.cwd_unresolved': 'The cwd cannot be determined: {detail}',
   'shell.cwd_outside': 'The cwd must be inside the allowed folders ({path})',

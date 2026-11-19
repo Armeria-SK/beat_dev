@@ -7,6 +7,7 @@ import type { ChatEngine } from '../engine/chat.ts';
 import { checkCommandOf, folderMissing, type ProjectStore } from '../projects/store.ts';
 import type { WorktreeRow } from '../projects/worktree.ts';
 import { scoutText } from '../shared/messages/scout.ts';
+import { openRunJob } from '../os/run-job.ts';
 import { readProposal } from '../tasks/proposal.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import { FIX_LIMITS, type FixCopies, type FixFinish } from './fix-copy.ts';
@@ -65,13 +66,20 @@ export async function runFix(d: FixRunDeps, proposalId: string, options: { signa
       ...(proposal.goal ? [`Plan goal: ${proposal.goal}`] : []), ...(proposal.evidence ? [`Evidence: ${proposal.evidence}`] : []),
     ].join('\n'), PROPOSAL_CHARS),
   ].join('\n');
-  const started = d.engine.runFix(task, conversationId, prompt, route.modelId,
-    { id: row.id, path: row.path!, productRoot: project.root, branch: row.branch, base: row.base, ceiling: dirname(row.path!) }, scoutText('en', 'proposal.untrusted'));
-  if (!started.ok) return fail(started.errorMessage.split('\n')[0] ?? 'the run did not start');
-  d.tasks.event(task.id, 'run', 'worker', null, started.runId);
-  const ended = await started.done;
-  if (!ended.ok) return fail(ended.errorMessage.split('\n')[0] ?? 'the run failed');
-  const result = await d.fixes.finishFixCopy(row.id, { check, ...(options.signal ? { signal: options.signal } : {}) });
-  d.tasks.finish(task.id, 'done', result.kept ? `Fix kept on ${result.branch}` : `Fix not kept: ${result.reason}`, 'worker', started.runId);
-  return { ok: true, row: d.fixes.get(row.id)!, runId: started.runId, result };
+  // 直す実行のシェルと確かめのコマンドが起こすプロセスの入れ物。作れなければ始めない。確かめのあと（本体と比べる前）に finishFixCopy が閉じる
+  const job = await openRunJob();
+  if ('failed' in job) return fail(`no process container: ${job.failed}`);
+  try {
+    const started = d.engine.runFix(task, conversationId, prompt, route.modelId,
+      { id: row.id, path: row.path!, productRoot: project.root, branch: row.branch, base: row.base, ceiling: dirname(row.path!), job }, scoutText('en', 'proposal.untrusted'));
+    if (!started.ok) return await fail(started.errorMessage.split('\n')[0] ?? 'the run did not start');
+    d.tasks.event(task.id, 'run', 'worker', null, started.runId);
+    const ended = await started.done;
+    if (!ended.ok) { await job.close(); return await fail(ended.errorMessage.split('\n')[0] ?? 'the run failed'); }
+    const result = await d.fixes.finishFixCopy(row.id, { check, job, ...(options.signal ? { signal: options.signal } : {}) });
+    d.tasks.finish(task.id, 'done', result.kept ? `Fix kept on ${result.branch}` : `Fix not kept: ${result.reason}`, 'worker', started.runId);
+    return { ok: true, row: d.fixes.get(row.id)!, runId: started.runId, result };
+  } finally {
+    await job.close();
+  }
 }

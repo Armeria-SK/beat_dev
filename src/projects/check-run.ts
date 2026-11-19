@@ -4,7 +4,7 @@ import type { AppConfig, Language } from '../config/schema.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../tools/shell/git-env.ts';
-import { findExecutable, resolveShell, runProcess, scrubEnv } from '../tools/shell/runner.ts';
+import { findExecutable, resolveShell, runProcess, scrubEnv, type RunOptions } from '../tools/shell/runner.ts';
 import { checkCommandOf, folderMissing, type ProjectStore } from './store.ts';
 
 export const CHECK_TIMEOUT_MS = 30 * 60_000;
@@ -57,7 +57,7 @@ const PACKAGE_MANAGER_FIRST = /^\s*(?:npm|pnpm|yarn)(?:\.cmd|\.ps1|\.exe)?(?:\s|
 export const climbsToParent = (command: string, root: string): boolean =>
   PACKAGE_MANAGER_FIRST.test(command) && !/(?:^|\s)(?:--prefix|--dir|--cwd|-C)(?:[\s=]|$)/u.test(command) && !existsSync(join(root, 'package.json'));
 
-export async function runProductCheck(check: ProductCheck, options: { config: AppConfig; dataDir: string; signal: AbortSignal; timeoutMs?: number }): Promise<CheckResult> {
+export async function runProductCheck(check: ProductCheck, options: { config: AppConfig; dataDir: string; signal: AbortSignal; timeoutMs?: number; onSpawn?: RunOptions['onSpawn'] }): Promise<CheckResult> {
   if (climbsToParent(check.command, check.root)) return { ok: false, reason: 'spawn', exitCode: null, tail: NO_PACKAGE_JSON, durationMs: 0 };
   const shell = resolveShell(options.config.tools.shell.shell);
   const { env: plain, cleanup } = checkEnv(options.config, check.root, options.dataDir);
@@ -66,6 +66,7 @@ export async function runProductCheck(check: ProductCheck, options: { config: Ap
   try {
     result = await runProcess(shell.file, shell.args(check.command), {
       cwd: check.root, env, timeoutMs: options.timeoutMs ?? CHECK_TIMEOUT_MS, signal: options.signal, maxBytes: HEAD_BYTES, tailBytes: TAIL_BYTES, settleOnExit: true,
+      ...(options.onSpawn ? { onSpawn: options.onSpawn } : {}),
       ...(shell.stdin ? { input: shell.stdin(check.command) } : {}),
     });
   } finally { cleanup(); }

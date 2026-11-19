@@ -233,7 +233,7 @@ function adminFile(path: string): string | null {
 }
 
 // 本体の .git の、worktree を足すときに git が書く所。リンク・ほかの worktree の管理フォルダ（commondir・gitdir）・リンクを含む objects は断る
-function mainGitSafe(gitDir: string): boolean {
+export function mainGitSafe(gitDir: string): boolean {
   if (lstatOf(join(gitDir, 'commondir')) !== undefined || lstatOf(join(gitDir, 'gitdir')) !== undefined) return false;
   const dirs = ['objects', 'refs', 'refs/heads', 'refs/heads/beat', 'logs', 'logs/refs', 'logs/refs/heads', 'logs/refs/heads/beat', 'worktrees', 'reftable'];
   if (!dirs.every(name => plainDirOrNone(join(gitDir, ...name.split('/'))))) return false;
