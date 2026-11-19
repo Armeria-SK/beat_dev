@@ -234,3 +234,18 @@ test('a message the owner queued during the asking run wins: it starts the next 
   const view = await s.json(`/api/conversations/${C}/messages`, 'GET');
   assert.equal(openAsk(view.body.messages), null, 'the card is closed');
 });
+
+test('only runs that have ask_owner are told to use it: a task run\'s system text never names it; the chat tool spec says to use it instead of listing options', async t => {
+  const s = await setup(t, c => { c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 }; c.worker.maxRunsPerHour = 100; });
+  s.app.tasks.create({ title: 'Tidy the notes', origin: 'user', actor: 'user' });
+  s.adapter().scripts = [calls(['task_complete', { summary: 'done' }])];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const taskReq = s.adapter().calls[0]!;
+  assert.ok(!taskReq.tools.some(x => x.name === 'ask_owner'), 'premise: a task run does not have the tool');
+  assert.ok(taskReq.system.frozen.includes('How you speak'), 'premise: the shared rules are in the frozen system');
+  assert.doesNotMatch(`${taskReq.system.frozen}\n${taskReq.system.dynamic}`, /ask_owner/u);
+  s.adapter().scripts = [reply('hi')];
+  await s.done(s.send('hello'));
+  const chatReq = s.adapter().calls.at(-1)!;
+  assert.match(chatReq.tools.find(x => x.name === 'ask_owner')!.description, /instead of listing options/u);
+});

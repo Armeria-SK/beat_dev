@@ -16,7 +16,7 @@ const asked = new WeakSet<ToolContext>();
 
 export const askOwner: ToolDef<AskOwnerInput> = {
   name: 'ask_owner',
-  description: 'Ask the owner multiple-choice questions, shown as a card they click. Ask only when their choice changes what you do. header: a short chip (about 12 characters). Put the recommended option first and end its label with " (Recommended)". The card adds "Something else" with a text field, so add no "Other" option. Call it once, as the last call of your reply, and write nothing after it: the answers arrive as the owner\'s next message.',
+  description: 'Ask the owner multiple-choice questions, shown as a card they click. Ask only when their choice changes what you do. Use it instead of listing options in your text. header: a short chip (about 12 characters). Put the recommended option first and end its label with " (Recommended)". The card adds "Something else" with a text field, so add no "Other" option. Call it once, as the last call of your reply, and write nothing after it: the answers arrive as the owner\'s next message.',
   input: Type.Object({
     questions: Type.Array(Type.Object({
       question: Type.String({ minLength: 1, maxLength: 500 }),
