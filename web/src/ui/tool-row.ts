@@ -203,6 +203,12 @@ export function toolLabel(name: string): string {
   return words(name) || name;
 }
 
+export function editPath(name: string, input: string): string | null {
+  if (!EDIT.has(name)) return null;
+  const path = record(input)?.['path'];
+  return typeof path === 'string' && path.trim() !== '' ? path.trim() : null;
+}
+
 export function toolVerb(name: string): ToolVerb {
   if (EDIT.has(name)) return 'edit';
   if (name === 'shell_run') return 'run';

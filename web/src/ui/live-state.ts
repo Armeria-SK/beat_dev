@@ -19,6 +19,7 @@ export type RunNotice = { runId: string; key?: string | undefined } & (
   | { kind: 'memory'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { kind: 'stopped' }
   | { kind: 'interrupted' }
+  | { kind: 'undo'; projectId: string; batch: string | null; undone: number; refused: number; more: number }
   | { kind: 'error'; errorKind: string; errorCode?: string | undefined; errorParams?: Record<string, string | number> | undefined; errorMessage?: string | undefined; hint?: string | undefined; measured?: number | undefined; required?: number | undefined }
 );
 
@@ -81,6 +82,7 @@ export type Action =
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'checklist'; conversationId: string; items: ChecklistItem[] }
   | { type: 'clearNotices'; conversationId: string }
+  | { type: 'notice'; conversationId: string; notice: RunNotice }
   | { type: 'interrupt'; conversationId: string; on: boolean };
 
 export const BROWSER_NOTIFY: ReadonlySet<string> = new Set(['task_waiting']);
@@ -267,6 +269,7 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
       if (kept.length) notices.set(a.conversationId, kept); else notices.delete(a.conversationId);
       return { state: { ...s, notices, interrupting: without(s.interrupting, a.conversationId) }, effects: [] };
     }
+    case 'notice': return { state: addNotice(s, a.conversationId, a.notice), effects: [] };
     case 'clearNotices': {
       if (!s.notices.has(a.conversationId)) return { state: s, effects: [] };
       const notices = new Map(s.notices);

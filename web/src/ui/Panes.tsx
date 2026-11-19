@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import type { WaitReason } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
+import { ChangesPane, type ChangesFocus, type UndoneNotice } from './panes/ChangesPane.tsx';
 import { FilesPane } from './panes/FilesPane.tsx';
 import { KanbanPane, type KanbanPaneProps } from './panes/KanbanPane.tsx';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
@@ -20,7 +21,7 @@ import './styles/panes.css';
 const NARROW = '(max-width: 760px)';
 const SIDEBAR = 248;
 
-export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined; onOpenPending?: (() => void) | undefined; onOpenTerminal?: ((jobId: string) => void) | undefined }
+export interface PanesToggle { open: boolean; onToggle: () => void; onOpenPlan?: ((reveal: boolean) => void) | undefined; onOpenPending?: (() => void) | undefined; onOpenTerminal?: ((jobId: string) => void) | undefined; onOpenChanges?: ((path: string) => void) | undefined }
 
 export function PanesButton({ open, onToggle }: PanesToggle) {
   const t = useT();
@@ -65,6 +66,8 @@ export interface PanesState {
   revealed: () => void;
   terminalFocus: TerminalFocus | null;
   openTerminal: (jobId: string) => void;
+  changesFocus: ChangesFocus | null;
+  openChanges: (path: string) => void;
 }
 
 export function usePanes(productId: string | null): PanesState {
@@ -74,6 +77,7 @@ export function usePanes(productId: string | null): PanesState {
   const [singleView, setSingleView] = useState<PaneView | null>(null);
   const [reveal, setReveal] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState<TerminalFocus | null>(null);
+  const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const views = useMemo(() => openable({ productId }), [productId]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
@@ -120,6 +124,13 @@ export function usePanes(productId: string | null): PanesState {
       if (single) setSingleView('terminal');
       else if (!shown.some(p => p.view === 'terminal')) keep(shown.length ? selectView(shown, shown.length - 1, 'terminal') : openView(shown, views, 'terminal'));
     },
+    changesFocus,
+    openChanges: path => {
+      if (!views.includes('changes')) return;
+      setChangesFocus(prev => ({ path, n: (prev?.n ?? 0) + 1 }));
+      if (single) setSingleView('changes');
+      else if (!shown.some(p => p.view === 'changes')) keep(shown.length ? selectView(shown, shown.length - 1, 'changes') : openView(shown, views, 'changes'));
+    },
   };
 }
 
@@ -155,7 +166,7 @@ export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: num
 
 export type PaneKanban = Omit<KanbanPaneProps, 'productId'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined }) {
+export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits, onUndone }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined; onUndone?: ((notice: UndoneNotice) => void) | undefined }) {
   const t = useT();
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
@@ -171,7 +182,8 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
         const { count: _count, ...board } = kanban;
         return <KanbanPane key={productId} productId={productId} {...board} />;
       }
-      case 'files': return <FilesPane key={productId} productId={productId} revision={revision} />;
+      case 'changes': return <ChangesPane key={`${productId}:${scope}`} source={{ kind: 'product', productId, conversationId: scope === 'new' ? undefined : scope, isGit }} revision={revision} focus={panes.changesFocus} onUndone={onUndone} />;
+      case 'files': return <FilesPane key={productId} productId={productId} revision={revision} onOpenChanges={panes.openChanges} />;
       case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
     }

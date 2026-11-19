@@ -1,0 +1,17 @@
+/* beat 8-5b: Changes の欄（Design ChangesPane）。差分の行は折り返さず、長い行は省略して title で全文 */
+.ui-changes { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.ui-changes > .bt-pane__bar { margin-bottom: 0; }
+.ui-changes > .bt-pane__bar > .bt-meta { flex: 1 0 auto; }
+.ui-changes > .bt-empty { max-width: none; padding-left: 0; padding-right: 0; }
+.ui-changes__since { max-width: 100%; }
+.ui-changes__note { margin: 0; }
+.ui-changes__redo { max-width: none; }
+.ui-changes .bt-diff__file { align-items: baseline; }
+.ui-changes__path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-changes__counts { flex: none; white-space: nowrap; }
+.ui-changes__undo { padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+.ui-changes__undo:disabled { color: var(--ink-mute); cursor: default; }
+.ui-changes .ui-changes__gap { color: var(--ink-mute); }
+.ui-changes .ui-changes__why { color: var(--ink-mute); white-space: normal; }
+.ui-changes .bt-diff:focus { outline: none; }
+.ui-changes .bt-diff.is-focus { box-shadow: 0 0 0 1px var(--line-strong); }
