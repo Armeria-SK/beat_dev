@@ -193,12 +193,12 @@ test('J-3: 判定役の「聞きたい」「答えられない」は覚えない
   assert.equal((await s.call()).decidedBy, 'pending', '聞きたいは覚えない: もう一度判定役に回って積まれる');
   s.state.classify = () => 'not json';
   assert.equal((await s.call()).decidedBy, 'pending');
-  assert.equal(s.prompts.length, 3);
+  assert.equal(s.prompts.length, 4, 'AP-1d: an unreadable answer is asked once more');
   s.state.classify = () => ALLOW;
   assert.equal((await s.call()).decidedBy, 'auto-mode');
   s.state.classify = () => ASK;
   assert.equal((await s.call()).decidedBy, 'judge-reuse');
-  assert.equal(s.prompts.length, 4);
+  assert.equal(s.prompts.length, 5);
   assert.equal(s.pending.list({ status: 'waiting' }).length, 3);
 });
 

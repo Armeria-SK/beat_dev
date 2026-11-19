@@ -10,7 +10,7 @@ import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { HeldValue, PreCheck, RunKind, ToolDef } from '../tools/types.ts';
 import { identityOf } from '../projects/created.ts';
-import { pushRule, storedCandidate, type RuleCandidate } from '../tools/approval-rules.ts';
+import { outsideRule, pushRule, storedCandidate, type RuleCandidate } from '../tools/approval-rules.ts';
 import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
@@ -96,7 +96,7 @@ export interface PendingView {
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
-  rule: { shown: string; push?: true } | null;
+  rule: { shown: string; push?: true; outside?: true } | null;
 }
 
 export interface PendingChange { id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
@@ -149,14 +149,15 @@ export function cleanReason(text: string | undefined): string | null {
 
 const unique = (items: readonly string[]): string[] => [...new Set(items)].sort();
 
-// J-5: the row offers "don't ask again in this product" only when a code-built shape was stored at park time, the run had a product and had not read outside text, and it is still waiting
-export function rememberable(row: Pick<PendingRow, 'project_id' | 'tainted' | 'status' | 'tool' | 'run_kind'>, state: Pick<PendingState, 'rule' | 'held'>): boolean {
+// J-5: the row offers "don't ask again in this product" only when a code-built shape was stored at park time, the run had a product, and it is still waiting.
+// Whether the run had read outside text does not matter (AP-1, Q1): a rule applies the same either way
+export function rememberable(row: Pick<PendingRow, 'project_id' | 'status' | 'tool' | 'run_kind'>, state: Pick<PendingState, 'rule' | 'held'>): boolean {
   const rule = storedCandidate(state.rule);
-  return rule !== undefined && rule.tool === row.tool && row.project_id !== null && row.tainted === 0 && row.status === 'waiting' && !state.held?.length
+  return rule !== undefined && rule.tool === row.tool && row.project_id !== null && row.status === 'waiting' && !state.held?.length
     && !((row.tool === 'task_create' || row.tool === 'task_update') && row.run_kind !== 'chat');
 }
 
-const ruleView = (rule: RuleCandidate): { shown: string; push?: true } => ({ shown: rule.shown, ...(pushRule(rule) ? { push: true as const } : {}) });
+const ruleView = (rule: RuleCandidate): { shown: string; push?: true; outside?: true } => ({ shown: rule.shown, ...(pushRule(rule) ? { push: true as const } : {}), ...(outsideRule(rule) ? { outside: true as const } : {}) });
 
 export function storedRule(row: Pick<PendingRow, 'state'>): RuleCandidate | undefined {
   return storedCandidate(parseJson<PendingState>(row.state, {}).rule);
@@ -413,7 +414,7 @@ export class PendingStore {
       ...(cardPreview?.length ? { preview: cardPreview } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
-      ...(input.rule && input.projectId && !input.tainted && masked === 0 && !carriesHeld([input.rule.base, input.rule.shown, ...(input.check?.ruleShape?.words ?? [])], heldNow) ? { rule: input.rule } : {}),
+      ...(input.rule && input.projectId && masked === 0 && !carriesHeld([input.rule.base, input.rule.shown, ...(input.check?.ruleShape?.words ?? [])], heldNow) ? { rule: input.rule } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
       rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text), this.#held(tool).map(h => h.value)) })) } : {}) },
     };

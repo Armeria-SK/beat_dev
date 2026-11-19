@@ -437,7 +437,7 @@ export function RulesGroup() {
           <div key={projectId} data-rules-product={projectId}>
             <p className="bt-label">{own[0]!.archived ? t('ui.set.rules.archived', product) : product}</p>
             {own.map(rule => (
-              <Row key={rule.id} k={`rules:${rule.id}`} title={<code>{rule.shown}</code>} desc={rule.push ? `${t(RULE_KIND[rule.kind])} · ${t('ui.set.rules.push')}` : t(RULE_KIND[rule.kind])}>
+              <Row key={rule.id} k={`rules:${rule.id}`} title={<code>{rule.shown}</code>} desc={[t(RULE_KIND[rule.kind]), ...(rule.push ? [t('ui.set.rules.push')] : []), ...(rule.outside ? [t('ui.set.rules.outside')] : [])].join(' · ')}>
                 <Button small variant="ghost" disabled={busy !== null} onClick={() => void remove(rule.id)}>{t('ui.set.rules.remove')}</Button>
               </Row>
             ))}

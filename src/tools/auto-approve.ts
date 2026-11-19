@@ -124,14 +124,17 @@ export async function judgeOnce(
   limits: JudgeLimits | number = CLASSIFIER_TIMEOUT_MS,
 ): Promise<{ verdict: AutoVerdict; spend: JudgeSpend }> {
   const started = Date.now();
-  const byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
+  // One map per call to the judge (AP-1d asks again once): a call reports its usage so far per model, the calls add up
+  const attempts: Array<Map<string, NonNullable<JudgeReply['usage']>>> = [];
   let model: string | undefined;
-  const note = (id: unknown, usage: JudgeReply['usage']): void => {
-    if (typeof id !== 'string' || !id) return;
-    model = id.slice(0, 200);
-    if (usage) byModel.set(model, usage);
-  };
   const counted = async (prompt: ClassifierPrompt, combined: AbortSignal, call?: JudgeCall): Promise<string> => {
+    const byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
+    attempts.push(byModel);
+    const note = (id: unknown, usage: JudgeReply['usage']): void => {
+      if (typeof id !== 'string' || !id) return;
+      model = id.slice(0, 200);
+      if (usage) byModel.set(model, usage);
+    };
     const reply = await (call ? ask(prompt, combined, { ...call, used: (id, usage) => { note(id, usage); call.used?.(id, usage); } }) : ask(prompt, combined));
     if (typeof reply !== 'object' || reply === null) return reply;
     note(reply.model, reply.usage);
@@ -139,7 +142,7 @@ export async function judgeOnce(
   };
   const verdict = await autoDecide(input, counted, signal, limits);
   const sum = (key: 'inputTokens' | 'outputTokens'): number | undefined => {
-    const counts = [...byModel.values()].map(usage => tokenCount(usage[key])).filter((n): n is number => n !== undefined);
+    const counts = attempts.flatMap(byModel => [...byModel.values()]).map(usage => tokenCount(usage[key])).filter((n): n is number => n !== undefined);
     return counts.length ? counts.reduce((a, b) => a + b, 0) : undefined;
   };
   const inputTokens = sum('inputTokens');
@@ -153,7 +156,7 @@ export class NoJudge extends Error {
   constructor(detail: string) { super(detail); }
 }
 
-// 判定役を 1 回呼ぶ。失敗・時間切れ・読めない返事・利用者の発言が無い・操作の文が長すぎるときは、必ず ask（確かめる）。
+// 判定役を 1 回呼ぶ（読めない返事のときだけ、残りの時間の中でもう 1 回）。失敗・時間切れ・読めない返事・利用者の発言が無い・操作の文が長すぎるときは、必ず ask（確かめる）。
 // ask 関数は、判定役のモデルに system と user の文を渡して、返事の文字を返す（呼べなければ投げる）
 export async function autoDecide(
   input: ClassifierInput,
@@ -178,22 +181,32 @@ export async function autoDecide(
     : undefined;
   const combined = AbortSignal.any([signal, stop.signal]);
   const failure = (): AutoVerdict => ({ decision: 'ask', reason: '', failed: expired ?? 'error' });
+  let prompt: ClassifierPrompt | undefined;
+  const once = async (step: JudgeCall | undefined): Promise<AutoVerdict> => {
+    try {
+      prompt ??= buildClassifierPrompt(input);
+      const reply = await Promise.race([
+        step ? ask(prompt, combined, step) : ask(prompt, combined),
+        new Promise<never>((_, reject) => {
+          if (combined.aborted) reject(combined.reason);
+          else combined.addEventListener('abort', () => reject(combined.reason), { once: true });
+        }),
+      ]);
+      // 答えを待っているあいだに実行が取り消された・時間が過ぎたときは、返事が届いていても使わない
+      if (combined.aborted) return failure();
+      const parsed = typeof reply === 'string' ? parseVerdict(reply) : undefined;
+      return parsed ?? { decision: 'ask', reason: '', failed: 'unparsable' };
+    } catch (error) {
+      if (error instanceof TruncatedReply) return { decision: 'ask', reason: '', failed: 'unparsable' };
+      if (error instanceof NoJudge && !combined.aborted) return { decision: 'ask', reason: '', failed: 'no_judge' };
+      return failure();
+    }
+  };
   try {
-    const reply = await Promise.race([
-      call ? ask(buildClassifierPrompt(input), combined, call) : ask(buildClassifierPrompt(input), combined),
-      new Promise<never>((_, reject) => {
-        if (combined.aborted) reject(combined.reason);
-        else combined.addEventListener('abort', () => reject(combined.reason), { once: true });
-      }),
-    ]);
-    // 答えを待っているあいだに実行が取り消された・時間が過ぎたときは、返事が届いていても使わない
-    if (combined.aborted) return failure();
-    const parsed = typeof reply === 'string' ? parseVerdict(reply) : undefined;
-    return parsed ?? { decision: 'ask', reason: '', failed: 'unparsable' };
-  } catch (error) {
-    if (error instanceof TruncatedReply) return { decision: 'ask', reason: '', failed: 'unparsable' };
-    if (error instanceof NoJudge && !combined.aborted) return { decision: 'ask', reason: '', failed: 'no_judge' };
-    return failure();
+    const first = await once(call);
+    if (first.failed !== 'unparsable' || combined.aborted) return first;
+    // AP-1d: a reply that could not be read is asked once more, inside the time left (the second call does not restart the clock)
+    return await once(call ? { ...call, queued: () => undefined, started: () => undefined } : undefined);
   } finally {
     clearTimeout(timer);
   }
