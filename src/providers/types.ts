@@ -23,6 +23,8 @@ export type StreamEvent =
   | { type: 'thinking'; block: ThinkingBlock }
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'usage'; usage: Usage }
+  // 送り返した考える部分が断られ、外して送り直した（実行の印 thinking_replay_rejected）
+  | { type: 'replay_rejected' }
   | { type: 'done'; stop: StopReason };
 
 export type ProbeStatus =

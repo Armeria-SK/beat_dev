@@ -668,4 +668,26 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_file_changes_project ON file_changes (project_id, id);
   CREATE INDEX ix_file_changes_run ON file_changes (run_id) WHERE run_id IS NOT NULL;
   `,
+  `
+  CREATE TABLE model_calls (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    purpose TEXT NOT NULL CHECK (purpose IN ('turn', 'compact', 'discarded')),
+    model TEXT NOT NULL,
+    input_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    output_tokens INTEGER,
+    est_tokens INTEGER,
+    removed INTEGER NOT NULL DEFAULT 0,
+    tools_hash TEXT NOT NULL,
+    frozen_hash TEXT NOT NULL,
+    dynamic_hash TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    UNIQUE (run_id, seq)
+  ) STRICT;
+  CREATE INDEX ix_model_calls_started ON model_calls (started_at);
+  `,
 ];

@@ -209,7 +209,7 @@ export class App {
     const now = options.now ?? Date.now;
     this.now = now;
     this.conversations = new Conversations(this.db, now, this.log);
-    this.runs = new Runs(this.db, now);
+    this.runs = new Runs(this.db, now, this.log);
     this.kv = new KV(this.db, now);
     const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
     if (dangling) this.log(`[INFO] Marked ${dangling} run(s) left unfinished at the last shutdown as interrupted`);
