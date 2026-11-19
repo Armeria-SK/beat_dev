@@ -204,3 +204,11 @@ test('Skills: 開いた行の中の囲み（SKILL.md の欄）は、行の左右
   assert.match(css, /\.ui-lib__open \{[^}]*padding-top: 0;/u, '開いた行は上の余白を持たない');
   assert.match(css, /\.ui-lib__detail \{ margin: var\(--space-4\) 0 var\(--space-2\); \}/u, '上は --space-4、下は行の --space-2 と合わせて --space-4');
 });
+
+test('ui/library: 直す番の実行（fix_branch のある行）の What は「pre-fix · <branch>」。ほかの行はそのまま', () => {
+  const rows = logRows({
+    runs: [runRow('f', 2, { kind: 'task', fix_branch: 'beat/prefix-a' }), runRow('p', 1, { kind: 'task', fix_branch: null })],
+    calls: [], jobs: [], runLabel: k => k.toUpperCase(), titleOf: () => 'Plan it', fixLabel: branch => `pre-fix · ${branch}`,
+  });
+  assert.deepEqual(rows.map(r => r.what), ['pre-fix · beat/prefix-a', 'TASK · Plan it']);
+});

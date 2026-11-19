@@ -5,7 +5,7 @@ import { removeModel, renameModel } from '../web/src/settings/model.ts';
 import { firstSentences, kanbanPaneCount, NARROW_COLUMNS } from '../web/src/ui/kanban.ts';
 import { EMPTY, reduce } from '../web/src/ui/live-state.ts';
 import { ownerRuns, runningRows } from '../web/src/ui/overview.ts';
-import { canThinkNow, isScoutState, SCOUT_MODE_CHOICES } from '../web/src/ui/scout.ts';
+import { canThinkNow, isScoutState, modeNeedsCheck, SCOUT_MODES } from '../web/src/ui/scout.ts';
 import { scoutChoice, setScout } from '../web/src/ui/settings/view.ts';
 
 // beat 7-1: the Kanban pane, proposal cards, the thinking model's state and the Scout role. Pure rules only.
@@ -49,7 +49,7 @@ test('ui/overview (7-1): a worker run of a kind the screen does not know (the th
   assert.deepEqual(runningRows({ worker: [...runs, unknown], drafts: [], conversations: [], checklists: new Map() }).map(r => r.key), ['w:r2', 'w:r3']);
 });
 
-test('ui/scout (7-1): the state endpoint is used only when its shape is right; Think now needs a mode other than Off and a state other than off or thinking; pre-fix is not pressable yet', () => {
+test('ui/scout (7-1): the state endpoint is used only when its shape is right; Think now needs a mode other than Off and a state other than off or thinking; pre-fix needs a check command (8-6c)', () => {
   const state = { state: 'asleep', examined: 3, area: null, lastChangeAt: 5, note: null };
   assert.equal(isScoutState(state), true);
   for (const bad of [{}, null, { ...state, state: 'dreaming' }, { ...state, examined: '3' }, { ...state, note: 1 }]) assert.equal(isScoutState(bad), false, JSON.stringify(bad));
@@ -58,7 +58,12 @@ test('ui/scout (7-1): the state endpoint is used only when its shape is right; T
   assert.equal(canThinkNow({ ...state, state: 'thinking' } as never, 'research'), false);
   assert.equal(canThinkNow({ ...state, state: 'off' } as never, 'research'), false);
   assert.equal(canThinkNow({ ...state, state: 'asleep' } as never, 'off'), false);
-  assert.deepEqual(SCOUT_MODE_CHOICES.map(c => [c.mode, c.enabled]), [['off', true], ['research', true], ['fix', false]]);
+  assert.deepEqual(SCOUT_MODES, ['off', 'research', 'fix']);
+  assert.equal(modeNeedsCheck('fix', { check_command: null }), true);
+  assert.equal(modeNeedsCheck('fix', { check_command: '   ' }), true);
+  assert.equal(modeNeedsCheck('fix', { check_command: 'npm test' }), false);
+  assert.equal(modeNeedsCheck('research', { check_command: null }), false);
+  assert.equal(modeNeedsCheck('off', { check_command: null }), false);
 });
 
 test('ui/settings (7-1): the Scout row writes routing.scout and Off removes it; removing or renaming a model updates routing.scout too', () => {

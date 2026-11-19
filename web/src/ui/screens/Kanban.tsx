@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { api, ApiError, type Acceptance, type BranchCommits, type ChecklistItem, type Conversation, type DeviationRow, type FinishedCursor, type Project, type RunRow, type Task, type WaitReason } from '../../api.ts';
+import { api, ApiError, type Acceptance, type BranchCommits, type ChecklistItem, type Conversation, type DeviationRow, type FinishedCursor, type PreFix, type Project, type RunRow, type Task, type WaitReason } from '../../api.ts';
 import { waitText } from '../wait.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, formatElapsed, formatRelative, timezoneLabel, useT } from '../../i18n/index.ts';
@@ -8,7 +8,7 @@ import { plainLine } from '../../task-meta.ts';
 import { evidenceLines, remainingItems } from '../acceptance.ts';
 import { useMedia, useNow } from '../hooks.ts';
 import {
-  awaitsCheck, awaitsMerge, branchLeft, buildBoard, cardProject, mergedBranch, COLUMN_TABS_MEDIA, firstSentences, KANBAN_PAGE, NARROW_COLUMNS, mergeFinished, pagesToReload, pendingRoute, pendingWait, proposalOf, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
+  awaitsCheck, awaitsMerge, branchLeft, buildBoard, cardProject, mergedBranch, COLUMN_TABS_MEDIA, firstSentences, KANBAN_PAGE, NARROW_COLUMNS, mergeFinished, pagesToReload, pendingRoute, pendingWait, prefixDiff, prefixOf, proposalOf, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
   type Card, type ChangesTarget, type Column, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
@@ -123,6 +123,18 @@ function BranchLine({ worktree }: { worktree: NonNullable<Task['worktree']> }) {
   );
 }
 
+function PrefixDiff({ prefix }: { prefix: PreFix }) {
+  const t = useT();
+  return (
+    <div className="bt-diff" aria-label={t('ui.kanban.prefix.diff')} data-prefix-diff>
+      <span className="bt-diff__file"><span>{t('ui.kanban.prefix.files', prefix.files)}</span><span><span className="bt-add">+{prefix.added}</span> <span className="bt-del">−{prefix.removed}</span></span></span>
+      {prefixDiff(prefix.diff).map((line, i) => (
+        <span key={i} className={`bt-diff__line bt-diff__line--${line.kind}`} title={line.text}>{line.text}</span>
+      ))}
+    </div>
+  );
+}
+
 function Deviations({ rows }: { rows: readonly DeviationRow[] }) {
   const t = useT();
   if (rows.length === 0) return null;
@@ -221,13 +233,17 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
   const discardButton = useRef<HTMLButtonElement>(null);
   const running = task.status === 'running';
   const proposal = proposalOf(task);
+  const prefix = prefixOf(task);
+  const pendingFix = column === 'proposed' ? prefix : null;
   const merge = column === 'check' && awaitsMerge(task);
   // 作業コピーのブランチが残るカード: 取り込み待ち（Awaiting check）と、失敗・取り消しのカード（Failed）
   const branchy = merge || (column === 'failed' && branchLeft(task));
   const held = branchy ? task.worktree?.held ?? null : null;
   const checking = column === 'check' && awaitsCheck(task);
-  const label = proposal && column === 'proposed' ? t(proposal.kind === 'bug' ? 'ui.kanban.proposal.bug' : 'ui.kanban.proposal.feature') : column === 'approved' ? t('ui.kanban.queued')
-    : merge ? t('ui.kanban.mergeIt') : column === 'check' ? t('ui.kanban.checkIt') : column === 'done' && mergedBranch(task) ? t('ui.kanban.merged') : t('ui.kanban.task');
+  const label = pendingFix ? t('ui.kanban.prefix.bug')
+    : proposal && column === 'proposed' ? t(proposal.kind === 'bug' ? 'ui.kanban.proposal.bug' : 'ui.kanban.proposal.feature') : column === 'approved' ? t('ui.kanban.queued')
+    : merge ? t(prefix ? 'ui.kanban.prefix.mergeIt' : 'ui.kanban.mergeIt') : column === 'check' ? t('ui.kanban.checkIt')
+    : column === 'done' && mergedBranch(task) ? t(prefix ? 'ui.kanban.prefix.merged' : 'ui.kanban.merged') : t('ui.kanban.task');
   const reasons = [checking && t('ui.kanban.reason.check'), merge && t(held ? 'ui.kanban.reason.held' : 'ui.kanban.reason.merge')].filter((r): r is string => Boolean(r));
   const note = branchy && task.worktree?.note && task.worktree.note in NOTE_KEY ? t(NOTE_KEY[task.worktree.note as keyof typeof NOTE_KEY]) : null;
   const startDiscard = async (mode: PanelMode = 'discard') => {
@@ -240,17 +256,19 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
   // Mark merged: 残すファイルがあると分かっていれば（held）、またはサーバーが branch_dirty で断ったら、消えるものを見せる欄を開く
   const markMerged = () => { if (held) void startDiscard('merge'); else void onMerged().then(result => { if (result === 'dirty') void startDiscard('merge'); }); };
   const stopDiscard = () => { setDiscarding(null); requestAnimationFrame(() => discardButton.current?.focus()); };
-  const right = column === 'proposed' ? <span className="bt-meta">{formatRelative(task.created_at, now)}</span>
+  const right = pendingFix ? <Pill tone="ok">{t('ui.kanban.prefix.checks')}</Pill>
+    : column === 'proposed' ? <span className="bt-meta">{formatRelative(task.created_at, now)}</span>
     : running ? <Pill tone="running">{t('ui.kanban.running')}</Pill>
     : task.status === 'waiting' ? <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>
     : task.status === 'failed' ? <Pill tone="danger">{t('ui.kanban.failed')}</Pill>
     : task.status === 'cancelled' ? <span className="bt-tag">{t(task.cancelled_from === 'inbox' ? 'ui.kanban.rejected' : 'ui.kanban.cancelled')}</span> : undefined;
   const onPending = pendingWait(task);
-  const body = column === 'proposed' ? (proposal ? firstSentences(proposal.why) : plainLine(task.body, 200)) : onPending ? '' : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
+  const body = column === 'proposed' ? (proposal ? firstSentences(proposal.why, pendingFix ? 1 : 2) : plainLine(task.body, 200)) : onPending ? '' : task.status === 'waiting' ? plainLine(task.waiting_text, 200) : column === 'failed' ? plainLine(task.result_summary, 120) : '';
   const timed = task.run_at !== null && task.run_at > now;
   const meta: Array<string | false | null> = column === 'approved'
     ? [timed ? t('ui.kanban.starts', formatDateTimeSmart(task.run_at, now)) : first && t('ui.kanban.next'), task.status === 'ready' && wait !== undefined && waitText(wait, now), card.repeating && t('ui.kanban.repeating')]
     : column === 'progress' ? [running && product, card.step && t('ui.kanban.step', card.step.step, card.step.total), card.repeating && t('ui.kanban.repeating')]
+    : pendingFix ? [pendingFix.branch, formatRelative(task.created_at, now)]
     : column === 'proposed' && proposal ? [...new Set(proposal.area), t('ui.kanban.proposal.size', proposal.size), proposal.goal !== null && t('ui.kanban.proposal.goal', proposal.goal)]
     : column === 'proposed' ? [task.origin !== 'user' && t('ui.kanban.byBeat'), card.repeating && t('ui.kanban.repeating')]
     : [formatRelative(card.at, now), column === 'check' && task.items !== undefined && t('ui.check.met', task.items.met, task.items.owned), card.repeating && t('ui.kanban.repeating')];
@@ -260,6 +278,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       <h3 className="bt-card__title"><a className="ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a></h3>
       {body && <p className="bt-card__body">{body}</p>}
       {onPending && <p className="bt-card__body"><a className="bt-tool__link" href={routeHash(onPending.route)} data-pending-wait={task.id}>{t('ui.kanban.waitingPending', onPending.refs)}</a></p>}
+      {pendingFix && <PrefixDiff prefix={pendingFix} />}
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
       {column === 'check' && reasons.length > 0 && <p className="bt-meta ui-card__reasons" data-reasons>{reasons.join(' · ')}</p>}
       {branchy && task.worktree && <BranchLine worktree={task.worktree} />}
@@ -293,6 +312,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
       {column === 'proposed' && (
         <div className="bt-card__actions">
           <Button variant="primary" small disabled={busy} onClick={onApprove}>{t('ui.kanban.approve')}</Button>
+          {pendingFix && onOpenChanges && <Button small onClick={onOpenChanges}>{t('ui.kanban.prefix.openDiff')}</Button>}
           <Button variant="ghost" small disabled={busy} data-reject={task.id} onClick={() => { setReason(''); onRejecting(true); }}>{t('ui.kanban.reject')}</Button>
         </div>
       )}
@@ -467,7 +487,9 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
         onOpenChanges={onOpenChanges && project ? () => onOpenChanges({ productId: project, conversationId: card.conversationId }) : undefined} />;
     }
     const { task } = card;
-    const worktree = branchLeft(task) ? task.worktree : null;
+    const prefix = task.status === 'inbox' ? prefixOf(task) : null;
+    const worktree = branchLeft(task) || prefix ? task.worktree : null;
+    const changes = onOpenChanges && project && (!prefix || worktree) ? () => onOpenChanges({ productId: project, ...(worktree ? { worktreeId: worktree.id, branch: worktree.branch } : {}) }) : undefined;
     return (
       <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0} questions={questionsByTask.get(task.id) ?? 0} wait={waits?.[task.id]}
         onApprove={() => void act(task.id, () => runTaskOp('approve', task))}
@@ -505,7 +527,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
           });
           return result;
         }}
-        onOpenChanges={onOpenChanges && project ? () => onOpenChanges({ productId: project, ...(worktree ? { worktreeId: worktree.id, branch: worktree.branch } : {}) }) : undefined}
+        onOpenChanges={changes}
         onChecked={() => void act(task.id, async () => { const list = task.project_id ? data?.lists.get(task.project_id) : undefined; if (list) await checkOp(task, list.version); return true; })} />
     );
   };

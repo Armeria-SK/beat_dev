@@ -156,16 +156,17 @@ export interface LogInput {
   jobs: readonly ReviewJob[];
   runLabel: (kind: string) => string;
   titleOf: (conversationId: string) => string | null;
+  fixLabel?: (branch: string) => string;
 }
 
-export function logRows({ runs, calls, jobs, runLabel, titleOf }: LogInput): LogRow[] {
+export function logRows({ runs, calls, jobs, runLabel, titleOf, fixLabel }: LogInput): LogRow[] {
   const models = new Map(runs.map(run => [run.id, run.model_id]));
   const rows: LogRow[] = [];
   for (const run of runs) {
     const title = run.conversation_id ? titleOf(run.conversation_id) : null;
     const tokens = run.input_tokens === null && run.output_tokens === null ? null : (run.input_tokens ?? 0) + (run.output_tokens ?? 0);
     rows.push({
-      key: `run:${run.id}`, kind: 'run', at: run.started_at, what: title ? `${runLabel(run.kind)} · ${title}` : runLabel(run.kind),
+      key: `run:${run.id}`, kind: 'run', at: run.started_at, what: run.fix_branch && fixLabel ? fixLabel(run.fix_branch) : title ? `${runLabel(run.kind)} · ${title}` : runLabel(run.kind),
       model: run.model_id, durationMs: run.duration_ms, tokens, result: runResult(run), run,
     });
   }

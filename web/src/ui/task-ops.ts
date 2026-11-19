@@ -25,18 +25,20 @@ function undo(run: () => Promise<unknown>, deps: TaskOpDeps): { label: string; r
   return { label: t('ui.toast.undo'), run: () => { void run().catch(error => reportOpError(error, deps, t('ui.task.toast.undoFailed'))); } };
 }
 
-export async function runTaskOp(op: TaskOp, task: Pick<Task, 'id' | 'title'>, options: TaskOpOptions = {}, deps: TaskOpDeps = REAL): Promise<boolean> {
+export async function runTaskOp(op: TaskOp, task: Pick<Task, 'id' | 'title'> & Partial<Pick<Task, 'prefix'>>, options: TaskOpOptions = {}, deps: TaskOpDeps = REAL): Promise<boolean> {
+  const prefix = task.prefix ?? null;
   const uncancel = undo(() => deps.api.taskAction(task.id, 'uncancel'), deps);
   try {
     switch (op) {
       case 'approve':
         await deps.api.taskAction(task.id, 'approve');
+        if (prefix) { deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.prefixApproved'), body: t('ui.task.toast.prefixReady', prefix.branch) }); return true; }
         deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.approved'), body: task.title, action: undo(() => deps.api.unapproveTask(task.id), deps) });
         return true;
       case 'reject': {
         const reason = options.reason?.trim() ?? '';
         await deps.api.cancelTask(task.id, reason);
-        deps.toast({ icon: 'x', title: t('ui.task.toast.rejected'), body: reason ? t('ui.task.toast.reason', reason) : task.title, action: uncancel });
+        deps.toast({ icon: 'x', title: t('ui.task.toast.rejected'), body: reason ? t('ui.task.toast.reason', reason) : task.title, ...(prefix ? {} : { action: uncancel }) });
         return true;
       }
       case 'cancel':

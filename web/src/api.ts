@@ -171,6 +171,7 @@ export interface RunRow {
   started_at: number; duration_ms: number | null; ok: number | null; error_kind: string | null; error_message: string | null;
   input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; est_prompt_tokens: number | null; flags: string[];
   project_id?: string | null;
+  fix_branch?: string | null;
 }
 
 // 道具の一覧（GET /api/tools）。policy は設定の tools.policies、configurable が false の道具（タスクの進め方に必要なもの）は方針を変えられない
@@ -223,8 +224,10 @@ export interface Task {
   spawned_by?: string | null;
   items?: TaskItems;
   proposal?: Proposal | null;
+  prefix?: PreFix | null;
 }
 export interface Proposal { kind: 'feature' | 'bug'; why: string; area: string[]; size: 'S' | 'M' | 'L'; goal: string | null; evidence: string | null; ledger: string | null }
+export interface PreFix { branch: string; base: string; checks: 'passed'; files: number; added: number; removed: number; diff: string[] }
 export type ScoutMode = 'off' | 'research' | 'fix';
 export interface ScoutState { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null }
 export interface ChatBuild {

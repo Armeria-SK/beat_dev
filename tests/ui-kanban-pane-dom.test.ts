@@ -158,7 +158,7 @@ test('ui/KanbanPane（DOM）: state off says why: mode Off points to Research on
   }
 });
 
-test('ui/ProductHome（DOM）: the head has the mode switch (Off / Research only / Research and pre-fix, the last not pressable, "Arrives later"); picking sends PATCH scoutMode. Without the state endpoint there is no Think now', async () => {
+test('ui/ProductHome（DOM）: the head has the mode switch (Off / Research only / Research and pre-fix; without a check command the last is not pressable and says "Needs a check command"); picking sends PATCH scoutMode. Without the state endpoint there is no Think now', async () => {
   let saved = null as Project | null;
   serve({ active: [] }, null, (path, method) => (path === `/api/projects/${PRODUCT}` && method === 'PATCH' ? { project: project({ scout_mode: 'research' }) } : undefined));
   const { container } = await render(createElement(ProductHome, { id: PRODUCT, project: project({ scout_mode: 'off' }), conversations: [], drafts: [], checklists: new Map(), worker: null, revision: 0, onProject: p => { saved = p; } }));
@@ -167,8 +167,8 @@ test('ui/ProductHome（DOM）: the head has the mode switch (Off / Research only
   assert.deepEqual(options.map(o => o.dataset.mode), ['off', 'research', 'fix']);
   assert.deepEqual(options.map(o => o.getAttribute('aria-pressed')), ['true', 'false', 'false']);
   const fix = options[2]!;
-  assert.equal(fix.disabled, true, 'pre-fix cannot be picked yet');
-  assert.ok(fix.textContent?.includes(en['ui.scout.mode.later']));
+  assert.equal(fix.disabled, true, 'pre-fix needs a check command');
+  assert.ok(fix.textContent?.includes(en['ui.scout.mode.needsCheck']));
   assert.equal(byText(container, 'button', en['ui.scout.thinkNow']), undefined);
   await click(options[1]);
   await settle();

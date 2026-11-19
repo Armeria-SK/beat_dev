@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type ScoutMode, type ScoutState, type Task, type WorkerStatus } from '../../api.ts';
+import { api, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type ScoutState, type Task, type WorkerStatus } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
-import { buildBoard, KANBAN_PAGE, RUNS_WINDOW, sessionCards } from '../kanban.ts';
+import { buildBoard, KANBAN_PAGE, prefixOf, RUNS_WINDOW, sessionCards, type Card } from '../kanban.ts';
 import type { LiveDraft } from '../live-state.ts';
+import { ScoutModeSwitch } from '../ScoutModeSwitch.tsx';
 import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners, ticksEverySecond } from '../overview.ts';
 import { Button, CountBadge, Icon, Notice, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
-import { canThinkNow, SCOUT_MODE_CHOICES, useScout } from '../scout.ts';
+import { canThinkNow, useScout } from '../scout.ts';
 import { reportOpError } from '../task-ops.ts';
 import { GrowthSection } from './GrowthSection.tsx';
 import { CommandItems, FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useProductCommands, useRunActions } from './home-parts.tsx';
@@ -26,28 +27,6 @@ export interface ProductHomeProps {
 }
 
 interface Loaded { active: Task[]; awaiting: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; changed: ReadonlySet<string> }
-
-const MODE_KEY = { off: 'ui.scout.mode.off', research: 'ui.scout.mode.research', fix: 'ui.scout.mode.fix' } as const satisfies Record<ScoutMode, string>;
-
-function ModeSwitch({ project, onProject }: { project: Project; onProject?: ((project: Project) => void) | undefined }) {
-  const t = useT();
-  const [busy, setBusy] = useState(false);
-  const pick = async (mode: ScoutMode) => {
-    if (busy || mode === project.scout_mode) return;
-    setBusy(true);
-    try { onProject?.((await api.patchProject(project.id, { scoutMode: mode })).project); } catch (error) { reportOpError(error); } finally { setBusy(false); }
-  };
-  return (
-    <div className="bt-seg ui-home__mode" role="group" aria-label={t('ui.scout.mode')}>
-      {SCOUT_MODE_CHOICES.map(choice => (
-        <button key={choice.mode} type="button" className="bt-seg__opt" data-mode={choice.mode} aria-pressed={project.scout_mode === choice.mode} disabled={busy || !choice.enabled}
-          title={choice.enabled ? undefined : t('ui.scout.mode.later')} onClick={() => void pick(choice.mode)}>
-          {t(MODE_KEY[choice.mode])}{!choice.enabled && <span className="bt-meta ui-home__later"> · {t('ui.scout.mode.later')}</span>}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function ScoutRow({ state }: { state: ScoutState }) {
   const t = useT();
@@ -91,6 +70,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
     const sessions = sessionCards({ conversations: mine, drafts, runs: data.runs, checklists, changed: data.changed });
     return miniBoard(buildBoard({ active: [...data.active, ...data.awaiting], finished: data.finished, hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }));
   }, [data, mine, drafts, checklists]);
+  const prefixTag = (card: Card): string | null => (card.kind === 'task' && card.column === 'proposed' && prefixOf(card.task) ? t('ui.kanban.prefix.tag') : null);
   const running = useMemo(
     () => runningRows(scopeRunning({ worker: worker?.runningAll ?? [], drafts, conversations, checklists }, id, data ? taskOwners(data.active) : null)),
     [worker, drafts, conversations, checklists, id, data],
@@ -113,7 +93,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
           <h1 className="bt-screen__title bt-screen__title--lg">{t('ui.home.away')}</h1>
         </div>
         <div className="bt-screen__tools">
-          <ModeSwitch project={project} onProject={onProject} />
+          <ScoutModeSwitch project={project} onProject={onProject} />
           {scoutState && canThinkNow(scoutState, project.scout_mode) && <Button disabled={thinking} onClick={() => void thinkNow()}>{t('ui.scout.thinkNow')}</Button>}
           <a className="bt-btn bt-btn--icon" href={routeHash({ view: 'productSettings', id })} aria-label={t('ui.product.settings')} title={t('ui.product.settings')}><Icon name="sliders" /></a>
         </div>
@@ -128,7 +108,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
 
       {!mini && !failed && <p className="bt-meta ui-col__empty ui-home__board" role="status" data-loading>{t('ui.set.loading')}</p>}
-      {mini && <MiniBoard columns={mini} label={t('ui.nav.kanban')} index={4} className="ui-home__board" />}
+      {mini && <MiniBoard columns={mini} label={t('ui.nav.kanban')} index={4} className="ui-home__board" tagOf={prefixTag} />}
 
       <section className="bt-section bt-rise" style={{ '--bt-i': 5 } as CSSProperties} aria-label={t('ui.overview.running')} data-home="running">
         <div className="bt-section__head"><span className="bt-label">{t('ui.overview.running')}</span><CountBadge n={running.length + commands.commands.length + (scoutRow ? 1 : 0)} quiet /></div>
