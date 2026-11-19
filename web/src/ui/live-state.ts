@@ -17,6 +17,7 @@ export type RunNotice = { runId: string; key?: string | undefined; after?: numbe
   | { kind: 'warning'; code: string; message: string; params?: Record<string, unknown> | undefined }
   | { kind: 'compaction'; summarized: number }
   | { kind: 'memory'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
+  | { kind: 'memoryNote'; action: 'create' | 'update' | 'forget'; projectId: string; name: string; eventId: number }
   | { kind: 'stopped' }
   | { kind: 'interrupted' }
   | { kind: 'undo'; projectId: string; batch: string | null; undone: number; refused: number; more: number }
@@ -214,6 +215,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     }
     case 'memory.changed':
       return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memory', action: e.action, content: e.content, eventId: e.eventId }), effects: [] };
+    case 'memoryFile.changed':
+      if (!e.conversationId || (e.action !== 'create' && e.action !== 'update' && e.action !== 'forget')) return { state: library(s), effects: [] };
+      return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memoryNote', action: e.action, projectId: e.projectId, name: e.name, eventId: e.eventId }), effects: [] };
     case 'checklist.updated': {
       const state = { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) };
       const chat = [...s.tasks.values()].find(mark => mark.buildChat?.conversation === e.conversationId)?.buildChat?.chat;

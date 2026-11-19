@@ -11,6 +11,7 @@ export type RunEvent =
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string; gate?: ToolGate }
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
+  | { type: 'memoryFile.changed'; runId: string; conversationId: string; projectId: string; name: string; action: 'create' | 'update' | 'forget' | 'restore' | 'reviewed'; eventId: number }
   | { type: 'checklist.updated'; runId: string; conversationId: string; items: ChecklistItem[]; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }

@@ -12,7 +12,7 @@ import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, submitMessage,
 import { getExplainLanguage, useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
 import { Markdown } from '../Markdown.tsx';
-import { undoMemoryEvent, useMemoryUndone } from '../memory-undo.ts';
+import { undoMemoryEvent, undoMemoryNoteEvent, useMemoryNoteUndone, useMemoryUndone } from '../memory-undo.ts';
 import { serverText, warningText } from '../server-text.ts';
 import { useContextUsage } from '../use-context-usage.ts';
 import { RedoAction } from './ChangesRedo.tsx';
@@ -24,6 +24,7 @@ import { newSessionHash, sendOptions } from './product-nav.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
+import { notePath } from './memory-notes.ts';
 import { routeHash } from './routes.ts';
 import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem, type ToolItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
@@ -55,6 +56,7 @@ interface Choice { modelId: string | null; effort: string | null; permissionMode
 const NO_CHOICE: Choice = { modelId: null, effort: null, permissionMode: 'auto' };
 
 const MEMORY_KEY = { create: 'ui.notice.memoryCreate', update: 'ui.notice.memoryUpdate', forget: 'ui.notice.memoryForget' } as const;
+const MEMORY_NOTE_KEY = { create: 'ui.notice.memoryNoteCreate', update: 'ui.notice.memoryNoteUpdate', forget: 'ui.notice.memoryNoteForget' } as const;
 const short = (text: string, max = 80): string => {
   const line = text.replace(/\s+/gu, ' ').trim();
   return line.length > max ? `${line.slice(0, max)}…` : line;
@@ -66,6 +68,7 @@ export function noticeText(t: T, n: RunNotice): string {
     case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getExplainLanguage());
     case 'compaction': return t('ui.notice.compacted', n.summarized);
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
+    case 'memoryNote': return t(MEMORY_NOTE_KEY[n.action], notePath(n.name));
     case 'stopped': return t('ui.notice.stopped');
     case 'interrupted': return t('ui.notice.interrupted');
     case 'undo': return [n.undone > 0 && t('ui.notice.undid', n.undone), n.refused > 0 && t('ui.notice.undidRefused', n.refused), n.more > 0 && t('ui.notice.undidMore', n.more)].filter(Boolean).join(' · ');
@@ -81,6 +84,14 @@ function MemoryUndo({ eventId }: { eventId: number }) {
   return <> <button type="button" className="bt-notice__action" onClick={() => void undoMemoryEvent(eventId).then(ok => setFailed(!ok))}>{failed ? t('ui.notice.undoFailed') : t('ui.notice.undo')}</button></>;
 }
 
+function MemoryNoteUndo({ projectId, name, eventId }: { projectId: string; name: string; eventId: number }) {
+  const t = useT();
+  const undone = useMemoryNoteUndone(projectId, eventId);
+  const [failed, setFailed] = useState(false);
+  if (undone) return <span> · {t('ui.notice.undone')}</span>;
+  return <> <button type="button" className="bt-notice__action" onClick={() => void undoMemoryNoteEvent(projectId, name, eventId).then(ok => setFailed(!ok))}>{failed ? t('ui.notice.undoFailed') : t('ui.notice.undo')}</button></>;
+}
+
 function QuietNotice({ notices }: { notices: RunNotice[] }) {
   const t = useT();
   return (
@@ -88,7 +99,7 @@ function QuietNotice({ notices }: { notices: RunNotice[] }) {
       <span className="bt-notice__rule" />
       <span className="ui-notice__text">
         {notices.map((n, i) => (
-          <Fragment key={i}>{i > 0 && ' · '}{noticeText(t, n)}{n.kind === 'memory' && <MemoryUndo eventId={n.eventId} />}{n.kind === 'undo' && n.batch && <RedoAction projectId={n.projectId} batch={n.batch} />}</Fragment>
+          <Fragment key={i}>{i > 0 && ' · '}{noticeText(t, n)}{n.kind === 'memory' && <MemoryUndo eventId={n.eventId} />}{n.kind === 'memoryNote' && <MemoryNoteUndo projectId={n.projectId} name={n.name} eventId={n.eventId} />}{n.kind === 'undo' && n.batch && <RedoAction projectId={n.projectId} batch={n.batch} />}</Fragment>
         ))}
       </span>
       <span className="bt-notice__rule" />
@@ -487,7 +498,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       case 'task': case 'tasks': location.hash = '#/kanban'; return;
       case 'skills': location.hash = '#/skills'; return;
       case 'log': location.hash = '#/runs'; return;
-      case 'memory': location.hash = '#/memory'; return;
+      case 'memory': location.hash = routeHash(product ? { view: 'memory', productId: product.id } : { view: 'memory' }); return;
       case 'stop': if (draft) void api.stop(draft.runId).catch(changeFailed); return;
       case 'archive': if (id) void api.archiveConversation(id).then(() => load(), changeFailed); return;
       case 'summary': setSummaryOpen(true); stick.current = false; scroller.current?.scrollTo({ top: 0 }); return;

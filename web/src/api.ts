@@ -197,6 +197,11 @@ export interface MemoryItem { id: number; book: Book; content: string; origin: s
 export interface MemoryEvent { id: number; memory_id: number; action: string; before: string | null; after: string | null; actor: string; reason: string | null; undone_at: number | null; created_at: number }
 export interface BookView { used: number; items: MemoryItem[] }
 export interface MemoryContext { tokens: number; budget: number | null; omitted: number }
+// 製品の記憶のファイル（beat 10-3 の口 src/web/routes-memory.ts）
+export type MemoryActor = 'beat' | 'review' | 'owner';
+export interface MemoryNote { name: string; title: string; mtime: number; hash: string; tainted: boolean; updatedBy: MemoryActor | null }
+export interface MemoryNoteFile { note: MemoryNote; text: string }
+export interface MemoryFileEvent { id: number; action: 'create' | 'update' | 'forget' | 'restore' | 'outside' | 'reviewed'; actor: MemoryActor; summary: string | null; tainted: boolean; before: string | null; after: string | null; created_at: number }
 export interface HistoryHit { conversationId: string; title: string | null; messageId: number; role: string; createdAt: number; snippet: string; projectId?: string | null }
 
 export type TaskStatus = 'inbox' | 'ready' | 'running' | 'waiting' | 'scheduled' | 'done' | 'failed' | 'cancelled';
@@ -447,6 +452,19 @@ export const api = {
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   recentMemoryEvents: () => call<{ events: MemoryEvent[] }>('/api/memory-events'),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
+  memoryNotes: (projectId: string) => call<{ notes: MemoryNote[]; archived: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/memory`),
+  memoryNote: (projectId: string, name: string) => call<MemoryNoteFile>(`/api/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}`),
+  memoryNoteHistory: (projectId: string, name: string) => call<{ events: MemoryFileEvent[] }>(`/api/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}/history`),
+  addMemoryNote: (projectId: string, input: { title: string; content: string }) =>
+    call<MemoryNoteFile>(`/api/projects/${encodeURIComponent(projectId)}/memory`, { method: 'POST', body: JSON.stringify(input) }),
+  editMemoryNote: (projectId: string, name: string, input: { title: string; content: string; baseHash: string }) =>
+    call<MemoryNoteFile>(`/api/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(input) }),
+  forgetMemoryNote: (projectId: string, name: string, baseHash: string) =>
+    call<{ ok: true }>(`/api/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}?baseHash=${encodeURIComponent(baseHash)}`, { method: 'DELETE' }),
+  restoreMemoryNote: (projectId: string, name: string, eventId: number, baseHash: string | null) =>
+    call<MemoryNoteFile>(`/api/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}/restore`, { method: 'POST', body: JSON.stringify({ eventId, baseHash }) }),
+  reviewedMemoryNote: (projectId: string, name: string, baseHash: string) =>
+    call<MemoryNoteFile>(`/api/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(name)}/reviewed`, { method: 'POST', body: JSON.stringify({ baseHash }) }),
   tasks: (project?: string) => call<{ active: Task[]; finished: Task[]; awaiting?: Task[]; finishedTotal?: number; repeating?: RepeatingTask[] }>(`/api/tasks${inProject(project, '?')}`),
   schedule: (from: number, to: number) => call<ScheduleView>(`/api/schedule?from=${from}&to=${to}`),
   deleteTask: (id: string) => call<{ deleted: { id: string; events: number; keptRuns: number } }>(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),

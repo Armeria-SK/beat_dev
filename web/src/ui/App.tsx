@@ -454,7 +454,7 @@ export function App() {
             ) : behind.view === 'notifications' ? (
               <Notifications unread={unread} epoch={live.epoch} onUnread={setUnread} projects={projects} />
             ) : behind.view === 'memory' ? (
-              <Memory revision={live.libraryRevision + live.epoch} />
+              <Memory key={behind.productId ?? ''} productId={behind.productId} projects={projects} projectsLoaded={live.projectsLoaded} revision={live.libraryRevision + live.epoch} />
             ) : behind.view === 'skills' ? (
               <Skills target={behind.target} revision={`${live.libraryRevision}:${live.epoch}:${skillDrafts}`} running={working} onDrafts={setDrafts} />
             ) : behind.view === 'runs' ? (
