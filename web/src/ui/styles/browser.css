@@ -1,0 +1,11 @@
+/* beat 9-2b: Browser の欄（Design BrowserPane）。画面は欄の幅と高さに合わせて縮め、切らない。比が違う分は surface-sunk の余白 */
+.ui-browser { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.ui-browser > .bt-pane__bar { flex: none; }
+.ui-browser > .bt-browser { flex: 1; min-height: 160px; }
+.ui-browser .ui-browser__view { flex: 1; display: grid; place-items: center; padding: 0; background: var(--surface-sunk); container-type: size; overflow: hidden; cursor: default; user-select: none; -webkit-user-select: none; }
+.ui-browser__stage { position: relative; width: min(100cqw, calc(100cqh * var(--ui-browser-w) / var(--ui-browser-h))); aspect-ratio: var(--ui-browser-w) / var(--ui-browser-h); background: var(--surface-overlay); }
+.ui-browser__stage > img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.ui-browser .bt-cursor { animation: none; transform: none; translate: -3px -2px; transition: left var(--dur-slow) var(--ease-calm), top var(--dur-slow) var(--ease-calm); }
+@media (prefers-reduced-motion: reduce) { .bt-root .ui-browser .bt-cursor { transform: none; transition: none; } }
+.bt-root.is-reduced .ui-browser .bt-cursor { transform: none; transition: none; }
+.ui-browser__meta { flex: none; margin: var(--space-2) 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

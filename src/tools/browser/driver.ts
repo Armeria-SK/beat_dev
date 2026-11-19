@@ -88,7 +88,10 @@ export interface ElementDetail extends ElementState {
   autocomplete: string | undefined;
   // フォームとの関係（D-5）。submits: 押すとフォームが送られる部品（form に属する submit / image、formaction・formmethod を持つボタン。label は label.control、部品の中の要素はその部品で見る）
   form: { inForm: boolean; submits: boolean };
+  // 見えている範囲での要素の位置（CSS ピクセル。Browser の欄の AI の指に使う。9-2b）。読めなければ undefined
+  box?: ElementBox | undefined;
 }
+export interface ElementBox { x: number; y: number; width: number; height: number }
 // 操作のあいだに起きたページ側の出来事。数だけ（ダイアログの文などページの文字は持たない）。blocked: 送信の守り（D-8）が断った要求の数
 export interface ActionEvents { dialogs: number; downloads: number; fileChoosers: number; blocked: number }
 
@@ -342,7 +345,10 @@ class PlaywrightPage implements PageHandle {
     const one = await this.#locator(target);
     if (!one) return undefined;
     const attrs = await one.evaluate(elementFacts);
+    let box: ElementBox | null = null;
+    try { box = await one.boundingBox(); } catch { box = null; }
     return {
+      ...(box ? { box: { x: box.x, y: box.y, width: box.width, height: box.height } } : {}),
       visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined,
       // 読めない形なら送信とみなす（迷ったら聞く側）
       form: { inForm: attrs.inForm === true, submits: attrs.submits !== false },

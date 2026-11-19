@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import type { WaitReason } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
+import { BrowserPane } from './panes/BrowserPane.tsx';
 import { ChangesPane, type ChangesFocus, type UndoneNotice } from './panes/ChangesPane.tsx';
 import { FilesPane } from './panes/FilesPane.tsx';
 import { KanbanPane, type KanbanPaneProps } from './panes/KanbanPane.tsx';
@@ -88,7 +89,7 @@ export function usePanes(productId: string | null): PanesState {
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const changesUsed = useCallback(() => setChangesFocus(null), []);
   const [changesBranch, setChangesBranch] = useState<BranchView | null>(null);
-  const views = useMemo(() => openable({ productId }), [productId]);
+  const views = useMemo(() => openable({ productId, narrow }), [productId, narrow]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
   const shown: PaneLayout = single
@@ -214,6 +215,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
       ) : <ChangesPane key={`${productId}:${scope}`} source={{ kind: 'product', productId, conversationId: scope === 'new' ? undefined : scope, isGit, root: productRoot }} revision={`${revision}:${editRevision ?? 0}`} focus={panes.changesFocus} onFocusUsed={panes.changesUsed} onUndone={onUndone} />;
       case 'files': return <FilesPane key={productId} productId={productId} revision={revision} onOpenChanges={panes.openChanges} />;
       case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
+      case 'browser': return <BrowserPane key={productId} productId={productId} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
     }
   };

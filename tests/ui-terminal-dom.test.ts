@@ -161,7 +161,7 @@ test('ui/TerminalPane（DOM）: focus の番号を選ぶ（道具の行の Open 
 test('ui/panes: Terminal の欄は製品があるときだけ開く。並びは Design の順', () => {
   assert.deepEqual(panes.openable({ productId: null }), []);
   assert.ok(panes.openable({ productId: 'p' }).includes('terminal'));
-  assert.deepEqual(panes.tabOrder(panes.openable({ productId: 'p' }), false), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal']);
+  assert.deepEqual(panes.tabOrder(panes.openable({ productId: 'p' }), false), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal', 'browser']);
   assert.equal(panes.paneDef('terminal').counted, false, '札に数は出さない');
 });
 

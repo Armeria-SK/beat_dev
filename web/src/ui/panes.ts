@@ -1,8 +1,8 @@
 import type { PlainKey } from '../i18n/index.ts';
 
-export type PaneView = 'plan' | 'questions' | 'kanban' | 'pending' | 'changes' | 'files' | 'terminal';
+export type PaneView = 'plan' | 'questions' | 'kanban' | 'pending' | 'changes' | 'files' | 'terminal' | 'browser';
 
-export interface PaneContext { productId: string | null }
+export interface PaneContext { productId: string | null; narrow?: boolean | undefined }
 
 export interface PaneDef { view: PaneView; label: PlainKey; counted: boolean; opens: (c: PaneContext) => boolean }
 
@@ -14,6 +14,7 @@ export const PANES: readonly PaneDef[] = [
   { view: 'changes', label: 'ui.pane.changes', counted: false, opens: c => c.productId !== null },
   { view: 'files', label: 'ui.pane.files', counted: false, opens: c => c.productId !== null },
   { view: 'terminal', label: 'ui.pane.terminal', counted: false, opens: c => c.productId !== null },
+  { view: 'browser', label: 'ui.pane.browser', counted: false, opens: c => c.productId !== null && c.narrow !== true },
 ];
 
 const VIEW_ORDER = ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal', 'browser'];
