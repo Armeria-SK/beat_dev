@@ -118,7 +118,7 @@ test('browser_open: 外部の見出し・枠・本文・触れるもの・足跡
   assert.ok(out.content.includes('e4 button "Go"'));
   const fence = lines.indexOf('>>>');
   assert.ok(fence > 1);
-  assert.equal(lines[fence + 1], r.text('browser.footer', { tab: 't1', blocked: 0, mode: r.text('browser.mode_read_only') }));
+  assert.equal(lines[fence + 1], r.text('browser.footer', { tab: 't1', blocked: 0, mode: r.text('browser.mode_unlisted') }));
   assert.equal(r.driver.current!.pageList.length, 1);
 });
 

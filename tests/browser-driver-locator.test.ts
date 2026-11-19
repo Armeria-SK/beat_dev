@@ -14,7 +14,7 @@ function rig(count: number) {
       nth: (i: number) => ({
         isVisible: async () => true,
         isEnabled: async () => true,
-        evaluate: async () => ({ type: null, autocomplete: null }),
+        evaluate: async () => ({ type: null, autocomplete: null, inForm: false, submits: false }),
         click: async () => { acted.push(`click ${i}`); },
         fill: async () => { acted.push(`fill ${i}`); },
       }),
@@ -29,7 +29,7 @@ const target = { role: 'button', name: 'Send', nth: 1, count: 2 };
 
 test('本物の #locator: 数が読んだときと違えば、探し直さず、押さず、入れない（page_changed）', async () => {
   const same = rig(2);
-  assert.deepEqual(await same.handle.locate(target), { visible: true, enabled: true, type: undefined, autocomplete: undefined });
+  assert.deepEqual(await same.handle.locate(target), { visible: true, enabled: true, type: undefined, autocomplete: undefined, form: { inForm: false, submits: false } });
   await same.handle.click(target, 1000);
   assert.deepEqual(same.acted, ['click 1']);
 

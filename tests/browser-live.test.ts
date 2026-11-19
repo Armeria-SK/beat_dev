@@ -281,7 +281,7 @@ test('9-1a A-1・A-2: 作業用の文脈の中継にループバックが通る�
   const work = await new PlaywrightDriver().launchWork!({ channel: 'chrome', executablePath: undefined, headless: true, proxy: { server: `http://127.0.0.1:${base.port}`, username: 'beat', password: 'b'.repeat(48) } });
   t.after(() => work.close());
   // 横取り（副の守り）はループバックを全部通す形にして、中継（本体）だけを見る
-  const context = await work.newContext({ proxy: { server: `http://127.0.0.1:${proxy.port}`, username: 'beat', password: 'c'.repeat(48) }, viewport: { width: 1280, height: 800 }, locale: systemLocale(), actionTimeoutMs: 10_000, sites: () => [], loopback: () => true });
+  const context = await work.newContext({ proxy: { server: `http://127.0.0.1:${proxy.port}`, username: 'beat', password: 'c'.repeat(48) }, viewport: { width: 1280, height: 800 }, locale: systemLocale(), actionTimeoutMs: 10_000, sites: () => [], loopback: () => true, sendGuard: 'attended' });
   const page = await context.newPage();
 
   const before = proxy.stats();

@@ -203,9 +203,9 @@ export type SendOutcome =
 
 type Route = { model: ModelConfig; provider: ProviderConfig; backup?: boolean };
 
-interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[]; generated?: true }
+interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[]; generated?: true; askAnswer?: true }
 
-const userMessage = ({ content, images, attachments, generated }: ChatItem): ChatMessage => ({ role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(generated ? { generated } : {}) });
+const userMessage = ({ content, images, attachments, generated, askAnswer }: ChatItem): ChatMessage => ({ role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}), ...(generated ? { generated } : {}), ...(askAnswer ? { askAnswer } : {}) });
 // held: 実行が始まったあとに会話のモデルか権限モードが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖・古いモードの実行）へは差し込まず、実行が終わってから新しいモデル・新しいモードの実行で読ませる
 // afterStop: 今の実行を止めたあとに送られた発言。止めた実行が終わるのを待って、新しい実行を始める（止める前に待たせた発言は、保存だけ）
 interface PendingMessage extends ChatItem { id: string; interrupt: boolean; createdAt: number; held: boolean; afterStop: boolean }
@@ -298,7 +298,8 @@ export class ChatEngine {
   // 実行中の会話に送った発言は、新しい実行にせず待たせる（待ちの発言）。今の実行が次の区切り（道具の結果を返して、次にモデルを呼ぶ前）に来たら
   // 履歴に入れ、実行が先に終わったら、その発言で新しい実行を始める。interrupt なら、今の実行を止めて、待っていた発言と一緒に新しい実行を始める
   send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean; projectId?: string | undefined; generated?: boolean } = {}): SendOutcome {
-    const item: ChatItem = { content: text, images, attachments, ...(options.generated ? { generated: true as const } : {}) };
+    // ask_owner の札が開いているあいだに届いた発言は、札の答えとして印を付ける（サーバー側で決める。発言の文では決めない）
+    const item: ChatItem = { content: text, images, attachments, ...(options.generated ? { generated: true as const } : {}), ...(this.#askOpen(conversationId) ? { askAnswer: true as const } : {}) };
     const running = this.#byConversation.get(conversationId);
     if (running === undefined) return this.#beginChat(conversationId, [item], choice, options.projectId);
     if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
@@ -888,6 +889,12 @@ export class ChatEngine {
       ...(() => { const evidence = this.#reviewEvidence.get(runId); this.#reviewEvidence.delete(runId); return kind === 'review' && evidence ? { reviewEvidence: evidence } : {}; })(),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
+      // 持ち主が自分で書いた文（9-1b の D-7）: タスクは持ち主の頼み、子の担当は親のもの、会話は持ち主の発言
+      ownerText: () => {
+        if (task) { const text = d.tasks?.ownerRequestText(task.task.id); return text ? [text] : []; }
+        if (agent) return agent.parent.ownerText?.() ?? [];
+        return this.#ownerTexts(conversationId);
+      },
       log: d.log ?? (() => undefined),
       services: this.toolServices(),
       task: taskSlot,
@@ -1110,6 +1117,26 @@ export class ChatEngine {
       if (message.role === 'user' && !message.generated && !message.note) return stripAttachments(message.content).slice(0, USER_REQUEST_LIMIT);
     }
     return '';
+  }
+
+  // 会話の持ち主の発言（最後の 50 行のうち、generated でも note でもない user の行。添付の中身は除く）
+  #ownerTexts(conversationId: string): string[] {
+    return this.#d.conversations.messages(conversationId, 50)
+      .filter(({ message }) => message.role === 'user' && !message.generated && !message.note && !message.askAnswer)
+      .map(({ message }) => stripAttachments(message.content));
+  }
+
+  // いちばん新しい持ち主の発言より後に、ask_owner の札（誤りでない結果）があるか。読めなければ「ある」側（持ち主の文に数えない）
+  #askOpen(conversationId: string): boolean {
+    try {
+      const messages = this.#d.conversations.messages(conversationId, 50);
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i]!.message;
+        if (message.role === 'user' && !message.note) return false;
+        if (message.role === 'tool' && message.name === 'ask_owner' && !message.isError) return true;
+      }
+      return false;
+    } catch { return true; }
   }
 
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。

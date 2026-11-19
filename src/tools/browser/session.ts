@@ -134,7 +134,7 @@ async function withTimeout(work: Promise<unknown>, ms: number): Promise<void> {
 interface Proxied { handle: BrowserHandle; proxy: EgressProxy }
 // 作業用の文脈（会話ごと）。許し（loopback・productId）は作ったときのもので、あとから広げない
 interface Idle { token: number; cancel: (() => void) | undefined }
-interface WorkContext extends Proxied { conversationId: string; loopback: boolean; productId: string | undefined; idle: Idle }
+interface WorkContext extends Proxied { conversationId: string; loopback: boolean; attended: boolean; productId: string | undefined; idle: Idle }
 interface PopupSink { conversationId: string; attended: boolean; pages: Array<{ page: PageHandle; kind: BrowserTabKind; handle: BrowserHandle }> }
 
 export class BrowserSession {
@@ -227,7 +227,8 @@ export class BrowserSession {
       if (context) {
         this.#cancelIdle(context.idle);
         // 許しが呼び出しと違えば、文脈（とそのタブ）を閉じて作り直す（許しをあとから広げない・狭めた許しで古いタブを使わせない）
-        if (context.loopback !== call.grant.loopback || context.productId !== call.grant.productId) await this.#closeContext(context);
+        // 持ち主が見ている実行の文脈（送信の守りが緩い方）を、人のいない実行には使わせない（逆は守りが厳しくなるだけなので、そのまま）
+        if (context.loopback !== call.grant.loopback || (context.attended && !call.grant.attended) || context.productId !== call.grant.productId) await this.#closeContext(context);
       }
       return await fn(this.#api(call));
     } finally {
@@ -485,6 +486,8 @@ export class BrowserSession {
         actionTimeoutMs: browser.limits.actionTimeoutSec * 1000,
         // 操作の一覧への、確かめを出せない遷移の守り。一覧は遷移のたびに読む。ログイン用の窓は、持ち主が自分で操作するので守りを付けない
         sites: login ? () => [] : () => this.#d.config().tools.browser.sites,
+        // 送信の守り（D-8）。持ち主のブラウザは持ち主が見ている会話だけが使う。ログイン用の窓には付けない
+        ...(login ? {} : { sendGuard: 'attended' as const }),
       };
       const handle = await this.#d.driver.launch(options);
       if (epoch !== this.#epoch) { await withTimeout(handle.close(), CLOSE_TIMEOUT_MS); throw new BrowserFailure('aborted', 'browser.aborted'); }
@@ -544,6 +547,7 @@ export class BrowserSession {
         actionTimeoutMs: config.limits.actionTimeoutSec * 1000,
         sites: () => this.#d.config().tools.browser.sites,
         loopback: grant.loopback ? url => allowedLoopbackUrl(url, this.loopbackDenied()) : undefined,
+        sendGuard: grant.attended ? 'attended' : 'unattended',
       });
     } catch (error) {
       await made?.proxy.close().catch(() => undefined);
@@ -557,7 +561,7 @@ export class BrowserSession {
       await made.proxy.close().catch(() => undefined);
       throw new BrowserFailure('aborted', 'browser.aborted');
     }
-    const context: WorkContext = { conversationId: grant.conversationId, loopback: grant.loopback, productId: grant.productId, handle, proxy: made.proxy, idle: { token: 0, cancel: undefined } };
+    const context: WorkContext = { conversationId: grant.conversationId, loopback: grant.loopback, attended: grant.attended, productId: grant.productId, handle, proxy: made.proxy, idle: { token: 0, cancel: undefined } };
     handle.onPage(page => this.#popup(page, 'work', handle));
     handle.onDisconnected(() => { if (this.#contexts.get(context.conversationId) === context) void this.#closeContext(context); });
     this.#contexts.set(grant.conversationId, context);

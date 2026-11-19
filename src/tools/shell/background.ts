@@ -308,7 +308,12 @@ interface Job extends JobOwner {
   halting?: Promise<void>;
   finishedOrder: number;
   onExit: (() => void) | undefined;
+  // 出力に出たループバックの URL のポート（ブラウザの「その実行の開発サーバー」。9-1b の R-8）
+  ports: Set<number>;
 }
+
+const LOOPBACK_URL = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})\b/giu;
+const PORTS_PER_JOB = 16;
 
 export interface BackgroundOptions {
   logDir: string;
@@ -353,7 +358,7 @@ export class BackgroundJobs {
       decoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }, gates: { stdout: gate(), stderr: gate() },
       incoming: { stdout: '', stderr: '' }, flushTimer: undefined, cursor: 0,
       log: undefined, logOpened: false, logQueue: [], logPath: join(this.#logDir, `bg-${input.conversationId}-${seq}-${this.#instance}.log`), logBytes: 0, logCut: false,
-      rootExited: false, rootExit: deferred(), done: deferred(), finishedOrder: 0, onExit: input.onExit,
+      rootExited: false, rootExit: deferred(), done: deferred(), finishedOrder: 0, onExit: input.onExit, ports: new Set(),
     };
     this.#jobs.set(job.id, job);
     try {
@@ -406,6 +411,18 @@ export class BackgroundJobs {
     return [...this.#jobs.values()]
       .filter(job => (filter.conversationId === undefined || job.conversationId === filter.conversationId) && (filter.projectId === undefined || job.projectId === filter.projectId))
       .map(job => this.#view(job));
+  }
+
+  // 動いている裏のコマンドのうち、この会話かこのタスクが始めたものが出力に出したループバックの URL のポート
+  printedPorts(owner: { conversationId: string; taskId?: string | undefined }): Set<number> {
+    const out = new Set<number>();
+    for (const job of this.#jobs.values()) {
+      if (job.state !== 'running') continue;
+      if (job.conversationId !== owner.conversationId && (owner.taskId === undefined || job.taskId !== owner.taskId)) continue;
+      this.#flush(job);
+      for (const port of job.ports) out.add(port);
+    }
+    return out;
   }
 
   read(id: string, conversationId: string, from?: number): JobRead | undefined {
@@ -511,6 +528,10 @@ export class BackgroundJobs {
       job.incoming[channel] = '';
       if (text === '' && !final) continue;
       for (const unit of job.gates[channel].push(text, final)) {
+        for (const match of unit.text.matchAll(LOOPBACK_URL)) {
+          const port = Number(match[1]);
+          if (port > 0 && port < 65536 && job.ports.size < PORTS_PER_JOB) job.ports.add(port);
+        }
         job.ring.append(unit.text, { channel, ...(unit.continues ? { continues: true as const } : {}) }, this.#limits.ringBytes, MERGE_BELOW_BYTES);
       }
     }
