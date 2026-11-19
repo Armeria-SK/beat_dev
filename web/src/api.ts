@@ -62,10 +62,10 @@ export interface PendingAction {
   task_title: string | null; project_name: string | null; conversation_title?: string | null; project_archived?: boolean;
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
   created_at: number; decided_at: number | null; ran_at: number | null;
-  rule?: { shown: string; push?: true } | null;
+  rule?: { shown: string; push?: true; outside?: true } | null;
 }
 export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingKind, number>>; notParked: number; ruled?: Record<string, number> }
-export interface ApprovalRule { id: number; project_id: string; project_name: string | null; archived: boolean; kind: 'judge' | 'send' | 'delete' | 'policy'; tool: string; shown: string; created_at: number; push?: true }
+export interface ApprovalRule { id: number; project_id: string; project_name: string | null; archived: boolean; kind: 'judge' | 'send' | 'delete' | 'policy'; tool: string; shown: string; created_at: number; push?: true; outside?: true }
 export interface PendingCounts { waiting: number; byProject: Record<string, number>; acceptanceChanges: Record<string, number>; judgedToday: { allowed: number; parked: number } }
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionFix = 'queued' | 'running' | 'done' | 'failed';

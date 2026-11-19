@@ -181,7 +181,7 @@ test('4-J 確かめ: 外を読んだ実行の文が本文にあるとき、持�
   assert.equal(s.app.tasks.judgeRequest(id), '');
 });
 
-test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ会話のきれいな実行がメモを書いたら、新しい会話で始めたタスクの実行も外を読んだ扱いで始まり、task_create は持ち主に聞く', async t => {
+test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ会話のきれいな実行がメモを書いたら、新しい会話で始めたタスクの実行も外を読んだ扱いで始まる。AP-1c（Q2）で、task_create は持ち主でなく判定役が決める（ask なら judge の行）', async t => {
   const s = await setup(t);
   const id = await s.ownerTask({ title: 'Owner task', body: 'owner body', when: LATER });
   const chat = uuid(91);
@@ -195,14 +195,14 @@ test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ�
   assert.equal(s.app.runs.get(second.body.runId as string)?.tainted, 0, '前提: 書いた実行そのものは外を読んでいない');
   assert.equal(s.app.tasks.judgeRequest(id), 'Owner task\nowner body', '前提: 頼みは持ち主の文');
 
-  s.adapter().scripts = [call('task_create', { title: 'SPAWNED', requested_by_user: true, when: LATER }), reply('done')];
+  s.adapter().scripts = [call('task_create', { title: 'SPAWNED', requested_by_user: true, when: LATER }), reply('{"decision":"ask","reason":"check"}'), reply('done')];
   const started = s.app.engine.runTask(s.app.tasks.get(id)!, s.app.conversations.create({ kind: 'task' }).id, 'Do the task');
   assert.ok(started.ok);
   await started.done;
   assert.equal(s.app.runs.get(started.runId)?.tainted, 1);
   const rows = s.app.pending.list({ status: 'waiting' });
-  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'owner', true]], '判定役に回さず持ち主（Pending の owner）に聞く');
-  assert.match(rows[0]!.reason, /this run read outside content, and task_create would change tasks/u);
+  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'judge', true]], 'the judge decides, not the owner kind');
+  assert.match(rows[0]!.reason, /the judge wants the owner to decide: check/u);
   assert.equal(s.app.db.prepare("SELECT 1 FROM tasks WHERE title = 'SPAWNED'").get(), undefined);
 });
 

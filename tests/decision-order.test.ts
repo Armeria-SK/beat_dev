@@ -225,21 +225,21 @@ test('4-3a: 守る場所への書き込み（.git の中・製品の直下の AG
   assert.equal(readFileSync(join(r.root, 'AGENTS.md'), 'utf8'), 'orig');
 });
 
-test('4-3a: 外を読んだタスク（と親がタスクの子の担当）の escalateOnTaint の道具は owner で積まれ、外を読んだ会話は判定役へ、外を読んでいないタスクは動く', async t => {
+test('4-3a: AP-1c（Q2）で反転: 外を読んだタスク（と親がタスクの子の担当）の escalateOnTaint の道具も、外を読んだ会話と同じく判定役へ。外を読んでいないタスクは動く', async t => {
   const r = rig(t, { project: false });
   ranTasks.length = 0;
   const tainted = { tainted: true, sources: ['web_fetch'] };
   const task = { kind: 'task' as const, permissionMode: 'auto' as const, task: { id: 't1', control: { outcome: 'none' as const } } };
-  assert.equal((await r.call('fake_task_create', { title: 'from task' }, { ...task, taint: tainted })).decidedBy, 'pending');
-  assert.equal((await r.call('fake_task_create', { title: 'from child' }, { kind: 'agent', taint: tainted, parent: { runId: 'rp', conversationId: 'cp', kind: 'task', title: 'c', taskId: 't1' } })).decidedBy, 'pending');
-  assert.deepEqual(r.waiting().map(row => row.kind), ['owner', 'owner']);
-  assert.equal(r.judge.calls.length, 0);
+  assert.equal((await r.call('fake_task_create', { title: 'from task' }, { ...task, taint: tainted })).decidedBy, 'auto-mode');
+  assert.equal((await r.call('fake_task_create', { title: 'from child' }, { kind: 'agent', taint: tainted, parent: { runId: 'rp', conversationId: 'cp', kind: 'task', title: 'c', taskId: 't1' } })).decidedBy, 'auto-mode');
+  assert.deepEqual(r.waiting(), []);
+  assert.equal(r.judge.calls.length, 2);
   const chat = await r.call('fake_task_create', { title: 'from chat' }, { kind: 'chat', taint: tainted });
   assert.equal(chat.decidedBy, 'auto-mode', chat.output.content);
-  assert.equal(r.judge.calls.length, 1, '外を読んだ会話は判定役へ');
+  assert.equal(r.judge.calls.length, 3, '外を読んだ会話は判定役へ');
   const clean = await r.call('fake_task_create', { title: 'clean task' }, task);
   assert.equal(clean.decision, 'allow');
-  assert.deepEqual(ranTasks, ['from chat', 'clean task']);
+  assert.deepEqual(ranTasks, ['from task', 'from child', 'from chat', 'clean task']);
 });
 
 test('4-3a 順 4: 製品のフォルダの中の npm test と node script.js は判定役を呼ばずに動く（product-code）', { skip: !npmAvailable && 'npm が無い' }, async t => {

@@ -7,7 +7,7 @@ const en = {
   'invalid_status': 'status must be waiting or decided',
   'invalid_reason': 'reason must be text',
   'invalid_remember': 'remember must be true or false',
-  'not_rememberable': 'Pending item #{id} cannot become a rule: only an item from a product\'s run that had not read text from elsewhere, with a shape beat can match exactly, can',
+  'not_rememberable': 'Pending item #{id} cannot become a rule: only an item from a product\'s run, with a shape beat can match exactly, can',
   'rule_not_found': 'Rule #{id} was not found',
   'invalid_rule_id': 'A rule id must be a positive integer',
   'unknown_tool': 'The tool {tool} is not available, so it cannot be parked',

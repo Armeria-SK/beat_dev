@@ -289,7 +289,8 @@ test('5-J1: 料金のかかった失敗（max_tokens で切れた・答えの途
     const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
     await settled(s.app, sent.body.runId);
     assert.deepEqual(s.app.db.prepare('SELECT outcome, failed, judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })),
-      [{ outcome: 'failed', failed, judge_model: 'm1', input_tokens: 900, output_tokens: 400 }], end);
+      // AP-1d: a cut-off reply is asked once more, and the spend of both calls is added up
+      [{ outcome: 'failed', failed, judge_model: 'm1', input_tokens: end === 'truncated' ? 1800 : 900, output_tokens: end === 'truncated' ? 800 : 400 }], end);
   }
 });
 

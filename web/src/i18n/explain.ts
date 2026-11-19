@@ -560,6 +560,8 @@ export const EXPLAIN_KEYS = [
   'ui.pending.rememberNote',
   'ui.pending.rememberPush',
   'ui.set.rules.push',
+  'ui.pending.rememberOutside',
+  'ui.set.rules.outside',
   'ui.changes.loadFailed',
   'ui.changes.undoFailed',
   'ui.changes.toolsOnly',
