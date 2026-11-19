@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { NPX_TOOLS } from './code-guard.ts';
 import { LOOKUP } from './outbound.ts';
 import type { StatementFacts } from './shell-facts.ts';
-import { flatten, GIT_VARIABLE, insideCopy, pathCandidates, stripProvider } from './worktree-git.ts';
+import { flatten, GIT_VARIABLE, insideCopy, LAUNCHERS, pathCandidates, stripProvider } from './worktree-git.ts';
 
 export const FIX_BACKGROUND = 'fix.background';
 export const FIX_PUSH = 'fix.push';
@@ -40,21 +40,35 @@ const GIT_PLACE_EQ = /^--(?:git-dir|work-tree)=(.*)$/u;
 
 // 裏に残る・切り離されたプロセスを起こす印（& / Start-Process / start / Start-Job / setsid / at / systemd-run / wsl など。code-guard.ts の SPAWNERS）
 const DETACHING = new Set(['shape.background', 'code.spawn']);
-// パッケージを取ってきて動かす（npm exec / npm x / pnpm dlx / yarn dlx / bun x）
-const FETCH_AND_RUN: Record<string, ReadonlySet<string>> = { npm: new Set(['exec', 'x']), pnpm: new Set(['dlx']), yarn: new Set(['dlx']), bun: new Set(['x']) };
+// ジョブの外でプロセスを作らせる道（WMI の Win32_Process.Create・[wmiclass]）。起動役（wmic・Invoke-CimMethod・rundll32 など）は LAUNCHERS と code.launcher
+const WMI_CREATE = /win32_process|\[wmiclass\]/iu;
+// パッケージを取ってきて動かす・作る（npm exec / npm x / pnpm dlx / yarn dlx / bun x / npm create / npm init <pkg> など）
+const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const FETCH_AND_RUN = new Set(['exec', 'x', 'dlx', 'create']);
 
-// 名前だけで外へ出る文: npx の仲間、パッケージを取ってきて動かす文、名前を引く・届くかを見る文（宛先が字のままでも）
+// 名前だけで外へ出る文: npx の仲間、パッケージを取ってきて動かす・作る文、名前を引く・届くかを見る文（宛先が字のままでも）。
+// 値を取るオプション（-w a・--prefix .）で位置がずれても見落とさないよう、-- より前のどの語でも見る（npm run x のような名前も断る側に倒す）
 function reachesNetwork(st: StatementFacts): boolean {
   const program = st.program.toLowerCase();
   if (NPX_TOOLS.has(program) || LOOKUP.has(program)) return true;
-  const sub = st.words.slice(1).find(w => !w.text.startsWith('-'))?.text.toLowerCase();
-  return sub !== undefined && FETCH_AND_RUN[program]?.has(sub) === true;
+  let words = st.words.slice(1).map(w => w.text.toLowerCase());
+  if (program === 'corepack') {
+    const manager = words.findIndex(w => !w.startsWith('-'));
+    if (manager < 0 || !PACKAGE_MANAGERS.has(words[manager]!)) return false;
+    words = words.slice(manager + 1);
+  } else if (!PACKAGE_MANAGERS.has(program)) return false;
+  const end = words.indexOf('--');
+  const before = end < 0 ? words : words.slice(0, end);
+  return before.some((w, i) => FETCH_AND_RUN.has(w) || (w === 'init' && before.slice(i + 1).some(next => !next.startsWith('-'))));
 }
+
+const startsOutsideJob = (st: StatementFacts): boolean => LAUNCHERS.has(st.program.toLowerCase()) || st.reasonKeys.includes('code.launcher');
 
 export function fixShellRefusal(f: FixShellFacts): FixRefusal | undefined {
   const shown = f.command.trim().slice(0, 200);
   const all = flatten(f.statements);
   if (f.background || f.reasonKeys.some(key => DETACHING.has(key)) || all.some(st => st.reasonKeys.some(key => DETACHING.has(key)))) return { key: FIX_BACKGROUND, detail: shown };
+  if (f.reasonKeys.includes('code.launcher') || all.some(startsOutsideJob) || WMI_CREATE.test(f.command)) return { key: FIX_BACKGROUND, detail: shown };
   if (f.pushes > 0) return { key: FIX_PUSH, detail: shown };
   if (f.fetched || f.sends || f.askKinds.includes('egress') || all.some(reachesNetwork)) return { key: FIX_NETWORK, detail: shown };
   // GIT_DIR・GIT_WORK_TREE などは git を写しの外のリポジトリへ向けられる。名前がどこにあっても断る

@@ -138,7 +138,7 @@ const expandedPath = (text: string, base: string): string | undefined => {
 const GIT_LIKE = /^(?:git-.+|scalar)$/u;
 export const isGitProgram = (program: string): boolean => program === 'git' || GIT_LIKE.test(program);
 // 中の命令を shell-facts が読めない起動役（code-guard の LAUNCHERS も）
-const LAUNCHERS = new Set(['conhost', 'wt', 'wmic', 'invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi', 'script', 'flock', 'forfiles',
+export const LAUNCHERS: ReadonlySet<string> = new Set(['conhost', 'wt', 'wmic', 'invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi', 'script', 'flock', 'forfiles',
   'rundll32', 'regsvr32', 'installutil', 'regasm', 'regsvcs', 'cmstp', 'msiexec', 'bitsadmin', 'schtasks', 'runas']);
 // 中の命令を別の作業フォルダで動かすオプション（値が作業コピーの中と決まらなければ断る）。find の -execdir は見つけたファイルごとのフォルダ
 // PowerShell は引数の名前の一意な頭を受け付ける（-wo・-WO で -WorkingDirectory）

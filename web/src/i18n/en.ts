@@ -250,6 +250,7 @@ export const en = {
   'runs.by.pending': 'Parked in Pending',
   'runs.by.noJudge': 'No judge (owner setting)',
   'runs.by.ownerRule': "Your rule (don't ask again in this product)",
+  'runs.by.fix': 'Fix-run limits (private copy, no network)',
   'runs.by.notParked': 'Needs your OK, but cannot wait in Pending',
   'runs.by.outbound': 'Send and delete check',
   'runs.by.hook': (name: string) => `Hook ${name}`,

@@ -13,7 +13,7 @@ import { CHECK_TIMEOUT_MS, runProductCheck } from '../projects/check-run.ts';
 import { changedScripts, flagsFrom, parseNameStatus } from '../projects/diff-flags.ts';
 import { folderMissing, type ProjectStore } from '../projects/store.ts';
 import { BEAT_BRANCH, branchSlug, HELD_NAME, mainGitSafe, placeUnsafe, removeTree, type Worktrees, type WorktreeRow } from '../projects/worktree.ts';
-import type { RunJob } from '../os/run-job.ts';
+import { openRunJob, type RunJob } from '../os/run-job.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { isInside, isSecretPath } from '../tools/hooks/scope.ts';
 
@@ -158,7 +158,7 @@ function underLink(root: string, name: string): boolean {
 
 // 本体に取ってきた base..tip の合否（本体の git で）: リンク・submodule を足していない → 試験の削除・確かめに関わる変更 → 大きさ → 子孫か。通れば大きさと 6 行の見本
 async function judgeFix(git: Git, base: string, tip: string, check: string, limits: { files: number; lines: number }): Promise<{ reason: FixReason; detail: string } | { files: number; added: number; removed: number; diff: string[] }> {
-  const raw = text(await git(['diff', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff', base, tip, '--']));
+  const raw = text(await git(['diff', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff', '--ignore-submodules=none', base, tip, '--']));
   if (raw === undefined) return { reason: 'failed', detail: 'git diff failed in the product folder' };
   // --raw -z: ":<元の型> <新しい型> <元> <新> <状態>\0<パス>\0"。新しい型が 120000（リンク）・160000（submodule）なら残さない
   const fields = raw.split('\0');
@@ -203,8 +203,8 @@ export interface FixCopyDeps {
   random?: (bytes: number) => string;
 }
 
-// job: 直す実行のプロセスの入れ物。確かめのコマンドもここへ入れ、確かめが終わったら閉じる（残ったプロセスを止めてから比べる）
-export interface FixFinishOptions { check: string; limits?: { files: number; lines: number }; signal?: AbortSignal; timeoutMs?: number; job?: RunJob }
+// job: 直す実行のプロセスの入れ物（要る）。finishFixCopy は始めにどの道でも閉じ（直す実行の残ったプロセスを止める）、確かめのコマンドには新しい入れ物を作って、比べる前に閉じる
+export interface FixFinishOptions { check: string; limits?: { files: number; lines: number }; signal?: AbortSignal; timeoutMs?: number; job: RunJob }
 
 type Git = (args: string[]) => Promise<Buffer | null>;
 
@@ -312,6 +312,8 @@ export class FixCopies {
 
   // 合否の順: 書きかけのコミット → 確かめのコマンド → 作業の木と HEAD が変わっていない → 差分の印 → 大きさ → 元のコミットの子孫 → 本体の指紋 → 本体へ取ってくる → 写しを消す
   async finishFixCopy(id: string, options: FixFinishOptions): Promise<FixFinish> {
+    // 直す実行が起こして残ったプロセスを、写しでコミットする前に止める（どの道で返っても）
+    await options.job.close();
     const row = this.get(id);
     if (!row || row.kind !== 'fix' || row.state !== 'active') return { kept: false, reason: 'failed', detail: 'not an active fix copy' };
     const before = this.#before.get(id);
@@ -349,14 +351,19 @@ export class FixCopies {
     this.#set(id, { tip, own_tip: tip });
     if (tip === row.base) return this.#fail(row, 'no_changes', 'the run changed nothing');
 
-    // 2. 確かめのコマンド（持ち主が書いたもの。見張りを通さずに、写しの中で。直す実行のプロセスの入れ物に入れる）
-    const job = options.job;
-    const check = await runProductCheck({ command: options.check, root: this.#ownCopy(row)!.path, ceiling: dirname(this.#ownCopy(row)!.path) }, {
-      config: this.#d.config(), dataDir: this.#d.paths.data, signal: options.signal ?? new AbortController().signal, timeoutMs: options.timeoutMs ?? CHECK_TIMEOUT_MS,
-      ...(job ? { onSpawn: (child: ChildProcess) => job.add(child) } : {}),
-    });
-    // 直す実行と確かめが起こして残ったプロセスを、ここで全部止める（このあと写しと本体を比べる）
-    await job?.close();
+    // 2. 確かめのコマンド（持ち主が書いたもの。見張りを通さずに、写しの中で。確かめだけの新しいプロセスの入れ物に入れる）
+    const job = await openRunJob();
+    if ('failed' in job) return this.#fail(row, 'failed', `no process container for the check: ${job.failed}`);
+    let check: Awaited<ReturnType<typeof runProductCheck>>;
+    try {
+      check = await runProductCheck({ command: options.check, root: this.#ownCopy(row)!.path, ceiling: dirname(this.#ownCopy(row)!.path) }, {
+        config: this.#d.config(), dataDir: this.#d.paths.data, signal: options.signal ?? new AbortController().signal, timeoutMs: options.timeoutMs ?? CHECK_TIMEOUT_MS,
+        onSpawn: (child: ChildProcess) => job.add(child),
+      });
+    } finally {
+      // 確かめが起こして残ったプロセスを、ここで全部止める（このあと写しと本体を比べる）
+      await job.close();
+    }
     if (!check.ok) return this.#fail(row, 'check_failed', check.reason === 'aborted' ? 'the check was stopped' : `${check.reason}${check.exitCode !== null ? ` (exit ${check.exitCode})` : ''}: ${check.tail}`.slice(0, 2000));
 
     // 3. 確かめが写しの作業の木と HEAD を変えていないか（写しの git で）

@@ -4,7 +4,7 @@ import { formatList, formatNumber, t, type PlainKey } from './i18n/index.ts';
 const RUN_KIND: Record<string, PlainKey> = { chat: 'runs.kind.chat', task: 'runs.kind.task', review: 'runs.kind.review', agent: 'runs.kind.agent' };
 const DECISION: Record<ToolCallRow['decision'], PlainKey> = { allow: 'runs.decision.allow', ask: 'runs.decision.ask', deny: 'runs.decision.deny' };
 const DECIDED_BY: Record<string, PlainKey> = {
-  builtin: 'runs.by.builtin', registry: 'runs.by.registry', truncated: 'runs.by.truncated', validation: 'runs.by.validation', user: 'runs.by.user', 'conversation-grant': 'runs.by.grant', recheck: 'runs.by.recheck', policy: 'runs.by.policy', 'auto-mode': 'runs.by.auto', 'judge-reuse': 'runs.by.judgeReuse', mode: 'runs.by.mode', 'folder-grant': 'runs.by.folder', pending: 'runs.by.pending', 'not-parked': 'runs.by.notParked', outbound: 'runs.by.outbound', 'no-judge': 'runs.by.noJudge', 'owner-rule': 'runs.by.ownerRule',
+  builtin: 'runs.by.builtin', registry: 'runs.by.registry', truncated: 'runs.by.truncated', validation: 'runs.by.validation', user: 'runs.by.user', 'conversation-grant': 'runs.by.grant', recheck: 'runs.by.recheck', policy: 'runs.by.policy', 'auto-mode': 'runs.by.auto', 'judge-reuse': 'runs.by.judgeReuse', mode: 'runs.by.mode', 'folder-grant': 'runs.by.folder', pending: 'runs.by.pending', 'not-parked': 'runs.by.notParked', outbound: 'runs.by.outbound', 'no-judge': 'runs.by.noJudge', 'owner-rule': 'runs.by.ownerRule', fix: 'runs.by.fix',
 };
 const CHANGE: Record<string, PlainKey> = {
   create: 'runs.reviews.change.create', update: 'runs.reviews.change.update', forget: 'runs.reviews.change.forget', restore: 'runs.reviews.change.restore',

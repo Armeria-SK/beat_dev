@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -108,6 +108,16 @@ async function fixApp(t: { after: (fn: () => void) => void }, options: { check?:
 
 const sh = (command: string, extra: Record<string, unknown> = {}): Script => toolCall('shell_run', { command, ...extra });
 const editFix = (): Script => toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' });
+// ジョブの外でプロセスを作らせる形（WMI・起動役）。直す実行では動く前に断るので、試験の中でも動かない
+const OUTSIDE_JOB = [
+  'wmic process call create "node check.js"',
+  "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'node check.js' }",
+  "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'node check.js'",
+  `([wmiclass]"Win32_Process").Create('node check.js')`,
+  'rundll32 url.dll,FileProtocolHandler check.js',
+];
+// パッケージを取ってきて動かす・作る形（値を取るオプションで位置がずれるものも）
+const PACKAGE_FETCH = ['npm -w a exec vitest', 'npm --prefix . exec vitest', 'npm --loglevel silent exec vitest', 'pnpm --dir . dlx vitest', 'npm init vite', 'npm create vite', 'pnpm create vite', 'yarn create vite', 'bun create vite', 'corepack pnpm dlx vitest'];
 // パイプのある文（製品のコードの段 4 に当たらず、判定役へ行く）
 const PIPE = 'node -e "console.log(1)" | node check.js';
 const pidAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -161,6 +171,8 @@ test('8-6a: 本体は持ち主の取り込みまで変わらない — 本体へ
     sh('nslookup a.example.com'),
     sh('npm exec vitest'),
     toolCall('web_fetch', { url: 'https://example.com/' }),
+    ...OUTSIDE_JOB.map(command => sh(command)),
+    ...PACKAGE_FETCH.map(command => sh(command)),
     editFix(),
     reply('Changed bug to fixed in a.txt.'),
   );
@@ -169,11 +181,17 @@ test('8-6a: 本体は持ち主の取り込みまで変わらない — 本体へ
   assert.ok(result.ok, JSON.stringify(result));
   assert.ok(result.result.kept, JSON.stringify(result.result));
   const calls = s.calls();
-  const refused = calls.slice(0, 13);
-  assert.deepEqual(refused.map(c => c.decision), Array(13).fill('deny'), JSON.stringify(calls));
-  assert.equal(calls[13]!.tool, 'file_edit');
-  assert.equal(calls[13]!.decision, 'allow');
-  assert.deepEqual(refused.slice(1, 12).map(c => /fix run in a private copy/u.test(c.out)), Array(11).fill(true), JSON.stringify(refused));
+  const n = 13 + OUTSIDE_JOB.length + PACKAGE_FETCH.length;
+  const refused = calls.slice(0, n);
+  assert.deepEqual(refused.map(c => c.decision), Array(n).fill('deny'), JSON.stringify(calls));
+  assert.equal(calls[n]!.tool, 'file_edit');
+  assert.equal(calls[n]!.decision, 'allow');
+  const shellRefused = [...refused.slice(1, 12), ...refused.slice(13)];
+  assert.deepEqual(shellRefused.map(c => /fix run in a private copy/u.test(c.out)), Array(shellRefused.length).fill(true), JSON.stringify(refused));
+  const launched = refused.slice(13, 13 + OUTSIDE_JOB.length);
+  assert.deepEqual(launched.map(c => /background commands/u.test(c.out)), Array(OUTSIDE_JOB.length).fill(true), `ジョブの外でプロセスを作る形: ${JSON.stringify(launched)}`);
+  const fetchedRun = refused.slice(13 + OUTSIDE_JOB.length);
+  assert.deepEqual(fetchedRun.map(c => /with no network/u.test(c.out)), Array(PACKAGE_FETCH.length).fill(true), `パッケージを取ってくる形: ${JSON.stringify(fetchedRun)}`);
   assert.match(refused[8]!.out, /background commands/u, 'Start-Process は裏のコマンドとして断る');
   assert.deepEqual(refused.slice(9, 12).map(c => /with no network/u.test(c.out)), [true, true, true], 'npx・nslookup・npm exec は通信として断る');
   assert.equal(s.count('judge_calls'), 0, '判定役は 1 度も呼ばれない');
@@ -386,7 +404,9 @@ test('8-6a: 起動の見回りは、作りかけ・使いかけで残った写�
   assert.equal(existsSync(made.row.path!), false);
   assert.equal(fresh.get(made.row.id)!.state, 'discarded');
   assert.deepEqual(changedKeys(before, mainContent(s.product)), []);
-  assert.equal((await fresh.finishFixCopy(made.row.id, { check: 'node check.js' })).kept, false);
+  const sweptJob = await openRunJob();
+  assert.ok(!('failed' in sweptJob));
+  assert.equal((await fresh.finishFixCopy(made.row.id, { check: 'node check.js', job: sweptJob })).kept, false);
 });
 
 test('8-6a: 直す実行のシェルと確かめのコマンドが残した切り離した孫は、本体と比べる前に止まる（Windows のジョブ）', { skip: !gitAvailable || !WINDOWS }, async t => {
@@ -426,6 +446,45 @@ test('8-6a: 直す実行のシェルと確かめのコマンドが残した切�
   const alive = pidAlive(pid);
   if (alive) process.kill(pid);
   assert.equal(alive, false, 'finishFixCopy が閉じた');
+});
+
+test('8-6a: finishFixCopy は早く返る道でも、始めに直す実行の入れ物を閉じる', { skip: !gitAvailable || !WINDOWS }, async t => {
+  const s = await fixApp(t);
+  const made = await s.app.fixes.createFixCopy({ projectId: s.project.id, root: s.product, proposalId: s.proposal.id, title: 'early' });
+  assert.ok(made.ok);
+  const job = await openRunJob();
+  assert.ok(!('failed' in job));
+  t.after(() => job.close());
+  const sleeper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+  t.after(() => { if (sleeper.exitCode === null) sleeper.kill(); });
+  job.add(sleeper);
+  await new Promise(done => setTimeout(done, 300));
+  assert.equal(sleeper.exitCode, null, '前提: 入れたプロセスは生きている');
+  const exited = new Promise(done => sleeper.once('exit', done));
+  const finished = await s.app.fixes.finishFixCopy(made.row.id, { check: 'node check.js', job });
+  assert.equal(!finished.kept && finished.reason, 'no_changes');
+  await Promise.race([exited, new Promise(done => setTimeout(done, 3000))]);
+  assert.notEqual(sleeper.exitCode, null, '変更なしで返っても、入れ物のプロセスは止まった');
+});
+
+test('8-6a: .gitmodules が ignore = all でも、submodule（160000）を変える直しは has_links で残さない', { skip: !gitAvailable }, async t => {
+  const s = await fixApp(t);
+  const sub = gitIn(s.product, 'rev-parse', 'HEAD');
+  writeFileSync(join(s.product, '.gitmodules'), '[submodule "s"]\n\tpath = s\n\turl = ./s\n\tignore = all\n');
+  gitIn(s.product, 'add', '.gitmodules');
+  gitIn(s.product, 'update-index', '--add', '--cacheinfo', `160000,${sub},s`);
+  gitIn(s.product, 'commit', '-q', '-m', 'gitlink');
+  const other = gitIn(s.product, 'rev-parse', 'HEAD~2');
+  const bump: Script = async function* (req) {
+    gitIn(s.app.fixes.get(fixId(s))!.path!, 'update-index', '--cacheinfo', `160000,${other},s`);
+    yield* editFix()(req);
+  };
+  s.model.scripts.push(bump, reply('done'));
+  const before = mainContent(s.product);
+  const result = await s.run();
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.equal(!result.result.kept && result.result.reason, 'has_links', JSON.stringify(result.result));
+  assert.deepEqual(changedKeys(before, mainContent(s.product)), []);
 });
 
 test('8-6a: 本体の fetch.prune・fetch.pruneTags が入っていても、取ってくるときに本体のタグを消さない', { skip: !gitAvailable }, async t => {
@@ -498,11 +557,12 @@ test('8-6a: 本体の指紋は objects の中身の置き場で、足すのは�
   const s = await fixApp(t);
   const a = (await fingerprintMain(s.product, s.paths.data))!;
   writeFileSync(join(s.dir, 'blob.txt'), 'new object\n');
-  gitIn(s.product, 'hash-object', '-w', join(s.dir, 'blob.txt'));
+  const added = gitIn(s.product, 'hash-object', '-w', join(s.dir, 'blob.txt'));
   const b = (await fingerprintMain(s.product, s.paths.data))!;
   assert.deepEqual(mainPrintChanges(a, b), [], '足しただけ');
-  const loose = readdirSync(join(s.product, '.git', 'objects')).find(name => /^[0-9a-f]{2}$/u.test(name))!;
-  const file = readdirSync(join(s.product, '.git', 'objects', loose))[0]!;
+  // 消すのは足したばかりの、どこからも指されない中身（コミットの中身を消すと git status が落ちて指紋が取れない）
+  const loose = added.slice(0, 2);
+  const file = added.slice(2);
   rmSync(join(s.product, '.git', 'objects', loose, file), { force: true });
   const c = (await fingerprintMain(s.product, s.paths.data))!;
   assert.deepEqual(mainPrintChanges(b, c), [`.git/objects/${loose}/${file}`]);
@@ -608,6 +668,16 @@ test('8-6a D-11 (1): fixShellRefusal は写しの外・解けないパス・GIT_
     assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] })?.key, 'fix.network', words.join(' '));
   }
   assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'test')] }), undefined, 'npm test は通信に数えない');
+  for (const words of [['npm', '-w', 'a', 'exec', 'v'], ['npm', '--prefix', '.', 'exec', 'v'], ['npm', '--loglevel', 'silent', 'exec', 'v'], ['pnpm', '--dir', '.', 'dlx', 'v'], ['npm', 'init', 'vite'], ['npm', 'create', 'vite'], ['pnpm', 'create', 'vite'], ['yarn', 'create', 'vite'], ['bun', 'create', 'vite'], ['corepack', 'pnpm', 'dlx', 'v']]) {
+    assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] })?.key, 'fix.network', words.join(' '));
+  }
+  assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'init', '-y')] }), undefined, 'npm init -y は取ってこない');
+  assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'test', '--', 'exec')] }), undefined, '-- のあとは見ない');
+  for (const program of ['wmic', 'rundll32', 'invoke-cimmethod', 'invoke-wmimethod']) {
+    assert.equal(fixShellRefusal({ ...base, statements: [run(program, 'x')] })?.key, 'fix.background', program);
+  }
+  assert.equal(fixShellRefusal({ ...base, statements: [st({ reasonKeys: ['code.launcher'] })] })?.key, 'fix.background', 'code.launcher');
+  assert.equal(fixShellRefusal({ ...base, reasonKeys: ['code.launcher'] })?.key, 'fix.background', '呼び出し全体の code.launcher');
   assert.equal(fixShellRefusal({ ...base, command: 'git status -m GIT_DIR' })?.key, 'fix.outside');
   assert.equal(fixShellRefusal({ ...base, statements: [st({ cwd: null })] })?.key, 'fix.outside');
   assert.equal(fixShellRefusal({ ...base, statements: [st({ cwd: join(copy, '..') })] })?.key, 'fix.outside');
