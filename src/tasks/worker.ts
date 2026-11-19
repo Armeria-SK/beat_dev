@@ -22,9 +22,12 @@ import { OWNER_FIX, OWNER_RUN_KV, SCOUT_RUN, type Task, type TaskStore } from '.
 import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
-import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
+import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutsOn, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
+import { dropUnrecordedFixes, fixCandidate, markFixTried, recordFix } from '../scout/fix.ts';
+import { runFix } from '../scout/fix-run.ts';
+import type { FixCopies } from '../scout/fix-copy.ts';
 import { clearSleep, currentMarks, ownerRejectedSince, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
-import { treeMark } from '../scout/areas.ts';
+import { headOf, treeMark } from '../scout/areas.ts';
 import { readLedger } from '../scout/ledger.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
 import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
@@ -83,11 +86,13 @@ export interface WorkerDeps {
   places?: TaskPlaces | undefined;
   worktrees?: Pick<Worktrees, 'finishWorktree' | 'removeWorktree'> | undefined;
   background?: Pick<BackgroundJobs, 'stopWhere'> | undefined;
+  fixes?: FixCopies | undefined;
 }
 
 export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
 
-export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string }
+// fix: 考える番に動かした直す実行（beat 8-6b）
+export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string; fix?: boolean }
 
 interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: boolean; marks?: Marks }
 
@@ -185,6 +190,8 @@ export class Worker {
   // Think now で頼まれた製品（押した回数ではなく「1 回動かす」の印。動き出したら外す）と、その頼みで動いている実行
   readonly #scoutAsked = new Set<string>();
   readonly #scoutAskedRuns = new Set<string>();
+  // 直す実行の確かめのコマンドを止める合図（キーは runId。止める条件で直す実行と一緒に止める）
+  readonly #fixAborts = new Map<string, AbortController>();
   // 材料を読んでいて、まだ #running に入っていない考える実行の製品（そのあいだの Think now を重ねないため）
   #scoutStarting: ScoutPlan | undefined;
   // 作業フォルダの印を最後に比べた時刻（製品ごと）。見回りの間隔より短くは比べない
@@ -652,7 +659,8 @@ export class Worker {
     if (!(c.routing.scout ?? []).length) return 'stop.route';
     const project = run.projectId ? this.#d.projects?.get(run.projectId) : undefined;
     if (!project || project.archived_at !== null) return 'stop.archived';
-    if (project.scout_mode !== 'research') return 'stop.mode';
+    if (!scoutsOn(project.scout_mode)) return 'stop.mode';
+    if (run.fix && project.scout_mode !== 'fix') return 'stop.fix_mode';
     const freeAt = this.#budgetFreeAt(c, this.#now());
     const familyCache = new Map<string, number | undefined>();
     if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && this.#familyFreeAt(t, this.#now(), false, familyCache) === undefined && (freeAt === undefined || this.#forced.has(t.id) || this.#buildFamily(t)) })) return 'stop.owner';
@@ -675,6 +683,7 @@ export class Worker {
     if (!why) return;
     this.#scoutStops.set(run.runId, why);
     this.#d.engine.stop(run.runId);
+    this.#fixAborts.get(run.runId)?.abort();
   }
 
   async #scoutPlan(c: AppConfig, now: number, own: boolean): Promise<{ plan?: ScoutPlan; wakeAt?: number }> {
@@ -686,7 +695,7 @@ export class Worker {
     const eligible = scoutProjects(this.#d.db);
     for (const id of [...this.#scoutAsked]) {
       const project = this.#d.projects.get(id);
-      if (!project || project.archived_at !== null || project.scout_mode !== 'research' || (!route.local && (c.scout?.cloudRunsPerHour ?? 1) === 0)) {
+      if (!project || project.archived_at !== null || !scoutsOn(project.scout_mode) || (!route.local && (c.scout?.cloudRunsPerHour ?? 1) === 0)) {
         this.#scoutAsked.delete(id);
         this.#scoutChanged(id);
         continue;
@@ -727,6 +736,12 @@ export class Worker {
     if (projectFolderGone(projects!, project.id)) {
       this.#scoutFailure(project.id, now, scoutText(language, 'note.folder'), language);
       return 'folder_missing';
+    }
+    // 直す番（beat 8-6b D-7）: fix の製品に直す提案があれば、考える実行の代わりに直す実行を 1 つ（Think now の回は考える）
+    if (!plan.asked && project.scout_mode === 'fix' && this.#d.fixes) {
+      const head = await headOf(project.root, dirname(projects!.dir)).catch(() => null);
+      const proposalId = head ? fixCandidate(this.#d.db, kv, project, head) : undefined;
+      if (proposalId && head) return this.#startFix(plan, proposalId, head, c, now, release);
     }
     const window = route.available ?? 32_000;
     // 休みの印は材料を読む前に取る（読んでいる間の Reject・計画書の保存を、休んだあとの変化として拾う）
@@ -784,6 +799,70 @@ export class Worker {
       this.#scoutChanged(project.id);
     }
     return 'ran';
+  }
+
+  // 直す実行（beat 8-6b）。考える実行と同じ枠: 同時に 1 本・routing.scout の先頭・クラウドの 1 時間の回数・休みと失敗の歯止め・止める条件（止めたら写しを捨てる）
+  async #startFix(plan: ScoutPlan, proposalId: string, head: string, c: AppConfig, now: number, release: () => void): Promise<TickResult> {
+    const { kv, tasks } = this.#d;
+    const language = languageOf(c);
+    const { project, route } = plan;
+    const abort = new AbortController();
+    let runId: string | undefined;
+    // 前の直す実行で消しきれなかった写し（Windows で消したファイルがまだ掴まれているなど）を、新しい写しを作る前に消し直す
+    await this.#d.fixes!.sweepFixCopies().catch(() => undefined);
+    await dropUnrecordedFixes({ db: this.#d.db, kv, worktrees: this.#d.worktrees!, ...(this.#d.log ? { log: this.#d.log } : {}) }).catch(() => undefined);
+    const result = await runFix({ tasks, conversations: this.#d.conversations, projects: this.#d.projects!, engine: this.#d.engine, fixes: this.#d.fixes! }, proposalId, {
+      signal: abort.signal,
+      onStart: (started, taskId) => {
+        runId = started;
+        if (!route.local) noteCloudRun(kv, now);
+        saveScoutState(kv, project.id, { last: now });
+        this.#running.set(started, { kind: 'scout', fix: true, taskId, runId: started, title: tasks.get(taskId)?.title ?? '', projectId: project.id });
+        this.#fixAborts.set(started, abort);
+        this.#scoutStarting = undefined;
+        this.#scoutChanged(project.id);
+        release();
+        this.#whileScout(c);
+      },
+    }).finally(() => {
+      if (runId) {
+        this.#running.delete(runId);
+        this.#fixAborts.delete(runId);
+      }
+    });
+    const stop = runId ? this.#scoutStops.get(runId) : undefined;
+    if (runId) this.#scoutStops.delete(runId);
+    try {
+      if (stop || (!result.ok && result.errorKind === 'cancelled')) {
+        // 確かめが通ったあとに止まった直しは、持ち主に見せずにブランチごと捨てる（Pre-fix にしない）
+        if (result.ok && result.result.kept) {
+          const dropped = await this.#d.worktrees!.removeWorktree(result.row.id, { keepBranch: false, state: 'discarded' });
+          if (!dropped.ok || dropped.branchKept) this.#d.log?.(`[WARN] Could not remove the branch ${result.row.branch} of a stopped fix`);
+        }
+        saveScoutState(kv, project.id, { until: now + SCOUT_SHORT_WAIT_MS });
+        return 'ran';
+      }
+      markFixTried(kv, proposalId, head);
+      const upstream = result.ok || !result.runId ? '' : new Runs(this.#d.db).get(result.runId)?.error_message ?? '';
+      if (!result.ok && (result.errorKind === 'rate_limit' || CREDIT_ERROR.test(upstream) || CREDIT_ERROR.test(result.detail))) {
+        const until = nextMidnight(now, c.timezone);
+        restScout(kv, route.providerId, until);
+        this.#d.notifications.notify({ kind: 'health_alert', title: scoutText(language, 'rest.title'), body: scoutText(language, 'rest.body', { model: route.modelId }), link: '#/settings', dedupKey: `scout-rest:${route.providerId}:${until}` });
+      } else if (!result.ok && result.reason === 'run_failed') this.#scoutFailure(project.id, now, result.detail, language);
+      else saveScoutState(kv, project.id, { fails: 0, until: now + SCOUT_SHORT_WAIT_MS, note: '' });
+      const kept = await recordFix({ db: this.#d.db, kv, tasks, worktrees: this.#d.worktrees!, projectsDir: this.#d.projects!.dir, language, log: this.#d.log }, proposalId, result);
+      if (kept) this.#notifyPrefix(project, now, language);
+      return runId ? 'ran' : 'idle';
+    } finally {
+      this.#scoutChanged(project.id);
+    }
+  }
+
+  // 新しい Pre-fix の知らせ（製品ごとにまとめて 1 つ。読むまで重ねない）
+  #notifyPrefix(project: ProjectRow, now: number, language: Language): void {
+    const prefix = `scout-prefix:${project.id}:`;
+    if (this.#d.notifications.unreadOf('info').some(n => n.dedup_key?.startsWith(prefix))) return;
+    this.#d.notifications.notify({ kind: 'info', title: scoutText(language, 'prefixes.title', { name: project.name }), body: scoutText(language, 'prefixes.body', { name: project.name }), link: `#/p/${project.id}`, dedupKey: `${prefix}${now}`, projectId: project.id });
   }
 
   #scoutChanged(projectId: string): void {
@@ -871,7 +950,7 @@ export class Worker {
       broken > 0 ? scoutText(language, 'note.broken', { count: broken }) : '',
     ].filter(Boolean).join(' · ') || null;
     const view = (s: ScoutView['state']): ScoutView => ({ state: s, examined: state.examined ?? 0, area: run ? this.#d.engine.scoutArea(run.runId) : null, lastChangeAt: state.changedAt ?? state.last ?? null, note });
-    if (project.archived_at !== null || project.scout_mode !== 'research' || !(c.routing.scout ?? []).length) return view('off');
+    if (project.archived_at !== null || !scoutsOn(project.scout_mode) || !(c.routing.scout ?? []).length) return view('off');
     if (run) return view('thinking');
     if (sleep) return view('asleep');
     const route = this.#d.engine.scoutRoute();
@@ -885,7 +964,7 @@ export class Worker {
     const project = this.#d.projects?.get(projectId);
     if (!project) return undefined;
     const c = this.#d.config();
-    if (project.archived_at !== null || project.scout_mode !== 'research') return { ok: false, code: 'scout_off' };
+    if (project.archived_at !== null || !scoutsOn(project.scout_mode)) return { ok: false, code: 'scout_off' };
     const route = (c.routing.scout ?? []).length ? this.#d.engine.scoutRoute() : null;
     if (!route) return { ok: false, code: 'scout_no_model' };
     if (!route.local && (c.scout?.cloudRunsPerHour ?? 1) === 0) return { ok: false, code: 'scout_cloud_zero' };

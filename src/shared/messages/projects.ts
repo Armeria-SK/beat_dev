@@ -13,7 +13,7 @@ const en = {
   'fixed_on_conversation': 'The product of a conversation cannot be changed',
   'bad_scout_mode': 'scoutMode must be off, research or fix',
   'scout_mode_key': 'Send the mode as scoutMode (scout_mode is only in the reply)',
-  'scout_fix_later': 'Research and pre-fix arrives later. Choose Off or Research only for now',
+  'scout_fix_needs_check': 'Research and pre-fix needs a check command, so the scout can prove a fix before keeping it. Set the check command first',
   'scout_off': 'The scout is off for this product. Choose Research only first',
   'scout_no_model': 'No usable model is set for the scout. Choose one in Settings › Models (Scout)',
   'scout_cloud_zero': 'The scout model is a cloud model and scout.cloudRunsPerHour is 0, so the scout does not run',

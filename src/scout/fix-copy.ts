@@ -157,7 +157,7 @@ function underLink(root: string, name: string): boolean {
 }
 
 // 本体に取ってきた base..tip の合否（本体の git で）: リンク・submodule を足していない → 試験の削除・確かめに関わる変更 → 大きさ → 子孫か。通れば大きさと 6 行の見本
-async function judgeFix(git: Git, base: string, tip: string, check: string, limits: { files: number; lines: number }): Promise<{ reason: FixReason; detail: string } | { files: number; added: number; removed: number; diff: string[] }> {
+async function judgeFix(git: Git, base: string, tip: string, check: string, limits: { files: number; lines: number }, secrets: readonly string[]): Promise<{ reason: FixReason; detail: string } | { files: number; added: number; removed: number; diff: string[] }> {
   const raw = text(await git(['diff', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff', '--ignore-submodules=none', base, tip, '--']));
   if (raw === undefined) return { reason: 'failed', detail: 'git diff failed in the product folder' };
   // --raw -z: ":<元の型> <新しい型> <元> <新> <状態>\0<パス>\0"。新しい型が 120000（リンク）・160000（submodule）なら残さない
@@ -188,7 +188,7 @@ async function judgeFix(git: Git, base: string, tip: string, check: string, limi
   if (lines.length > limits.files || added + removed > limits.lines) return { reason: 'too_large', detail: `${lines.length} files, ${added + removed} changed lines` };
   if (text(await git(['merge-base', base, tip]))?.trim() !== base) return { reason: 'not_descendant', detail: 'the fix does not build on the commit it started from' };
   const patch = text(await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=0', base, tip, '--'])) ?? '';
-  const diff = patch.split('\n').filter(line => /^[+-]/u.test(line) && !/^(?:\+\+\+|---) /u.test(line)).slice(0, FIX_DIFF_LINES).map(line => redactSecrets(line).slice(0, 200));
+  const diff = patch.split('\n').filter(line => /^[+-]/u.test(line) && !/^(?:\+\+\+|---) /u.test(line)).slice(0, FIX_DIFF_LINES).map(line => redactSecrets(line, secrets).slice(0, 200));
   return { files: lines.length, added, removed, diff };
 }
 
@@ -197,7 +197,9 @@ export interface FixCopyDeps {
   paths: Pick<AppPaths, 'data'>;
   config: () => AppConfig;
   projects: Pick<ProjectStore, 'get'>;
-  worktrees: Pick<Worktrees, 'place' | 'get'>;
+  worktrees: Pick<Worktrees, 'place' | 'get' | 'removeWorktree'>;
+  // 差分の見本の行を切る前に伏せる、設定の鍵（registry.secrets()）
+  secrets?: () => readonly string[];
   now?: () => number;
   log?: (line: string) => void;
   random?: (bytes: number) => string;
@@ -402,7 +404,7 @@ export class FixCopies {
       if (await run(['fetch', '--no-tags', '--no-prune', '--no-prune-tags', '--no-write-fetch-head', '--no-recurse-submodules', '--no-auto-gc', '--no-auto-maintenance', '--', copyPath, ref]) === null) return 'git fetch failed';
       if (await run(['cat-file', '-e', `${tip}^{commit}`]) === null) return 'the checked commit did not arrive';
       arrived = true;
-      const judged = await judgeFix(run, row.base, tip, options.check, limits);
+      const judged = await judgeFix(run, row.base, tip, options.check, limits, this.#d.secrets?.() ?? []);
       if ('reason' in judged) return judged;
       if (await run(['update-ref', '-m', `beat: fix ${row.id}`, ref, tip, '']) === null) return 'git update-ref failed';
       return judged;
@@ -452,7 +454,14 @@ export class FixCopies {
     let left = 0;
     for (const row of rows) {
       if (row.state !== 'removing' && this.#before.has(row.id)) continue;
-      await this.#drop(row, row.state === 'removing' && row.ending ? row.ending as 'branch' | 'discarded' | 'gone' : 'discarded', row.note ?? 'beat restarted');
+      if (row.state === 'removing' && row.path === null) {
+        // 写しはもう無く、ブランチの片付け（removeWorktree）の途中で止まった行: ブランチの片付けからやり直す
+        await this.#d.worktrees.removeWorktree(row.id, { keepBranch: row.keep_branch === 1 });
+      } else {
+        await this.#drop(row, row.state === 'removing' && row.ending ? row.ending as 'branch' | 'discarded' | 'gone' : 'discarded', row.note ?? 'beat restarted');
+        // 再起動で途切れた直しが本体にブランチを作り終えていた（update-ref のあと）なら、それも捨てる。先端が確かめたコミットのままのときだけ消す
+        if (row.own_tip && this.get(row.id)?.state === 'discarded') await this.#d.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
+      }
       if (this.get(row.id)?.state === 'removing') left++;
       else removed++;
     }

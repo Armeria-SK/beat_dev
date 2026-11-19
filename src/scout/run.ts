@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { KV } from '../db/kv.ts';
 import { withGit } from '../mesh/folders.ts';
 import type { PlanStore } from '../projects/plan.ts';
-import type { ProjectRow } from '../projects/store.ts';
+import type { ProjectRow, ScoutMode } from '../projects/store.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
 import { validCommit } from './areas.ts';
@@ -59,6 +59,9 @@ export function nextMidnight(now: number, timezone: string): number {
   return now - elapsed + 86_400_000;
 }
 
+// 考える役が動くモード（Research only と Research and pre-fix）。モードの比べはここだけ（F7）
+export const scoutsOn = (mode: ScoutMode | string): boolean => mode === 'research' || mode === 'fix';
+
 export function scoutBuilt(db: DatabaseSync, projectId: string): boolean {
   return db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status = 'done' LIMIT 1").get(projectId) !== undefined;
 }
@@ -68,10 +71,10 @@ export function scoutBusy(db: DatabaseSync, projectId: string): boolean {
 }
 
 export function scoutProjects(db: DatabaseSync): ProjectRow[] {
-  return db.prepare(`SELECT p.* FROM projects p WHERE p.archived_at IS NULL AND p.scout_mode = 'research'
+  return (db.prepare(`SELECT p.* FROM projects p WHERE p.archived_at IS NULL
     AND EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.acceptance_items IS NOT NULL AND t.spawned_by IS NULL AND t.status = 'done')
     AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.status IN ('ready', 'running') AND t.proposed_by IS NOT 'scout-run')
-    ORDER BY p.created_at, p.rowid`).all() as unknown as ProjectRow[];
+    ORDER BY p.created_at, p.rowid`).all() as unknown as ProjectRow[]).filter(p => scoutsOn(p.scout_mode));
 }
 
 export function pickScoutProject(db: DatabaseSync, kv: KV, now: number): { project?: ProjectRow; wakeAt?: number } {

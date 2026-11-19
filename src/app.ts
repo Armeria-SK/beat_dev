@@ -74,6 +74,7 @@ import { maskedTaskView } from './web/task-view.ts';
 import { ProjectStore } from './projects/store.ts';
 import { Worktrees } from './projects/worktree.ts';
 import { FixCopies } from './scout/fix-copy.ts';
+import { dropRejectedPrefix, dropUnrecordedFixes } from './scout/fix.ts';
 import { MERGE_WATCH_MS, MergeWatch } from './projects/merge-watch.ts';
 import { TaskPlaces } from './tasks/place.ts';
 import { PlanStore } from './projects/plan.ts';
@@ -169,6 +170,8 @@ export class App {
   readonly places: TaskPlaces;
   // beat 8-6a: 直す実行の写し（まだどこからも選ばない。8-6b が使う）
   readonly fixes: FixCopies;
+  // 取り消した提案の Pre-fix のブランチの片付け（提案ごとに 1 本。画面の Reject はこれを待ってから返す）
+  readonly #prefixDrops = new Map<string, Promise<void>>();
   readonly mergeWatch: MergeWatch;
   readonly #mergeTimer: ReturnType<typeof setInterval> | undefined;
   readonly plans: PlanStore;
@@ -238,8 +241,9 @@ export class App {
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
     this.worktrees = new Worktrees({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, now, log: this.log });
     void this.worktrees.sweepWorktrees().catch(error => this.log(`[WARN] Could not check beat working copies: ${(error as Error).message}`));
-    this.fixes = new FixCopies({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, worktrees: this.worktrees, now, log: this.log });
-    void this.fixes.sweepFixCopies().catch(error => this.log(`[WARN] Could not check beat fix copies: ${(error as Error).message}`));
+    this.fixes = new FixCopies({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, worktrees: this.worktrees, now, log: this.log, secrets: () => this.registry.secrets() });
+    void this.fixes.sweepFixCopies().then(() => dropUnrecordedFixes({ db: this.db, kv: this.kv, worktrees: this.worktrees, log: this.log }))
+      .catch(error => this.log(`[WARN] Could not check beat fix copies: ${(error as Error).message}`));
     this.places = new TaskPlaces({ db: this.db, tasks: this.tasks, projects: this.projects, worktrees: this.worktrees, config: () => this.config() });
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
@@ -274,7 +278,7 @@ export class App {
     this.mergeWatch = new MergeWatch({
       db: this.db, kv: this.kv, worktrees: this.worktrees, dataDir: this.paths.data, log: this.log, now,
       stopBackground: taskId => this.background.stopWhere({ taskId }),
-      onChanged: (row, outcome, by) => this.#branchChanged(row.task_id, row.branch, outcome, by),
+      onChanged: (row, outcome, by) => this.#branchChanged(row.kind === 'fix' ? row.proposal_id : row.task_id, row.branch, outcome, by),
     });
     this.#mergeTimer = options.workerTimers === false ? undefined : setInterval(() => this.mergeWatch.due(), MERGE_WATCH_MS);
     this.#mergeTimer?.unref();
@@ -305,7 +309,7 @@ export class App {
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, memoryFiles: this.memoryFiles, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
-      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background,
+      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background, fixes: this.fixes,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
     this.tasks.onChange = task => {
@@ -323,7 +327,10 @@ export class App {
       }
       this.worker.poke();
     };
-    this.tasks.onFinished = task => { if (!isScoutRun(task) && this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task); };
+    this.tasks.onFinished = task => {
+      if (!isScoutRun(task) && this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task);
+      if (task.status === 'cancelled' && task.proposal !== null) void this.dropRejectedPrefix(task.id);
+    };
     this.tasks.onUncancelled = task => { this.curiosity.onTaskRestored(task); this.questions.resumeAnswered(task); };
     this.tasks.onDeleted = removed => {
       const title = removed.title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Bidi_Control}]+/gu, ' ').replace(/[\\"]/gu, '\\$&');
@@ -613,6 +620,17 @@ export class App {
     if (!task) return;
     this.tasks.event(task.id, 'worktree', by, taskText(languageOf(this.config()), `event.branch_${outcome}`, { branch }));
     this.bus.publish({ type: 'task.changed', task: maskedTaskView(this, task) });
+  }
+
+  // beat 8-6b: 取り消した提案の Pre-fix のブランチを捨てる。同じ提案の片付けが動いていれば、それを返す
+  dropRejectedPrefix(proposalId: string): Promise<void> {
+    const running = this.#prefixDrops.get(proposalId);
+    if (running) return running;
+    const drop = dropRejectedPrefix({ db: this.db, tasks: this.tasks, worktrees: this.worktrees, language: languageOf(this.config()), log: this.log }, proposalId)
+      .catch(error => this.log(`[WARN] Could not remove a rejected pre-fix branch: ${(error as Error).message}`))
+      .finally(() => this.#prefixDrops.delete(proposalId));
+    this.#prefixDrops.set(proposalId, drop);
+    return drop;
   }
 
   close(): void {

@@ -6,6 +6,7 @@ export interface Proposal {
   goal: string | null;
   evidence: string | null;
   ledger: string | null;
+  fixable?: true;
 }
 
 export const PROPOSAL_LIMITS = { why: 400, areas: 10, area: 200, goal: 200, evidence: 2000, ledger: 64 } as const;
@@ -17,7 +18,7 @@ export const deepenNote = (head: string | null): string => `commit ${head ?? 'no
 // 持ち主が直した提案（PATCH /api/tasks/:id が残す 'edited' / 'user' の経過）。考える実行はこれを書き換えない
 export const OWNER_EDITED_SQL = "EXISTS (SELECT 1 FROM task_events oe WHERE oe.task_id = tasks.id AND oe.kind = 'edited' AND oe.actor = 'user')";
 
-const KEYS = ['kind', 'why', 'area', 'size', 'goal', 'evidence', 'ledger'] as const;
+const KEYS = ['kind', 'why', 'area', 'size', 'goal', 'evidence', 'ledger', 'fixable'] as const;
 
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const LINE_BREAKS = /[\r\n\t]/gu;
@@ -45,6 +46,7 @@ export function proposalProblem(value: unknown): string | null {
     if (problem !== null) return problem;
   }
   if (p.size !== 'S' && p.size !== 'M' && p.size !== 'L') return 'size must be S, M or L';
+  if (p.fixable !== undefined && p.fixable !== true) return 'fixable must be true when given';
   return optionalProblem('goal', p.goal, PROPOSAL_LIMITS.goal)
     ?? optionalProblem('evidence', p.evidence, PROPOSAL_LIMITS.evidence, true)
     ?? optionalProblem('ledger', p.ledger, PROPOSAL_LIMITS.ledger);
@@ -56,5 +58,5 @@ export function readProposal(raw: string | null | undefined): Proposal | null {
   try { value = JSON.parse(raw); } catch { return null; }
   if (proposalProblem(value) !== null) return null;
   const p = value as Proposal;
-  return { kind: p.kind, why: p.why, area: [...p.area], size: p.size, goal: p.goal, evidence: p.evidence, ledger: p.ledger };
+  return { kind: p.kind, why: p.why, area: [...p.area], size: p.size, goal: p.goal, evidence: p.evidence, ledger: p.ledger, ...(p.fixable ? { fixable: true as const } : {}) };
 }

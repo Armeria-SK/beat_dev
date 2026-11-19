@@ -49,6 +49,10 @@ const en = {
   'event.schedule_untrusted': 'Its text came from a schedule that had text written after reading text from elsewhere.',
   'summary.done_from_ui': 'Marked as done from the screen',
   'summary.cancelled_from_ui': 'Cancelled from the screen',
+  'summary.prefix_approved': 'Pre-fix approved. Merge the branch {branch} into the product yourself; the card moves to Done when the merge is seen',
+  'event.prefix_rejected': 'Pre-fix rejected, so the branch {branch} was removed',
+  'event.prefix_branch_kept': 'Pre-fix rejected, but the branch {branch} has commits that were not made by beat, so it was kept',
+  'event.prefix_branch_left': 'Pre-fix rejected, but the branch {branch} was kept. Delete it yourself if you no longer need it',
   'summary.cancelled_schedule_deleted': 'Cancelled because its schedule was deleted while this run was waiting',
 
   'reason.no_model': 'Waiting because no model is available: {detail}',

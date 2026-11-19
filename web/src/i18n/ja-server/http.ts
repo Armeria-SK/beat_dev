@@ -24,6 +24,7 @@ export const httpJa = {
   'already_finished': "このタスクはもう終わっています",
   'scout_run': "これは scout の実行です。beat が自分で始めて止めるので、ここからは変えられません",
   'no_branch': "このタスクには、取り込み待ちのブランチがありません",
+  'prefix_undecided': "先にこの直しを Approve するか Reject してください",
   'branch_busy': "beat がこのブランチを片づけている最中です。少し待ってからもう一度押してください",
   'branch_moved': "見たあとでブランチが変わりました。捨てる前に、もう一度コミットを確かめてください",
   'branch_changed': "見たあとで作業コピーのファイルが変わりました。捨てる前に、もう一度ファイルを確かめてください",
