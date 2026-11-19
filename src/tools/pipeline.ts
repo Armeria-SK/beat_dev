@@ -10,6 +10,7 @@ import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
 import { stricterMode, type PermissionMode } from '../shared/permission-mode.ts';
 import { guardText } from '../shared/messages/guard.ts';
+import { scoutText } from '../shared/messages/scout.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
@@ -100,7 +101,16 @@ export interface JudgeLimitSet { chat: JudgeLimits; unattended: JudgeLimits }
 
 export const JUDGE_LIMITS: JudgeLimitSet = { chat: { answerMs: 20_000, slotWaitMs: 40_000 }, unattended: { answerMs: 60_000 } };
 
-export const noOneToAsk = (ctx: Pick<ToolContext, 'kind' | 'scout'>): boolean => ctx.kind === 'review' || ctx.scout === true;
+// Pending に積めない実行（振り返り・考える実行・直す実行）と、判定役を呼べない実行（振り返り・考える実行）。
+// 直す実行（beat 8-6a D-11）は Pending に積まないが、判定役は呼べる（4 の形の npm test などを止めないため。考える実行の印で動かすと 4 の形より前で断られる）
+export const cannotPark = (ctx: Pick<ToolContext, 'kind' | 'scout' | 'fix'>): boolean => ctx.kind === 'review' || ctx.scout === true || ctx.fix === true;
+export const cannotJudge = (ctx: Pick<ToolContext, 'kind' | 'scout'>): boolean => ctx.kind === 'review' || ctx.scout === true;
+
+// 直す実行の判定役に見せる頼みの文: beat が書いた決まった文だけ（提案の文は Web から来たので入れない。D-11）
+export function judgeRequestOf(ctx: Pick<ToolContext, 'fix' | 'project'>, deps: Pick<PipelineDeps, 'lastUserRequest'>): string {
+  if (ctx.fix) return scoutText('en', 'fix.judge_request', { path: ctx.project?.root ?? '' });
+  return deps.lastUserRequest?.() ?? '';
+}
 export const unattendedRun =(ctx: Pick<ToolContext, 'kind' | 'parent'>): boolean => ctx.kind === 'task' || (ctx.kind === 'agent' && ctx.parent?.kind !== 'chat');
 
 function judgeLimitsFor(ctx: ToolContext, deps: PipelineDeps): JudgeLimits {
@@ -318,6 +328,10 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (decision !== 'deny' && submitsOf(tool, first) && ctx.kind !== 'chat') return refuseSubmit();
   const outbound = decision === 'deny' ? undefined : outboundOfCall(tool, first, language);
   if (outbound?.kind === 'deny') return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: outbound.reason }));
+  // 直す実行（beat 8-6a D-11 の 1）: 外へ出る・外から取る呼び出しは、道具を問わず判定役にも Pending にも回さず断る（シェルは shell.ts が先に fix.* で断る）
+  if (ctx.fix && decision !== 'deny' && (network || first?.fetched === true || outbound?.kind === 'send' || askKinds.has('egress'))) {
+    return refuse('deny', 'fix', toolText(language, 'pipeline.denied', { reasons: guardText(language, 'fix.network', { cmd: tool.name }) }));
+  }
   const tainted = ctx.taint.tainted || conversationTainted(deps);
   // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる。拒否は拒否のまま
   if (ctx.taint.tainted && tool.escalateOnTaint === true && decision !== 'deny') {
@@ -384,7 +398,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound, offer = false): Promise<ToolCallOutcome> => {
     const sendOrDelete = parkOutbound?.kind === 'send' || parkOutbound?.kind === 'delete' ? parkOutbound : undefined;
     const parkReasons = [...new Set([...(sendOrDelete ? [sendOrDelete.reason] : []), ...reasons])];
-    if (noOneToAsk(ctx)) return refuse('deny', 'pending',toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
+    if (cannotPark(ctx)) return refuse('deny', 'pending',toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
     if (tool.replayable === false) return finish({ output: { content: pendingText('en', 'not_parked', { tool: tool.name, reason }), isError: true }, decision: 'ask', decidedBy: 'not-parked', invalidArguments: false });
     if (!deps.pending) return refuse('deny', 'pending', pendingText('en', 'no_pending', { reason }));
     const parkCwd = callCwd();
@@ -419,7 +433,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       decision = 'allow'; decidedBy = OWNER_RULE; ruleGate = parkRule; judgedId = `rule:${parkRule.id}`;
     } else if (parkAs) return park(parkAs.kind, parkAs.reason, outbound, ruleKind);
     if (decision === 'ask') {
-      if (noOneToAsk(ctx)) return refuse('deny', decidedBy,toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
+      if (cannotJudge(ctx)) return refuse('deny', decidedBy,toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
       if (stepFour && first?.productRun !== undefined) {
         decision = 'allow';
         decidedBy = first.productRun;
@@ -429,11 +443,13 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           runId: ctx.runId, runKind: ctx.kind, projectId: ctx.project?.id ?? null, tool: tool.name, reasonKeys: judgeKeys, askKinds: [...askKinds], outcome, failed, spend,
         });
         const noJudge = runsWithoutJudge(ctx, deps);
+        // 直す実行は判定役の「許す」でだけ動く。判定役を切っていれば断る（D-11）
+        if (noJudge && ctx.fix) return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: [...reasons, guardText(language, 'fix.no_judge')].join('\n- ') }));
         if (noJudge && judgeKeys.includes(SELF_TOUCH_KEY)) return park('owner', pendingText('en', 'owner_no_judge_self', { reasons: reasons.join('; ') }));
         // AP-1c sends this to the judge; with the judge off nobody would decide it, so it still waits for the owner
         if (noJudge && unattendedRun(ctx) && tool.escalateOnTaint === true && askKinds.has('taint')) return park('owner', pendingText('en', 'owner_task_taint', { name: tool.name }));
         if (noJudge && judgeKeys.includes(OPAQUE_CONTROL_KEY)) return park('owner', pendingText('en', 'owner_no_judge_opaque', { reasons: reasons.join('; ') }));
-        if (noJudge && !(deps.lastUserRequest?.() ?? '').trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
+        if (noJudge && !judgeRequestOf(ctx, deps).trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
         if (noJudge && tool.mcp && tool.effect === 'write') return park('owner', pendingText('en', 'owner_no_judge_mcp', { server: tool.mcp.server, tool: tool.mcp.tool }));
         const ruled = ruleFor(candidateFor('judge', first, outbound));
         const classify = deps.autoClassify;
@@ -441,7 +457,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) => noJudge || ruled ? undefined :
           deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
         const judgeInput: ClassifierInput = {
-          userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
+          userRequest: judgeRequestOf(ctx, deps), tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
         };
         const cwdNow = callCwd();
         const snapshotNow = () => {

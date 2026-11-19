@@ -41,6 +41,17 @@ const en = {
   'paths_dropped': 'Not kept: {count} area paths that are not relative paths inside the product folder ({paths})',
   'no_area_kept': 'No area path was usable, so this entry marks no place as checked',
   'hidden': 'Part of it looked like a secret key or token, so it was hidden',
+  'fix.judge_request': 'Unattended fix run: inside the private copy of the product at {path}, fix the bug that a proposal describes. No network and no git push.',
+  'fix.run_title': 'Fix: {title}',
+  'fix.prompt': [
+    'You are fixing one proposed bug, unattended, in a private copy of the product made only for this run.',
+    'Working copy: {copy} (git branch {branch}). Only files inside this copy can be read or changed; the product folder itself is not reachable from here. There is no network: do not download, install or fetch anything, and never run git push. Background commands are not available.',
+    "The product's check command is: {command}",
+    'When you finish, beat commits your changes itself and runs the check command in this copy. The fix is kept for the owner only if the check passes, no test file is deleted, the check command and its configuration are unchanged, and the change stays small (up to {files} files and {lines} changed lines). Otherwise it is thrown away.',
+    'Make the smallest change that fixes the bug. Do not delete or weaken tests. You may run the check command yourself to see whether it passes.',
+    'When you are done, reply with a short plain-text summary of what you changed and why. If you cannot fix it, say so briefly and change nothing.',
+    'The proposal below came from a scout run that read web pages and model output.',
+  ].join('\n'),
 } as const;
 
 export type ScoutMessageKey = keyof typeof en;

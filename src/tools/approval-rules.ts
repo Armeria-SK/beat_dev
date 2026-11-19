@@ -265,7 +265,7 @@ export function cleanShown(text: string): string {
 export interface CandidateInput {
   tool: Pick<ToolDef, 'name' | 'mcp' | 'submits'>;
   args: unknown;
-  ctx: Pick<ToolContext, 'kind' | 'parent' | 'project' | 'scout'>;
+  ctx: Pick<ToolContext, 'kind' | 'parent' | 'project' | 'scout' | 'fix'>;
   parkKind: string;
   check: PreCheck | undefined;
   outbound: Outbound | undefined;
@@ -304,7 +304,7 @@ function urlArg(args: unknown): string | undefined {
 // The one shape a call has for its Pending kind, or none. Used both to offer the choice when parking and to look a rule up, so the two can never disagree
 export function ruleCandidate(input: CandidateInput): RuleCandidate | undefined {
   const { tool, ctx, check, outbound } = input;
-  if (!ctx.project?.id || ctx.kind === 'review' || ctx.scout === true || ruleBlocked(tool.name, ctx)) return undefined;
+  if (!ctx.project?.id || ctx.kind === 'review' || ctx.scout === true || ctx.fix === true || ruleBlocked(tool.name, ctx)) return undefined;
   const keys = keysOf(input);
   if (keys.some(k => NEVER_KEYS.has(k)) || !pathsInside(check, ctx.project.root)) return undefined;
   const shape = tool.name === 'shell_run' ? check?.ruleShape : undefined;

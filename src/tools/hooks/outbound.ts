@@ -35,7 +35,7 @@ const ALWAYS_SEND = new Set([
   'send-mailmessage', 'mail', 'mailx', 'sendmail', 'bitsadmin', 'start-bitstransfer', 'pscp', 'plink', 'psftp', 'ssh-copy-id', 'finger',
 ]);
 const WEB_PROGRAMS = new Set(['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
-const LOOKUP = new Set(['nslookup', 'dig', 'host', 'ping', 'tracert', 'traceroute', 'resolve-dnsname', 'test-netconnection', 'test-connection']);
+export const LOOKUP: ReadonlySet<string> = new Set(['nslookup', 'dig', 'host', 'ping', 'tracert', 'traceroute', 'resolve-dnsname', 'test-netconnection', 'test-connection']);
 const FETCHERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3', 'pipx', 'uv', 'poetry', 'gem', 'cargo', 'go', 'composer', 'docker', 'podman']);
 const SECRET_CHECKED = new Set([...ALWAYS_SEND, ...WEB_PROGRAMS, ...LOOKUP, 'gh', 'git', 'openssl', 'tailscale', 'hg', 'svn', ...FETCHERS]);
 const DELETE_PROGRAMS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'srm', 'del', 'erase', 'rd', 'remove-item', 'ri', 'clear-content', 'clc']);

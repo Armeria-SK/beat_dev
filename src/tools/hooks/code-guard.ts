@@ -58,7 +58,7 @@ const PACKAGE_TOOLS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const PACKAGE_READONLY_SUB = new Set(['ls', 'list', 'll', 'la', 'view', 'info', 'show', 'outdated', 'why', 'explain', 'help', 'audit', 'version', 'bin', 'root', 'prefix']);
 const RUNNER_TOOLS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'bundle']);
 // パッケージの道具を取ってきて（または node_modules/.bin のものを）動かす。node_modules は beat が書き換えられるので、毎回確かめる
-const NPX_TOOLS = new Set(['npx', 'pnpx', 'bunx']);
+export const NPX_TOOLS: ReadonlySet<string> = new Set(['npx', 'pnpx', 'bunx']);
 const BUILD_TOOLS = new Set([
   'make', 'gmake', 'nmake', 'just', 'rake', 'ninja', 'mvn', 'gradle', 'gradlew', 'ant', 'sbt', 'pytest', 'tox', 'nox', 'jest', 'vitest', 'mocha', 'playwright', 'msbuild',
 ]);

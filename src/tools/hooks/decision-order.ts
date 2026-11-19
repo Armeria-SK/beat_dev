@@ -13,6 +13,7 @@ const REFUSED = [
   'web.secret_text', 'web.long_query', 'web.fetch_off', 'web.search_off', 'web.scout_fetch_limit',
   'file.outside', 'file.root_write', 'file.root_read', 'file.root_sep', 'file.readonly', 'file.symlink',
   'wt.git_shared', 'wt.write_main', 'wt.push_beat', 'wt.main_path', 'wt.opaque', 'wt.git_env', 'wt.outside_path',
+  'fix.outside', 'fix.push', 'fix.network', 'fix.background',
 ] as const;
 
 const OWNER = [

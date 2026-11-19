@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,6 +17,7 @@ import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts'
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
+import { fixShellRefusal } from '../hooks/fix-guard.ts';
 import { broadPush, gitWithOutsidePath, linkOutOfCopy, mainWrites, namesMain, worktreeGitRefusal, WT_MAIN_PATH, WT_OUTSIDE_PATH, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
 import { installTouchOf, protectedTouchOf } from '../hooks/protected-touch.ts';
@@ -169,7 +171,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;
   const self = verdict.decision === 'deny' ? undefined : selfTarget(input.command, ctx.config.server);
   if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'] };
-  const place = ctx.place && ctx.project?.root ? { worktree: ctx.project.root, productRoot: ctx.place.productRoot, cwd: cwd.cwd } : undefined;
+  const place = ctx.place?.kind === 'worktree' && ctx.project?.root ? { worktree: ctx.project.root, productRoot: ctx.place.productRoot, cwd: cwd.cwd } : undefined;
   // 作業コピーのタスクは、本体のフォルダ（作業コピーの外）を作業フォルダにして動かさない（files.ts の checkFilePath のシェル版）
   if (place && mainWrites([cwd.cwd], place).length) return { decision: 'deny', reasons: [guardText(language, WT_MAIN_PATH, { path: cwd.cwd })], reasonKeys: [WT_MAIN_PATH] };
   if (place && verdict.decision !== 'deny') {
@@ -206,6 +208,14 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   if (input.background === true && pushes.length) return { decision: 'deny', reasons: [guardText(language, 'shell.background_push')] };
   const beatPush = pushes.length && gitExe && verdict.decision !== 'deny' ? beatBranchPush(verdict.statements, isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }), cwd.cwd) : undefined;
   if (beatPush !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_PUSH_BEAT, { cmd: beatPush })], reasonKeys: [WT_PUSH_BEAT] };
+  // 直す実行（beat 8-6a D-11 の 1）: 裏のコマンド・push・通信・写しの外のパスは、判定役にも Pending にも回さずここで断る
+  if (ctx.place?.kind === 'fix' && ctx.project?.root && verdict.decision !== 'deny') {
+    const refused = fixShellRefusal({
+      copy: ctx.project.root, cwd: cwd.cwd, command: input.command, background: input.background === true, statements: verdict.statements, paths: verdict.paths, writes: verdict.writes,
+      reasonKeys: verdict.reasonKeys, askKinds: verdict.askKinds, fetched: verdict.fetched === true, pushes: pushes.length, sends: outbound?.kind === 'send',
+    });
+    if (refused) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.detail })], reasonKeys: [refused.key] };
+  }
   const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
   const run = ctx.project?.root && verdict.decision === 'ask' ? productRunOf({
     root: ctx.project.root, verdict,
@@ -357,6 +367,9 @@ export const shellRun: ToolDef<ShellInput> = {
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
+    if (input.background === true && ctx.fix) return { content: guardText(language, 'fix.background', { cmd: input.command.slice(0, 200) }), isError: true };
+    const fixJob = ctx.fixJob;
+    if (ctx.fix && !fixJob) return { content: guardText(language, 'fix.no_job', {}), isError: true };
     if (input.background === true) return runBackground(input, ctx, info, { cwd: cwd.cwd, shell, child, settings });
     const ownerHooks = info?.approvedOnce === true ? info.check?.ownHooksDir : undefined;
     const pushCheck = info?.pushCheck;
@@ -373,6 +386,7 @@ export const shellRun: ToolDef<ShellInput> = {
         cwd: cwd.cwd, env: placeEnv(ctx, { ...child.env, ...gitRun?.env }), timeoutMs: timeoutSec * 1000, signal: ctx.signal,
         maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
         ...(shell.stdin ? { input: shell.stdin(input.command) } : {}),
+        ...(fixJob ? { onSpawn: (spawned: ChildProcess) => fixJob.add(spawned) } : {}),
       });
       pushRefused = gitRun?.refused?.() === true;
     } finally { gitRun?.cleanup(); }

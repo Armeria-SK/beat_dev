@@ -626,5 +626,6 @@ export const NOT_EXPLAIN: Partial<Record<DictKey, string>> = {
   'ui.ob.style.friendly.example': 'Sample of the speaking style the agent will use, shown as an example',
   'ui.ob.model.keyOptional': 'Field label: text that names an input stays a name (placeholders inside the input are guidance and are translated)',
   'runs.by.ownerRule': 'Label of who decided, next to the other decided-by labels (a name)',
+  'runs.by.fix': 'Label of who decided, next to the other decided-by labels (a name)',
   'ui.pending.remember': 'Button label',
 };
