@@ -94,13 +94,15 @@ export function classifyAnthropicError(error: unknown, signal: AbortSignal, secr
   return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error), secrets).slice(0, UPSTREAM_KEEP) });
 }
 
-// 送り返した考える部分を API が断った 400 か（署名が合わない・前の発言が変わって別の会話のものになった）。断りの文は、どの発言のどのブロックかを頭に付けて
-// その thinking / redacted_thinking ブロックを名指しする（実際の API: "messages.1.content.0: Invalid `signature` in `thinking` block"）。考える深さの設定の誤りなど、ほかの 400 は送り直さない
+// 送り返した考える部分を API が断ったと分かる文（署名が合わない・前の発言が変わって別の会話のものになった）。断りの文は、どの発言のどのブロックかを頭に付けて
+// その thinking / redacted_thinking ブロックを名指しする（実際の API: "messages.1.content.0: Invalid `signature` in `thinking` block"）
 const THINKING_REJECTED = /^messages\.\d+\.content\.\d+: .*`(?:redacted_)?thinking` block/u;
-function thinkingRejected(error: unknown): boolean {
-  if (!(error instanceof Anthropic.APIError) || error.status !== 400) return false;
-  const body = error.error as { error?: { message?: string } } | undefined;
-  return THINKING_REJECTED.test(body?.error?.message ?? '');
+// 要求の形の誤り（400 の invalid_request_error）なら、考える部分を断ったと分かる文か（known）を返す。それ以外の失敗は undefined
+function requestRejected(error: unknown): { known: boolean } | undefined {
+  if (!(error instanceof Anthropic.APIError) || error.status !== 400) return undefined;
+  const body = error.error as { error?: { type?: string; message?: string } } | undefined;
+  if (body?.error?.type !== 'invalid_request_error') return undefined;
+  return { known: THINKING_REJECTED.test(body.error.message ?? '') };
 }
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -167,10 +169,13 @@ export class AnthropicAdapter implements ProviderAdapter {
       const replay = !this.#noReplay.has(req.model.model) && req.messages.some(m => m.role === 'assistant' && m.thinking?.provider === this.provider.id && m.thinking.model === req.model.model && m.thinking.blocks.length > 0);
       let stream;
       try { stream = await create(replay); } catch (error) {
-        // 送り返した考える部分を断られたら（署名が合わない・前の発言が変わった）、このモデルには以後送り返さず、外して 1 回だけ送り直す
-        if (!replay || !thinkingRejected(error)) throw error;
-        this.#noReplay.add(req.model.model);
+        // 考える部分を送り返した要求が 400（要求の形の誤り）で断られたら、断りの文に関わらず、外して 1 回だけ送り直す（新しいアカウントで前の発言の変化を断る文は確かめていないため）。
+        // このモデルに以後送り返さないのは、外したら通ったとき、または考える部分を断ったと分かる文のとき。外しても断られたら、送り直しの誤りを返す
+        const rejected = replay ? requestRejected(error) : undefined;
+        if (!rejected) throw error;
+        if (rejected.known) this.#noReplay.add(req.model.model);
         stream = await create(false);
+        this.#noReplay.add(req.model.model);
       }
       for await (const event of stream) {
         switch (event.type) {

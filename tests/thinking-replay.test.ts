@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
@@ -123,33 +124,59 @@ test('F3 Anthropic: 送り返した考える部分を API が 400 で断った�
   assert.deepEqual(assistantTypes(bodies[2]!), ['text', 'tool_use', 'tool_use']);
 });
 
-test('F3 Anthropic: 考える部分と関係の無い 400 は送り直さず、そのまま失敗にする', async () => {
-  const other = () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'max_tokens: too large' } }), { status: 400, headers: { 'content-type': 'application/json', 'request-id': 'req_400' } });
-  const { adapter, bodies } = capturing([other]);
-  await assert.rejects(drain(adapter, request('claude-a', history(record()))));
-  assert.equal(bodies.length, 1);
-});
-
 const badRequest = (message: string) => () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }), { status: 400, headers: { 'content-type': 'application/json', 'request-id': 'req_400' } });
+const serverError = () => new Response(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'thinking failed' } }), { status: 500, headers: { 'content-type': 'application/json', 'request-id': 'req_500' } });
+const knownRejection = 'messages.1.content.0: Invalid `signature` in `thinking` block';
 
 test('F3 Anthropic: 実際の API の断りの文（署名だけの短い形）でも外して送り直す', async () => {
-  const { adapter, bodies } = capturing([badRequest('messages.1.content.0: Invalid `signature` in `thinking` block')]);
+  const { adapter, bodies } = capturing([badRequest(knownRejection)]);
   await drain(adapter, request('claude-a', history(record())));
   assert.equal(bodies.length, 2);
   assert.deepEqual(assistantTypes(bodies[1]!), ['text', 'tool_use', 'tool_use']);
 });
 
-test('F3 Anthropic: 「thinking」や「signature」の語を含んでも、考える部分のブロックを名指ししない 400 は送り直さない', async () => {
+test('F3 Anthropic: 知らない文の 400 でも、考える部分を送っていたら外して 1 回だけ送り直し、通ればそのモデルには以後送り返さない', async () => {
+  const { adapter, bodies } = capturing([badRequest('messages.1: the conversation prefix no longer matches this reasoning')]);
+  const events = await drain(adapter, request('claude-a', history(record())));
+  assert.deepEqual(events.at(-1), { type: 'done', stop: 'end_turn' });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(assistantTypes(bodies[1]!), ['text', 'tool_use', 'tool_use']);
+  await drain(adapter, request('claude-a', history(record())));
+  assert.equal(bodies.length, 3);
+  assert.deepEqual(assistantTypes(bodies[2]!), ['text', 'tool_use', 'tool_use'], '以後は送り返さない');
+});
+
+test('F3 Anthropic: 外しても断られる 400（考える部分と関係が無い）は、送り直しの誤りで失敗にし、そのモデルには次も送り返す', async () => {
   for (const message of [
+    'max_tokens: too large',
     '`max_tokens` must be greater than `thinking.budget_tokens`',
     'thinking: Input tag \'enabled\' found using \'type\' does not match any of the expected tags',
     'messages.2.content.0: unexpected `tool_use_id` found in `tool_result` blocks (thinking about it will not help)',
     'invalid request signature',
   ]) {
-    const { adapter, bodies } = capturing([badRequest(message)]);
+    const { adapter, bodies } = capturing([badRequest(message), badRequest(message)]);
     await assert.rejects(drain(adapter, request('claude-a', history(record()))), message);
-    assert.equal(bodies.length, 1, message);
+    assert.equal(bodies.length, 2, message);
+    await drain(adapter, request('claude-a', history(record())));
+    assert.deepEqual(assistantTypes(bodies[2]!), ['thinking', 'redacted_thinking', 'text', 'tool_use', 'thinking', 'tool_use'], message);
   }
+});
+
+test('F3 Anthropic: 考える部分を断ったと分かる文なら、外した送り直しが失敗しても、そのモデルには以後送り返さない', async () => {
+  const { adapter, bodies } = capturing([badRequest(knownRejection), badRequest('max_tokens: too large')]);
+  await assert.rejects(drain(adapter, request('claude-a', history(record()))));
+  await drain(adapter, request('claude-a', history(record())));
+  assert.equal(bodies.length, 3);
+  assert.deepEqual(assistantTypes(bodies[2]!), ['text', 'tool_use', 'tool_use']);
+});
+
+test('F3 Anthropic: 400 でない失敗と、考える部分を送っていない要求の 400 は送り直さない', async () => {
+  const failed = capturing([serverError]);
+  await assert.rejects(drain(failed.adapter, request('claude-a', history(record()))));
+  assert.equal(failed.bodies.length, 1);
+  const plain = capturing([badRequest('max_tokens: too large')]);
+  await assert.rejects(drain(plain.adapter, request('claude-a', history())));
+  assert.equal(plain.bodies.length, 1);
 });
 
 test('F3 OpenAI 互換: 考える部分を持つ発言も、持たない発言と同じ内容を送る', () => {
@@ -220,7 +247,7 @@ async function engineApp(t: { after: (fn: () => void) => void }, contextLength =
     assert.ok(outcome.ok, JSON.stringify(outcome));
     return await app.engine.wait(outcome.runId)!;
   };
-  return { app, adapter: () => adapter, events, run };
+  return { app, adapter: () => adapter, events, run, paths };
 }
 const sentThinking = (req: ModelRequest) => req.messages.some(m => m.role === 'assistant' && m.thinking !== undefined);
 const strip = (m: ChatMessage): ChatMessage => { if (m.role !== 'assistant' || !m.thinking) return m; const { thinking: _t, ...rest } = m; return rest; };
@@ -288,4 +315,26 @@ test('F3 エンジン: 上限で切れた返事の考える部分と、署名の
   const saved = (c: string) => s.app.conversations.messages(c).map(m => m.message).filter(m => m.role === 'assistant').map(m => m.role === 'assistant' ? m.thinking?.blocks.map(b => b.type === 'thinking' ? b.signature : 'redacted') : undefined);
   assert.equal(saved('c1').some(b => b?.includes('SIG-CUT')), false);
   assert.deepEqual(saved('c2'), [['SIG-OK']]);
+});
+
+test('F3 エンジン: 考える部分を送らなくなったら、道具の結果の量の見積もりも考える部分を数えない（呼び出しと同じ履歴で決める）', async t => {
+  const s = await engineApp(t);
+  writeFileSync(join(s.paths.workspace, 'big.txt'), 'abcdefghij '.repeat(4_000));
+  const thinkRead = (n: number): Script => async function* (req) {
+    yield { type: 'thinking', block: { type: 'thinking', thinking: '', signature: `SIG-R${n}`, at: 0, lead: true } };
+    for (const c of withLoad({ id: `call_${n}`, name: 'file_read', arguments: { path: 'big.txt' } }, req)) yield { type: 'tool_call', call: c };
+    yield { type: 'usage', usage: { outputTokens: 25_000 } };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  };
+  const cut: Script = async function* () { yield { type: 'text', delta: '読んだ結果は途中' }; yield { type: 'done', stop: 'max_tokens' as StopReason }; };
+  s.adapter().scripts.push(thinkRead(1), thinkRead(2), thinkRead(3), cut, reply('まで'));
+  assert.ok((await s.run('c1', '読んで')).ok);
+  const results = s.app.conversations.messages('c1').map(m => m.message).filter(m => m.role === 'tool');
+  assert.equal(results.length, 3);
+  assert.equal(sentThinking(s.adapter().calls[3]!), false, '3 つ分の考える部分は入らないので送らない');
+  assert.ok(results[2]!.content.length > 8_000, `3 つ目の結果は最低の量（600 トークン）より十分大きい: ${results[2]!.content.length}`);
+  assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'output_continue_no_room'), false, '続きを頼める');
+  assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'output_continued'), true);
+  const usage = s.app.engine.contextUsage('c1');
+  assert.ok(usage.ok && usage.ratio < 1, JSON.stringify(usage));
 });

@@ -31,13 +31,13 @@ const cutText = (text: string): Script => async function* () {
   yield { type: 'done', stop: 'max_tokens' as StopReason };
 };
 
-async function setup(t: { after: (fn: () => void) => void }, model?: ModelConfig, probe: Partial<ProbeResult> = {}) {
+async function setup(t: { after: (fn: () => void) => void }, model?: ModelConfig, probe: Partial<ProbeResult> = {}, backups: ModelConfig[] = []) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [model ?? { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
-  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
+  config.models = [model ?? { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }, ...backups];
+  config.routing = { chat: ['m', ...backups.map(b => b.id)], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
@@ -456,6 +456,14 @@ test('F1: 捨てた呼び出しの使用量も実行の使用量に入る（成�
   const failed = await s.run('もう一度');
   assert.equal(failed.result.ok, false);
   assert.equal(s.app.runs.get(failed.runId)!.output_tokens, 64_000);
+});
+
+test('F1: 上げた上限は、上げたモデルにだけ効く。同じ実行で予備のモデルに替わったら、そのモデルのふだんの上限から始める', async t => {
+  const s = await setup(t, big(1_000_000), {}, [{ ...big(40_000), id: 'm2', model: 'y' }]);
+  s.adapter().scripts.push(thinkingOnly, fail(new Error('boom')), reply('おわり'));
+  const { result } = await s.run('作って');
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.deepEqual(s.adapter().calls.map(c => [c.model.id, c.maxOutputTokens]), [['m', 32_000], ['m', 64_000], ['m2', 10_000]]);
 });
 
 test('F1: 続きを頼んだあとの返事が考えるだけで上限に達し、もう上げられなければ、続きの一言を重ねず、それまでの文で切れたとして終える', async t => {

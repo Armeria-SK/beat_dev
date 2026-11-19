@@ -261,8 +261,8 @@ export class ChatEngine {
   #runFence = new Map<string, string>();
   #runIndex = new Map<string, string>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
-  // 考えるだけで上限に達したあと、その実行で上げた返事の上限（#assemble がモデルの許す範囲で使う）
-  #outputCap = new Map<string, number>();
+  // 考えるだけで上限に達したあと、その実行で上げた返事の上限（実行 → モデルの ID → 上限。上げたモデルにだけ、#assemble がそのモデルの許す範囲で使う）
+  #outputCap = new Map<string, Map<string, number>>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
   #hardStops = new Map<string, AbortController>();
@@ -1175,7 +1175,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject });
+        const { toolDefs, listed, system, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject });
         const run = this.#loaded.get(p.runId);
         if (run) {
           run.sent.clear();
@@ -1184,17 +1184,9 @@ export class ChatEngine {
         const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name), ...(run?.loaded ?? [])]);
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
-        const fit = (messages: ChatMessage[]) => fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages, tools: apiTools, available, factor });
-        // 考える部分は、古い発言を 1 つも外さずに（考える部分の量も数えて）入りきるときだけ送り返す。前の発言が変わると API が断るため
-        const replayable = history.some(m => m.role === 'assistant' && m.thinking);
-        let whole: ReturnType<typeof fitMessages> | undefined;
-        if (replayable) {
-          try { const all = fit(history); if (all.removed === 0) whole = all; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
-        }
-        const replay = whole !== undefined;
         let fitted;
         try {
-          fitted = whole ?? fit(replayable ? history.map(m => withThinkingFor(m)) : history);
+          fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
         } catch (error) {
           if (!(error instanceof ContextOverflow)) throw error;
           last = { kind: 'context_overflow', message: engineText(language, 'fit.overflow', { required: error.required.toLocaleString('en-US'), available: error.available.toLocaleString('en-US') }), code: 'engine.fit.overflow', params: { required: error.required, available: error.available }, retryable: false, route,
@@ -1267,7 +1259,9 @@ export class ChatEngine {
           const raised = Math.min(raisedOutputFor(model, capacity, planned, d.status.get(model.id)?.maxOutput), room);
           if (raised > maxOutput) {
             raisedOnce = true;
-            this.#outputCap.set(p.runId, raised);
+            const caps = this.#outputCap.get(p.runId) ?? new Map<string, number>();
+            caps.set(model.id, raised);
+            this.#outputCap.set(p.runId, caps);
             addUsageTo(spent, usage);
             if (!p.flags.includes('output_raised')) p.flags.push('output_raised');
             d.log?.(`[INFO] model ${model.id} used the whole output limit (${maxOutput}) on thinking; retrying the call with ${raised}`);
@@ -1315,8 +1309,8 @@ export class ChatEngine {
     const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config);
     const { capacity, maxOutput: planned } = d.status.limits(model);
-    // 考えるだけで上限に達してこの実行で上げた上限は、そのモデルで上げてよい範囲で、使える量の見積もりすべてに効かせる
-    const raisedCap = p.runId ? this.#outputCap.get(p.runId) : undefined;
+    // 考えるだけで上限に達してこの実行で上げた上限は、上げたそのモデルにだけ（予備のモデルに替わったら引き継がない）、使える量の見積もりすべてに効かせる
+    const raisedCap = p.runId ? this.#outputCap.get(p.runId)?.get(model.id) : undefined;
     const maxOutput = raisedCap ? Math.min(raisedOutputFor(model, capacity, planned, d.status.get(model.id)?.maxOutput), Math.max(planned, raisedCap)) : planned;
     const available = contextAvailable(capacity, maxOutput);
     const conversation = d.conversations.get(p.conversationId);
@@ -1332,11 +1326,17 @@ export class ChatEngine {
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist, background].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
-    // 考える部分は、それを書いた提供元・モデルへ送るときだけ持たせる（要約で前の発言が変わった会話では送り返さない）
-    const history = stored.map(m => withThinkingFor(forModel(m.message), conversation?.summary ? undefined : { provider: model.provider, model: model.model }));
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
-    return { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor };
+    // 考える部分を送り返すかはここだけで決め、呼び出し・道具の結果の量・続きの見積もり・使用量の表示が同じ履歴を使う。
+    // 送り返すのは、それを書いた提供元・モデルへ送り、要約の無い会話で、考える部分の量も数えて古い発言を 1 つも外さずに入りきるときだけ（前の発言が変わると API が断る）
+    let history = stored.map(m => withThinkingFor(forModel(m.message), conversation?.summary ? undefined : { provider: model.provider, model: model.model }));
+    let replay = false;
+    if (history.some(m => m.role === 'assistant' && m.thinking)) {
+      try { replay = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor }).removed === 0; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
+      if (!replay) history = history.map(m => withThinkingFor(m));
+    }
+    return { toolDefs, listed, system, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
