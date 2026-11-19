@@ -90,7 +90,8 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
     if (stat.size > MAX_READ_BYTES && !input.limit) return { content: toolText(language, 'file.too_big', { size: stat.size.toLocaleString('en-US') }), isError: true };
     const text = readFileSync(abs, 'utf8');
     if (text.includes('\u0000')) return { content: toolText(language, 'file.binary'), isError: true };
-    const lines = text.split(/\r?\n/u);
+    const lines = redactSecrets(text, [], { keepLines: true }).split(/\r?\n/u);
+    if (lines.length > 1 && text.endsWith('\n')) lines.pop();
     const start = (input.offset ?? 1) - 1;
     return { content: readPage(lines, start, Math.min(lines.length, start + (input.limit ?? DEFAULT_READ_LINES)), language, ctx.outputTokens) };
   },
@@ -98,18 +99,17 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
 
 function readPage(lines: readonly string[], start: number, end: number, language: Language, tokens: number | undefined): string {
   const budget = tokens ?? Infinity;
-  const page = (to: number) => lines.slice(start, to).join('\n') + (to < lines.length ? `\n\n${toolText(language, 'file.more', { total: lines.length, from: start + 1, to, next: to + 1 })}` : '');
-  const fits = (text: string) => {
-    const redacted = redactSecrets(text);
-    return prefixLength(redacted, TOOL_OUTPUT_LIMIT, budget) >= redacted.length;
+  const hint = (to: number) => (to < lines.length ? `\n\n${toolText(language, 'file.more', { total: lines.length, from: start + 1, to, next: to + 1 })}` : '');
+  const page = (to: number) => lines.slice(start, to).join('\n') + hint(to);
+  const fits = (to: number) => {
+    const redacted = redactSecrets(page(to));
+    return redacted.endsWith(hint(to)) && prefixLength(redacted, TOOL_OUTPUT_LIMIT, budget) >= redacted.length;
   };
-  let to = end;
-  let text = page(to);
-  if (start >= end || fits(text)) return text;
+  if (start >= end || fits(end)) return page(end);
   const whole = lines.slice(start, end).join('\n');
-  to = start + whole.slice(0, prefixLength(whole, TOOL_OUTPUT_LIMIT - PAGE_NOTE_ROOM, budget - PAGE_NOTE_ROOM / 3.5)).split('\n').length - 1;
-  while (to > start && !fits(text = page(to))) to = start + Math.floor((to - start) * 0.9);
-  if (to > start) return text;
+  let to = start + whole.slice(0, prefixLength(whole, TOOL_OUTPUT_LIMIT - PAGE_NOTE_ROOM, budget - PAGE_NOTE_ROOM / 3.5)).split('\n').length - 1;
+  while (to > start && !fits(to)) to = start + Math.floor((to - start) * 0.9);
+  if (to > start) return page(to);
   const line = redactSecrets(lines[start] ?? '');
   const shown = prefixLength(line, TOOL_OUTPUT_LIMIT - PAGE_NOTE_ROOM, budget - PAGE_NOTE_ROOM / 3.5);
   const more = start + 1 < lines.length ? toolText(language, 'file.line_cut_more', { next: start + 2 }) : '';

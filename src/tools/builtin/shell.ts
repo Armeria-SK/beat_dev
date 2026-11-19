@@ -55,10 +55,21 @@ const PREVIEW_CHARS = 8000;
 const SHELL_TAIL_BYTES = 16_384;
 const FINGERPRINT_LIMIT_BYTES = 1_048_576;
 
+function commonEdge(a: string, b: string, fromEnd: boolean): number {
+  let n = 0;
+  while (n < a.length && n < b.length && (fromEnd ? a[a.length - 1 - n] === b[b.length - 1 - n] : a[n] === b[n])) n++;
+  return n;
+}
+
 function headAndTail(head: string, rest: StreamRest | undefined, language: Language): string {
   if (!rest || (rest.text === '' && rest.skipped === 0)) return head;
   if (rest.skipped === 0) return head + rest.text;
-  return `${head.trimEnd()}\n${toolText(language, 'shell.omitted', { bytes: rest.skipped.toLocaleString('en-US') })}\n${rest.text}`;
+  const ownHead = redactSecrets(head);
+  const shownHead = ownHead.slice(0, commonEdge(ownHead, redactSecrets(head + rest.afterHead), false));
+  const ownTail = redactSecrets(rest.text);
+  const shownTail = ownTail.slice(ownTail.length - commonEdge(ownTail, redactSecrets(rest.before + rest.text), true));
+  const skipped = rest.skipped + Buffer.byteLength(ownTail, 'utf8') - Buffer.byteLength(shownTail, 'utf8');
+  return `${shownHead.trimEnd()}\n${toolText(language, 'shell.omitted', { bytes: skipped.toLocaleString('en-US') })}\n${shownTail}`;
 }
 
 const sha256 = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');

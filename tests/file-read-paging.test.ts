@@ -35,7 +35,7 @@ function setup(t: { after: (fn: () => void) => void }) {
     autoClassify: async () => '{"decision":"ask","reason":"x"}', lastUserRequest: () => 'read it', conversationTainted: () => false,
   })).output.content;
   const write = (name: string, lines: readonly string[]) => writeFileSync(join(workspace, name), lines.join('\n'));
-  return { read, write };
+  return { read, write, dir: workspace };
 }
 
 const HINT = /\n\n\[Lines (\d+) to (\d+) of (\d+)\. Read on with offset=(\d+)\]$/u;
@@ -114,4 +114,57 @@ test('TE-3: 1 行が 16,000 字より長いときは、伏せたあとの行の�
   assert.equal(out.includes('Zq7Wm3'), false, '秘密のかけらが出た');
   assert.equal(out.includes('sk-ant'), false);
   assert.equal(await s.read({ path: 'minified.js', offset: 2 }), 'second line');
+});
+
+// ── 安全の審査（TE-3）: 伏せ字はファイル全体に掛けてから頁に分ける ──
+
+test('TE-3 審査: 頁が秘密鍵の途中で切れても、どの頁にも鍵の中身が出ない（outputTokens 600 で最後まで）', async t => {
+  const s = setup(t);
+  const body = Array.from({ length: 52 }, (_, i) => `KEYBODY${String(i).padStart(2, '0')}${'Q'.repeat(55)}`);
+  const lines = ['intro line', '-----BEGIN PRIVATE KEY-----', ...body, '-----END PRIVATE KEY-----', ...Array.from({ length: 400 }, (_, i) => `filler ${i + 1}`)];
+  assert.equal(body[0]!.length, 64);
+  s.write('key.txt', lines);
+  const seen: string[] = [];
+  let offset = 1;
+  for (let calls = 0; calls < 200; calls++) {
+    const out = await s.read({ path: 'key.txt', offset }, { outputTokens: 600 });
+    seen.push(out);
+    assert.doesNotMatch(out, /KEYBODY\d\d/u, `offset=${offset} の頁に鍵の中身が出た`);
+    const hint = HINT.exec(out);
+    if (!hint) break;
+    offset = Number(hint[4]);
+  }
+  assert.ok(seen.length > 2, '前提: 何頁にも分かれる');
+  assert.ok(seen.at(-1)!.endsWith('filler 400'), '最後まで読める');
+  assert.match(seen.join('\n'), /filler 1\n/u, '鍵のあとの行は、行の番号がずれずに続く');
+  for (const limit of [1, 3, 10]) assert.doesNotMatch(await s.read({ path: 'key.txt', offset: 3, limit }), /KEYBODY\d\d/u, `limit=${limit} で鍵の途中から読んでも出ない`);
+});
+
+test('TE-3 審査: YAML の password: が 2,000 行目で値が 2,001 行目でも、どちらの頁にも値が出ない', async t => {
+  const s = setup(t);
+  const lines = [...Array.from({ length: 1999 }, () => 'k'), 'password:', '  hunter2secretvalue', 'after: ok'];
+  s.write('conf.yaml', lines);
+  const first = await s.read({ path: 'conf.yaml' });
+  assert.ok(first.endsWith('[Lines 1 to 2000 of 2002. Read on with offset=2001]'), first.slice(-80));
+  const second = await s.read({ path: 'conf.yaml', offset: 2001 });
+  assert.equal(second.split('\n').at(-1), 'after: ok', '行の番号はずれない');
+  assert.equal(`${first}\n${second}`.includes('hunter2'), false);
+  assert.equal((await s.read({ path: 'conf.yaml', offset: 2001, limit: 1 })).includes('hunter2'), false, 'limit を付けた読み方でも出ない');
+});
+
+test('TE-3 審査: 頁が BEGIN の行でちょうど終わっても、offset=2001 の案内は消えない', async t => {
+  const s = setup(t);
+  const lines = [...Array.from({ length: 1999 }, (_, i) => `n${i}`), '-----BEGIN PRIVATE KEY-----', ...Array.from({ length: 30 }, () => 'B'.repeat(64)), '-----END PRIVATE KEY-----'];
+  s.write('edge.txt', lines);
+  const out = await s.read({ path: 'edge.txt' });
+  assert.ok(out.endsWith('\n\n[Lines 1 to 2000 of 2031. Read on with offset=2001]'), out.slice(-120));
+  assert.equal(out.includes('BBBBBBBB'), false);
+});
+
+test('TE-3 審査: 改行で終わる 2,000 行のファイルは、末尾の空の行を数えず 1 回で読み終わる', async t => {
+  const s = setup(t);
+  const lines = Array.from({ length: 2000 }, (_, i) => `r${i + 1}`);
+  writeFileSync(join(s.dir, 'ends.txt'), `${lines.join('\n')}\n`);
+  const out = await s.read({ path: 'ends.txt' });
+  assert.equal(out, lines.join('\n'), '案内（of 2001）が付かない');
 });

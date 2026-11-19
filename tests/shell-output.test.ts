@@ -33,11 +33,13 @@ function writeGenerator(dir: string, extra = ''): void {
   ].join('\n'));
 }
 
-function setup(t: { after: (fn: () => void) => void }) {
+function setup(t: { after: (fn: () => void) => void }, capBytes?: number) {
   const dir = realpathSync.native(tempDir(t));
   const paths = resolvePaths(dir);
   mkdirSync(paths.workspace, { recursive: true });
-  const config = parseConfig(testConfig());
+  const raw = testConfig();
+  if (capBytes !== undefined) raw.tools.shell.outputCapBytes = capBytes;
+  const config = parseConfig(raw);
   const policy = buildPolicy(config, paths);
   const workspace = defaultWorkspace(policy, paths);
   const ctx: ToolContext = {
@@ -129,7 +131,7 @@ test('TE-3 runner: 上限を少し超えただけなら、頭と尻はつなが�
   assert.equal(result.truncated, true);
   assert.equal(result.rest?.out.skipped, 0);
   assert.equal(result.stdout + result.rest!.out.text, 'ab\n'.repeat(500));
-  assert.deepEqual(result.rest?.err, { text: '', skipped: 0 });
+  assert.deepEqual(result.rest?.err, { text: '', skipped: 0, before: '', afterHead: '' });
 });
 
 test('TE-3 runner: 間を飛ばした尻は、途中で切れた行（と文字の途中）を落として行の頭から始め、落とした分も skipped に数える', async t => {
@@ -142,4 +144,40 @@ test('TE-3 runner: 間を飛ばした尻は、途中で切れた行（と文字�
   assert.ok(rest.text.startsWith(line), rest.text.slice(0, 40));
   assert.equal(rest.text.length % line.length, 0, '行の途中で終わらない');
   assert.equal(1000 + rest.skipped + Buffer.byteLength(rest.text, 'utf8'), result.totalBytes, '頭 + 飛ばした分 + 尻 = 全部');
+});
+
+// ── 安全の審査（TE-3）: 切れ目が秘密の途中に来ても、かけらを出さない ──
+
+const TOKEN = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+
+function assertNoTokenPiece(content: string): void {
+  for (let i = 0; i + 6 <= TOKEN.length; i++) assert.equal(content.includes(TOKEN.slice(i, i + 6)), false, `秘密のかけら ${TOKEN.slice(i, i + 6)} が出た`);
+}
+
+// 空白も改行も無い 1 行の JSON。tok の値（TOKEN）が始まる位置を tokenAt バイト目にする
+function writeJsonLine(dir: string, tokenAt: number, suffixPad: number): void {
+  const pad = tokenAt - '{"pad":"'.length - '","tok":"'.length;
+  const line = `{"pad":"${'a'.repeat(pad)}","tok":"${TOKEN}","more":"${'b'.repeat(suffixPad)}"}`;
+  writeFileSync(join(dir, 'tok.js'), `process.stdout.write(${JSON.stringify(line)});`);
+}
+
+test('TE-3 審査: 尻の始まりが秘密の 8 バイトあとに来ても（改行の無い JSON）、秘密のかけらは出ない', async t => {
+  const s = setup(t, 4096);
+  const suffix = 4096 + 8 - TOKEN.length - '","more":"'.length - '"}'.length;
+  writeJsonLine(s.workspace, 20_000, suffix);
+  const outcome = await s.call({ command: 'node tok.js' });
+  assert.equal(outcome.decision, 'allow', outcome.output.content.slice(0, 300));
+  assert.match(outcome.output.content, /\[\.\.\. [\d,]+ bytes left out \.\.\.\]/u, '前提: 頭と尻に切れている');
+  assertNoTokenPiece(outcome.output.content);
+  assert.ok(outcome.output.content.includes('"more":"bbbb'), '尻の残りは見える');
+});
+
+test('TE-3 審査: 頭の終わりが秘密の 8 バイトあとに来ても、秘密のかけらは出ない', async t => {
+  const s = setup(t, 4096);
+  writeJsonLine(s.workspace, 4096 - 8, 20_000);
+  const outcome = await s.call({ command: 'node tok.js' });
+  assert.equal(outcome.decision, 'allow', outcome.output.content.slice(0, 300));
+  assert.match(outcome.output.content, /\[\.\.\. [\d,]+ bytes left out \.\.\.\]/u, '前提: 頭と尻に切れている');
+  assertNoTokenPiece(outcome.output.content);
+  assert.ok(outcome.output.content.includes('{"pad":"aaaa'), '頭の残りは見える');
 });
