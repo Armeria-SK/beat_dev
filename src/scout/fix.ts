@@ -55,7 +55,8 @@ export function prefixOf(db: DatabaseSync, kv: KV, proposalId: string): Prefix |
 export async function dropRejectedPrefix(d: Pick<FixRecordDeps, 'db' | 'tasks' | 'worktrees' | 'language' | 'log'>, proposalId: string): Promise<void> {
   const task = d.tasks.get(proposalId);
   const row = latestFixRow(d.db, proposalId);
-  if (task?.status !== 'cancelled' || !row || row.state !== 'branch') return;
+  // 未処理の提案を取り消したときだけ（承認したあとの Pre-fix を task_update で取り消しても、取り込み待ちのブランチは消さない。消すのは Discard）
+  if (task?.status !== 'cancelled' || task.cancelled_from !== 'inbox' || !row || row.state !== 'branch') return;
   const done = await d.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
   const key = done.ok && !done.branchKept ? 'event.prefix_rejected' : done.ok && done.note === 'branch_moved' ? 'event.prefix_branch_kept' : 'event.prefix_branch_left';
   if (key !== 'event.prefix_rejected') d.log?.(`[WARN] The pre-fix branch ${row.branch} was not removed: ${done.ok ? done.note ?? 'kept' : done.reason}`);

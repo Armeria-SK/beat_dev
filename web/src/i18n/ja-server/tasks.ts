@@ -52,7 +52,7 @@ export const taskJa = {
   'summary.prefix_approved': "Pre-fix を承認しました。ブランチ {branch} を自分で製品に取り込んでください。取り込みが見つかるとカードは Done に移ります",
   'event.prefix_rejected': "Pre-fix を却下したので、ブランチ {branch} を消しました",
   'event.prefix_branch_kept': "Pre-fix を却下しましたが、ブランチ {branch} に beat の作っていないコミットがあるので残しました",
-  'event.prefix_branch_left': "Pre-fix を却下しましたが、ブランチ {branch} はまだ消せていません",
+  'event.prefix_branch_left': "Pre-fix を却下しましたが、ブランチ {branch} は残っています。要らなければご自分で消してください",
   'summary.cancelled_schedule_deleted': "この回が待っているあいだに予定が消されたので、取り消しました",
   'reason.no_model': "使えるモデルが無いので待っています: {detail}",
   'reason.worktree_unavailable': "製品のフォルダが空くのを待っています: ほかのタスクが使っていて、このタスク用の別の作業コピーも作れませんでした",

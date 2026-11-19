@@ -460,7 +460,7 @@ export class FixCopies {
       } else {
         await this.#drop(row, row.state === 'removing' && row.ending ? row.ending as 'branch' | 'discarded' | 'gone' : 'discarded', row.note ?? 'beat restarted');
         // 再起動で途切れた直しが本体にブランチを作り終えていた（update-ref のあと）なら、それも捨てる。先端が確かめたコミットのままのときだけ消す
-        if (row.state !== 'removing' && row.own_tip && this.get(row.id)?.state === 'discarded') await this.#d.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
+        if (row.own_tip && this.get(row.id)?.state === 'discarded') await this.#d.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
       }
       if (this.get(row.id)?.state === 'removing') left++;
       else removed++;

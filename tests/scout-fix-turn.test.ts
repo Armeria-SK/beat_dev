@@ -465,7 +465,7 @@ test('8-6b: a Reject whose branch delete failed is retried by the sweep until th
   await s.app.fixes.sweepFixCopies();
   assert.deepEqual(beatBranches(s.product), []);
   assert.equal(s.fixRows()[0]!.state, 'discarded');
-  assert.deepEqual(s.events(proposal.id, 'worktree'), [`Pre-fix rejected, but the branch ${row.branch} could not be removed yet`]);
+  assert.deepEqual(s.events(proposal.id, 'worktree'), [`Pre-fix rejected, but the branch ${row.branch} was kept. Delete it yourself if you no longer need it`]);
 });
 
 // review REVISE 3: チャットの task_update で取り消しても、Pre-fix のブランチを消す
@@ -596,4 +596,40 @@ test('8-6b: clearing the check command while the mode is pre-fix is refused', { 
   assert.equal(s.app.projects.get(s.project.id)!.scout_mode, 'research');
   const renamed = await s.json(`/api/projects/${s.project.id}`, 'PATCH', { name: 'Q' });
   assert.equal(renamed.status, 200);
+});
+
+// re-review MEDIUM: 承認した Pre-fix を task_update で取り消しても、取り込み待ちのブランチは消さない（消すのは Discard）
+test('8-6b: cancelling an approved Pre-fix through task_update keeps its branch', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const proposal = s.propose();
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const approved = await s.json(`/api/tasks/${proposal.id}/approve`, 'POST', {});
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const ctx = { runId: 'r1', conversationId: 'c1', kind: 'chat', config: s.app.config(), signal: new AbortController().signal, log: () => undefined, services: { db: s.app.db, tasks: s.app.tasks } } as unknown as ToolContext;
+  await taskUpdate.execute({ id: proposal.id, status: 'cancelled' }, ctx);
+  await s.app.dropRejectedPrefix(proposal.id);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(beatBranches(s.product).length, 1, 'the approved branch stays');
+  assert.equal(s.fixRows()[0]!.state, 'branch');
+  assert.deepEqual(s.events(proposal.id, 'worktree'), []);
+});
+
+// re-review LOW: 再起動のあと 1 回目の見回りで写しを消せなかった行も、2 回目でブランチまで捨てる
+test('8-6b: a restarted fix whose copy removal failed once still has its branch dropped on the next sweep', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  s.propose();
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const row = s.fixRows()[0]!;
+  const place = s.app.worktrees.place();
+  assert.ok(place.ok);
+  const copy = join(place.root, 'fix', row.id);
+  mkdirSync(copy, { recursive: true });
+  s.app.kv.delete(`scout:prefix:${row.id}`);
+  s.app.db.prepare("UPDATE worktrees SET state = 'removing', ending = 'discarded', path = ? WHERE id = ?").run(copy, row.id);
+  await s.app.fixes.sweepFixCopies();
+  assert.equal(existsSync(copy), false);
+  assert.equal(s.app.fixes.get(row.id)!.state, 'discarded');
+  assert.deepEqual(beatBranches(s.product), []);
 });
