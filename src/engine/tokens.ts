@@ -29,7 +29,7 @@ export function estimateMessageTokens(message: ChatMessage): number {
   if (message.role === 'user') {
     tokens += estimateTextTokens(message.content) + (message.images?.length ?? 0) * IMAGE_TOKENS;
   } else if (message.role === 'assistant') {
-    tokens += estimateTextTokens(message.content);
+    tokens += estimateTextTokens(message.content) + (message.thinking?.tokens ?? 0);
     for (const call of message.toolCalls ?? []) tokens += 8 + estimateTextTokens(call.name) + estimateTextTokens(call.raw ?? JSON.stringify(call.arguments ?? {}));
   } else {
     tokens += 8 + estimateTextTokens(message.content) + (message.images?.length ?? 0) * IMAGE_TOKENS;

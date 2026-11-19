@@ -18,6 +18,16 @@ export interface ToolCall {
   raw?: string;
 }
 
+// 提供元が返した考える部分のブロック（Anthropic の thinking / redacted_thinking）。中身も署名も受け取ったまま持ち、送り返すときも変えない。
+// at: そのブロックより前にあった道具の呼び出しの数。lead: まだ文が出ていなかった（送り返すとき文より前に置く）
+export type ThinkingBlock =
+  | { type: 'thinking'; thinking: string; signature: string; at: number; lead?: true }
+  | { type: 'redacted_thinking'; data: string; at: number; lead?: true };
+
+// 返事の考える部分。書いた提供元とモデル（provider の id とモデルの名前）が同じ相手に送るときだけ送り返す。
+// tokens: 送り返すときの量の見積もり（その返事の出力のトークンから、文と呼び出しの分を引いたもの。考える部分の中身は見えないため）
+export interface ThinkingRecord { provider: string; model: string; blocks: ThinkingBlock[]; tokens: number }
+
 export interface AttachmentMeta { id: string; name: string; kind: 'text' | 'pdf' | 'image' }
 
 export interface ImageRef {
@@ -27,7 +37,7 @@ export interface ImageRef {
 
 export type ChatMessage =
   | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true; note?: 'pending' | 'continue'; fetched?: true }
-  | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
+  | { role: 'assistant'; content: string; toolCalls?: ToolCall[]; thinking?: ThinkingRecord }
   // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
   | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; gate?: ToolGate };
 

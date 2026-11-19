@@ -34,4 +34,12 @@ export function maxOutputFor(model: Pick<ModelConfig, 'maxOutputTokens'>, capaci
   return Math.min(cap, Math.max(MIN_AUTO_OUTPUT, Math.min(AUTO_MAX_OUTPUT, Math.floor(capacity / 4))));
 }
 
+// 考えるだけで返事の上限に達し、文も道具の呼び出しも無かった返事を呼び直すときの上限（planned はふだんの上限 maxOutputFor）。
+// planned だけから決まるので、何度呼んでも同じ値になり、上げるのは 1 段だけ。書いた値（maxOutputTokens）は超えない。
+// 提供元の上限が分かればそこまで、分からなければ planned の 2 倍。どちらもコンテキストの半分まで。planned より大きくならなければ planned
+export function raisedOutputFor(model: Pick<ModelConfig, 'maxOutputTokens'>, capacity: number, planned: number, providerMax?: number): number {
+  if (model.maxOutputTokens !== undefined) return planned;
+  return Math.max(planned, Math.min(providerMax ?? planned * 2, Math.floor(capacity / 2)));
+}
+
 export const contextAvailable = (capacity: number, maxOutput: number): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - maxOutput;
