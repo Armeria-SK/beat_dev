@@ -862,3 +862,20 @@ test('scout: over the hourly cap, no scout starts while a Build child waits for 
   await s.app.worker.tick();
   assert.equal(s.scoutRows().length, 1, 'control: with no Build work left, the scout starts');
 });
+
+test('scout: a Build family held by its own hourly backstop (60 runs) does not stop a running scout, even when the hourly cap is not reached', async t => {
+  const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 61; } });
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  const build = s.app.tasks.create({ title: 'Build: capped', origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 60; i++) s.app.tasks.event(build.id, 'run', 'worker', null, `old-${i}`);
+  await s.app.worker.tick();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(s.scoutRows()[0]!.status, 'running', 'the capped Build is not owner work that can run now');
+  s.app.tasks.create({ title: 'owner work', origin: 'user', actor: 'user' });
+  await s.app.worker.tick();
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled', 3000), 'control: owner work under the cap stops the scout');
+  await running;
+});

@@ -301,9 +301,17 @@ export class Worker {
   }
 
   // Build の仲間がこの 1 時間に BUILD_FAMILY_HOURLY_MAX 回動いていれば、窓が空く時刻（それまで仲間は動かない）。notify なら持ち主に 1 回知らせる
-  #familyFreeAt(task: Task, now: number, notify = false): number | undefined {
+  // cache を渡すと、同じ根の数え直しをしない（1 回の tick の中で、候補ごとに数えない）
+  #familyFreeAt(task: Task, now: number, notify = false, cache?: Map<string, number | undefined>): number | undefined {
     const root = this.#familyRoot(task);
     if (!root) return undefined;
+    if (cache?.has(root.id)) return cache.get(root.id);
+    const at = this.#familyCount(root, now, notify);
+    cache?.set(root.id, at);
+    return at;
+  }
+
+  #familyCount(root: Task, now: number, notify: boolean): number | undefined {
     const runs = this.#d.db.prepare(`WITH RECURSIVE fam(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN fam ON t.spawned_by = fam.id)
       SELECT e.created_at AS at FROM task_events e WHERE e.kind = 'run' AND e.created_at > ? AND e.task_id IN (SELECT id FROM fam) ORDER BY e.created_at`).all(root.id, now - 3_600_000) as Array<{ at: number }>;
     if (runs.length < BUILD_FAMILY_HOURLY_MAX) return undefined;
@@ -399,7 +407,8 @@ export class Worker {
         this.#schedule(Math.max(1000, Math.min(at ?? Infinity, now + IDLE_POLL_MS) - now));
       };
       const own = c.worker.enabled;
-      const eligible = (t: Task): boolean => (own || this.#ownerWork(t)) && this.#familyFreeAt(t, now, true) === undefined;
+      const familyCache = new Map<string, number | undefined>();
+      const eligible = (t: Task): boolean => (own || this.#ownerWork(t)) && this.#familyFreeAt(t, now, true, familyCache) === undefined;
       const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t), ...(this.#d.places ? { placeFree: (t: Task) => !this.#busy(t) } : {}) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
@@ -645,7 +654,8 @@ export class Worker {
     if (!project || project.archived_at !== null) return 'stop.archived';
     if (project.scout_mode !== 'research') return 'stop.mode';
     const freeAt = this.#budgetFreeAt(c, this.#now());
-    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id) || (this.#buildFamily(t) && this.#familyFreeAt(t, this.#now()) === undefined)) })) return 'stop.owner';
+    const familyCache = new Map<string, number | undefined>();
+    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && this.#familyFreeAt(t, this.#now(), false, familyCache) === undefined && (freeAt === undefined || this.#forced.has(t.id) || this.#buildFamily(t)) })) return 'stop.owner';
     return undefined;
   }
 
@@ -1096,8 +1106,14 @@ export class Worker {
     const projectId = task.project_id;
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
-    // 仕事をした回は、このタスクを生んだ親の進展なしの数も消す（子が仕事をしている親は止めない。何もしない子ばかりなら親は 3 回で止まる）
-    if (result.ok && result.workDone > 0 && task.spawned_by) this.#d.kv.delete(`task-idle:${task.spawned_by}`);
+    // 仕事をした回は、spawned_by でたどれる先祖すべての進展なしの数も消す（子孫が仕事をしている親は止めない。何もしない子ばかりなら親は 3 回で止まる）
+    if (result.ok && result.workDone > 0) {
+      const seen = new Set<string>([task.id]);
+      for (let up = task.spawned_by; up && !seen.has(up); up = tasks.get(up)?.spawned_by ?? null) {
+        seen.add(up);
+        this.#d.kv.delete(`task-idle:${up}`);
+      }
+    }
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
     const status = tasks.get(task.id)?.status;
     if (status !== 'running') {
@@ -1125,9 +1141,11 @@ export class Worker {
       return;
     }
     if (control.outcome === 'yield') {
-      // 子を待って区切る回も、途中経過と同じに数える（仕事をしていない回は進展なし。子が仕事をすれば、子の回が親の数を消す）
+      // 子を待って区切る回も、途中経過と同じに数える。ただし進展なしに数えるのは、この回が子のタスクを作ったときだけ
+      // （もうある子を待つだけの回〔持ち主の Run now など〕は数えない。子が仕事をすれば、子の回が親の数を消す）
+      const created = this.#d.db.prepare("SELECT 1 FROM tasks t JOIN task_events e ON e.task_id = t.id AND e.kind = 'context' AND e.run_id = ? WHERE t.spawned_by = ? LIMIT 1").get(runId, task.id) !== undefined;
       if ((result.ok && result.workDone > 0) || answered || decidedDuring(this.#d.db, task.id, runId)) this.#d.kv.delete(idleKey);
-      else if (this.#noProgress(task, runId)) return;
+      else if (created && this.#noProgress(task, runId)) return;
       this.#continued(task);
       tasks.setReady(task.id, { reason: control.reason });
       return;

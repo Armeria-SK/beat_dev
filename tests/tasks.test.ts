@@ -494,6 +494,35 @@ test('子が仕事をする、task_complete で待つ親は止めず、親の 10
   }
 });
 
+test('孫が仕事をすれば、子を待つ根と子の両方の進展なしの数が消え、根は止まらない（spawned_by の先祖すべて）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const root = s.userTask('Build: 3 段', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 4; i++) {
+    s.adapter().scripts.push(
+      toolCall('task_create', { title: `子 ${i}` }), toolCall('task_complete', { summary: '子を待つ', notify: false }),
+      toolCall('task_create', { title: `孫 ${i}` }), toolCall('task_complete', { summary: '孫を待つ', notify: false }),
+      work(), toolCall('task_complete', { summary: '孫 済み', notify: false }),
+      toolCall('task_complete', { summary: '子 済み', notify: false }),
+    );
+    assert.equal(await ranTicks(s, 4), 4, `${i + 1} 回目: 根・子・孫・子が動く`);
+    assert.equal(s.app.tasks.get(root.id)!.status, 'ready', `${i + 1} 回目: 根は止まらない`);
+    assert.equal(s.app.kv.get(`task-idle:${root.id}`), undefined, `${i + 1} 回目: 孫の仕事で根の数も消える`);
+  }
+});
+
+test('保険: 1 時間の上限で止まった Build の仲間も、持ち主の Run now（今すぐ実行）なら動く。作った子は上限待ち', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const root = s.userTask('Build: 押して動かす', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 60; i++) s.app.tasks.event(root.id, 'run', 'worker', null, `old-${i}`);
+  assert.equal(s.app.worker.waitReason(s.app.tasks.get(root.id)!)?.kind, 'budget', '前提: 仲間は 60 回で止まっている');
+  s.app.worker.requestRun(root.id);
+  assert.equal(s.app.worker.waitReason(s.app.tasks.get(root.id)!), null, 'Run now したものは待たない');
+  s.adapter().scripts.push(toolCall('task_create', { title: '部分' }), toolCall('task_complete', { summary: '待つ', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const child = s.app.db.prepare('SELECT * FROM tasks WHERE spawned_by = ?').get(root.id) as unknown as Parameters<typeof s.app.worker.waitReason>[0];
+  assert.equal(s.app.worker.waitReason(child)?.kind, 'budget', '作った子は上限を待つ');
+});
+
 test('保険: Build の仲間は、進展なしの数に掛からない回り方でも、1 時間に 60 回動いたら止まって 1 回知らせ、枠が空けばまた動く', async t => {
   const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
   const parent = s.userTask('Build: 回り続ける', { acceptanceItems: ['A-1'] });
