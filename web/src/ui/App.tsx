@@ -389,7 +389,12 @@ export function App() {
     if (chatId) dispatch({ type: 'notice', conversationId: chatId, notice: { runId: `undo:${notice.batch ?? Date.now()}`, kind: 'undo', ...notice } });
   }, [chatId, dispatch]);
   let paneEdits = 0;
-  if (paneProduct) for (const [id, n] of live.edits) if (id === chatId || conversations.some(c => c.id === id && c.project_id === paneProduct)) paneEdits += n;
+  if (paneProduct) {
+    const mine = new Set(conversations.filter(c => c.project_id === paneProduct).map(c => c.id));
+    if (chatId) mine.add(chatId);
+    for (const mark of live.tasks.values()) if (mark.projectId === paneProduct) for (const id of [mark.conversationId, mark.buildChat?.conversation]) if (id) mine.add(id);
+    for (const [id, n] of live.edits) if (mine.has(id)) paneEdits += n;
+  }
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>

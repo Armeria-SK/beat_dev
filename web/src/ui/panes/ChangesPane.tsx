@@ -42,9 +42,15 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
   const wanted = useRef<{ path: string; after: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const worktreeId = source.kind === 'branch' ? source.worktreeId : null;
+  const busy = useRef<string | null>(null);
+  const dirty = useRef(false);
+  const leaveTimer = useRef<number | null>(null);
+  const key = `${productId}|${worktreeId ?? ''}|${pick ?? ''}|${conversation ?? ''}`;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<void> => {
     const gen = ++generation.current;
+    busy.current = key;
+    dirty.current = false;
     try {
       const data = worktreeId ? await api.worktreeChanges(worktreeId) : await api.changes(productId, scopeOf(pick, conversation));
       if (gen !== generation.current) return;
@@ -54,10 +60,24 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
       setLoaded({ state: 'ok', data, asked: pick, seq: gen });
     } catch (error) {
       if (gen === generation.current) setLoaded({ state: 'failed', message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (gen === generation.current) {
+        busy.current = null;
+        if (dirty.current) void load();
+      }
     }
-  }, [productId, worktreeId, pick, conversation]);
+  }, [key, productId, worktreeId, pick, conversation]);
 
-  useEffect(() => { void load(); }, [load, revision, touched, focusTick]);
+  useEffect(() => {
+    if (busy.current === key) dirty.current = true;
+    else void load();
+  }, [load, key, revision, touched, focusTick]);
+
+  useEffect(() => () => {
+    generation.current++;
+    busy.current = null;
+    if (leaveTimer.current !== null) window.clearTimeout(leaveTimer.current);
+  }, []);
 
   useEffect(() => {
     if (!focus) return;
@@ -90,15 +110,16 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
 
   const product = source.kind === 'product';
   const picks = product ? changePicks({ isGit: source.isGit, hasBuild, conversation }) : [];
-  const picker = (value: ChangesPick | 'branch') => picks.length > 1 && value !== 'branch' && (
+  const picker = (value: ChangesPick | 'branch' | '') => picks.length > 1 && value !== 'branch' && (
     <select className="bt-select ui-changes__since" aria-label={t('ui.changes.measure')} value={value} onChange={e => { setFocused(null); setNotHere(null); setProblem(null); setPick(e.target.value as ChangesPick); }}>
+      {value === '' && <option value="" disabled>{t('ui.changes.measure')}</option>}
       {picks.map(p => <option key={p} value={p}>{t(SINCE[p])}</option>)}
     </select>
   );
 
   if (loaded.state === 'loading') return <div className="ui-changes" ref={root} />;
   if (loaded.state === 'failed') {
-    const select = picker(pick ?? picks[0] ?? 'branch');
+    const select = picker(pick ?? '');
     return (
       <div className="ui-changes" ref={root}>
         {select && <div className="bt-pane__bar"><span className="bt-meta" />{select}</div>}
@@ -130,7 +151,7 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
       if (done.refused.length) setProblem({ title: t('ui.changes.refused', done.refused.length), text: refusalText(t, done.refused) });
       if (done.undone.length || done.refused.length) onUndone?.({ projectId: productId, batch: done.redo, undone: done.undone.length, refused: done.refused.length, more });
       setLeaving(new Set(done.undone));
-      window.setTimeout(() => { setWorking(false); changesTouched(productId); }, done.undone.length ? LEAVE_MS : 0);
+      leaveTimer.current = window.setTimeout(() => { leaveTimer.current = null; setWorking(false); changesTouched(productId); }, done.undone.length ? LEAVE_MS : 0);
     } catch (error) {
       setProblem({ title: t('ui.changes.undoFailed'), text: error instanceof Error ? error.message : String(error) });
       setWorking(false);

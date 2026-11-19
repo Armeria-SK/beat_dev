@@ -26,10 +26,9 @@ const { usePanes } = await loadTsx<{ usePanes: (productId: string | null) => { s
 const { Panes } = await loadTsx<{ Panes: ComponentType<Record<string, unknown>> }>('../web/src/ui/Panes.tsx', import.meta.url);
 const { App } = await loadTsx<{ App: ComponentType }>('../web/src/ui/App.tsx', import.meta.url);
 
-const realFetch = globalThis.fetch;
 afterEach(async () => {
   await cleanup();
-  globalThis.fetch = realFetch;
+  globalThis.fetch = (async () => json({ error: 'not_found' }, 404)) as typeof fetch;
   localStorage.clear();
   sources.length = 0;
   window.history.replaceState(null, '', '/');
@@ -166,4 +165,23 @@ test('ui/App（DOM）: この製品の会話で書く道具が終わったら、
   assert.equal(gets(), before, '読むだけの道具では読み直さない');
   await send('file_edit');
   assert.equal(gets(), before + 1, '書く道具で読み直す');
+});
+
+test('ui/App（DOM）: この製品の Build（task の会話）で書く道具が終わっても、開いている Changes の欄を読み直す', async () => {
+  const calls: string[] = [];
+  const container = await startApp(calls);
+  assert.ok(container.querySelector('.bt-diff[data-path="src/a.ts"]'));
+  const emit = async (event: unknown) => {
+    await update(() => { for (const s of sources) for (const run of s.listeners.get('run') ?? []) run({ data: JSON.stringify(event) }); });
+    await settle();
+  };
+  const gets = () => calls.filter(c => c === 'GET /api/projects/p1/changes').length;
+  const task = { id: 't1', title: 'Build', status: 'running', waiting_kind: null, check_state: null, project_id: 'p1', conversation_id: 'tc1', created_at: 1, updated_at: 5 };
+  await emit({ type: 'task.changed', task });
+  await emit({ type: 'task.changed', task: { ...task, id: 't2', project_id: 'p9', conversation_id: 'tc9', updated_at: 6 } });
+  const before = gets();
+  await emit({ type: 'tool.result', runId: 'r9', conversationId: 'tc9', callId: 'x', name: 'file_edit', ok: true, decision: 'allow', preview: '' });
+  assert.equal(gets(), before, 'ほかの製品の Build では読み直さない');
+  await emit({ type: 'tool.result', runId: 'r1', conversationId: 'tc1', callId: 'y', name: 'file_edit', ok: true, decision: 'allow', preview: '' });
+  assert.equal(gets(), before + 1, 'この製品の Build で読み直す');
 });

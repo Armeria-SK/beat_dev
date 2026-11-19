@@ -58,6 +58,7 @@ function serve(server: Server) {
   }) as typeof fetch;
 }
 
+const LEAVE = 300;
 const settle = () => update(() => new Promise(resolve => setTimeout(resolve, 0)));
 const wait = (ms: number) => update(() => new Promise(resolve => setTimeout(resolve, ms)));
 const block = (container: HTMLElement, path: string) => container.querySelector(`.bt-diff[data-path="${path}"]`) as HTMLElement | null;
@@ -140,6 +141,7 @@ test('ui/ChangesPane（DOM）: ファイル 1 つの Undo の知らせには mor
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
   assert.deepEqual(notices, [{ projectId: 'p1', batch: BATCH, undone: 1, refused: 0, more: 0 }]);
+  await wait(LEAVE);
 });
 
 test('ui/ChangesPane（DOM）: 測る点を変えて読み直しを待つあいだは、前の一覧の Undo を押せない（新しい元で古い一覧のファイルを戻さない）。読み終えたら新しい元で送る', async () => {
@@ -163,6 +165,7 @@ test('ui/ChangesPane（DOM）: 測る点を変えて読み直しを待つあい�
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
   assert.deepEqual(state.bodies, [{ base: 'commit', paths: ['src/upload/queue.ts'] }]);
+  await wait(LEAVE);
 });
 
 test('ui/ChangesPane（DOM）: 「この会話」で読んだ一覧の Undo は、会話の id を付けて送る', async () => {
@@ -173,6 +176,7 @@ test('ui/ChangesPane（DOM）: 「この会話」で読んだ一覧の Undo は�
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
   assert.deepEqual(state.bodies, [{ base: 'records', conversation: 'c1', paths: ['src/upload/queue.ts'] }]);
+  await wait(LEAVE);
 });
 
 test('ui/ChangesPane（DOM）: 欄を開く前の Undo（サーバーが覚えている古いまとまり）には Redo の行を出さない', async () => {
@@ -216,6 +220,7 @@ test('ui/ChangesPane（DOM）: 測る点を切り替えると、その元で読�
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
   assert.deepEqual(state.bodies[0], { base: 'commit', paths: ['src/upload/queue.ts'] }, 'Undo も見ている元で');
+  await wait(LEAVE);
 });
 
 test('ui/ChangesPane（DOM）: 空のときは No changes と測る点。Build の控えが無い git の製品では build を出さない。会話が無ければ「この会話」も無い', async () => {
@@ -305,5 +310,49 @@ test('ui/ChangesPane（DOM）: 読めなくても測る点の箱は残り、別�
   await update(() => { select.value = 'conversation'; select.dispatchEvent(new Event('change', { bubbles: true })); });
   await settle();
   assert.equal(calls.at(-1), '/api/projects/p1/changes?base=records&conversation=c1');
+  assert.ok(block(container, 'src/upload/queue.ts'));
+});
+
+test('ui/ChangesPane（DOM）: Undo のあと欄が閉じたら、去る合図の時計を止める（閉じた欄の時計が、あとで開いた欄を読み直させない）', async () => {
+  const first = await show([queue, backoff]);
+  await click(byText(block(first.container, 'src/upload/queue.ts')!, 'button', 'Undo'));
+  await settle();
+  await update(() => first.root.unmount());
+  const second = await show([backoff]);
+  await wait(LEAVE);
+  assert.deepEqual(second.state.calls, ['GET /api/projects/p1/changes'], '開いた欄は 1 回だけ読む');
+});
+
+test('ui/ChangesPane（DOM）: 読んでいる最中に読み直しの合図が何度来ても、読み終えてから 1 回だけ読み直す', async () => {
+  let release!: () => void;
+  let held = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const { root, props, state } = await show([queue], {}, { hold: () => (held++ === 1 ? gate : null) });
+  for (const revision of ['1', '2', '3']) await update(() => root.render(createElement(ChangesPane, { ...props, revision })));
+  await settle();
+  assert.equal(state.calls.length, 2, '最初と、待たされている 1 回');
+  await update(async () => { release(); await gate; });
+  await settle();
+  await settle();
+  assert.equal(state.calls.length, 3, '終わってから 1 回だけ');
+});
+
+test('ui/ChangesPane（DOM）: 選ぶ前の既定の元で読めなかったときの箱は、どの元とも言わない空きの行を出し、どの元も選べる', async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (path: string | URL | Request) => {
+    const url = new URL(String(path), 'http://x');
+    calls.push(`${url.pathname}${url.search}`);
+    if (!url.searchParams.get('base')) return new Response(JSON.stringify({ error: 'project', code: 'project.changes_git_unusable', message: 'git could not be run safely' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ base: { kind: 'commit', ref: null, at: null }, files: [queue], more: 0, redo: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const { container } = await render(createElement(ChangesPane, { source: { kind: 'product', productId: 'p1', conversationId: 'c1', isGit: true }, revision: '0' }));
+  await settle();
+  const select = container.querySelector('select.bt-select') as HTMLSelectElement;
+  assert.equal(select.value, '', '失敗した既定の元を「since the last commit」と言わない');
+  assert.equal(select.options[0]!.textContent, 'Measure changes from');
+  assert.ok(select.options[0]!.disabled);
+  await update(() => { select.value = 'commit'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+  assert.equal(calls.at(-1), '/api/projects/p1/changes?base=commit', '最初の元も選べる');
   assert.ok(block(container, 'src/upload/queue.ts'));
 });
