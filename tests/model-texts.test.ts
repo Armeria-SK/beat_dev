@@ -11,7 +11,8 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from '../src/engine/prompts.ts';
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
-import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
+import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, fenceTail, readTemplate, statusGuide, WORKSPACE_FILES } from '../src/engine/workspace.ts';
+import { PLACEHOLDER_NONCE } from '../src/shared/fence.ts';
 import { bookPressureText, reviewLabel, reviewPrompt, reviewWindow, TRIGGER_TEXT, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
@@ -163,7 +164,7 @@ test('baseTokens: ルールと動的な部分の長さで見積もる', async t 
   const s = await startApp(t);
   const given = () => s.app.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' || isBrowserTool(tool.name) || tool.name === 'acceptance_change' });
   const rest = () => estimateToolTokens(ToolRegistry.specs(given().filter(isCore))) + estimateTextTokens(deferredSection(given().filter(tool => !isCore(tool)), s.app.config())) + 64; // 既定では agent_run と browser_* は無効で、モデルに渡らない。acceptance_change は acceptance_write と同時には渡らない
-  const expected = estimateTextTokens(buildSnapshot(s.paths, { skills: '' }).text) + estimateTextTokens(buildDynamic(s.app.config().timezone)) + estimateTextTokens(buildTail(s.app.config().timezone)) + rest();
+  const expected = estimateTextTokens(buildSnapshot(s.paths, { skills: '' }).text) + estimateTextTokens(buildDynamic(s.app.config().timezone)) + estimateTextTokens(statusGuide(PLACEHOLDER_NONCE)) + estimateTextTokens(fenceTail(buildTail(s.app.config().timezone), PLACEHOLDER_NONCE)) + rest();
   assert.equal(s.app.baseTokens(), expected);
 });
 

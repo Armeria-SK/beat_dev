@@ -437,7 +437,7 @@ test('F1: 上げた上限は、同じ実行の次の組み立ての「使える�
 test('F1: 上げる上限は、いまのやり取りと合わせてコンテキストの 95% に入りきる量まで', async t => {
   const s = await setup(t, big(40_000));
   s.adapter().scripts.push(thinkingOnly, reply('おわり'));
-  await s.run('abcdefg '.repeat(9_000));
+  await s.run('abcdefg '.repeat(8_950));
   const calls = s.adapter().calls;
   assert.equal(calls.length, 2);
   const second = calls[1]!;
