@@ -502,7 +502,28 @@ export const api = {
   savePersona: (patch: { soul?: string; user?: string }) => call<PersonaView>('/api/workspace/persona', { method: 'PUT', body: JSON.stringify(patch) }),
   files: (projectId: string, tree: FileTree, dir: string) => call<FolderListing>(`/api/projects/${encodeURIComponent(projectId)}/files?tree=${tree}&dir=${encodeURIComponent(dir)}`),
   file: (projectId: string, tree: FileTree, path: string) => call<FileContent>(`/api/projects/${encodeURIComponent(projectId)}/file?tree=${tree}&path=${encodeURIComponent(path)}`),
+  changes: (projectId: string, scope: ChangesScope) => call<ChangesView>(`/api/projects/${encodeURIComponent(projectId)}/changes${changesQuery(scope)}`),
+  undoChanges: (projectId: string, scope: ChangesScope, paths: string[] | 'all') => call<UndoView>(`/api/projects/${encodeURIComponent(projectId)}/changes/undo`, { method: 'POST', body: JSON.stringify({ ...scope, paths }) }),
+  redoChanges: (projectId: string, redo: string) => call<RedoView>(`/api/projects/${encodeURIComponent(projectId)}/changes/redo`, { method: 'POST', body: JSON.stringify({ redo }) }),
+  worktreeChanges: (worktreeId: string) => call<ChangesView>(`/api/worktrees/${encodeURIComponent(worktreeId)}/changes`),
 };
+
+function changesQuery(scope: ChangesScope): string {
+  const query = new URLSearchParams();
+  if (scope.base) query.set('base', scope.base);
+  if (scope.conversation) query.set('conversation', scope.conversation);
+  const text = query.toString();
+  return text ? `?${text}` : '';
+}
+
+export type ChangeBaseKind = 'build' | 'commit' | 'records' | 'branch';
+export interface ChangesScope { base?: Exclude<ChangeBaseKind, 'branch'> | undefined; conversation?: string | undefined }
+export interface ChangedFile { path: string; status: 'modified' | 'added' | 'deleted'; added: number; removed: number; hunks: string[][] | null; hidden: boolean; undo: boolean }
+export interface ChangesView { base: { kind: ChangeBaseKind; ref: string | null; at: number | null }; files: ChangedFile[]; more: number; redo?: { id: string; created_at: number; paths: string[] } | null }
+export type ChangeRefusal = 'not_changed' | 'hidden' | 'unsafe_path' | 'link' | 'not_kept' | 'too_large' | 'cannot_keep' | 'same_file' | 'changed' | 'failed';
+export interface RefusedChange { path: string; reason: ChangeRefusal }
+export interface UndoView { undone: string[]; refused: RefusedChange[]; redo: string | null; more: number }
+export interface RedoView { redone: string[]; refused: RefusedChange[] }
 
 // beat 8-5a: Files の欄（読むだけ）。product は製品のフォルダ、knowledge は beat が持つ製品の知識のフォルダ。mark は前のコミットからの変更（git の製品だけ）
 export type FileTree = 'product' | 'knowledge';

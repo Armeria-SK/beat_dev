@@ -8,12 +8,12 @@ import type { ChatMessage, RunEvent, StopReason, ToolCall } from '../src/engine/
 import { resolvePaths } from '../src/paths.ts';
 import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
-import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
-import { FakeAdapter, fakeServer, reply, sse, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
+import type { ModelRequest, ProbeResult, StreamEvent } from '../src/providers/types.ts';
+import { FakeAdapter, fail, fakeServer, reply, sse, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 import type { SpeechRow } from '../src/db/conversations.ts';
 import { prepareSpeech } from '../src/projects/acceptance.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
-import { ContextOverflow, fitMessages, groupExchanges } from '../src/engine/fit.ts';
+import { ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from '../src/engine/fit.ts';
 
 // 出力の上限で切れた返事（停止理由が max_tokens）を、成功として扱わない（AU-1）
 
@@ -31,17 +31,18 @@ const cutText = (text: string): Script => async function* () {
   yield { type: 'done', stop: 'max_tokens' as StopReason };
 };
 
-async function setup(t: { after: (fn: () => void) => void }) {
+async function setup(t: { after: (fn: () => void) => void }, model?: ModelConfig, probe: Partial<ProbeResult> = {}, backups: ModelConfig[] = []) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
-  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
+  config.models = [model ?? { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }, ...backups];
+  config.routing = { chat: ['m', ...backups.map(b => b.id)], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  adapter.probeResult = probe;
   await app.status.probeAll(app.config());
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
@@ -358,5 +359,120 @@ test('B 空の続き: 空白だけの続きも空として扱う（前の文が�
   const { result } = await s.run('Write');
   assert.equal(result.ok && result.truncated, true);
   assert.equal(result.ok && result.text, 'nospace');
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_empty').length, 1);
+});
+
+// ── 考えるだけで上限に達し、文も呼び出しも無い返事（F1）: 続きの一言を送らず、上限を上げて同じ呼び出しをやり直す ──
+const thinkingOnly: Script = async function* () {
+  yield { type: 'reasoning', delta: '' };
+  yield { type: 'usage', usage: { outputTokens: 64_000 } };
+  yield { type: 'done', stop: 'max_tokens' as StopReason };
+};
+const big = (contextLength: number): ModelConfig => ({ id: 'm', provider: 'fake', model: 'x', contextLength, vision: false });
+
+test('F1: 考えるだけで上限に達した返事は、続きの一言を送らず、上げた上限で同じ呼び出しをやり直す。上げた上限は同じ実行の次の呼び出しにも効く', async t => {
+  const s = await setup(t, big(1_000_000), { maxOutput: 128_000 });
+  s.adapter().scripts.push(thinkingOnly, listCall, reply('おわり'));
+  const { runId, result } = await s.run('作って');
+  assert.ok(result.ok);
+  assert.equal(result.ok && result.truncated, undefined);
+  assert.equal(result.ok && result.text, 'おわり');
+  const calls = s.adapter().calls;
+  assert.deepEqual(calls.map(c => c.maxOutputTokens), [32_000, 128_000, 128_000]);
+  assert.equal(calls.some(c => c.messages.some(isContinue)), false, '続きの一言は送らない');
+  assert.equal(s.app.conversations.messages('c1').some(m => m.message.role === 'assistant' && !m.message.content && !m.message.toolCalls?.length), false, '空の返事は保存しない');
+  assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), ['output_raised']);
+  assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'output_continued'), false);
+});
+
+test('F1: 上げられる上限が無ければ（提供元の上限に達している）やり直さず、続きも頼まず、知らせを出して切れたとして終える', async t => {
+  const s = await setup(t, big(1_000_000), { maxOutput: 32_000 });
+  s.adapter().scripts.push(thinkingOnly);
+  const { result } = await s.run('作って');
+  assert.equal(result.ok && result.truncated, true);
+  assert.equal(s.adapter().calls.length, 1);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_thinking_only').length, 1);
+  assert.equal(s.app.conversations.messages('c1').some(m => m.message.role === 'assistant' || isContinue(m.message)), false);
+});
+
+test('F1: 書いた上限（maxOutputTokens）は超えない', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(thinkingOnly);
+  const { result } = await s.run('作って');
+  assert.equal(result.ok && result.truncated, true);
+  assert.deepEqual(s.adapter().calls.map(c => c.maxOutputTokens), [1024]);
+});
+
+test('F1: 提供元の上限が分からなければ 2 倍（長さの半分まで）に 1 回上げ、それでも考えるだけなら止まる（繰り返さない）', async t => {
+  const s = await setup(t, big(200_000));
+  s.adapter().scripts.push(thinkingOnly, thinkingOnly, thinkingOnly);
+  const { result } = await s.run('作って');
+  assert.equal(result.ok && result.truncated, true);
+  assert.deepEqual(s.adapter().calls.map(c => c.maxOutputTokens), [32_000, 64_000]);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_thinking_only').length, 1);
+});
+
+test('F1: 提供元の上限が分からず長さがとても大きくても、上げるのは 1 回だけ（2 倍）で、考えるだけが続いても繰り返さない', async t => {
+  const s = await setup(t, big(1_000_000));
+  s.adapter().scripts.push(thinkingOnly, thinkingOnly, thinkingOnly, thinkingOnly);
+  const { result } = await s.run('作って');
+  assert.equal(result.ok && result.truncated, true);
+  assert.deepEqual(s.adapter().calls.map(c => c.maxOutputTokens), [32_000, 64_000]);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_thinking_only').length, 1);
+});
+
+test('F1: 上げた上限は、同じ実行の次の組み立ての「使える量」にも効く（古い発言を外す境目が下がる）', async t => {
+  const s = await setup(t, big(40_000));
+  const huge = 'abcdefg '.repeat(8_000);
+  s.adapter().scripts.push(reply('ok'));
+  await s.run(huge);
+  s.adapter().scripts.push(thinkingOnly, reply('おわり'));
+  await s.run('続けて');
+  const calls = s.adapter().calls;
+  assert.deepEqual(calls.map(c => c.maxOutputTokens), [10_000, 10_000, 20_000]);
+  assert.equal(calls[1]!.messages.some(m => m.content === huge), true, 'ふだんの上限なら古い発言は入る');
+  assert.equal(calls[2]!.messages.some(m => m.content === huge), false, '上げた上限では古い発言を外す');
+});
+
+test('F1: 上げる上限は、いまのやり取りと合わせてコンテキストの 95% に入りきる量まで', async t => {
+  const s = await setup(t, big(40_000));
+  s.adapter().scripts.push(thinkingOnly, reply('おわり'));
+  await s.run('abcdefg '.repeat(9_000));
+  const calls = s.adapter().calls;
+  assert.equal(calls.length, 2);
+  const second = calls[1]!;
+  assert.ok(second.maxOutputTokens > 10_000 && second.maxOutputTokens < 20_000, String(second.maxOutputTokens));
+  const irreducible = irreducibleEstimate({ system: `${second.system.frozen}\n${second.system.dynamic}`, messages: second.messages, tools: second.tools }).tokens;
+  assert.ok(irreducible + second.maxOutputTokens <= Math.floor(40_000 * 0.95), `${irreducible} + ${second.maxOutputTokens}`);
+});
+
+test('F1: 捨てた呼び出しの使用量も実行の使用量に入る（成功でも、そのあと失敗しても）', async t => {
+  const s = await setup(t, big(200_000));
+  s.adapter().scripts.push(thinkingOnly, reply('おわり', { outputTokens: 10 }));
+  const ok = await s.run('作って');
+  assert.equal(ok.result.ok && ok.result.usage.outputTokens, 64_010);
+  assert.equal(s.app.runs.get(ok.runId)!.output_tokens, 64_010);
+  s.adapter().scripts.push(thinkingOnly, fail(new Error('boom')));
+  const failed = await s.run('もう一度');
+  assert.equal(failed.result.ok, false);
+  assert.equal(s.app.runs.get(failed.runId)!.output_tokens, 64_000);
+});
+
+test('F1: 上げた上限は、上げたモデルにだけ効く。同じ実行で予備のモデルに替わったら、そのモデルのふだんの上限から始める', async t => {
+  const s = await setup(t, big(1_000_000), {}, [{ ...big(40_000), id: 'm2', model: 'y' }]);
+  s.adapter().scripts.push(thinkingOnly, fail(new Error('boom')), reply('おわり'));
+  const { result } = await s.run('作って');
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.deepEqual(s.adapter().calls.map(c => [c.model.id, c.maxOutputTokens]), [['m', 32_000], ['m', 64_000], ['m2', 10_000]]);
+});
+
+test('F1: 続きを頼んだあとの返事が考えるだけで上限に達し、もう上げられなければ、続きの一言を重ねず、それまでの文で切れたとして終える', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('これは途中で'), thinkingOnly);
+  const { result } = await s.run('書いて');
+  assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.text, 'これは途中で');
+  assert.equal(s.adapter().calls.length, 2);
+  assert.equal(s.app.conversations.messages('c1').filter(m => isContinue(m.message)).length, 1, '一言は最初の 1 回だけ');
   assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'output_continue_empty').length, 1);
 });

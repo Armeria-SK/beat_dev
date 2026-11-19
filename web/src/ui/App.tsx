@@ -10,6 +10,7 @@ import { EMPTY, reduce, type Action, type Effect, type LiveState, type RunNotice
 import { NarrowBar, TabBar } from './NarrowBar.tsx';
 import { Onboarding } from './Onboarding.tsx';
 import { Panes, usePanes } from './Panes.tsx';
+import type { UndoneNotice } from './panes/ChangesPane.tsx';
 import { paneTarget, pendingFor, pendingRouteReady, pendingTotal, sessionCounts, taskCounts, withPendingCounts } from './pending.ts';
 import { kanbanPaneCount } from './kanban.ts';
 import type { PaneView } from './panes.ts';
@@ -383,7 +384,17 @@ export function App() {
     if (want.view === 'plan') panes.openPlan(false); else panes.openPane(want.view);
     setWant(null);
   }, [want, paneProduct, panes]);
-  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan, onOpenPending: () => panes.openPane('pending'), onOpenTerminal: panes.openTerminal } : undefined;
+  const paneToggle = paneProduct ? { open: paneCount > 0, onToggle: panes.toggle, onOpenPlan: panes.openPlan, onOpenPending: () => panes.openPane('pending'), onOpenTerminal: panes.openTerminal, onOpenChanges: panes.openChanges } : undefined;
+  const undone = useCallback((notice: UndoneNotice) => {
+    if (chatId) dispatch({ type: 'notice', conversationId: chatId, notice: { runId: `undo:${notice.batch ?? Date.now()}`, kind: 'undo', ...notice } });
+  }, [chatId, dispatch]);
+  let paneEdits = 0;
+  if (paneProduct) {
+    const mine = new Set(conversations.filter(c => c.project_id === paneProduct).map(c => c.id));
+    if (chatId) mine.add(chatId);
+    for (const mark of live.tasks.values()) if (mark.projectId === paneProduct) for (const id of [mark.conversationId, mark.buildChat?.conversation]) if (id) mine.add(id);
+    for (const [id, n] of live.edits) if (mine.has(id)) paneEdits += n;
+  }
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
@@ -450,7 +461,7 @@ export function App() {
           </main>
         )}
         {paneProduct && paneCount > 0 && (
-          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting}
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting} productRoot={convoProduct?.root ?? null} editRevision={paneEdits} onUndone={undone}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
             pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
             questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }}

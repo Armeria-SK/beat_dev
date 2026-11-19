@@ -1,8 +1,9 @@
 import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, QuestionCounts, Task, TaskStatus, ToolGate } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
+import { EDIT_TOOLS } from './changes.ts';
 
-export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; projectId?: string | null; buildChat?: { chat: string; conversation: string | null } }
+export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; projectId?: string | null; conversationId?: string | null; buildChat?: { chat: string; conversation: string | null } }
 
 export interface SettledTool { callId: string; name: string; input: string; gate?: ToolGate | undefined }
 export interface LiveDraft extends Draft { startedAt?: number | undefined; toolStartedAt?: number | undefined; toolCallId?: string | undefined; settled?: SettledTool[] | undefined; settledCount?: number | undefined; waitingSince?: number | undefined }
@@ -19,6 +20,7 @@ export type RunNotice = { runId: string; key?: string | undefined } & (
   | { kind: 'memory'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { kind: 'stopped' }
   | { kind: 'interrupted' }
+  | { kind: 'undo'; projectId: string; batch: string | null; undone: number; refused: number; more: number }
   | { kind: 'error'; errorKind: string; errorCode?: string | undefined; errorParams?: Record<string, string | number> | undefined; errorMessage?: string | undefined; hint?: string | undefined; measured?: number | undefined; required?: number | undefined }
 );
 
@@ -36,6 +38,7 @@ export interface LiveState {
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   notices: ReadonlyMap<string, RunNotice[]>;
   revisions: ReadonlyMap<string, number>;
+  edits: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
   taskRevision: number;
   planRevisions: ReadonlyMap<string, number>;
@@ -51,7 +54,7 @@ export interface LiveState {
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
+  notices: new Map(), revisions: new Map(), edits: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
@@ -81,6 +84,7 @@ export type Action =
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'checklist'; conversationId: string; items: ChecklistItem[] }
   | { type: 'clearNotices'; conversationId: string }
+  | { type: 'notice'; conversationId: string; notice: RunNotice }
   | { type: 'interrupt'; conversationId: string; on: boolean };
 
 export const BROWSER_NOTIFY: ReadonlySet<string> = new Set(['task_waiting']);
@@ -92,7 +96,7 @@ const buildChat = (t: Task): Pick<TaskMark, 'buildChat'> =>
   (t.created_in_conversation && t.acceptance_items && !t.spawned_by ? { buildChat: { chat: t.created_in_conversation, conversation: t.conversation_id } } : {});
 
 export function mergeTasks(prev: ReadonlyMap<string, TaskMark>, snapshot: readonly Task[]): Map<string, TaskMark> {
-  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), projectId: t.project_id ?? null, ...(t.check_state ? { checkState: t.check_state } : {}), ...buildChat(t) }]));
+  const next = new Map<string, TaskMark>(snapshot.map(t => [t.id, { status: t.status, updatedAt: t.updated_at, live: false, ...(t.waiting_kind ? { waitingKind: t.waiting_kind } : {}), projectId: t.project_id ?? null, ...(t.conversation_id ? { conversationId: t.conversation_id } : {}), ...(t.check_state ? { checkState: t.check_state } : {}), ...buildChat(t) }]));
   for (const [id, mark] of prev) {
     const fresh = next.get(id);
     if (fresh ? mark.updatedAt > fresh.updatedAt : mark.live) next.set(id, mark);
@@ -166,8 +170,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       };
     case 'tool.result': {
       const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId, e.gate), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
+      const edited = e.ok && e.decision !== 'deny' && EDIT_TOOLS.has(e.name) ? { ...state, edits: new Map(state.edits).set(e.conversationId, (state.edits.get(e.conversationId) ?? 0) + 1) } : state;
       return {
-        state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
+        state: e.decision === 'deny' ? addNotice(edited, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : edited,
         effects: [],
       };
     }
@@ -212,7 +217,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'task.changed': {
       const old = s.tasks.get(e.task.id);
       if (old && old.updatedAt > e.task.updated_at) return { state: s, effects: refresh('worker') };
-      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), projectId: e.task.project_id ?? null, ...(e.task.check_state ? { checkState: e.task.check_state } : {}), ...buildChat(e.task) });
+      const tasks = new Map(s.tasks).set(e.task.id, { status: e.task.status, updatedAt: e.task.updated_at, live: true, ...(e.task.waiting_kind ? { waitingKind: e.task.waiting_kind } : {}), projectId: e.task.project_id ?? null, ...(e.task.conversation_id ? { conversationId: e.task.conversation_id } : {}), ...(e.task.check_state ? { checkState: e.task.check_state } : {}), ...buildChat(e.task) });
       const mark = tasks.get(e.task.id)!;
       const moved = !old || old.status !== mark.status || old.waitingKind !== mark.waitingKind || old.checkState !== mark.checkState || old.buildChat?.conversation !== mark.buildChat?.conversation;
       const chat = moved ? mark.buildChat?.chat : undefined;
@@ -267,6 +272,7 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
       if (kept.length) notices.set(a.conversationId, kept); else notices.delete(a.conversationId);
       return { state: { ...s, notices, interrupting: without(s.interrupting, a.conversationId) }, effects: [] };
     }
+    case 'notice': return { state: addNotice(s, a.conversationId, a.notice), effects: [] };
     case 'clearNotices': {
       if (!s.notices.has(a.conversationId)) return { state: s, effects: [] };
       const notices = new Map(s.notices);
