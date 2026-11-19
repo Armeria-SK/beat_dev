@@ -16,8 +16,12 @@ export const LONG_GAP_MS = 60 * 60_000;
 export const MISS_RATIO = 0.95;
 const CUT_MARK = toolText('en', 'pipeline.truncated', { shown: '\u0000', total: '\u0000', note: '' }).split('\u0000')[0]!;
 
-export type MissReason = 'tools' | 'frozen' | 'dynamic' | 'removed' | 'gap_5min' | 'history';
-export const MISS_REASONS: readonly MissReason[] = ['tools', 'frozen', 'dynamic', 'removed', 'gap_5min', 'history'];
+export type MissReason = 'model' | 'tools' | 'frozen' | 'dynamic' | 'removed' | 'gap_5min' | 'history';
+export const MISS_REASONS: readonly MissReason[] = ['model', 'tools', 'frozen', 'dynamic', 'removed', 'gap_5min', 'history'];
+// 実行の終わり方。engine_runs が量を書くのは ok と failed だけ（cancelled・unfinished・beat の中で落ちた internal_error は書かない）
+export type RunState = 'ok' | 'failed' | 'cancelled' | 'unfinished' | 'internal_error';
+export const RUN_STATES: readonly RunState[] = ['ok', 'failed', 'cancelled', 'unfinished', 'internal_error'];
+export interface StateReport { state: RunState; runs: number; volume: Volume; engineInput: number; engineRead: number }
 
 export interface Volume { calls: number; input: number; read: number; write: number; fresh: number; output: number; weighted: number; readShare: number | null }
 export interface Reads {
@@ -44,15 +48,21 @@ export interface TokenReport {
   gaps: { count: number; longGapWrite: number; longGapShare: number | null };
   reads: Reads;
   thinkingReplayRejected: number;
+  // 実行の終わり方ごとの model_calls（turn + discarded）と engine_runs の量。engine_runs の読みの割合（前の 72%）と比べるのは ok と failed の行だけ
+  states: StateReport[];
+  compared: { runs: number; volume: Volume; engineReadShare: number | null };
   conversations: ConversationReport[];
   runs: RunReport[];
 }
 
 interface CallRow {
-  run_id: string; seq: number; purpose: 'turn' | 'compact' | 'discarded'; input_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null;
+  run_id: string; seq: number; purpose: 'turn' | 'compact' | 'discarded'; model: string; input_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null;
   output_tokens: number | null; removed: number; tools_hash: string; frozen_hash: string; dynamic_hash: string; started_at: number; conversation_id: string | null;
 }
-interface RunRow { id: string; kind: string; conversation_id: string | null; parent_run_id: string | null; started_at: number; flags: string }
+interface RunRow {
+  id: string; kind: string; conversation_id: string | null; parent_run_id: string | null; started_at: number; flags: string;
+  ok: number | null; error_kind: string | null; ended_at: number | null; attempts: number; input_tokens: number | null; cache_read_tokens: number | null;
+}
 
 const emptyVolume = (): Volume => ({ calls: 0, input: 0, read: 0, write: 0, fresh: 0, output: 0, weighted: 0, readShare: null });
 const emptyReads = (): Reads => ({ fileReads: 0, dupReads: 0, dupChars: 0, toolChars: 0, rereadAfterCut: 0, cutOutputs: 0, rereadAfterCompact: 0 });
@@ -69,11 +79,15 @@ function addCall(v: Volume, c: Pick<CallRow, 'input_tokens' | 'cache_read_tokens
 
 const addReads = (into: Reads, r: Reads): void => { for (const key of Object.keys(into) as Array<keyof Reads>) into[key] += r[key]; };
 const hasTable = (db: DatabaseSync, name: string): boolean => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+const hasColumn = (db: DatabaseSync, table: string, column: string): boolean => (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(c => c.name === column);
+const stateOf = (run: Pick<RunRow, 'ok' | 'error_kind' | 'ended_at' | 'attempts'>): RunState =>
+  run.ended_at === null ? 'unfinished' : run.ok === 1 ? 'ok' : run.error_kind === 'cancelled' ? 'cancelled' : run.error_kind === 'internal' && run.attempts === 0 ? 'internal_error' : 'failed';
 const normalPath = (path: string): string => path.replaceAll('\\', '/').replace(/^\.\//u, '');
 const flagsOf = (text: string): string[] => { try { const v = JSON.parse(text) as unknown; return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 
 // 前の呼び出しとの比べで、外れた理由を 1 つ決める（先に当てはまったもの）
-export function missReason(prev: Pick<CallRow, 'tools_hash' | 'frozen_hash' | 'dynamic_hash' | 'removed' | 'started_at'>, cur: Pick<CallRow, 'tools_hash' | 'frozen_hash' | 'dynamic_hash' | 'removed' | 'started_at'>): MissReason {
+export function missReason(prev: Pick<CallRow, 'model' | 'tools_hash' | 'frozen_hash' | 'dynamic_hash' | 'removed' | 'started_at'>, cur: Pick<CallRow, 'model' | 'tools_hash' | 'frozen_hash' | 'dynamic_hash' | 'removed' | 'started_at'>): MissReason {
+  if (prev.model !== cur.model) return 'model';
   if (prev.tools_hash !== cur.tools_hash) return 'tools';
   if (prev.frozen_hash !== cur.frozen_hash) return 'frozen';
   if (prev.dynamic_hash !== cur.dynamic_hash) return 'dynamic';
@@ -90,21 +104,28 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
     misses: MISS_REASONS.map(reason => ({ reason, count: 0, lostTokens: 0 })),
     gaps: { count: 0, longGapWrite: 0, longGapShare: null },
     reads: emptyReads(), thinkingReplayRejected: 0, conversations: [], runs: [],
+    states: RUN_STATES.map(state => ({ state, runs: 0, volume: emptyVolume(), engineInput: 0, engineRead: 0 })),
+    compared: { runs: 0, volume: emptyVolume(), engineReadShare: null },
   };
   if (!hasTable(db, 'engine_runs')) { report.notes.push('this database has no engine_runs table (nothing has run yet)'); return report; }
   const calls = hasTable(db, 'model_calls');
   if (!calls) report.notes.push('this database has no model_calls table yet (start beat once with this version); token volumes are empty');
 
-  const parents = new Map((db.prepare('SELECT id, parent_run_id FROM engine_runs WHERE parent_run_id IS NOT NULL').all() as Array<{ id: string; parent_run_id: string }>).map(r => [r.id, r.parent_run_id]));
+  // parent_run_id は移し替え 18 から。それより古い DB では子の実行が無いものとして読む（ほかの列と表は移し替え 1・2 から。judge_calls・model_calls は無ければ飛ばす）
+  const parentColumn = hasColumn(db, 'engine_runs', 'parent_run_id') ? 'parent_run_id' : 'NULL AS parent_run_id';
+  const runColumns = `id, kind, conversation_id, ${parentColumn}, started_at, flags, ok, error_kind, ended_at, attempts, input_tokens, cache_read_tokens`;
+  const children = (parentColumn === 'parent_run_id' ? db.prepare('SELECT id, parent_run_id FROM engine_runs WHERE parent_run_id IS NOT NULL').all() : []) as Array<{ id: string; parent_run_id: string }>;
+  const parents = new Map(children.map(r => [r.id, r.parent_run_id]));
   const rootOf = (id: string): string => {
     let at = id;
     for (let hops = 0; hops < 50 && parents.has(at); hops++) at = parents.get(at)!;
     return at;
   };
-  const windowRuns = db.prepare('SELECT id, kind, conversation_id, parent_run_id, started_at, flags FROM engine_runs WHERE started_at >= ? AND started_at < ? ORDER BY started_at, rowid').all(since, until) as unknown as RunRow[];
+  const windowRuns = db.prepare(`SELECT ${runColumns} FROM engine_runs WHERE started_at >= ? AND started_at < ? ORDER BY started_at, rowid`).all(since, until) as unknown as RunRow[];
   const inWindow = new Set(windowRuns.map(r => r.id));
   const runInfo = new Map(windowRuns.map(r => [r.id, r]));
-  const rootRow = (id: string): RunRow => runInfo.get(id) ?? (db.prepare('SELECT id, kind, conversation_id, parent_run_id, started_at, flags FROM engine_runs WHERE id = ?').get(id) as RunRow | undefined) ?? { id, kind: '?', conversation_id: null, parent_run_id: null, started_at: 0, flags: '[]' };
+  const rootRow = (id: string): RunRow => runInfo.get(id) ?? (db.prepare(`SELECT ${runColumns} FROM engine_runs WHERE id = ?`).get(id) as RunRow | undefined)
+    ?? { id, kind: '?', conversation_id: null, parent_run_id: null, started_at: 0, flags: '[]', ok: null, error_kind: null, ended_at: null, attempts: 0, input_tokens: null, cache_read_tokens: null };
 
   const roots = new Map<string, RunReport>();
   const rootReport = (runId: string): RunReport => {
@@ -121,6 +142,8 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
     const r = rootReport(run.id);
     if (run.id !== r.runId) r.children++;
     if (flagsOf(run.flags).includes('thinking_replay_rejected')) { r.thinkingReplayRejected = true; report.thinkingReplayRejected++; }
+    const state = report.states.find(x => x.state === stateOf(run))!;
+    state.runs++; state.engineInput += run.input_tokens ?? 0; state.engineRead += run.cache_read_tokens ?? 0;
   }
 
   const conversations = new Map<string, ConversationReport>();
@@ -133,7 +156,7 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
 
   if (calls) {
     const rows = db.prepare(`
-      SELECT m.run_id, m.seq, m.purpose, m.input_tokens, m.cache_read_tokens, m.cache_write_tokens, m.output_tokens, m.removed, m.tools_hash, m.frozen_hash, m.dynamic_hash, m.started_at, r.conversation_id
+      SELECT m.run_id, m.seq, m.purpose, m.model, m.input_tokens, m.cache_read_tokens, m.cache_write_tokens, m.output_tokens, m.removed, m.tools_hash, m.frozen_hash, m.dynamic_hash, m.started_at, r.conversation_id
       FROM model_calls m JOIN engine_runs r ON r.id = m.run_id
       WHERE r.started_at >= ? AND r.started_at < ? ORDER BY m.started_at, m.run_id, m.seq
     `).all(since, until) as unknown as CallRow[];
@@ -147,6 +170,8 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
       }
       if (row.purpose === 'turn') r.turn++; else r.discarded++;
       addCall(r.volume, row); addCall(c.volume, row); addCall(report.totals.volume, row);
+      const own = runInfo.get(row.run_id);
+      if (own) addCall(report.states.find(x => x.state === stateOf(own))!.volume, row);
       // 子の実行は自分の会話を持つので、前の呼び出しは同じ会話（消した会話は同じ実行）のものと比べる
       const chain = row.conversation_id ?? `run:${row.run_id}`;
       const prev = previous.get(chain);
@@ -199,6 +224,7 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
       const seen = new Set<string>();
       const cutPaths = new Set<string>();
       const readAt = new Map<string, number[]>();
+      const rereadSince = new Set<string>();
       for (const m of select.all(conversationId) as Array<{ run_id: string | null; role: string; chars: number; parts: string; created_at: number }>) {
         let parts: { toolCalls?: Array<{ id: string; name: string; arguments?: unknown }>; toolCallId?: string; name?: string; content?: string };
         try { parts = JSON.parse(m.parts) as typeof parts; } catch { continue; }
@@ -222,7 +248,8 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
           if (seen.has(read.key)) { r.dupReads++; r.dupChars += m.chars; }
           if (cutPaths.has(read.path)) r.rereadAfterCut++;
           const lastCompact = compacts.filter(t => t < m.created_at).at(-1);
-          if (lastCompact !== undefined && (readAt.get(read.path) ?? []).some(t => t < lastCompact)) r.rereadAfterCompact++;
+          const once = `${lastCompact}|${read.path}`;
+          if (lastCompact !== undefined && !rereadSince.has(once) && (readAt.get(read.path) ?? []).some(t => t < lastCompact)) { r.rereadAfterCompact++; rereadSince.add(once); }
         }
         seen.add(read.key);
         readAt.set(read.path, [...(readAt.get(read.path) ?? []), m.created_at]);
@@ -237,6 +264,15 @@ export function tokenReport(db: DatabaseSync, options: { since: number; until: n
     if (inWindow.has(r.runId) || r.volume.calls > 0) conversationReport(r).runs++;
   }
   for (const c of conversations.values()) c.weightedTotal = c.volume.weighted + c.compactVolume.weighted + c.judgeInput;
+  for (const state of report.states.filter(x => x.state === 'ok' || x.state === 'failed')) {
+    const v = report.compared.volume;
+    report.compared.runs += state.runs;
+    for (const key of ['calls', 'input', 'read', 'write', 'fresh', 'output', 'weighted'] as const) v[key] += state.volume[key];
+    v.readShare = v.input > 0 ? v.read / v.input : null;
+  }
+  const compared = report.states.filter(x => x.state === 'ok' || x.state === 'failed');
+  const engineInput = compared.reduce((n, x) => n + x.engineInput, 0);
+  report.compared.engineReadShare = engineInput > 0 ? compared.reduce((n, x) => n + x.engineRead, 0) / engineInput : null;
   const t = report.totals;
   t.weightedTotal = t.volume.weighted + t.compactVolume.weighted + t.judge.input;
   report.gaps.longGapShare = t.weightedTotal > 0 ? (report.gaps.longGapWrite * 1.25) / t.weightedTotal : null;
@@ -262,6 +298,11 @@ export function renderReport(r: TokenReport): string {
     `summary calls (compact)\t${volumeCells(t.compactVolume)}`,
     `judge calls\t${t.judge.calls}\t${t.judge.input}\t-\t-\t${t.judge.input}\t${t.judge.output}\t${t.judge.input}\t-`,
     `weighted input, all\t${int(t.weightedTotal)}`,
+    '',
+    '## By run state (each run on its own, not added to its parent). engine_runs records tokens only for runs that ended ok or failed',
+    `state\truns\t${VOLUME_HEAD}\tengine_runs_input\tengine_runs_read`,
+    ...r.states.map(s => `${s.state}\t${s.runs}\t${volumeCells(s.volume)}\t${s.engineInput}\t${s.engineRead}`),
+    `compared with the engine_runs baseline: the ${r.compared.runs} run(s) that ended ok or failed, on both sides; model_calls read share ${pct(r.compared.volume.readShare)}, engine_runs read share ${pct(r.compared.engineReadShare)}. cancelled, unfinished and internal_error runs are left out of both`,
     '',
     '## Cache misses (read < 95% of what the previous call left in the cache), by first differing part', 'reason\tcount\tlost_tokens',
     ...r.misses.map(m => `${m.reason}\t${m.count}\t${m.lostTokens}`),

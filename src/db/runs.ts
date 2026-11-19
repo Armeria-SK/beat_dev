@@ -68,7 +68,8 @@ const shortHash = (text: string): string => createHash('sha256').update(text).di
 export class Runs {
   readonly db: DatabaseSync;
   readonly now: () => number;
-  constructor(db: DatabaseSync, now: () => number = Date.now) { this.db = db; this.now = now; }
+  readonly log: ((line: string) => void) | undefined;
+  constructor(db: DatabaseSync, now: () => number = Date.now, log?: (line: string) => void) { this.db = db; this.now = now; this.log = log; }
 
   start(id: string, kind: string, conversationId?: string, parentRunId?: string): void {
     this.db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at, parent_run_id) VALUES (?, ?, ?, ?, ?)')
@@ -91,16 +92,22 @@ export class Runs {
     );
   }
 
-  // モデルの呼び出し 1 回の量（数字と hash だけ。文は持たない）。turn と discarded の合計が engine_runs の量になり、compact は engine_runs に入らない
+  // モデルの呼び出し 1 回の量（数字と hash だけ。文は持たない）。ok か失敗で終わった実行では、turn と discarded の合計が engine_runs の量になる
+  // （取り消し・途中で落ちた実行は engine_runs に量を書かないので、行だけが残る）。compact は engine_runs に入らない。
+  // 測るための記録なので、書けなくても実行は止めない（[WARN] を残す）
   recordCall(c: ModelCallRecord): void {
     const ended = this.now();
-    this.db.prepare(`
-      INSERT INTO model_calls (run_id, seq, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, est_tokens, removed, tools_hash, frozen_hash, dynamic_hash, started_at, duration_ms)
-      VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM model_calls WHERE run_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      c.runId, c.runId, c.purpose, c.model, c.usage.inputTokens ?? null, c.usage.cacheReadTokens ?? null, c.usage.cacheWriteTokens ?? null, c.usage.outputTokens ?? null,
-      c.estTokens ?? null, c.removed ?? 0, shortHash(JSON.stringify(c.tools)), shortHash(c.system.frozen), shortHash(c.system.dynamic), c.startedAt, Math.max(0, ended - c.startedAt),
-    );
+    try {
+      this.db.prepare(`
+        INSERT INTO model_calls (run_id, seq, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, est_tokens, removed, tools_hash, frozen_hash, dynamic_hash, started_at, duration_ms)
+        VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM model_calls WHERE run_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        c.runId, c.runId, c.purpose, c.model, c.usage.inputTokens ?? null, c.usage.cacheReadTokens ?? null, c.usage.cacheWriteTokens ?? null, c.usage.outputTokens ?? null,
+        c.estTokens ?? null, c.removed ?? 0, shortHash(JSON.stringify(c.tools)), shortHash(c.system.frozen), shortHash(c.system.dynamic), c.startedAt, Math.max(0, ended - c.startedAt),
+      );
+    } catch (error) {
+      this.log?.(`[WARN] could not record a model call of run ${c.runId}: ${(error as Error).message}`);
+    }
   }
 
   // 「外から読んだ」印を付ける（一度付いたら外れない）。実行が終わる前に書くので、落ちて途中で終わった実行にも残る

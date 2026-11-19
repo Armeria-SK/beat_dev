@@ -19,11 +19,14 @@ const MIN = 60_000;
 const AT = MIGRATIONS.findIndex(m => typeof m === 'string' && m.includes('CREATE TABLE model_calls'));
 const CUT = toolText('en', 'pipeline.truncated', { shown: '16,000', total: '40,000', note: toolText('en', 'pipeline.note_none') });
 
-interface Call { run: string; seq: number; purpose?: string; input: number; read: number | null; write: number | null; output?: number; at: number; tools?: string; frozen?: string; dynamic?: string; removed?: number }
+interface Call { run: string; seq: number; purpose?: string; input: number; read: number | null; write: number | null; output?: number; at: number; tools?: string; frozen?: string; dynamic?: string; removed?: number; model?: string }
 const call = (db: DatabaseSync, c: Call) => db.prepare(`INSERT INTO model_calls (run_id, seq, purpose, model, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, est_tokens, removed, tools_hash, frozen_hash, dynamic_hash, started_at, duration_ms)
-  VALUES (?, ?, ?, 'm', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 100)`).run(c.run, c.seq, c.purpose ?? 'turn', c.input, c.read, c.write, c.output ?? 10, c.removed ?? 0, c.tools ?? 'T', c.frozen ?? 'F', c.dynamic ?? 'D', c.at);
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 100)`).run(c.run, c.seq, c.purpose ?? 'turn', c.model ?? 'm', c.input, c.read, c.write, c.output ?? 10, c.removed ?? 0, c.tools ?? 'T', c.frozen ?? 'F', c.dynamic ?? 'D', c.at);
 const run = (db: DatabaseSync, id: string, kind: string, conversation: string, at: number, extra: { parent?: string; flags?: string[] } = {}) =>
   db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at, parent_run_id, flags) VALUES (?, ?, ?, ?, ?, ?)').run(id, kind, conversation, at, extra.parent ?? null, JSON.stringify(extra.flags ?? []));
+// 実行の終わり方: engine_runs に量を書くのは ok と failed だけ（取り消し・beat の中で落ちた実行は書かない）
+const end = (db: DatabaseSync, id: string, e: { ok: boolean; kind?: string; attempts?: number; input?: number; read?: number }) =>
+  db.prepare('UPDATE engine_runs SET ended_at = started_at + 1, ok = ?, error_kind = ?, attempts = ?, input_tokens = ?, cache_read_tokens = ? WHERE id = ?').run(e.ok ? 1 : 0, e.kind ?? null, e.attempts ?? 1, e.input ?? null, e.read ?? null, id);
 const conversation = (db: DatabaseSync, id: string) => db.prepare('INSERT INTO conversations (id, created_at, last_message_at) VALUES (?, 0, 0)').run(id);
 const message = (db: DatabaseSync, conv: string, runId: string, at: number, m: Record<string, unknown> & { role: string }) => {
   const text = m.role === 'tool' ? `[${String(m.name)}] ${String(m.content)}` : String(m.content ?? '');
@@ -38,7 +41,7 @@ const readCall = (db: DatabaseSync, conv: string, runId: string, at: number, id:
 function build(path: string) {
   const db = openDatabase(path, MIGRATIONS);
   try {
-    for (const id of ['c1', 'c1-child', 'c2']) conversation(db, id);
+    for (const id of ['c1', 'c1-child', 'c2', 'c3', 'c4']) conversation(db, id);
     // r1: 2 回の turn と 1 回の捨てた呼び出し・要約 1 回・子の実行 1 本・判定役 3 回（子の 1 回も）・切れた shell の出力 1 つ
     run(db, 'r1', 'chat', 'c1', BASE);
     call(db, { run: 'r1', seq: 1, input: 1000, read: 0, write: 900, at: BASE + 1000 });
@@ -59,6 +62,8 @@ function build(path: string) {
     call(db, { run: 'r2', seq: 1, input: 1400, read: 0, write: 1300, at: BASE + 3000 + 10 * MIN, dynamic: 'D2' });
     call(db, { run: 'r2', seq: 2, input: 1400, read: 1300, write: 50, at: BASE + 3000 + 11 * MIN, dynamic: 'D2' });
     const k3 = readCall(db, 'c1', 'r2', BASE + 604_000, 'k3', { path: 'src/a.txt', offset: 10 }, 'b'.repeat(20));
+    // 同じ要約のあとの 2 回目の読み直しは、要約のあとの読み直しに数えない（パスと要約の組で 1 回）
+    const k3b = readCall(db, 'c1', 'r2', BASE + 604_500, 'k3b', { path: 'src/a.txt', offset: 20 }, 'b'.repeat(25));
     const k4 = readCall(db, 'c1', 'r2', BASE + 605_000, 'k4', { path: 'src/b.txt' }, 'c'.repeat(10));
     const shell = message(db, 'c1', 'r2', BASE + 606_000, { role: 'tool', toolCallId: 'k5', name: 'shell_run', content: 'ok' });
     // r3: 前の呼び出しとの違いの順に、外れた理由を 1 つずつ（道具・固定・dynamic・外した数・5 分超・それ以外）。2 つ違うときは先の方（道具と固定 → 道具、固定と dynamic → 固定）。最後は読める
@@ -72,10 +77,22 @@ function build(path: string) {
     const same = { tools: 'T2', frozen: 'F3', dynamic: 'D3', removed: 3 };
     call(db, { run: 'r3', seq: 7, input: 1100, read: 100, write: 1000, at: T3 + 5000 + 7 * MIN, ...same });
     call(db, { run: 'r3', seq: 8, input: 1100, read: 1100, write: 0, at: T3 + 6000 + 7 * MIN, ...same });
+    // モデルが替われば、ほかが同じでも理由は model
+    call(db, { run: 'r3', seq: 9, input: 1000, read: 0, write: 1000, at: T3 + 7000 + 7 * MIN, ...same, model: 'm2' });
+    // 終わり方: r1・r1c は ok、r3 は failed（どちらも engine_runs に量がある）。r2 は取り消し、r4 は beat の中で落ち、r5 は終わっていない（engine_runs に量が無い）
+    end(db, 'r1', { ok: true, input: 3300, read: 1950 });
+    end(db, 'r1c', { ok: true, input: 500, read: 0 });
+    end(db, 'r2', { ok: false, kind: 'cancelled' });
+    end(db, 'r3', { ok: false, kind: 'provider_error', input: 9200, read: 1200 });
+    run(db, 'r4', 'chat', 'c3', T3 + 60 * MIN);
+    call(db, { run: 'r4', seq: 1, input: 700, read: 0, write: 0, at: T3 + 60 * MIN + 1000 });
+    end(db, 'r4', { ok: false, kind: 'internal', attempts: 0 });
+    run(db, 'r5', 'chat', 'c4', T3 + 120 * MIN);
+    call(db, { run: 'r5', seq: 1, input: 300, read: 0, write: 0, at: T3 + 120 * MIN + 1000 });
     // 期間の外の古い実行（数えない）
     run(db, 'old', 'chat', 'c2', BASE - 30 * 24 * 60 * MIN);
     call(db, { run: 'old', seq: 1, input: 99_999, read: 0, write: 0, at: BASE - 30 * 24 * 60 * MIN });
-    return { k1, k2, k3, k4, shell };
+    return { k1, k2, k3, k3b, k4, shell };
   } finally { db.close(); }
 }
 
@@ -87,14 +104,14 @@ test('量は model_calls から: 子の実行と判定役は親に足し、要�
   const path = join(tempDir(t), 'beat.db');
   build(path);
   const r = report(path);
-  assert.deepEqual(r.runs.map(x => x.runId), ['r3', 'r2', 'r1'], '子の実行は親の行に入り、古い実行は無い');
+  assert.deepEqual(r.runs.map(x => x.runId), ['r5', 'r4', 'r3', 'r2', 'r1'], '子の実行は親の行に入り、古い実行は無い');
   const r1 = byId(r, 'r1');
   assert.deepEqual([r1.turn, r1.discarded, r1.compact, r1.children], [3, 1, 1, 1], '子の turn も親に入る');
   assert.deepEqual({ ...r1.volume }, { calls: 4, input: 3800, read: 1950, write: 1150, fresh: 700, output: 35, weighted: 2332.5, readShare: 1950 / 3800 });
   assert.deepEqual([r1.compactVolume.input, r1.compactVolume.output, r1.compactVolume.weighted], [4000, 300, 4000]);
   assert.deepEqual(r1.judge, { calls: 3, input: 600, output: 35 });
   assert.equal(r1.weightedTotal, 2332.5 + 4000 + 600);
-  assert.equal(r.totals.volume.input, 3800 + 2800 + 6 * 1000 + 2200, '古い実行の 99,999 は入らない');
+  assert.equal(r.totals.volume.input, 3800 + 2800 + 9200 + 700 + 300, '古い実行の 99,999 は入らない');
   assert.equal(r.totals.compactVolume.calls, 1);
   assert.equal(r.totals.weightedTotal, r.runs.reduce((n, x) => n + x.weightedTotal, 0));
   const c1 = r.conversations.find(c => c.conversationId === 'c1')!;
@@ -109,9 +126,9 @@ test('外れた理由: 前の呼び出しが置いた分の 95% 未満しか読�
   build(path);
   const r = report(path);
   assert.deepEqual(r.misses.map(m => [m.reason, m.count, m.lostTokens]), [
-    ['tools', 1, 1000], ['frozen', 1, 1000], ['dynamic', 2, 1000 + 1150], ['removed', 1, 1000], ['gap_5min', 1, 1000], ['history', 1, 900],
+    ['model', 1, 1100], ['tools', 1, 1000], ['frozen', 1, 1000], ['dynamic', 2, 1000 + 1150], ['removed', 1, 1000], ['gap_5min', 1, 1000], ['history', 1, 900],
   ]);
-  assert.deepEqual([byId(r, 'r1').misses, byId(r, 'r2').misses, byId(r, 'r3').misses], [0, 1, 6], '要約の呼び出しは比べの鎖に入らない（r1 の 2・3 回目は読める）');
+  assert.deepEqual([byId(r, 'r1').misses, byId(r, 'r2').misses, byId(r, 'r3').misses], [0, 1, 7], '要約の呼び出しは比べの鎖に入らない（r1 の 2・3 回目は読める）');
   assert.equal(r.gaps.count, 2, 'r2 の頭（10 分）と r3 の 6 回目（6 分）');
   assert.equal(r.gaps.longGapWrite, 1300 + 1000);
   assert.equal(r.gaps.longGapShare, (2300 * 1.25) / r.totals.weightedTotal);
@@ -124,10 +141,10 @@ test('読み直し: 同じパス・範囲（上限）・切れた結果のあと
   const r1 = byId(r, 'r1');
   const r2 = byId(r, 'r2');
   assert.deepEqual([r1.fileReads, r1.dupReads, r1.dupChars, r1.rereadAfterCut, r1.rereadAfterCompact, r1.cutOutputs], [2, 1, chars.k2, 1, 0, 1], 'パスの書き方（./ と \\）は同じに見る');
-  assert.deepEqual([r2.fileReads, r2.dupReads, r2.dupChars, r2.rereadAfterCut, r2.rereadAfterCompact, r2.cutOutputs], [2, 0, 0, 1, 1, 0], '範囲が違えば重複ではない');
+  assert.deepEqual([r2.fileReads, r2.dupReads, r2.dupChars, r2.rereadAfterCut, r2.rereadAfterCompact, r2.cutOutputs], [3, 0, 0, 2, 1, 0], '範囲が違えば重複ではない。要約のあとの読み直しはパスごとに 1 回');
   assert.equal(r1.toolChars, chars.k1 + chars.k2);
-  assert.equal(r2.toolChars, chars.k3 + chars.k4 + chars.shell);
-  assert.deepEqual(r.reads, { fileReads: 4, dupReads: 1, dupChars: chars.k2, toolChars: chars.k1 + chars.k2 + chars.k3 + chars.k4 + chars.shell, rereadAfterCut: 2, cutOutputs: 1, rereadAfterCompact: 1 });
+  assert.equal(r2.toolChars, chars.k3 + chars.k3b + chars.k4 + chars.shell);
+  assert.deepEqual(r.reads, { fileReads: 5, dupReads: 1, dupChars: chars.k2, toolChars: chars.k1 + chars.k2 + chars.k3 + chars.k3b + chars.k4 + chars.shell, rereadAfterCut: 3, cutOutputs: 1, rereadAfterCompact: 1 });
   const text = renderReport(r);
   assert.match(text, /upper bound/u);
   assert.match(text, /\ndynamic\t2\t2150\n/u);
@@ -176,4 +193,31 @@ test('コマンドとして流すと表を出し、--json で同じ数を返す�
   const missing = spawnSync(process.execPath, [script, '--db', join(path, 'nope.db')], { encoding: 'utf8' });
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /no database at/u);
+});
+
+test('終わり方ごとに分けて出し、engine_runs の基準と比べるのは ok と failed の実行だけ（両側とも同じ実行）', t => {
+  const path = join(tempDir(t), 'beat.db');
+  build(path);
+  const r = report(path);
+  const state = (name: string) => r.states.find(s => s.state === name)!;
+  assert.deepEqual(r.states.map(s => [s.state, s.runs, s.volume.input, s.volume.read, s.engineInput, s.engineRead]), [
+    ['ok', 2, 3800, 1950, 3800, 1950], ['failed', 1, 9200, 1200, 9200, 1200], ['cancelled', 1, 2800, 1300, 0, 0], ['unfinished', 1, 300, 0, 0, 0], ['internal_error', 1, 700, 0, 0, 0],
+  ], '子の実行（r1c）は親に足さず自分の終わり方で数える');
+  assert.equal(state('cancelled').volume.calls, 2, '取り消した実行も、終えた呼び出しは model_calls にある');
+  assert.equal(r.compared.runs, 3);
+  assert.deepEqual([r.compared.volume.input, r.compared.volume.read], [13_000, 3150]);
+  assert.equal(r.compared.volume.readShare, r.compared.engineReadShare, '両側が同じ実行');
+  assert.match(renderReport(r), /compared with the engine_runs baseline: the 3 run\(s\) that ended ok or failed, on both sides; model_calls read share 24\.2%, engine_runs read share 24\.2%/u);
+});
+
+test('parent_run_id の無い古い DB（移し替え 18 より前）でも落ちず、子の実行は無いものとして読む', t => {
+  const path = join(tempDir(t), 'beat.db');
+  const at = MIGRATIONS.findIndex(m => typeof m === 'string' && m.includes('parent_run_id'));
+  assert.ok(at > 0, 'the parent_run_id migration exists');
+  const db = openDatabase(path, MIGRATIONS.slice(0, at));
+  db.prepare("INSERT INTO engine_runs (id, kind, conversation_id, started_at, ended_at, ok, input_tokens) VALUES ('r1', 'chat', 'c1', ?, ?, 1, 100)").run(BASE, BASE + 1);
+  db.close();
+  const r = report(path);
+  assert.deepEqual([r.runs.length, r.runs[0]!.children, r.states[0]!.runs, r.states[0]!.engineInput], [1, 0, 1, 100]);
+  assert.match(r.notes.join('\n'), /no model_calls table/u);
 });

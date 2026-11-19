@@ -997,7 +997,7 @@ export class ChatEngine {
       }
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
       if (!call.ok) {
-        if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
+        if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial, flags);
         if (call.usage) addUsage(call.usage);
         return finishFail(call.failure);
       }
@@ -1067,7 +1067,7 @@ export class ChatEngine {
       let invalidThisRound = 0;
       let askedOwner = false;
       for (const toolCall of call.toolCalls) {
-        if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
+        if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
         counters.toolCalls++;
         if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
         // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
@@ -1086,7 +1086,7 @@ export class ChatEngine {
         }, runId);
         d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
       }
-      if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
+      if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
       // タスクの終え方（完了・途中経過・質問）が決まったら、モデルを呼び直さずに終える
       if (task && task.control.value.outcome !== 'none') return finishOk(call.text, 'end_turn');
       if (kind === 'chat' && askedOwner) {
@@ -1633,14 +1633,14 @@ export class ChatEngine {
       && !this.#excluded(kind, forbid, started)(search);
   }
 
-  #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string): EngineResult {
+  #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string, flags: readonly string[]): EngineResult {
     const d = this.#d;
     const language = languageOf(d.config());
     if (partial.trim()) {
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: `${partial}\n\n${engineText(language, 'message.stopped_partway')}` }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
     }
-    d.runs.finish(runId, { ok: false, attempts: counters.attempts, iterations: counters.iterations, toolCalls: counters.toolCalls, errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), modelId: route.model.id, providerId: route.provider.id, model: route.model.model });
+    d.runs.finish(runId, { ok: false, attempts: counters.attempts, iterations: counters.iterations, toolCalls: counters.toolCalls, errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), modelId: route.model.id, providerId: route.provider.id, model: route.model.model, flags: flags.filter(flag => flag === 'thinking_replay_rejected') });
     d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), errorCode: 'provider.cancelled' });
     return { ok: false, runId, text: '', errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), errorCode: 'provider.cancelled', retryable: false };
   }

@@ -27,7 +27,8 @@ async function setup(t: { after: (fn: () => void) => void }, model: ModelConfig 
   writeFileSync(paths.config, JSON.stringify(config));
   const clock = { now: Date.parse('2026-11-19T10:00:00Z') };
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const logs: string[] = [];
+  const app = new App({ paths, databasePath: ':memory:', log: line => { logs.push(line); }, now: () => clock.now, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   adapter.probeResult = probe;
   await app.status.probeAll(app.config());
   t.after(() => app.close());
@@ -39,7 +40,7 @@ async function setup(t: { after: (fn: () => void) => void }, model: ModelConfig 
     const result = await app.engine.wait(outcome.runId);
     return { runId: outcome.runId, result };
   };
-  return { app, adapter: () => adapter, clock, run, paths };
+  return { app, adapter: () => adapter, clock, run, paths, logs };
 }
 
 const used = (n: number): Usage => ({ inputTokens: 1000 * n, cacheReadTokens: 700 * n, cacheWriteTokens: 200 * n, outputTokens: 10 * n });
@@ -152,4 +153,36 @@ test('提供元が考える部分の送り返しを断って送り直したら�
   s.adapter().scripts.push(reply('ok'));
   const next = await s.run('again');
   assert.deepEqual(JSON.parse(s.app.runs.get(next.runId)!.flags), []);
+});
+
+test('取り消した実行: 終えた呼び出しは model_calls に残り、engine_runs の量は空のまま（決まりは ok か失敗で終わった実行だけ）。考える部分の断りの印は残る', async t => {
+  const s = await setup(t);
+  let runId = '';
+  const stopped: Script = async function* (req) {
+    yield { type: 'replay_rejected' };
+    s.app.engine.stop(runId);
+    throw req.signal.reason;
+  };
+  s.adapter().scripts.push(withUsage(used(1), readNotes), stopped);
+  const outcome = s.app.engine.send(C, 'read it');
+  assert.ok(outcome.ok);
+  runId = outcome.runId;
+  const result = await s.app.engine.wait(runId);
+  assert.equal(result!.ok, false);
+  const run = s.app.runs.get(runId)!;
+  assert.equal(run.error_kind, 'cancelled');
+  assert.deepEqual(callsOf(s.app, runId).map(r => [r.purpose, r.input_tokens]), [['turn', 1000]]);
+  assert.deepEqual([run.input_tokens, run.cache_read_tokens, run.cache_write_tokens, run.output_tokens], [null, null, null, null], 'engine_runs の量の列は前のまま空');
+  assert.deepEqual(JSON.parse(run.flags), ['thinking_replay_rejected']);
+});
+
+test('model_calls に書けなくても、実行と要約は止まらない（[WARN] を残す）', async t => {
+  const s = await setup(t);
+  s.app.db.exec('DROP TABLE model_calls');
+  s.adapter().scripts.push(withUsage(used(1), readNotes), withUsage(used(1), reply('all done')));
+  const { runId, result } = await s.run('read it');
+  assert.equal(result!.ok, true, JSON.stringify(result));
+  assert.ok(s.app.conversations.messages(C).some(m => m.role === 'assistant' && m.text === 'all done'), '返事は保存された');
+  assert.equal(s.app.runs.get(runId)!.input_tokens, 2000);
+  assert.equal(s.logs.filter(line => line.startsWith(`[WARN] could not record a model call of run ${runId}`)).length, 2);
 });
