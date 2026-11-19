@@ -43,14 +43,23 @@ const DETACHING = new Set(['shape.background', 'code.spawn']);
 // ジョブの外でプロセスを作らせる道（WMI の Win32_Process.Create・[wmiclass]）。起動役（wmic・Invoke-CimMethod・rundll32 など）は LAUNCHERS と code.launcher
 const WMI_CREATE = /win32_process|\[wmiclass\]/iu;
 // パッケージを取ってきて動かす・作る語（道具ごと）。npm は init <名前> も（npm init vite は create-vite を取ってくる）
+// 入れる・上げる語（パッケージを取ってくる）も、オプションのあとに来ても見落とさないようここで見る
 const FETCH_AND_RUN: Readonly<Record<string, ReadonlySet<string>>> = {
-  npm: new Set(['exec', 'x', 'create']), pnpm: new Set(['dlx', 'create']), yarn: new Set(['dlx', 'create']), bun: new Set(['x', 'create']),
+  npm: new Set(['exec', 'x', 'create', 'install', 'i', 'in', 'ci', 'add', 'update', 'up', 'upgrade', 'install-test', 'it', 'install-ci-test', 'cit']),
+  pnpm: new Set(['dlx', 'create', 'install', 'i', 'add', 'update', 'up', 'upgrade', 'fetch']),
+  yarn: new Set(['dlx', 'create', 'install', 'add', 'up', 'upgrade', 'upgrade-interactive']),
+  bun: new Set(['x', 'create', 'install', 'i', 'add', 'a', 'update', 'upgrade']),
 };
 // 必ず値を取るオプション（その次の語は値で、サブコマンドではない）。値を取らないものを入れると次の語を見落とすので、確かなものだけ
 const VALUE_FLAGS = new Set(['-w', '--workspace', '--prefix', '--loglevel', '--registry', '--cache', '--userconfig', '--filter', '--dir', '--workspace-dir', '--cwd']);
+// 1 文字のものは道具ごとに意味が違うので、大文字小文字を区別して道具ごとに（npm の -C は --prefix・-f は --force、pnpm の -C は --dir・-F は --filter、
+// bun の -F は --filter。yarn の -C は --caret〔値を取らない〕なので入れない）
+const SHORT_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  npm: new Set(['-C']), pnpm: new Set(['-C', '-F']), yarn: new Set(), bun: new Set(['-F']),
+};
 // ここで見つかれば、そのあとの語はサブコマンドではない（パッケージ・スクリプトの名前）
-const OTHER_SUBCOMMANDS = new Set(['install', 'i', 'add', 'uninstall', 'remove', 'rm', 'un', 'r', 'run', 'run-script', 'test', 't', 'start', 'stop', 'restart',
-  'ci', 'ls', 'list', 'll', 'why', 'outdated', 'update', 'up', 'upgrade', 'audit', 'pack', 'build', 'rebuild', 'version', 'view', 'info', 'config', 'link',
+const OTHER_SUBCOMMANDS = new Set(['uninstall', 'remove', 'rm', 'un', 'r', 'run', 'run-script', 'test', 't', 'start', 'stop', 'restart',
+  'ls', 'list', 'll', 'why', 'outdated', 'audit', 'pack', 'build', 'rebuild', 'version', 'view', 'info', 'config', 'link',
   'unlink', 'prune', 'dedupe', 'help', 'explain', 'fund', 'doctor', 'cache', 'exec', 'init', 'pm']);
 // Python の、名前で取ってきて動かす・入れる道具
 const PY_FETCH: Readonly<Record<string, (words: readonly string[]) => boolean>> = {
@@ -60,12 +69,13 @@ const PY_FETCH: Readonly<Record<string, (words: readonly string[]) => boolean>> 
 };
 
 // オプションとその値を飛ばした語（-- の手前まで）
-function plainWords(words: readonly string[]): string[] {
+function plainWords(program: string, raw: readonly string[]): string[] {
   const out: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]!;
+  const short = SHORT_VALUE_FLAGS[program];
+  for (let i = 0; i < raw.length; i++) {
+    const w = raw[i]!.toLowerCase();
     if (w === '--') break;
-    if (VALUE_FLAGS.has(w)) { i++; continue; }
+    if (VALUE_FLAGS.has(w) || short?.has(raw[i]!)) { i++; continue; }
     if (!w.startsWith('-')) out.push(w);
   }
   return out;
@@ -76,7 +86,7 @@ function plainWords(words: readonly string[]): string[] {
 function reachesNetwork(st: StatementFacts): boolean {
   const program = st.program.toLowerCase();
   if (NPX_TOOLS.has(program) || LOOKUP.has(program) || program === 'corepack') return true;
-  const words = plainWords(st.words.slice(1).map(w => w.text.toLowerCase()));
+  const words = plainWords(program, st.words.slice(1).map(w => w.text));
   const py = PY_FETCH[program];
   if (py) return py(words);
   const fetching = FETCH_AND_RUN[program];
