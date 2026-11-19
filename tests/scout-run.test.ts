@@ -818,3 +818,64 @@ test('scout: a scout run and its scouts do not move the product\'s last activity
   s.app.conversations.append(chat.id, { role: 'user', content: 'hello' });
   assert.equal(s.app.projects.counts(s.projectId).lastActivityAt, s.clock.now);
 });
+
+// build-in-chat-2 A-8: Build の仲間は 1 時間の上限で待たないので、Scout から見ても「持ち主の仕事が待っている」に数える
+const fillHour = (s: Awaited<ReturnType<typeof setup>>) => {
+  const other = s.app.conversations.create({ kind: 'task', title: 'earlier task' });
+  s.app.runs.start('old-run', 'task', other.id);
+  s.app.db.prepare('UPDATE engine_runs SET started_at = ? WHERE id = ?').run(s.clock.now - 60_000, 'old-run');
+};
+
+test('scout: over the hourly cap, a plain owner task lets a running scout go on, but a Build (or its child) stops it', async t => {
+  const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 1; } });
+  fillHour(s);
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  s.app.tasks.create({ title: 'owner work', origin: 'user', actor: 'user' });
+  await s.app.worker.tick();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(s.scoutRows()[0]!.status, 'running', 'a plain task waits on the cap, so the scout keeps going');
+  s.app.tasks.create({ title: 'Build: other', origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
+  await s.app.worker.tick();
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled', 3000), 'a Build does not wait on the cap, so it stops the scout');
+  await running;
+});
+
+test('scout: over the hourly cap, no scout starts while a Build child waits for a free provider slot; it starts once the Build work is gone', async t => {
+  const s = await setup(t, { scout: ['c'], edit: c => { c.worker.maxRunsPerHour = 1; c.worker.maxParallel = 2; c.providers[0]!.maxParallel = 1; } });
+  fillHour(s);
+  const build = s.app.tasks.create({ title: 'Build: other', origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  const child = s.app.tasks.create({ title: 'part of the build', origin: 'user', actor: 'beat', spawnedBy: build.id });
+  assert.equal(await s.app.worker.tick(), 'budget', 'the child has no provider slot and the cap is reached');
+  assert.equal(s.scoutRows().length, 0, 'no scout while Build work waits');
+  s.app.tasks.finish(child.id, 'cancelled', null, 'user');
+  s.app.worker.stopTask(build.id);
+  await running;
+  s.app.tasks.finish(build.id, 'cancelled', null, 'user');
+  s.adapter('far').scripts.push(...loop());
+  await s.app.worker.tick();
+  assert.equal(s.scoutRows().length, 1, 'control: with no Build work left, the scout starts');
+});
+
+test('scout: a Build family held by its own hourly backstop (60 runs) does not stop a running scout, even when the hourly cap is not reached', async t => {
+  const s = await setup(t, { edit: c => { c.worker.maxRunsPerHour = 61; } });
+  const held = gate();
+  s.adapter().scripts.push(held.script);
+  const running = s.app.worker.tick();
+  await held.started;
+  const build = s.app.tasks.create({ title: 'Build: capped', origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 60; i++) s.app.tasks.event(build.id, 'run', 'worker', null, `old-${i}`);
+  await s.app.worker.tick();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(s.scoutRows()[0]!.status, 'running', 'the capped Build is not owner work that can run now');
+  s.app.tasks.create({ title: 'owner work', origin: 'user', actor: 'user' });
+  await s.app.worker.tick();
+  assert.ok(await until(() => s.scoutRows()[0]!.status === 'cancelled', 3000), 'control: owner work under the cap stops the scout');
+  await running;
+});

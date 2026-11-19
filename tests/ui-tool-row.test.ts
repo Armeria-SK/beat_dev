@@ -152,7 +152,7 @@ const shownVerb = (name: string, verb: string): string => (verb === 'tool' ? too
 
 const REAL: Record<string, [unknown, string, string]> = {
   task_complete: [{ summary: 'Added retry with backoff', items: [{ id: 'A-1' }] }, 'Finish task', 'Added retry with backoff'],
-  task_checkpoint: [{ tried: 'ran tests', result: '2 failed', next_action: 'Fix the upload test', resume_after_minutes: 30 }, 'Save progress', 'Fix the upload test'],
+  task_checkpoint: [{ tried: 'ran tests', result: '2 failed', next_action: 'Fix the upload test' }, 'Save progress', 'Fix the upload test'],
   question_add: [{ question: 'Apply it to existing data too?', why: 'Not said', options: ['No', 'Yes'] }, 'Ask question', 'Apply it to existing data too?'],
   tool_search: [{ query: 'browser' }, 'Load tool', 'browser'],
   memory_save: [{ book: 'user', content: 'Likes tea' }, 'Save memory', 'Likes tea'],

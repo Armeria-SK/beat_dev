@@ -16,7 +16,7 @@ const complete: Script = async function* (req) {
 };
 
 const checkpoint: Script = async function* (req) {
-  const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name: 'task_checkpoint', arguments: { tried: 'read the notes', result: 'half done', next_action: 'finish the rest', resume_after_minutes: 1 } };
+  const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name: 'task_checkpoint', arguments: { tried: 'read the notes', result: 'half done', next_action: 'finish the rest' } };
   for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };

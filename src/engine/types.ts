@@ -76,8 +76,8 @@ export interface ContextDetail {
 
 export type EngineResult =
   // truncated: 最後の返事が出力の上限で途中で切れた（成功扱いでも、最後まで書けていない）
-  // split: 人のいない実行が区切りの回数に来て終わった。続きは次の実行
-  | { ok: true; runId: string; text: string; modelId: string; usage: Usage; stop: StopReason; workCalls: number; truncated?: true; split?: true }
+  // split: 人のいない実行が区切りの回数に来た（max_iterations）か、タスクの実行のやり取りが長くなった（context）ので終わった。続きは次の実行
+  | { ok: true; runId: string; text: string; modelId: string; usage: Usage; stop: StopReason; workDone: number; changeDone: number; iterations: number; truncated?: true; split?: 'max_iterations' | 'context' }
   | {
     ok: false;
     runId: string;

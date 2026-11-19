@@ -265,7 +265,7 @@ test('タスクの道具の結果（英語）', async t => {
   const endEn = 'End this run here (do no further work).';
   assert.equal(await text(taskComplete, { summary: 's' }, withTask(slot())), `Recorded as done. ${endEn}`);
   const checkpoint = slot();
-  assert.equal(await text(taskCheckpoint, { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 5 }, withTask(checkpoint)), `Saved the progress. Will resume in 5 min. ${endEn}`);
+  assert.equal(await text(taskCheckpoint, { tried: 'a', result: 'b', next_action: 'c' }, withTask(checkpoint)), `Saved the progress. beat continues in a new run right away. ${endEn}`);
   assert.equal((checkpoint.control as { note?: string }).note, 'Tried: a / Result: b');
 });
 

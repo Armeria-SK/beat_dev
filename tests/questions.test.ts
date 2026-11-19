@@ -265,7 +265,7 @@ test('実行の途中の答え: task_checkpoint で終わっても、先の時�
   const s = await setup(t);
   const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
   const sink: { res?: { status: number; body: any } } = {};
-  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 60 }), sink));
+  s.adapter().scripts.push(toolCall('question_add', ask), answerMidRun(s, toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }), sink));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(sink.res?.status, 200);
   const after = s.app.tasks.get(task.id)!;
@@ -286,17 +286,19 @@ test('実行の途中の答え: 返事だけで終わっても、進展なしと
   assert.equal(s.app.tasks.list().length, 1);
 });
 
-test('実行の途中に答えが無ければ、終わり方は今までどおり（task_checkpoint は先の時刻・返事だけは進展なし）', async t => {
+test('実行の途中に答えが無ければ、終わり方は答えの無い形（question_add だけの task_checkpoint・返事だけは、どちらも進展なし。どちらも休まない）', async t => {
   const s = await setup(t);
   const task = s.app.tasks.create({ title: 'Build the page', origin: 'user', actor: 'user' });
-  s.adapter().scripts.push(toolCall('question_add', ask), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 60 }));
+  s.adapter().scripts.push(toolCall('question_add', ask), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now + 60 * 60_000]);
+  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now]);
+  assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content, 'The run ended without progress, so it continues now in a new run (it stops after 3 such runs in a row)', 'question_add は仕事に数えない');
+  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 1);
   s.clock.now += 60 * 60_000;
   s.adapter().scripts.push(reply('thinking'));
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now + 15 * 60_000]);
-  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 1);
+  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.get(task.id)!.run_at], ['ready', s.clock.now]);
+  assert.equal(s.app.kv.getJson(`task-idle:${task.id}`), 2);
   assert.equal(s.app.questions.list({ status: 'open' }).length, 1);
 });
 

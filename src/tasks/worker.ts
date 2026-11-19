@@ -18,7 +18,7 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister, growSkills } from '../tools/skills/store.ts';
 import { resolveConfigPath } from '../tools/hooks/scope.ts';
 import type { TaskControl } from '../tools/types.ts';
-import { OWNER_RUN_KV, SCOUT_RUN, type Task, type TaskStore } from './store.ts';
+import { OWNER_FIX, OWNER_RUN_KV, SCOUT_RUN, type Task, type TaskStore } from './store.ts';
 import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
@@ -46,7 +46,10 @@ const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
 // 区切り（人のいない実行の回数の上限）が続いたとき、持ち主に 1 回だけ知らせる数。止めはしない
-const SPLIT_LIMIT = 3;
+// 終わり方を決めずに区切りで終わった回がこの数だけ続いたら、1 回だけ知らせる
+const LONG_RUN_NOTICE = 10;
+// Build の仲間（根と、spawned_by でたどれる子孫）が 1 時間に動ける回数の保険。上限で待たない Build の、まだ見つけていない回りっぱなしを止める（ふつうの Build は届かない。持ち主が変えられる仮の数）
+const BUILD_FAMILY_HOURLY_MAX = 60;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 const SKILL_REVIEW_IDLE_MS = 5 * 60_000;
@@ -108,6 +111,7 @@ interface TaskText {
   otherReason: string;
   howHeading: string;
   how: readonly string[];
+  repliedOnly: string;
   time: (ms: number, timezone: string) => string;
 }
 
@@ -127,19 +131,20 @@ const TASK_TEXT: Record<Language, TaskText> = {
     otherReason: 'reason for cancelling',
     howHeading: '# How to proceed',
     how: [
-      '- Make progress with your tools. Do not overdo it in a single run',
+      '- Make progress with your tools and keep going until the task is done. If the run grows long, beat continues it in a new run right away',
       '- When you are done, call task_complete (a summary of the result). If there is nothing to tell the user, finish quietly with notify=false',
-      '- To continue later or to wait for something, call task_checkpoint (what you tried, the result, the next step, and how many minutes until you resume)',
+      '- To leave a record of your progress at a milestone, call task_checkpoint (what you tried, the result, the next step); beat continues in a new run right away. If something has to be checked later, create a task for that time with task_create (when), then end this run with task_complete (it waits until the tasks you created finish) or task_checkpoint. While tasks you created are open, this task runs again only after they finish',
       '- If something is unclear, record it with question_add and keep going with the option you assume. Set blocking only when no assumption is safe',
       '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
       "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
+    repliedOnly: '- The previous run ended with a reply only, without task_complete or task_checkpoint. A run that ends that way counts as no progress, and the task is stopped after a few of them in a row',
     time: (ms, timezone) => new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone }).format(ms),
   },
 };
 
 
-export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE, agreement?: string): string {
+export function taskPrompt(task: Task, events: ReadonlyArray<{ kind: string; actor?: string; content: string | null; created_at: number }>, timezone: string, language: Language = DEFAULT_LANGUAGE, agreement?: string, repliedOnly = false): string {
   const text = TASK_TEXT[language];
   const shown = events.filter(e => e.content).slice(0, 10);
   const lastRun = events.findIndex(e => e.kind === 'run' || e.kind === 'answer_moved');
@@ -163,6 +168,7 @@ ${agreement}`,
     '',
     text.howHeading,
     ...text.how,
+    repliedOnly && text.repliedOnly,
   ].filter((line): line is string => typeof line === 'string').join('\n').replace(/\n{3,}/gu, '\n\n');
 }
 
@@ -280,6 +286,42 @@ export class Worker {
     return !this.#d.tasks.beatDecided(task.id) && !chain.some(link => this.#beatSchedule(link));
   }
 
+  // Build の根（受け入れの項目を持つ・生んだタスクが無い・直しのタスクでない）か、spawned_by をたどってそこに着くタスク。
+  // 持ち主が押した仕事なので、1 時間の上限では待たせない（回数には数える）
+  #familyRoot(task: Task): Task | undefined {
+    const seen = new Set<string>();
+    let root: Task | undefined = task;
+    while (root?.spawned_by && !seen.has(root.id)) { seen.add(root.id); root = this.#d.tasks.get(root.spawned_by); }
+    return root !== undefined && root.spawned_by === null && root.acceptance_items !== null
+      && this.#d.db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? LIMIT 1').get(root.id, OWNER_FIX) === undefined ? root : undefined;
+  }
+
+  #buildFamily(task: Task): boolean {
+    return this.#familyRoot(task) !== undefined;
+  }
+
+  // Build の仲間がこの 1 時間に BUILD_FAMILY_HOURLY_MAX 回動いていれば、窓が空く時刻（それまで仲間は動かない）。notify なら持ち主に 1 回知らせる
+  // cache を渡すと、同じ根の数え直しをしない（1 回の tick の中で、候補ごとに数えない）
+  #familyFreeAt(task: Task, now: number, notify = false, cache?: Map<string, number | undefined>): number | undefined {
+    const root = this.#familyRoot(task);
+    if (!root) return undefined;
+    if (cache?.has(root.id)) return cache.get(root.id);
+    const at = this.#familyCount(root, now, notify);
+    cache?.set(root.id, at);
+    return at;
+  }
+
+  #familyCount(root: Task, now: number, notify: boolean): number | undefined {
+    const runs = this.#d.db.prepare(`WITH RECURSIVE fam(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN fam ON t.spawned_by = fam.id)
+      SELECT e.created_at AS at FROM task_events e WHERE e.kind = 'run' AND e.created_at > ? AND e.task_id IN (SELECT id FROM fam) ORDER BY e.created_at`).all(root.id, now - 3_600_000) as Array<{ at: number }>;
+    if (runs.length < BUILD_FAMILY_HOURLY_MAX) return undefined;
+    if (notify) {
+      const language = this.#language();
+      this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.build_cap.title', { title: root.title }), body: taskText(language, 'notify.build_cap.body', { max: BUILD_FAMILY_HOURLY_MAX }), link: `#/tasks/${root.id}`, dedupKey: `build-cap:${root.id}`, projectId: root.project_id });
+    }
+    return runs[runs.length - BUILD_FAMILY_HOURLY_MAX]!.at + 3_600_000;
+  }
+
   #beatSchedule(task: Task): boolean {
     if (!task.parent_id) return false;
     return Boolean(this.#d.db.prepare(`SELECT 1 FROM tasks p WHERE p.id = ? AND p.cron IS NOT NULL
@@ -311,7 +353,9 @@ export class Worker {
     if (!this.#ownerWork(task)) return task.origin === 'self' || task.origin === 'curiosity' ? { kind: 'owner' } : c.worker.enabled ? null : { kind: 'off' };
     if (this.#d.tasks.openChildren(task.id) > 0) return null;
     if (hold) return { kind: hold };
-    if (budgetAt !== undefined && !this.#forced.has(task.id)) return { kind: 'budget', at: budgetAt };
+    const familyAt = this.#forced.has(task.id) ? undefined : this.#familyFreeAt(task, now);
+    if (familyAt !== undefined) return { kind: 'budget', at: familyAt };
+    if (budgetAt !== undefined && !this.#forced.has(task.id) && !this.#buildFamily(task)) return { kind: 'budget', at: budgetAt };
     if (this.#busy(task)) return { kind: 'product' };
     if (this.#running.size >= c.worker.maxParallel || !room) return { kind: 'slots' };
     return null;
@@ -363,7 +407,8 @@ export class Worker {
         this.#schedule(Math.max(1000, Math.min(at ?? Infinity, now + IDLE_POLL_MS) - now));
       };
       const own = c.worker.enabled;
-      const eligible = (t: Task): boolean => own || this.#ownerWork(t);
+      const familyCache = new Map<string, number | undefined>();
+      const eligible = (t: Task): boolean => (own || this.#ownerWork(t)) && this.#familyFreeAt(t, now, true, familyCache) === undefined;
       const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t), ...(this.#d.places ? { placeFree: (t: Task) => !this.#busy(t) } : {}) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
@@ -396,15 +441,17 @@ export class Worker {
       }
       const freeAt = this.#budgetFreeAt(c, now);
       let freeAtWake = Infinity;
+      // Build の仲間も「今すぐ実行」と同じに上限より先に動く
+      if (!task && freeAt !== undefined) task = pick(t => this.#buildFamily(t) && roomFor());
       if (!task && freeAt !== undefined) {
-        // 「今すぐ実行」で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
-        if (pick(t => !this.#forced.has(t.id))) {
+        // 「今すぐ実行」・Build の仲間で提供元の空きを待っているタスクは、上限より先に動くもの（空き待ちであって上限待ちではない）なので、上限の知らせの数に入れない
+        if (pick(t => !this.#forced.has(t.id) && !this.#buildFamily(t))) {
           this.#d.notifications.notify({
             kind: 'info', title: taskText(languageOf(c), 'notify.budget.title'),
             body: taskText(languageOf(c), 'notify.budget.body', { max: c.worker.maxRunsPerHour }),
             link: '#/tasks', dedupKey: `budget:${Math.floor(now / 3_600_000)}`,
           });
-        } else if ((own || this.#scoutAsked.size > 0) && this.#forced.size === 0) {
+        } else if ((own || this.#scoutAsked.size > 0) && this.#forced.size === 0 && !pick(t => this.#buildFamily(t))) {
           const scout = await this.#scoutPlan(c, now, own);
           if (scout.plan) {
             const outcome = await this.#runScout(scout.plan, c, now, release);
@@ -607,7 +654,8 @@ export class Worker {
     if (!project || project.archived_at !== null) return 'stop.archived';
     if (project.scout_mode !== 'research') return 'stop.mode';
     const freeAt = this.#budgetFreeAt(c, this.#now());
-    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id)) })) return 'stop.owner';
+    const familyCache = new Map<string, number | undefined>();
+    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && this.#familyFreeAt(t, this.#now(), false, familyCache) === undefined && (freeAt === undefined || this.#forced.has(t.id) || this.#buildFamily(t)) })) return 'stop.owner';
     return undefined;
   }
 
@@ -932,7 +980,9 @@ export class Worker {
     const mainRoot = placed?.kind === 'worktree' ? this.#d.projects?.get(task.project_id!)?.root : undefined;
     const since = this.#now();
     const mainBefore = mainRoot ? await mainGitPrint(mainRoot, dirname(this.#d.projects!.dir), this.#d.places?.placeRoot()) : undefined;
-    const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
+    const events = tasks.events(task.id);
+    // 前の回が返事だけだったかは、残した経過の文で見る（サーバーの文は今は英語だけなので、言語が変わって外れることは無い）
+    const prompt = taskPrompt(task, events, c.timezone, language, workAgreement(this.#d.db, task, language), events.find(e => e.kind === 'requeued')?.content === taskText(language, 'reason.replied_only', { limit: STAGNATION_LIMIT }));
     const started = engine.runTask(task, conversationId, prompt, placed ? { place: placed.kind === 'worktree' ? placed.row.id : null } : {});
     if (!started.ok) {
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.no_model', { detail: started.errorMessage.split('\n')[0]! }) });
@@ -1016,6 +1066,35 @@ export class Worker {
     }
   }
 
+  // 終わり方を決めずに区切り（task_checkpoint・split のどれも）で終わった回を続けて数え、LONG_RUN_NOTICE 回目に 1 回だけ知らせる（止めない。止めるのは持ち主）
+  #continued(task: Task): void {
+    const runs = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
+    this.#d.kv.setJson(splitKey(task.id), runs);
+    if (runs !== LONG_RUN_NOTICE) return;
+    const language = this.#language();
+    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: LONG_RUN_NOTICE }), link: `#/tasks/${task.id}`, dedupKey: `split:${task.id}`, projectId: task.project_id });
+  }
+
+  // 進展の無い回を 1 つ数える。STAGNATION_LIMIT 回に来たら行き詰まり（failed + stuck の質問 + 知らせ）にして true
+  #noProgress(task: Task, runId: string): boolean {
+    const { tasks, notifications } = this.#d;
+    const idleKey = `task-idle:${task.id}`;
+    const strikes = (this.#d.kv.getJson<number>(idleKey) ?? 0) + 1;
+    if (strikes < STAGNATION_LIMIT) {
+      this.#d.kv.setJson(idleKey, strikes);
+      return false;
+    }
+    this.#d.kv.delete(idleKey);
+    const language = this.#language();
+    const now = this.#now();
+    const projectId = task.project_id;
+    const reason = taskText(language, 'stuck.reason', { strikes });
+    tasks.finish(task.id, 'failed', reason, 'beat', runId);
+    this.#d.questions?.add({ kind: 'stuck', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: taskText(language, 'stuck.question', { title: task.title, strikes }), why: taskText(language, 'stuck.why'), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
+    notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: reason, link: `#/tasks/${task.id}`, dedupKey: `failed:${task.id}:${now}`, projectId });
+    return true;
+  }
+
   #followUpAnswers(taskId: string, runId: string): void {
     for (const id of this.#d.questions?.followUpUnread(taskId, runId) ?? []) this.requestRun(id);
   }
@@ -1027,6 +1106,14 @@ export class Worker {
     const projectId = task.project_id;
     const language = this.#language();
     const idleKey = `task-idle:${task.id}`;
+    // 仕事をした回は、spawned_by でたどれる先祖すべての進展なしの数も消す（子孫が仕事をしている親は止めない。何もしない子ばかりなら親は 3 回で止まる）
+    if (result.ok && result.workDone > 0) {
+      const seen = new Set<string>([task.id]);
+      for (let up = task.spawned_by; up && !seen.has(up); up = tasks.get(up)?.spawned_by ?? null) {
+        seen.add(up);
+        this.#d.kv.delete(`task-idle:${up}`);
+      }
+    }
     // 実行中に、ユーザーが取り消した・完了にした（またはモデルが道具で終えた）なら、その状態を尊重する
     const status = tasks.get(task.id)?.status;
     if (status !== 'running') {
@@ -1039,8 +1126,11 @@ export class Worker {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
-    if (!(result.ok && result.split)) this.#d.kv.delete(splitKey(task.id));
+    if (!(result.ok && result.split) && control.outcome !== 'checkpoint' && control.outcome !== 'yield') this.#d.kv.delete(splitKey(task.id));
     const answered = (this.#d.questions?.answeredDuringRun(task.id, runId).length ?? 0) > 0;
+    // もうある子を待つだけの回（この回は子のタスクを作っていない。持ち主の Run now など）は、進展なしに数えない（yield と task_checkpoint で同じ）
+    const createdChild = (): boolean => this.#d.db.prepare("SELECT 1 FROM tasks t JOIN task_events e ON e.task_id = t.id AND e.kind = 'context' AND e.run_id = ? WHERE t.spawned_by = ? LIMIT 1").get(runId, task.id) !== undefined;
+    const onlyWaits = (): boolean => tasks.openChildren(task.id) > 0 && !createdChild();
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       if (answered) {
@@ -1054,7 +1144,10 @@ export class Worker {
       return;
     }
     if (control.outcome === 'yield') {
-      this.#d.kv.delete(idleKey);
+      // 子を待って区切る回も、途中経過と同じに数える（子が仕事をすれば、子の回が親の数を消す）
+      if ((result.ok && result.workDone > 0) || answered || decidedDuring(this.#d.db, task.id, runId)) this.#d.kv.delete(idleKey);
+      else if (!onlyWaits() && this.#noProgress(task, runId)) return;
+      this.#continued(task);
       tasks.setReady(task.id, { reason: control.reason });
       return;
     }
@@ -1078,32 +1171,37 @@ export class Worker {
       return;
     }
     if (control.outcome === 'checkpoint') {
-      this.#d.kv.delete(idleKey);
       const decided = decidedDuring(this.#d.db, task.id, runId);
       if (decided || answered) {
+        this.#d.kv.delete(idleKey);
+        this.#continued(task);
         tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
         tasks.setReady(task.id, { runAt: now, reason: decided ? taskText(language, 'reason.pending_decided', { id: decided.id, status: decided.status }) : taskText(language, 'reason.answered') });
         return;
       }
-      const open = result.ok && result.workCalls === 0 ? openPendingIds(this.#d.db, task.id) : [];
+      const idle = result.ok && result.workDone === 0;
+      const open = idle ? openPendingIds(this.#d.db, task.id) : [];
       if (open.length) {
+        this.#d.kv.delete(splitKey(task.id));
         tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction, runAt: null }, 'beat', runId);
         tasks.setWaiting(task.id, 'approval', open.map(id => `#${id}`).join(', '), runId);
         return;
       }
       tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
-      tasks.setReady(task.id, { runAt: now + Math.min(Math.max(control.resumeAfterMinutes, 1), 10_080) * 60_000, reason: taskText(language, 'reason.checkpoint', { minutes: control.resumeAfterMinutes }) });
+      // 道具を使わない区切りは進展なしに数える（休まずに続けるので、空回りは STAGNATION_LIMIT 回で止める）
+      if (!idle) this.#d.kv.delete(idleKey);
+      else if (!onlyWaits() && this.#noProgress(task, runId)) return;
+      this.#continued(task);
+      tasks.setReady(task.id, { runAt: now, reason: idle ? taskText(language, 'reason.no_progress', { limit: STAGNATION_LIMIT }) : taskText(language, 'reason.checkpoint') });
       return;
     }
     if (result.ok && result.split) {
-      // 区切りの回数に来た: すぐ続ける。進展なしの数（idleKey）は増やしも消しもしない（区切りと返事だけの終わりが交互に続くタスクも、今までどおり相談に届く）。
-      // 続けて区切れた数が SPLIT_LIMIT に来たら 1 回だけ知らせる（止めない。止めるのは持ち主の取り消し）
-      const splits = (this.#d.kv.getJson<number>(splitKey(task.id)) ?? 0) + 1;
-      this.#d.kv.setJson(splitKey(task.id), splits);
-      if (splits === SPLIT_LIMIT) {
-        notifications.notify({ kind: 'info', title: taskText(language, 'notify.task_long', { title: task.title }), body: taskText(language, 'split.long_body', { title: task.title, runs: SPLIT_LIMIT, max: UNATTENDED_ITERATION_CEILING }), link, dedupKey: `split:${task.id}`, projectId });
-      }
-      tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
+      // 区切り: すぐ続ける。道具を使った区切りは進展なしの数（idleKey）を増やしも消しもしない（区切りと返事だけの終わりが交互に続くタスクも、今までどおり相談に届く）。
+      // 仕事をせず、答えも Pending の決めも読んでいない区切りは進展なしに数える。長さの区切りは、書き換え・実行の仕事（changeDone）をしていなければ進展なし（読むだけで長くなる回は回りっぱなしになる）
+      const idle = result.split === 'context' ? result.changeDone === 0 : result.workDone === 0;
+      if (idle && !answered && !decidedDuring(this.#d.db, task.id, runId) && this.#noProgress(task, runId)) return;
+      this.#continued(task);
+      tasks.setReady(task.id, { runAt: now, reason: result.split === 'context' ? taskText(language, 'reason.context_split') : taskText(language, 'reason.split', { max: UNATTENDED_ITERATION_CEILING }) });
       return;
     }
     if (result.ok && answered) {
@@ -1112,19 +1210,10 @@ export class Worker {
       return;
     }
     if (result.ok) {
-      // 道具で終わり方を決めずに返事だけ書いた: 進展が無いとみなし、休む時間を延ばす。続いたら相談する
-      const strikes = (this.#d.kv.getJson<number>(idleKey) ?? 0) + 1;
-      this.#d.kv.setJson(idleKey, strikes);
+      // 道具で終わり方を決めずに返事だけ書いた: 進展が無いとみなし、休まずに続ける（次の回の指示に 1 行足す）。続いたら相談する
       if (result.text.trim()) tasks.update(task.id, { appendNote: taskText(language, result.truncated ? 'note.memo_truncated' : 'note.memo', { text: result.text.trim().slice(0, 500) }) }, 'beat', runId);
-      if (strikes >= STAGNATION_LIMIT) {
-        this.#d.kv.delete(idleKey);
-        const reason = taskText(language, 'stuck.reason', { strikes });
-        tasks.finish(task.id, 'failed', reason, 'beat', runId);
-        this.#d.questions?.add({ kind: 'stuck', projectId, taskId: task.id, conversationId: tasks.get(task.id)?.conversation_id ?? null, question: taskText(language, 'stuck.question', { title: task.title, strikes }), why: taskText(language, 'stuck.why'), options: CHECK_OPTIONS, chosen: CHECK_KEEP, tainted: this.#taskTainted(task.id) });
-        notifications.notify({ kind: 'task_failed', title: taskText(language, 'notify.task_failed', { title: task.title }), body: reason, link, dedupKey: `failed:${task.id}:${now}`, projectId });
-      } else {
-        tasks.setReady(task.id, { runAt: now + 15 * 60_000 * 2 ** (strikes - 1), reason: taskText(language, 'reason.no_progress') });
-      }
+      if (this.#noProgress(task, runId)) return;
+      tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.replied_only', { limit: STAGNATION_LIMIT }) });
       return;
     }
     if (result.errorKind === 'cancelled') {

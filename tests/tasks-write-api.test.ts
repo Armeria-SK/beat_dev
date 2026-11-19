@@ -254,12 +254,12 @@ test('DELETE: 実行中・返事待ちの回があるひな形は 409（run_open
   assert.equal(s.app.tasks.uncancel(child.id, 'user').status, 'ready', '残った実行は、ふつうのタスクとして戻せる');
 });
 
-test('DELETE: 区切りで ready に戻り未来の run_at を持つタスク（会話あり）は 409', async t => {
+test('DELETE: 区切りで ready に戻ったタスク（会話あり）は 409', async t => {
   const s = await taskApp(t);
   const task = s.userTask('Check the build', { runAt: s.clock.now });
-  await runOnce(s, 'task_checkpoint', { tried: 'built', result: 'waiting', next_action: 'look', resume_after_minutes: 30 });
+  await runOnce(s, 'task_checkpoint', { tried: 'built', result: 'waiting', next_action: 'look' });
   const rested = s.app.tasks.get(task.id)!;
-  assert.deepEqual([rested.status, rested.attempts, rested.run_at, rested.conversation_id !== null], ['ready', 0, s.clock.now + 30 * MIN, true]);
+  assert.deepEqual([rested.status, rested.attempts, rested.run_at, rested.conversation_id !== null], ['ready', 0, s.clock.now, true]);
   const before = snapshot(s);
   const res = await s.api(`/api/tasks/${task.id}`, undefined, 'DELETE');
   assert.equal(res.status, 409);

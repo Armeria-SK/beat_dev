@@ -206,7 +206,7 @@ test('5-0 ctx.runTool の返り: Pending に積まれた呼び出しは ask / pe
   assert.deepEqual(rows.map(row => [row.tool, row.decision, row.decided_by]), [['file_write', parked.decision, parked.decidedBy], ['shell_run', judged.decision, judged.decidedBy]]);
 });
 
-test('5-0 EngineResult.workCalls: 成功した実行の結果に、task_ で始まらない道具の呼び出しの数が載る（コードから呼んだ分も数える）', async t => {
+test('5-0 EngineResult.workDone: 成功した実行の結果に、実際に動いた task_ で始まらない道具の呼び出しの数が載る（コードから呼んだ分も数える）', async t => {
   const s = await setup(t, { tools: [...builtinTools(), probeRun] });
   const run = async (scripts: Script[]) => {
     const id = await s.task({ title: 'Count' });
@@ -216,11 +216,12 @@ test('5-0 EngineResult.workCalls: 成功した実行の結果に、task_ で始�
     assert.ok(started.ok);
     const result = await started.done;
     assert.ok(result.ok);
-    return result.workCalls;
+    return result.workDone;
   };
   assert.equal(await run([call('task_complete', { summary: 'done' })]), 0);
   assert.equal(await run([call('calculate', { expression: '1+1' }), call('file_list', { path: '.' }), call('task_complete', { summary: 'done' })]), 2);
-  assert.equal(await run([call('probe_run', { tool: 'calculate', input: { expression: '1+1' } }), call('task_complete', { summary: 'done' })]), 2);
+  assert.equal(await run([call('probe_run', { tool: 'file_list', input: { path: '.' } }), call('task_complete', { summary: 'done' })]), 2);
+  assert.equal(await run([call('probe_run', { tool: 'calculate', input: { expression: '1+1' } }), call('task_complete', { summary: 'done' })]), 1, 'コードから呼んで断られた分（decision が deny）は数えない');
 });
 
 test('5-0 知らせの製品: notify に渡した projectId が notifications.project_id に入り、渡さなければ NULL。ワーカーのタスクの知らせは、そのタスクの製品を持つ', async t => {

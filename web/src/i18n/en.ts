@@ -184,7 +184,7 @@ export const en = {
   'tool.task_create': 'Create a task',
   'tool.task_list': 'List tasks',
   'tool.task_update': 'Update a task (note, next step, done, cancel)',
-  'tool.task_checkpoint': 'Save progress on a task and rest',
+  'tool.task_checkpoint': 'Save progress on a task and continue in a new run',
   'tool.task_complete': 'Finish a task',
   'tool.question_add': 'Record a question for you and keep working',
   'tool.ask_owner': 'Ask you to choose and wait for your answer',

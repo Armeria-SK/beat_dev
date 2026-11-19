@@ -197,7 +197,7 @@ const en = {
   'task.updated': 'Updated {line}',
   'task.not_running': 'No task is running',
   'task.end': 'End this run here (do no further work).',
-  'task.checkpoint_saved': 'Saved the progress. Will resume in {minutes} min. {end}',
+  'task.checkpoint_saved': 'Saved the progress. beat continues in a new run right away. {end}',
   'task.checkpoint_note': 'Tried: {tried} / Result: {result}',
   'task.completed': 'Recorded as done. {end}',
 

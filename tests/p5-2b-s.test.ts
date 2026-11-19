@@ -428,7 +428,7 @@ test('5-2b-s 人のいない実行のフォームの送信は断り、質問票�
   const task = s.app.tasks.create({ title: 'Book a table', origin: 'user', actor: 'user' });
   let url: string | undefined = 'https://example.com/book';
   s.app.browser.tabUrl = () => url;
-  s.adapter().scripts.push(toolCall('form_send', { tab: 't1' }), toolCall('form_send', { tab: 't1' }), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 1 }));
+  s.adapter().scripts.push(toolCall('form_send', { tab: 't1' }), toolCall('form_send', { tab: 't1' }), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.deepEqual(sent, [], '送らない');
   const refused = s.app.db.prepare("SELECT output_preview, decision FROM tool_calls WHERE tool = 'form_send'").all() as Array<{ output_preview: string; decision: string }>;
@@ -440,7 +440,7 @@ test('5-2b-s 人のいない実行のフォームの送信は断り、質問票�
 
   url = 'https://example.com/other';
   s.clock.now += 2 * MIN;
-  s.adapter().scripts.push(toolCall('form_send', {}), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 1 }));
+  s.adapter().scripts.push(toolCall('form_send', {}), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
   await s.app.worker.tick();
   rows = s.app.questions.list({ status: 'open', taskId: task.id });
   assert.deepEqual(rows.map(r => r.question), ['Send the form at https://example.com/other?', 'Send the form at https://example.com/book?']);
@@ -451,7 +451,7 @@ test('5-2b-s 送信を断った行は、ページが分からないときも 1 �
   const s = await setup(t, [...builtinTools(), formSend]);
   const task = s.app.tasks.create({ title: 'Send it', origin: 'user', actor: 'user' });
   s.app.tasks.markUntrusted(task.id, 'question', 'test: text from elsewhere');
-  s.adapter().scripts.push(toolCall('form_send', {}), toolCall('form_send', {}), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 1 }));
+  s.adapter().scripts.push(toolCall('form_send', {}), toolCall('form_send', {}), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
   await s.app.worker.tick();
   const rows = s.app.questions.list({ status: 'open', taskId: task.id });
   assert.deepEqual(rows.map(r => r.question), ['Send the form in the browser (form_send; the page is not known)?']);

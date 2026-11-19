@@ -221,21 +221,95 @@ test('急ぐ質問（question_add の blocking）で返事待ちになり、知�
   assert.deepEqual(s.app.notifications.list().map(n => n.kind), ['question_new'], '知らせ直しは無い');
 });
 
-test('途中経過（task_checkpoint）を残すと、指定の時間まで休む', async t => {
+const work = () => toolCall('history_search', { query: 'zzqq-none' });
+
+test('A-1 途中経過（task_checkpoint）を残すと、休まずにすぐ実行待ちに戻る', async t => {
   const s = await setup(t);
   const task = s.userTask('ビルドの確認');
-  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'ビルドした', result: '待ち', next_action: '結果を見る', resume_after_minutes: 30 }));
+  s.app.kv.setJson(`task-idle:${task.id}`, 2);
+  s.adapter().scripts.push(work(), toolCall('task_checkpoint', { tried: 'ビルドした', result: '待ち', next_action: '結果を見る' }));
   assert.equal(await s.app.worker.tick(), 'ran');
   const rested = s.app.tasks.get(task.id)!;
   assert.equal(rested.status, 'ready');
   assert.equal(rested.next_action, '結果を見る');
-  assert.equal(rested.run_at, s.clock.now + 30 * MIN);
+  assert.equal(rested.run_at, s.clock.now, '休まない');
   assert.match(rested.body, /Tried: ビルドした/u);
-  assert.equal(await s.app.worker.tick(), 'idle');
-  s.clock.now += 31 * MIN;
+  assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')?.content, 'Saved its progress, so it continues now in a new run');
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '道具を使った区切りは進展なしの数を消す');
   s.adapter().scripts.push(toolCall('task_complete', { summary: '成功' }));
-  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(await s.app.worker.tick(), 'ran', '時間を進めずに次の回が動く');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
   assert.match(taskPrompt(s.app.tasks.get(task.id)!, s.app.tasks.events(task.id), 'Asia/Tokyo'), /結果を見る/u);
+});
+
+test('A-2 古い呼び方（resume_after_minutes つき）の task_checkpoint は入力の誤りで断られ、終わり方は決まらない', async t => {
+  const s = await setup(t);
+  const task = s.userTask('古い呼び方');
+  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 30 }), reply('おしまい'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const result = s.app.conversations.messages(s.app.tasks.get(task.id)!.conversation_id!).map(m => m.message).find(m => m.role === 'tool' && m.name === 'task_checkpoint');
+  assert.equal(result?.role === 'tool' && result.isError, true, JSON.stringify(result));
+  assert.equal(s.app.tasks.get(task.id)!.next_action, null, '区切りとしては保存しない');
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${task.id}`), 1, '返事だけの終わりとして数える');
+});
+
+test('A-3 道具を使わない task_checkpoint が 3 回続くと行き詰まり（failed + stuck の質問 + 知らせ）。間に道具を使った区切りが入れば数え直す', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('空回り');
+  const idle = () => toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' });
+  s.adapter().scripts.push(idle(), idle());
+  await s.app.worker.tick(); await s.app.worker.tick();
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${task.id}`), 2);
+  assert.equal(s.app.tasks.get(task.id)!.run_at, s.clock.now, '休まない');
+  assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')?.content, 'The run ended without progress, so it continues now in a new run (it stops after 3 such runs in a row)');
+  s.adapter().scripts.push(work(), idle());
+  await s.app.worker.tick();
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '道具を使った区切りで数え直す');
+  s.adapter().scripts.push(idle(), idle(), idle());
+  for (let i = 0; i < 3; i++) assert.equal(await s.app.worker.tick(), 'ran', `${i + 1} 回目`);
+  const stuck = s.app.tasks.get(task.id)!;
+  assert.equal(stuck.status, 'failed');
+  assert.match(stuck.result_summary ?? '', /3 runs in a row without progress/u);
+  assert.equal(s.app.questions.list({ status: 'open', taskId: task.id }).filter(q => q.kind === 'stuck').length, 1);
+  assert.ok(s.app.notifications.list().some(n => n.kind === 'task_failed'));
+  assert.equal(await s.app.worker.tick(), 'idle', 'もう動かない');
+});
+
+test('仕事は結果で数える: 引数の誤りで動かなかった呼び出しだけの task_checkpoint は進展なしに数える（動いて誤りなく終わった呼び出しは数え直す）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('引数を間違える');
+  s.adapter().scripts.push(toolCall('history_search', { wrong: 1 }), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${task.id}`), 1, '動かなかった呼び出しは仕事でない');
+  s.adapter().scripts.push(work(), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '動いた呼び出しは仕事');
+});
+
+test('A-3 道具を使わない区切り（100 往復）も進展なしに数え、3 回で行き詰まる', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
+  const task = s.userTask('task の道具だけ');
+  for (let i = 0; i < 3; i++) {
+    s.adapter().scripts.push(...Array.from({ length: 100 }, () => toolCall('task_list', {})));
+    assert.equal(await s.app.worker.tick(), 'ran', `${i + 1} 回目`);
+  }
+  assert.equal(s.app.tasks.get(task.id)!.status, 'failed');
+  assert.equal(s.app.questions.list({ status: 'open', taskId: task.id }).filter(q => q.kind === 'stuck').length, 1);
+});
+
+test('A-7 定期実行のひな形の回は、今までどおり cron の時刻で作られる', async t => {
+  const s = await setup(t);
+  const template = s.userTask('朝のまとめ', { cron: '0 9 * * *', timezone: 'Asia/Tokyo' });
+  assert.equal(await s.app.worker.tick(), 'idle', '時刻の前は作らない');
+  s.clock.now = template.run_at!;
+  s.adapter().scripts.push(work(), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }), toolCall('task_complete', { summary: 'まとめました', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const child = s.app.db.prepare('SELECT id FROM tasks WHERE parent_id = ?').get(template.id) as { id: string };
+  assert.equal(s.app.tasks.get(child.id)!.run_at, s.clock.now, '回の区切りは休まない');
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(child.id)!.status, 'done');
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(s.app.tasks.get(template.id)!.run_at, Date.parse('2026-11-06T00:00:00Z'), 'ひな形は自分の時刻表のまま（次回は翌日）');
 });
 
 test('失敗は時間をおいて再試行し、上限を超えたら失敗にして知らせる', async t => {
@@ -256,16 +330,18 @@ test('失敗は時間をおいて再試行し、上限を超えたら失敗に�
   assert.equal(s.app.notifications.list()[0]?.kind, 'task_failed');
 });
 
-test('道具で終え方を決めないまま 3 回続いたら、理由つきの failed にして質問票に stuck の行を足す', async t => {
+test('A-4 道具で終え方を決めないまま 3 回続いたら、理由つきの failed にして質問票に stuck の行を足す（間は休まない。2 回目の指示にその旨の 1 行）', async t => {
   const s = await setup(t);
   const task = s.userTask('ふわっとした仕事');
+  const repliedLine = 'The previous run ended with a reply only, without task_complete or task_checkpoint';
   for (let i = 0; i < 3; i++) s.adapter().scripts.push(reply(`考えました ${i}`));
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.tasks.get(task.id)!.run_at, s.clock.now + 15 * MIN);
-  s.clock.now += 15 * MIN;
+  assert.equal(s.app.tasks.get(task.id)!.run_at, s.clock.now, '休まない');
+  assert.doesNotMatch(JSON.stringify(s.adapter().calls[0]!.messages), new RegExp(repliedLine, 'u'), '1 回目の指示には無い');
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.tasks.get(task.id)!.run_at, s.clock.now + 30 * MIN, '休む時間を延ばす');
-  s.clock.now += 30 * MIN;
+  assert.equal(s.app.tasks.get(task.id)!.run_at, s.clock.now, '2 回目のあとも休まない');
+  const second = s.adapter().calls[1]!.messages.filter(m => m.role === 'user').at(-1)!;
+  assert.match(String(second.content), new RegExp(repliedLine, 'u'), '2 回目の指示に 1 行');
   assert.equal(await s.app.worker.tick(), 'ran');
   const stuck = s.app.tasks.get(task.id)!;
   assert.equal(stuck.status, 'failed');
@@ -280,7 +356,7 @@ test('道具で終え方を決めないまま 3 回続いたら、理由つき�
 // ── 人のいない実行の 100 往復の区切り（M1 の持ち主の決定 B: 止めずに続け、3 回続いたら 1 回だけ知らせる） ──
 
 const SPLIT_REASON = 'Reached 100 rounds of tool calls in one run, so it continues in a new run';
-const splitRun = (s: Awaited<ReturnType<typeof setup>>) => s.adapter().scripts.push(...Array.from({ length: 100 }, () => toolCall('task_list', {})));
+const splitRun = (s: Awaited<ReturnType<typeof setup>>) => s.adapter().scripts.push(...Array.from({ length: 100 }, () => work()));
 const longNotes = (s: Awaited<ReturnType<typeof setup>>) => s.app.notifications.list().filter(n => n.kind === 'info');
 const lastRun = (s: Awaited<ReturnType<typeof setup>>) => s.app.db.prepare("SELECT * FROM engine_runs WHERE kind = 'task' ORDER BY rowid DESC LIMIT 1").get() as { flags: string; iterations: number };
 
@@ -306,9 +382,11 @@ test('タスクの実行が 100 往復で区切られたら、すぐ実行待ち
   assert.deepEqual(s.events.filter(e => e.type === 'warning'), [], '人のいない実行にお知らせは出さない');
 });
 
-test('区切りが 3 回続いても止めず、題つきで 1 回だけ知らせる（4 回目も知らせない）', async t => {
+test('区切りが 10 回続いても止めず、題つきで 1 回だけ知らせる（11 回目も知らせない）', async t => {
   const s = await setup(t, c => { c.worker.maxRunsPerHour = 20; });
   const task = s.userTask('終わらない調べもの');
+  // 前に 7 回続いていた形から始める（100 往復の実行を 10 回動かさずに、10 回目で知らせることを見る）
+  s.app.kv.setJson(`task-split:${task.id}`, 7);
   for (let i = 1; i <= 4; i++) {
     // 4 回目は、同じ知らせを重ねない 24 時間を過ぎてから動かす（数がちょうど 3 のときだけ知らせることを、重ねない仕組みに頼らずに見る）
     if (i === 4) s.clock.now += 25 * HOUR;
@@ -324,11 +402,148 @@ test('区切りが 3 回続いても止めず、題つきで 1 回だけ知ら�
     else {
       assert.equal(notes.length, 1, `${i} 回目: 知らせはちょうど 1 つ`);
       assert.equal(notes[0]!.title, 'Taking a long time: 終わらない調べもの');
-      assert.equal(notes[0]!.body, '"終わらない調べもの" has run 3 times in a row (100 rounds of tool calls each) without finishing. It keeps going; cancel it if it is stuck');
+      assert.equal(notes[0]!.body, '"終わらない調べもの" has run 10 times in a row without finishing (each run ended at a checkpoint or was split). It keeps going; cancel it if it is stuck');
       assert.equal(notes[0]!.link, `#/tasks/${task.id}`);
     }
   }
-  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 4);
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 11);
+});
+
+test('R3 仕事をした task_checkpoint も区切りと同じに続けて数え、区切りと混ざっても 10 回目に 1 回だけ知らせる（止めない）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 30; });
+  const task = s.userTask('区切りながら進む');
+  const saved = () => s.adapter().scripts.push(work(), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
+  for (let i = 1; i <= 9; i++) {
+    if (i === 5) splitRun(s); else saved();
+    assert.equal(await s.app.worker.tick(), 'ran', `${i} 回目`);
+  }
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 9);
+  assert.equal(longNotes(s).length, 0, '9 回目まではまだ知らせない（健康な Build は区切りを重ねる）');
+  saved();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'ready', '止めない');
+  assert.equal(longNotes(s).length, 1, '10 回目に知らせる');
+  assert.equal(longNotes(s)[0]!.title, 'Taking a long time: 区切りながら進む');
+  s.clock.now += 25 * HOUR;
+  saved();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(longNotes(s).length, 1, '11 回目は知らせない');
+  assert.equal(s.app.kv.get(`task-idle:${task.id}`), undefined, '仕事をした区切りは進展なしに数えない');
+});
+
+// 子に仕事を任せて区切る親: 親の回は task_ の道具だけでも、子が仕事をすれば親の進展なしの数は消える（conductor ruling round 2）
+const delegateCycle = (s: Awaited<ReturnType<typeof setup>>, i: number, childWorks: boolean) => s.adapter().scripts.push(
+  toolCall('task_create', { title: `部分 ${i}` }), toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }),
+  ...(childWorks ? [work()] : []), toolCall('task_complete', { summary: `部分 ${i} 済み`, notify: false }),
+);
+
+test('子に仕事を任せて区切る親は、子が仕事をしている限り、仕事の道具を使わない task_checkpoint が続いても止まらない', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 任せる', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 4; i++) {
+    delegateCycle(s, i, true);
+    assert.equal(await s.app.worker.tick(), 'ran', `${i + 1} 回目の親`);
+    assert.equal(s.app.kv.getJson<number>(`task-idle:${parent.id}`), 1, `${i + 1} 回目: 親の回は進展なしに 1 回数える`);
+    assert.equal(await s.app.worker.tick(), 'ran', `${i + 1} 回目の子`);
+    assert.equal(s.app.kv.get(`task-idle:${parent.id}`), undefined, `${i + 1} 回目: 子の仕事で親の数が消える`);
+    assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', `${i + 1} 回目: 止めない`);
+  }
+  assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 0);
+});
+
+test('すぐ終わる何もしない子を作って区切るだけの親（上限 1 の Build）は、3 回で止まる（回りっぱなしにならない）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 空回り', { acceptanceItems: ['A-1'] });
+  let runs = 0;
+  for (let i = 0; i < 6 && s.app.tasks.get(parent.id)!.status !== 'failed'; i++) {
+    delegateCycle(s, i, false);
+    if (await s.app.worker.tick() === 'ran') runs++;
+    if (await s.app.worker.tick() === 'ran') runs++;
+  }
+  assert.equal(s.app.tasks.get(parent.id)!.status, 'failed', `止まる（${runs} 回動いた）`);
+  assert.ok(runs <= 6, `親 3 回・子 2 回のあたりで止まる: ${runs}`);
+  assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 1);
+});
+
+// 子を作って task_complete で子を待つ（yield）親（conductor ruling round 3）
+const yieldCycle = (s: Awaited<ReturnType<typeof setup>>, i: number, childWorks: boolean) => s.adapter().scripts.push(
+  toolCall('task_create', { title: `部分 ${i}` }), toolCall('task_complete', { summary: `部分 ${i} を待つ`, notify: false }),
+  ...(childWorks ? [work()] : []), toolCall('task_complete', { summary: `部分 ${i} 済み`, notify: false }),
+);
+const ranTicks = async (s: Awaited<ReturnType<typeof setup>>, n: number) => { let ran = 0; for (let i = 0; i < n; i++) if (await s.app.worker.tick() === 'ran') ran++; return ran; };
+
+test('すぐ終わる何もしない子を作って task_complete で待つだけの親（上限 1 の Build）は、3 回で止まる', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 待つだけ', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 6 && s.app.tasks.get(parent.id)!.status !== 'failed'; i++) {
+    yieldCycle(s, i, false);
+    await ranTicks(s, 2);
+  }
+  assert.equal(s.app.tasks.get(parent.id)!.status, 'failed', '止まる');
+  assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 1);
+});
+
+test('子が仕事をする、task_complete で待つ親は止めず、親の 10 回目で 1 回だけ長く続いている知らせを出す', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 任せて待つ', { acceptanceItems: ['A-1'] });
+  for (let i = 1; i <= 11; i++) {
+    yieldCycle(s, i, true);
+    assert.equal(await ranTicks(s, 2), 2, `${i} 回目: 親と子が動く`);
+    assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', `${i} 回目: 止めない`);
+    assert.equal(longNotes(s).length, i < 10 ? 0 : 1, `${i} 回目の知らせの数`);
+  }
+});
+
+test('孫が仕事をすれば、子を待つ根と子の両方の進展なしの数が消え、根は止まらない（spawned_by の先祖すべて）', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const root = s.userTask('Build: 3 段', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 4; i++) {
+    s.adapter().scripts.push(
+      toolCall('task_create', { title: `子 ${i}` }), toolCall('task_complete', { summary: '子を待つ', notify: false }),
+      toolCall('task_create', { title: `孫 ${i}` }), toolCall('task_complete', { summary: '孫を待つ', notify: false }),
+      work(), toolCall('task_complete', { summary: '孫 済み', notify: false }),
+      toolCall('task_complete', { summary: '子 済み', notify: false }),
+    );
+    assert.equal(await ranTicks(s, 4), 4, `${i + 1} 回目: 根・子・孫・子が動く`);
+    assert.equal(s.app.tasks.get(root.id)!.status, 'ready', `${i + 1} 回目: 根は止まらない`);
+    assert.equal(s.app.kv.get(`task-idle:${root.id}`), undefined, `${i + 1} 回目: 孫の仕事で根の数も消える`);
+  }
+});
+
+test('保険: 1 時間の上限で止まった Build の仲間も、持ち主の Run now（今すぐ実行）なら動く。作った子は上限待ち', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const root = s.userTask('Build: 押して動かす', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 60; i++) s.app.tasks.event(root.id, 'run', 'worker', null, `old-${i}`);
+  assert.equal(s.app.worker.waitReason(s.app.tasks.get(root.id)!)?.kind, 'budget', '前提: 仲間は 60 回で止まっている');
+  s.app.worker.requestRun(root.id);
+  assert.equal(s.app.worker.waitReason(s.app.tasks.get(root.id)!), null, 'Run now したものは待たない');
+  s.adapter().scripts.push(toolCall('task_create', { title: '部分' }), toolCall('task_complete', { summary: '待つ', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const child = s.app.db.prepare('SELECT * FROM tasks WHERE spawned_by = ?').get(root.id) as unknown as Parameters<typeof s.app.worker.waitReason>[0];
+  assert.equal(s.app.worker.waitReason(child)?.kind, 'budget', '作った子は上限を待つ');
+});
+
+test('保険: Build の仲間は、進展なしの数に掛からない回り方でも、1 時間に 60 回動いたら止まって 1 回知らせ、枠が空けばまた動く', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 回り続ける', { acceptanceItems: ['A-1'] });
+  let ran = 0;
+  for (let i = 0; i < 40; i++) {
+    yieldCycle(s, i, true);
+    const n = await ranTicks(s, 2);
+    ran += n;
+    if (n < 2) break;
+  }
+  assert.equal(ran, 60, '仲間の回数は 60 で止まる');
+  assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', '失敗にはしない（待つだけ）');
+  assert.equal(await ranTicks(s, 3), 0, 'それ以上は動かない');
+  const capped = s.app.notifications.list(100).filter(n => n.title.startsWith('Paused for a while'));
+  assert.equal(capped.length, 1, '知らせは 1 回');
+  assert.equal(capped[0]!.title, 'Paused for a while: Build: 回り続ける ran too many times this hour');
+  assert.equal(s.app.worker.status().waiting[parent.id]?.kind, 'budget', '画面には上限待ちと出る');
+  s.adapter().scripts.length = 0;
+  s.clock.now += HOUR + MIN;
+  yieldCycle(s, 99, true);
+  assert.ok(await ranTicks(s, 2) >= 1, '1 時間の枠が空けばまた動く');
 });
 
 test('区切りでない終わり・持ち主の操作（run-now・PATCH・answer・取り消し・取り消しを戻す・完了）で、続けての区切りの数は 0 に戻る', async t => {
@@ -338,9 +553,9 @@ test('区切りでない終わり・持ち主の操作（run-now・PATCH・answe
   const splitKey = `task-split:${task.id}`;
   for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
   assert.equal(s.app.kv.getJson<number>(splitKey), 2);
-  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 1 }));
+  s.adapter().scripts.push(reply('考え中'));
   await s.app.worker.tick();
-  assert.equal(s.app.kv.get(splitKey), undefined, '途中経過で終わった実行は数を消す');
+  assert.equal(s.app.kv.get(splitKey), undefined, '区切りでない終わり（返事だけ）は数を消す');
   s.clock.now += MIN;
   for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
   assert.equal(s.app.tasks.get(task.id)!.status, 'ready');
@@ -404,11 +619,13 @@ test('実行中にタスクが終わった（API を通らずに取り消され�
   assert.equal(s.app.kv.get(`task-split:${task.id}`), undefined);
 });
 
-test('区切りのあいだに会話の割り込みで止められても、続けての区切りの数は消えず、3 回目で知らせる', async t => {
+test('区切りのあいだに会話の割り込みで止められても、続けての区切りの数は消えず、10 回目で知らせる', async t => {
   const s = await setup(t, c => { c.worker.maxRunsPerHour = 50; });
   const task = s.userTask('長い調べもの');
   for (let i = 0; i < 2; i++) { splitRun(s); await s.app.worker.tick(); }
   assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 2);
+  // 10 回目の手前まで進めた形にする（100 往復の実行を 9 回動かさない）
+  s.app.kv.setJson(`task-split:${task.id}`, 9);
   s.adapter().scripts.push(hang());
   const ticking = s.app.worker.tick();
   await waitFor(() => s.app.tasks.get(task.id)?.status === 'running' && s.adapter().calls.length === 201, '割り込まれる実行が始まる');
@@ -418,12 +635,12 @@ test('区切りのあいだに会話の割り込みで止められても、続�
   await s.app.engine.wait(sent.runId);
   await ticking;
   assert.equal(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')?.content, 'Paused to give priority to the conversation with the user (it will resume from where it left off)', '前提: 割り込みで止められた');
-  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 2, '割り込みは消しも増やしもしない');
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 9, '割り込みは消しも増やしもしない');
   s.clock.now = s.app.tasks.get(task.id)!.run_at!;
   splitRun(s);
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 3);
-  assert.equal(longNotes(s).length, 1, '割り込みをまたいで 3 回目に知らせる');
+  assert.equal(s.app.kv.getJson<number>(`task-split:${task.id}`), 10);
+  assert.equal(longNotes(s).length, 1, '割り込みをまたいで 10 回目に知らせる');
 });
 
 test('使えるモデルが無ければ実行せず、待ってから試す', async t => {

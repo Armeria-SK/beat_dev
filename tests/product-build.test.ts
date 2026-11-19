@@ -440,6 +440,7 @@ test('3-2-s Build のあとの汚れ: きれいに Build したあと計画書�
       assert.equal(judgeSeesTaint(s.app.tasks, taskId), true, label);
       assert.equal(marks.length, 1, `${label}: 2 回読んでも印は 1 つ`);
     }
+    s.app.tasks.finish(taskId, 'cancelled', null, 'owner');
   }
 });
 
@@ -487,6 +488,7 @@ test('3-2-s Build のあとの汚れ（子の担当）: Build のタスクの実
       assert.equal(marks.length, 1, `${label}: 子が 2 回読んでも印は 1 つ`);
       assert.equal(marks[0]!.actor, 'mesh', label);
     }
+    s.app.tasks.finish(taskId, 'cancelled', null, 'owner');
   }
 });
 
