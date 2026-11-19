@@ -1000,6 +1000,7 @@ export const en = {
   'ui.memory.action.outside': 'Edited outside beat',
   'ui.memory.action.reviewed': 'Mark cleared',
   'ui.memory.toast.cleared': 'Mark cleared',
+  'ui.memory.saveConflict': 'beat changed this note while you were editing. Save again to replace that version; it stays in History.',
   'ui.memory.action.create': 'Created',
   'ui.memory.action.update': 'Edited',
   'ui.memory.action.forget': 'Deleted',

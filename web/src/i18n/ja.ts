@@ -303,6 +303,7 @@ export const ja = {
   'ui.memory.noteEmptyText': 'beat はこの製品について学んだことをここに保存し、次の実行で調べ直さずに使います。あなたが足すこともできます。',
   'ui.memory.notePlaceholder': '話題を 1 つ、4,000 文字まで',
   'ui.memory.outsideNote': 'Web ページなど外の内容を読んだ会話で書かれました。印を外すまで、beat は実行に題を見せず、これを読んだ実行は外の内容を読んだものとして扱います。',
+  'ui.memory.saveConflict': '編集しているあいだに beat がこの記憶を書き直しました。もう一度 Save すると、その版を置き換えます（その版は History に残ります）。',
   'ui.skills.draftUpdate': '登録済みのスキルを変えます',
   'ui.skills.draftOutside': '外の内容を読んだあとに作られました',
   'ui.skills.discardWarn': 'Discard · 元に戻せません',

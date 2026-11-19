@@ -302,6 +302,7 @@ export const EXPLAIN_KEYS = [
   'ui.memory.noteEmptyText',
   'ui.memory.notePlaceholder',
   'ui.memory.outsideNote',
+  'ui.memory.saveConflict',
   'ui.skills.draftUpdate',
   'ui.skills.draftOutside',
   'ui.skills.discardWarn',

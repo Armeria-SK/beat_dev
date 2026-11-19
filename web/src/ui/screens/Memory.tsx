@@ -117,13 +117,16 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
   const askDelete = () => { confirmOpener.current = document.activeElement; setConfirming(true); };
   const toRead = () => leave(() => { setMode('read'); setBase(null); setError(''); });
   const startEdit = () => { if (file && parts) { setBase({ hash: file.hash, title: parts.title, body: parts.body }); setMode('edit'); } };
-  const run = async (work: (hash: string) => Promise<void>) => {
+  // 409（見ていた版が古い）: 確かめの行を閉じて読み直す。Edit の版を進めるのは Save のときだけ（ほかの操作は、見ていない版を消したり印を外したりしない）
+  const run = async (work: (hash: string) => Promise<void>, saving = false) => {
     const hash = mode === 'edit' ? base?.hash : file?.hash;
     if (busy || !hash) return;
     setBusy(true); setError('');
     try { await work(hash); } catch (failure) {
-      if (mode === 'edit' && failure instanceof ApiError && failure.status === 409) { rebaseFrom.current = file; onChanged(); }
-      setError(failText(failure, t));
+      const stale = failure instanceof ApiError && failure.status === 409;
+      if (stale) { setConfirming(false); onChanged(); }
+      if (stale && saving && mode === 'edit') { rebaseFrom.current = file; setError(t('ui.memory.saveConflict')); }
+      else setError(failText(failure, t));
     } finally { setBusy(false); }
   };
   const save = () => void run(async hash => {
@@ -133,7 +136,7 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
     setBase(null);
     onChanged();
     toast({ kind: 'memory', icon: 'check', title: t('ui.memory.toast.saved'), body: path });
-  });
+  }, true);
   const remove = () => void run(async hash => {
     await api.forgetMemoryNote(projectId, note.name, hash);
     setConfirming(false);
@@ -310,7 +313,7 @@ export function Memory({ productId, projects, projectsLoaded, revision }: { prod
   let current = notes.find(note => note.name === selected) ?? (creating ? undefined : notes[0]);
   // 書きかけのある記憶が一覧から消えても（外で消された・名前が変わった）、書きかけを捨てずに開いたままにする
   const held = shown.current;
-  if (held && !creating && current?.name !== held.name && !notes.some(note => note.name === held.name) && hasUnsavedEdits(`${EDITS}:${productId}:${held.name}`)) current = held;
+  if (held && !creating && (selected === null || selected === held.name) && current?.name !== held.name && !notes.some(note => note.name === held.name) && hasUnsavedEdits(`${EDITS}:${productId}:${held.name}`)) current = held;
   shown.current = current;
   const changed = (select?: string) => { if (select !== undefined) setSelected(select); setTick(n => n + 1); };
   const ask = useDiscardAsk(() => hasUnsavedEdits(EDITS));

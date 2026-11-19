@@ -310,7 +310,7 @@ test('Memory（DOM）: Edit のあいだに beat が書き直して画面が読�
   assert.deepEqual(server.writes().map(c => [c.method, c.body?.baseHash]), [['PUT', hashOf(V2)]]);
   assert.equal(server.notes.get('test-commands')!.text, NEWER, '新しい版は上書きされない');
   assert.equal(container.querySelector<HTMLTextAreaElement>('.ui-mem__edit textarea')?.value, 'My draft.', '書きかけが残る');
-  assert.ok(container.querySelector('[role="alert"]'));
+  assert.equal(container.querySelector('[role="alert"]')?.textContent, 'beat changed this note while you were editing. Save again to replace that version; it stays in History.');
   await click(byText(container, '.bt-pane__bar button', 'Save'));
   await settle();
   assert.deepEqual(server.writes()[1]!.body, { title: 'Test commands', content: 'My draft.', baseHash: hashOf(NEWER) });
@@ -339,6 +339,11 @@ test('Memory（DOM）: 書きかけのある記憶が一覧から消えても（
   assert.deepEqual(rows(container).map(r => r.dataset.note), ['note-1']);
   assert.equal(container.querySelector('.ui-mem__path')?.textContent, 'memory/test-commands.md');
   assert.equal(container.querySelector<HTMLTextAreaElement>('.ui-mem__edit textarea')?.value, 'Keep me.');
+  await click(rows(container)[0]!.querySelector('button'));
+  await settle();
+  await click(byText(container, 'button', 'Discard'));
+  await settle();
+  assert.equal(container.querySelector('.ui-mem__path')?.textContent, 'memory/note-1.md', 'Discard を確かめたら選んだ記憶へ移る');
 });
 
 test('Memory の Notice の Undo: beat の外で中身が変わっていれば（履歴の行が無くても）戻さず、何も書かない', async () => {
@@ -360,4 +365,39 @@ test('Memory（DOM）: Edit の書きかけのまま自分で Delete したら�
   await click(byText(container, '.bt-pane button', 'Delete'));
   await settle();
   assert.equal(container.querySelector('.ui-mem__path')?.textContent, 'memory/note-1.md');
+});
+
+test('Memory（DOM）: Edit のあいだの Delete が 409 なら確かめの行を閉じ、もう一度 Delete しても Edit を始めた版のハッシュのまま（見ていない版を消さない）', async () => {
+  const server = fakeServer(SEED);
+  const { container, rerender } = await mounted(PID);
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  const NEWER = '# Test commands\n\nNewer.\n';
+  server.beatWrites('test-commands', NEWER);
+  await rerender(1);
+  await click(byText(container, '.bt-pane__bar button', 'Delete'));
+  await click(byText(container, '.bt-pane button', 'Delete'));
+  await settle();
+  assert.equal(byText(container, '*', 'Delete this memory?'), undefined, '409 で確かめの行が閉じる');
+  await click(byText(container, '.bt-pane__bar button', 'Delete'));
+  await click(byText(container, '.bt-pane button', 'Delete'));
+  await settle();
+  assert.deepEqual(server.writes().map(c => c.query.get('baseHash')), [hashOf(V2), hashOf(V2)]);
+  assert.equal(server.notes.get('test-commands')!.text, NEWER);
+});
+
+test('Memory（DOM）: Edit のあいだの「印を外す」が 409 でも、Edit の版のハッシュは進めない（2 回目も古いハッシュで断られる）', async () => {
+  const server = fakeServer(SEED);
+  const { container, rerender } = await mounted(PID);
+  await click(rows(container)[1]!.querySelector('button'));
+  await settle();
+  const OLD = server.hashOf('note-1');
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  server.beatWrites('note-1', '# Web finding\n\nRewritten.\n');
+  await rerender(1);
+  for (let i = 0; i < 2; i++) {
+    await click(byText(container, 'button', 'I read it · clear the mark'));
+    await settle();
+  }
+  assert.deepEqual(server.writes().map(c => [c.path.endsWith('/reviewed'), c.body!.baseHash]), [[true, OLD], [true, OLD]]);
+  assert.ok(rows(container)[1]!.querySelector('.ui-mem__tag'), '印は残る');
 });
