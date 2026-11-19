@@ -930,7 +930,8 @@ export class Worker {
       if (tasks.get(task.id)?.status !== 'running') return 'idle';
     }
     const mainRoot = placed?.kind === 'worktree' ? this.#d.projects?.get(task.project_id!)?.root : undefined;
-    const mainBefore = mainRoot ? await mainGitPrint(mainRoot, dirname(this.#d.projects!.dir)) : undefined;
+    const since = this.#now();
+    const mainBefore = mainRoot ? await mainGitPrint(mainRoot, dirname(this.#d.projects!.dir), this.#d.places?.placeRoot()) : undefined;
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
     const started = engine.runTask(task, conversationId, prompt, placed ? { place: placed.kind === 'worktree' ? placed.row.id : null } : {});
     if (!started.ok) {
@@ -944,7 +945,7 @@ export class Worker {
     try {
       const result = await started.done;
       this.#finalize(task, result, started.control.value, started.runId);
-      if (mainRoot && mainBefore) await this.#mainChanged(task, mainRoot, mainBefore);
+      if (mainRoot && mainBefore) await this.#mainChanged(task, mainRoot, mainBefore, since);
       // 生んだタスクから引き継いだ作業コピーは閉じない（ほかの子と生んだタスクがまだ使う）
       if (placed?.kind === 'worktree' && placed.row.task_id === task.id) await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
@@ -952,12 +953,20 @@ export class Worker {
   }
 
   // 作業コピーで動いた実行の前後で、本体の git（HEAD・ブランチ・参照・stash・共有の設定）が変わっていたら、タスクの経過と知らせで持ち主に伝える（止めも戻しもしない）
-  async #mainChanged(task: Task, root: string, before: MainGitPrint): Promise<void> {
-    const after = await mainGitPrint(root, dirname(this.#d.projects!.dir));
+  // 同じ製品で、その間に本体で動いた（動いている）ほかのタスクがあれば、そちらの変化かもしれないので名前を書き、知らせは出さない
+  async #mainChanged(task: Task, root: string, before: MainGitPrint, since: number): Promise<void> {
+    const after = await mainGitPrint(root, dirname(this.#d.projects!.dir), this.#d.places?.placeRoot());
     const changed = after ? mainGitChanges(before, after) : ['unreadable'];
     if (changed.length === 0) return;
     const language = this.#language();
     const parts = changed.join(', ');
+    const onMain = (this.#d.db.prepare(`SELECT id, title FROM tasks t WHERE project_id = ? AND id != ? AND (status = 'running' OR COALESCE(completed_at, 0) >= ?
+      OR EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = 'run' AND e.created_at >= ?)) AND NOT EXISTS (SELECT 1 FROM worktrees w WHERE w.task_id = t.id AND w.kind = 'task')`)
+      .all(task.project_id, task.id, since, since) as Array<{ id: string; title: string }>).filter(other => this.#d.places?.rowOf(other.id)?.state !== 'active');
+    if (onMain.length) {
+      this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.main_changed_others', { parts, names: onMain.slice(0, 5).map(o => `“${o.title.slice(0, 80)}”`).join(', ') }));
+      return;
+    }
     this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.main_changed', { parts }));
     this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.main_changed', { title: task.title, parts }), link: `#/p/${task.project_id}`, dedupKey: `main-changed:${task.id}`, projectId: task.project_id });
   }

@@ -56,6 +56,7 @@ const en = {
   'reason.worktree_unavailable': 'Waiting for the product folder: another task is using it, and beat could not make a separate working copy for this task',
   'reason.worktree_gone': "The task's separate working copy is missing, so the task cannot continue",
   'event.main_changed': "While this task ran in its separate working copy, the product folder's git state changed ({parts}). Nothing was undone; check the product folder (another task or you may also have changed it)",
+  'event.main_changed_others': "While this task ran in its separate working copy, the product folder's git state changed ({parts}). Other tasks ran in the product folder at the same time and may have made this change: {names}. Nothing was undone",
   'notify.main_changed': "The product folder's git state changed while “{title}” ran in a working copy ({parts})",
   'event.worktree_held':'Not committed to the branch because the names look like secrets (they stay in the working copy only): {names}',
   'reason.preempted':'Paused to give priority to the conversation with the user (it will resume from where it left off)',

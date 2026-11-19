@@ -17,22 +17,60 @@ export type WorktreeNote = 'not_on_branch' | 'in_progress' | 'missing';
 
 // 本体の git の状態（作業コピーのタスクの実行の前後で比べる。変われば持ち主に知らせるだけで、止めも戻しもしない）。
 // beat の作業ブランチ（refs/heads/beat/）・beat の控え（refs/beat/）・取ってきた宛先の参照（refs/remotes/）は、並べたタスクと fetch で正しく変わるので入れない
-export interface MainGitPrint { head: string; branch: string; refs: string; stash: string; config: string }
-export async function mainGitPrint(root: string, dataDir: string): Promise<MainGitPrint | undefined> {
+// フック（*.sample を除く名前と中身）と worktree の登録（beat の作業コピーの置き場の中を指すものを除く）も見る。
+// 共有の .git は --git-common-dir で探す（.git がファイルの製品も）。フックは <共有の .git>/hooks を読む（beat の git は core.hooksPath を差し替えるので --git-path hooks は使えない。core.hooksPath を変えたら設定の変化として出る）
+// git を動かせない（設定に beat が使わない鍵がある・.git がファイルなど）ときは、ファイルで読める分（設定・フック・登録）だけ比べ、git で読む分は git: false にする
+export interface MainGitPrint { git: boolean; head: string; branch: string; refs: string; stash: string; config: string; hooks: string; worktrees: string }
+const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+const readOr = (path: string): Buffer | string => { try { return readFileSync(path); } catch { return 'unreadable'; } };
+function folderDigest(dir: string, keep: (name: string, path: string) => boolean): string {
+  let names: string[];
+  try { names = readdirSync(dir).sort(); } catch { return 'none'; }
+  return names.filter(name => keep(name, join(dir, name))).map(name => {
+    const path = join(dir, name);
+    return `${name} ${lstatOf(path)?.isDirectory() ? sha(readOr(join(path, 'gitdir'))) : sha(readOr(path))}`;
+  }).join('\n');
+}
+export async function mainGitPrint(root: string, dataDir: string, ownCopies?: string): Promise<MainGitPrint | undefined> {
   const print = await withGit(root, dataDir, async git => {
     const text = async (args: string[]): Promise<string> => (await git(args))?.toString('utf8').trim() ?? '';
     const refs = (await text(['for-each-ref', '--format=%(refname) %(objectname)'])).split('\n')
       .filter(line => line && !/^refs\/(?:heads\/beat\/|beat\/|remotes\/)/u.test(line)).join('\n');
-    return { head: await text(['rev-parse', '-q', '--verify', 'HEAD']), branch: await text(['symbolic-ref', '-q', 'HEAD']), refs, stash: await text(['reflog', 'show', '--format=%H', 'refs/stash', '--']) };
+    return {
+      head: await text(['rev-parse', '-q', '--verify', 'HEAD']), branch: await text(['symbolic-ref', '-q', 'HEAD']), refs,
+      stash: await text(['reflog', 'show', '--format=%H', 'refs/stash', '--']),
+      common: await text(['rev-parse', '--git-common-dir']),
+    };
   });
-  if (!print) return undefined;
-  let config = '';
-  try { config = createHash('sha256').update(readFileSync(join(root, '.git', 'config'))).digest('hex'); } catch { config = 'unreadable'; }
-  return { ...print, config };
+  const { common: commonText, ...rest } = print ?? { head: '', branch: '', refs: '', stash: '', common: '' };
+  const common = commonText ? resolve(root, commonText) : fileCommonDir(root);
+  if (!common) return undefined;
+  const hooks = folderDigest(join(common, 'hooks'), name => !name.endsWith('.sample'));
+  const worktrees = folderDigest(join(common, 'worktrees'), (_, path) => {
+    const gitdir = readOr(join(path, 'gitdir')).toString().trim();
+    return !(ownCopies && gitdir !== 'unreadable' && isInside(ownCopies, dirname(gitdir)));
+  });
+  return { git: print !== undefined, ...rest, config: sha(readOr(join(common, 'config'))), hooks, worktrees };
 }
 
-export const mainGitChanges = (before: MainGitPrint, after: MainGitPrint): Array<keyof MainGitPrint> =>
-  (['branch', 'head', 'refs', 'stash', 'config'] as const).filter(key => before[key] !== after[key]);
+// git を使わずに共有の .git を探す（.git のフォルダ、または gitdir: の行と commondir）
+function fileCommonDir(root: string): string | undefined {
+  const dotGit = join(root, '.git');
+  const stat = lstatOf(dotGit);
+  if (stat?.isDirectory()) return dotGit;
+  if (!stat?.isFile()) return undefined;
+  const line = /^gitdir:\s*(.+?)\s*$/mu.exec(readOr(dotGit).toString());
+  if (!line) return undefined;
+  const gitdir = resolve(root, line[1]!);
+  const commondir = readOr(join(gitdir, 'commondir')).toString().trim();
+  return commondir !== 'unreadable' && commondir ? resolve(gitdir, commondir) : gitdir;
+}
+
+// 変わった所。前は git で読めて後で読めなくなったら git（設定を変えて見えなくした場合も伝える）
+export const mainGitChanges = (before: MainGitPrint, after: MainGitPrint): string[] => [
+  ...(before.git && after.git ? (['branch', 'head', 'refs', 'stash'] as const).filter(key => before[key] !== after[key]) : before.git && !after.git ? ['git'] : []),
+  ...(['config', 'hooks', 'worktrees'] as const).filter(key => before[key] !== after[key]),
+];
 
 export interface WorktreeRow {
   id: string;
@@ -552,6 +590,11 @@ export class Worktrees {
       const git = timed(raw, { timedOut: false });
       if ((await git(['symbolic-ref', '-q', 'HEAD']))?.trim() !== `refs/heads/${row.branch}`) return false;
       if ((await git(['rev-parse', '-q', '--verify', 'HEAD']))?.trim() !== (row.own_tip ?? row.base)) return false;
+      // checkout が書いている途中で止まると、索引が無く古い index.lock が残る。ファイルには触らずに HEAD から索引だけ作り直して比べる（持ち主の書きかけは M や ?? で残る）
+      if (lstatOf(join(admin, 'index')) === undefined) {
+        if (lstatOf(join(admin, 'index.lock')) !== undefined) await unlink(join(admin, 'index.lock'));
+        if (await git(['read-tree', 'HEAD']) === null) return false;
+      }
       const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
       if (status === null) return false;
       const entries = status.split('\0').filter(Boolean);

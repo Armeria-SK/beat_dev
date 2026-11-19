@@ -13,7 +13,10 @@ export const WT_MAIN_PATH = 'wt.main_path';
 export const WT_OPAQUE = 'wt.opaque';
 export const WT_GIT_ENV = 'wt.git_env';
 
-export interface WorktreeRefusal { key: typeof WT_GIT_SHARED | typeof WT_OPAQUE | typeof WT_GIT_ENV; cmd: string }
+// git の文があるコマンドで、作業コピーの外のパスを名指す
+export const WT_OUTSIDE_PATH = 'wt.outside_path';
+
+export interface WorktreeRefusal { key: typeof WT_GIT_SHARED | typeof WT_OPAQUE | typeof WT_GIT_ENV | typeof WT_MAIN_PATH; cmd: string }
 
 type Kind = 'b' | 's' | 'opt';
 type Flags = ReadonlyMap<string, Kind>;
@@ -138,17 +141,21 @@ export const isGitProgram = (program: string): boolean => program === 'git' || G
 const LAUNCHERS = new Set(['conhost', 'wt', 'wmic', 'invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi', 'script', 'flock', 'forfiles',
   'rundll32', 'regsvr32', 'installutil', 'regasm', 'regsvcs', 'cmstp', 'msiexec', 'bitsadmin', 'schtasks', 'runas']);
 // 中の命令を別の作業フォルダで動かすオプション（値が作業コピーの中と決まらなければ断る）。find の -execdir は見つけたファイルごとのフォルダ
-const PARAM_PREFIX = (name: string, full: string): boolean => name.length >= 3 && full.startsWith(name);
+// PowerShell は引数の名前の一意な頭を受け付ける（-wo・-WO で -WorkingDirectory）
+const PARAM_PREFIX = (name: string, full: string): boolean => name.length >= 2 && full.startsWith(name);
 function launchDirs(st: StatementFacts): { words: Array<{ text: string; dynamic: boolean } | undefined>; always?: boolean } {
   const p = st.program.toLowerCase();
   const ws = st.words;
+  // オプションの値（次の語・--opt=値・-opt:値・-C値）。変数の語でも頭がオプションなら値を変数として返す
   const valueOf = (match: (t: string) => boolean): Array<{ text: string; dynamic: boolean } | undefined> => {
     const out: Array<{ text: string; dynamic: boolean } | undefined> = [];
     ws.forEach((w, i) => {
-      if (i === 0 || w.dynamic) return;
-      const eq = /^(-{1,2}[A-Za-z-]+)[=:](.+)$/u.exec(w.text);
-      if (eq && match(eq[1]!)) out.push({ text: eq[2]!, dynamic: w.dynamic });
+      if (i === 0) return;
+      const eq = /^(-{1,2}[A-Za-z-]+)[=:](.*)$/u.exec(w.text);
+      const short = /^(-[A-Za-z])(.+)$/u.exec(w.text);
+      if (eq && match(eq[1]!)) out.push(eq[2] === '' ? ws[i + 1] : { text: eq[2]!, dynamic: w.dynamic });
       else if (match(w.text)) out.push(ws[i + 1]);
+      else if (short && match(short[1]!)) out.push({ text: short[2]!, dynamic: w.dynamic });
     });
     return out;
   };
@@ -171,6 +178,12 @@ export function worktreeGitRefusal(statements: readonly StatementFacts[], place:
     || (st.inner === null && st.unknownInner === undefined) || st.codeDynamic
     || (() => { const d = launchDirs(st); return d.always === true || d.words.some(w => !w || w.dynamic || !insideDir(place, w.text, st)); })());
   if (opaque) return { key: WT_OPAQUE, cmd: shownOf(opaque) || opaque.program };
+  // 作業コピーの外（cd で本体へ移ったあと）か、決められないフォルダで動く文は断る（git の文は gitRefusal が数える）
+  const away = all.filter(st => st.program !== '' && !isGitProgram(st.program) && (st.cwd === null || [...(st.cwds ?? []), st.cwd].some(dir => !insideCopy(place.worktree, dir))));
+  if (away.length) {
+    const inMain = away.find(st => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])].some(dir => mainWrites([dir], place).length > 0));
+    return { key: inMain ? WT_MAIN_PATH : WT_OPAQUE, cmd: shownOf(inMain ?? away[0]!) };
+  }
   const gits = all.filter(st => isGitProgram(st.program));
   if (gits.length === 0) return undefined;
   const command = place.command ?? '';
