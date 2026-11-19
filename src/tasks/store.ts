@@ -288,6 +288,25 @@ export class TaskStore {
     return [task.title, task.acceptance_items === null ? task.body : '', task.done_criteria].filter(Boolean).join('\n');
   }
 
+  // 持ち主が自分で書いたタスクの頼み（題・本文・終わりの条件）だけ（9-1b の D-7。ブラウザが持ち主の書いた URL のサイトかを見る）。
+  // 頼みが無ければ親のもの、AI が分けたタスクは元のタスクのもの。beat が決めたタスク・外を読んだ実行が書いた計画を持つ頼み・頼みの無いタスクは undefined。
+  // 計画の抜粋・受け入れの項目（AI が書いて持ち主が承認したもの）は入れない
+  ownerRequestText(id: string): string | undefined {
+    const task = this.get(id);
+    if (!task || this.beatDecided(id)) return undefined;
+    const start = task.spawned_by ? task : task.parent_id ? this.get(task.parent_id) : undefined;
+    let base = task;
+    if (start?.spawned_by) {
+      const root = this.#spawnChain(start)?.at(-1);
+      if (!root || this.beatDecided(root.id)) return undefined;
+      base = root;
+    }
+    const holder = base.owner_request === null && base.parent_id ? this.get(base.parent_id) : base;
+    const owner = ownerRequestOf(holder?.owner_request);
+    if (!owner || !holder || owner.outside) return undefined;
+    return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria].filter(Boolean).join('\n');
+  }
+
   #ownerText(task: Task): string | undefined {
     const holder = task.owner_request === null && task.parent_id ? this.get(task.parent_id) : task;
     const owner = ownerRequestOf(holder?.owner_request);

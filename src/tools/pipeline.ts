@@ -23,7 +23,7 @@ import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { QuestionError } from '../questions/store.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
-import { outboundOfCall, type Outbound } from './hooks/outbound.ts';
+import { outboundOfCall, submitsOf, type Outbound } from './hooks/outbound.ts';
 import { windowsNames } from './hooks/scope.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import { isCore, projectAllows, type ToolRegistry } from './registry.ts';
@@ -288,10 +288,11 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const errors = [...Value.Errors(tool.input, args)].slice(0, 5).map(e => `${e.path || '/'}: ${e.message}`);
     return refuse('deny', 'validation', toolText(language, 'pipeline.bad_args', { errors: errors.join('\n- ') }), true);
   }
-  if (tool.submits === true && ctx.kind !== 'chat') {
+  // 会話の外（タスク・子の担当）でページのフォームを送る呼び出しは、積まずに断って質問票に 1 行（事前の判定が要素を調べて submits を出したもの。9-1b）
+  const refuseSubmit = (): ToolCallOutcome => {
     askSubmit(tool, args, ctx, deps);
     return refuse('deny', 'mode', pendingText('en', 'unattended_submit', { name: tool.name }));
-  }
+  };
   // この呼び出しが外へ出るか（効果が network、または networkCall がそう答えた）。外から読んだ印だけがこれを使う
   const network = tool.effect === 'network' || callsNetwork(tool, args);
 
@@ -313,6 +314,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
     }
   }
+  // 持ち主の決め（J-5 の決まり）・判定役・Pending より前に断る
+  if (decision !== 'deny' && submitsOf(tool, first) && ctx.kind !== 'chat') return refuseSubmit();
   const outbound = decision === 'deny' ? undefined : outboundOfCall(tool, first, language);
   if (outbound?.kind === 'deny') return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: outbound.reason }));
   const tainted = ctx.taint.tainted || conversationTainted(deps);
@@ -492,6 +495,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           } catch (error) { changed = [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })]; }
         }
         if (!changed && ruled && ruleFor(candidateFor('judge', first, outbound))?.id !== ruled.id) changed = [toolText(language, 'pipeline.changed_rule')];
+        // 判定のあいだに押す先が送信の部品に変わったら、会話の外では、変わった旨より先に同じく断って質問票に 1 行（会話は下の変わった旨で断る）
+        if (first?.decision !== 'deny' && submitsOf(tool, first) && ctx.kind !== 'chat') { autoEvent('asked'); return refuseSubmit(); }
         if (changed) { autoEvent('asked'); return refuse('deny', decidedBy, toolText(language, 'pipeline.changed_judging', { reasons: changed.join('\n- ') })); }
         const late = outboundOfCall(tool, first, language);
         if (late?.kind === 'deny') { autoEvent('asked'); return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: late.reason })); }

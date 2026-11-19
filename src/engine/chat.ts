@@ -888,6 +888,12 @@ export class ChatEngine {
       ...(() => { const evidence = this.#reviewEvidence.get(runId); this.#reviewEvidence.delete(runId); return kind === 'review' && evidence ? { reviewEvidence: evidence } : {}; })(),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
+      // 持ち主が自分で書いた文（9-1b の D-7）: タスクは持ち主の頼み、子の担当は親のもの、会話は持ち主の発言
+      ownerText: () => {
+        if (task) { const text = d.tasks?.ownerRequestText(task.task.id); return text ? [text] : []; }
+        if (agent) return agent.parent.ownerText?.() ?? [];
+        return this.#ownerTexts(conversationId);
+      },
       log: d.log ?? (() => undefined),
       services: this.toolServices(),
       task: taskSlot,
@@ -1110,6 +1116,13 @@ export class ChatEngine {
       if (message.role === 'user' && !message.generated && !message.note) return stripAttachments(message.content).slice(0, USER_REQUEST_LIMIT);
     }
     return '';
+  }
+
+  // 会話の持ち主の発言（最後の 50 行のうち、generated でも note でもない user の行。添付の中身は除く）
+  #ownerTexts(conversationId: string): string[] {
+    return this.#d.conversations.messages(conversationId, 50)
+      .filter(({ message }) => message.role === 'user' && !message.generated && !message.note)
+      .map(({ message }) => stripAttachments(message.content));
   }
 
   // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。

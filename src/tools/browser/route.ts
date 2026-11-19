@@ -17,8 +17,9 @@ export interface RouteRequest {
 
 // scheme: 許さない種類の URL / navigation: ページの遷移として許さない / downgrade: https のページから http への遷移 /
 // listed: 操作の一覧のサイトの（クエリ付き・根ページでない）URL への、確かめを出せない遷移（リダイレクト・一覧外のページからの移動） /
-// loopback: 許されていないループバック、または公開のページから来たループバックへの要求
-export type RouteRefusal = 'scheme' | 'navigation' | 'downgrade' | 'listed' | 'loopback';
+// loopback: 許されていないループバック、または公開のページから来たループバックへの要求 /
+// submit: 送信の許しの無い GET 以外の遷移・人のいない実行の公開のホストへの GET 以外の要求（D-8）
+export type RouteRefusal = 'scheme' | 'navigation' | 'downgrade' | 'listed' | 'loopback' | 'submit';
 export type RouteVerdict = { allow: true } | { allow: false; reason: RouteRefusal };
 
 const PARTS = new Set(['http:', 'https:', 'ws:', 'wss:', 'data:', 'blob:']);
@@ -127,4 +128,35 @@ export function loopbackVerdict(request: LoopbackRequest): RouteVerdict {
   if (request.redirectedFrom !== undefined) return from(request.redirectedFrom);
   if (request.entryUrl !== undefined && sameUrl(request.entryUrl, request.url)) return { allow: true };
   return from(request.sourceUrl);
+}
+
+// 送信の許し: any = 承認された送信の押す・入れる / loopback = 許されたループバックのページで通った押す・入れる（送ってよいのはループバックへだけ）
+export type SubmitPermit = 'any' | 'loopback';
+// 送信の守りの種類: attended = 持ち主が見ている実行 / unattended = 人のいない実行（タスク・子の担当）
+export type SendGuard = 'attended' | 'unattended';
+
+export interface MethodRequest {
+  method: string;
+  navigation: boolean;
+  url: string;
+  // そのページの、いまの送信の許し
+  permit: SubmitPermit | undefined;
+  guard: SendGuard;
+  // 許されたループバックの URL か（無ければ () => false）
+  allowed: (url: string) => boolean;
+}
+
+const READ_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// D-8: 要素の形で見分けられない送信（type="button" から form.submit() など）の受け皿。
+// GET・HEAD・OPTIONS は通す。行き先が許されたループバックなら通す（この PC の外へ出ない）。
+// 人のいない実行は、ほかの行き先への GET 以外を、遷移でもスクリプトの fetch / XHR / sendBeacon でも断る（許しがあっても）。
+// 持ち主が見ている実行は、遷移だけを見て、承認された送信の最中（any）でなければ断る（スクリプトの fetch / XHR は止めない: R-3）
+export function navigationMethodVerdict(request: MethodRequest): RouteVerdict {
+  const refuse: RouteVerdict = { allow: false, reason: 'submit' };
+  if (READ_METHODS.has(request.method.toUpperCase())) return { allow: true };
+  if (isLoopbackUrl(request.url)) return request.allowed(request.url) ? { allow: true } : refuse;
+  if (request.guard === 'unattended') return refuse;
+  if (!request.navigation) return { allow: true };
+  return request.permit === 'any' ? { allow: true } : refuse;
 }

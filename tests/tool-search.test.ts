@@ -128,12 +128,13 @@ test('T-1 外された道具は出ない: 持ち主が「止める」にした�
   hidden(s, ['table_write'], 'block');
 });
 
-test('T-1 外された道具は出ない: allowedIn に無い実行の種類（タスクの plan_write と browser_click、会話の question_list）', async t => {
+test('T-1 外された道具は出ない: allowedIn に無い実行の種類（タスクの plan_write、会話の question_list）。タスクの browser_click は 9-1b から出る', async t => {
   const s = await setup(t, { configure: c => { c.tools.browser.enabled = true; } });
   const shop = await s.product('shop');
   s.adapter().scripts = [search('plan_write browser_click'), reply('ok')];
   await s.runTask({ projectId: shop.id });
-  hidden(s, ['plan_write', 'browser_click'], 'task');
+  hidden(s, ['plan_write'], 'task');
+  assert.ok(s.lastResult().includes('browser_click'), 'task: browser_click is found by tool_search');
   s.adapter().scripts = [search('question_list'), reply('ok')];
   await s.send(uuid(1), { text: 'x' });
   hidden(s, ['question_list'], 'chat');

@@ -29,3 +29,23 @@ export function siteAllows(sites: readonly string[], url: string | URL): boolean
   }
   return false;
 }
+
+const OWNER_URL = /https?:\/\/[^\s<>"'`()[\]{}]+/giu;
+
+// 持ち主が書いた文（会話の持ち主の発言・タスクの持ち主の頼み）にある http(s):// の URL のどれかと、url のホストがちょうど同じか（D-7）。
+// 下のドメインは含めない。スキームの無い書き方（example.com だけ）は拾わない。ホストとして読めないもの（IP の直書きなど）は当たらない
+export function ownerHostAllows(ownerTexts: readonly string[], url: string | URL): boolean {
+  let parsed: URL;
+  try { parsed = typeof url === 'string' ? new URL(url) : url; } catch { return false; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const host = normalizeSiteHost(parsed.hostname);
+  if (!host) return false;
+  for (const text of ownerTexts) {
+    for (const match of text.matchAll(OWNER_URL)) {
+      let written: URL;
+      try { written = new URL(match[0]); } catch { continue; }
+      if (normalizeSiteHost(written.hostname) === host) return true;
+    }
+  }
+  return false;
+}

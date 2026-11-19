@@ -36,7 +36,7 @@ test('持ち主のブラウザは永続のプロファイル（launchPersistentC
 });
 
 test('作業用の文脈の選択: 持ち主と同じ固定の守り（ダウンロード・service worker・権限・証明書）に、文脈だけの中継と <-loopback> を足す', () => {
-  const work = workContextOptions({ proxy: { server: 'http://127.0.0.1:7', username: 'w', password: 'q' }, viewport: { width: 1280, height: 800 }, locale: 'ja-JP', actionTimeoutMs: 10_000 });
+  const work = workContextOptions({ proxy: { server: 'http://127.0.0.1:7', username: 'w', password: 'q' }, viewport: { width: 1280, height: 800 }, locale: 'ja-JP', actionTimeoutMs: 10_000, sendGuard: 'attended' });
   assert.deepEqual(work.proxy, { server: 'http://127.0.0.1:7', username: 'w', password: 'q', bypass: '<-loopback>' });
   assert.equal(work.acceptDownloads, false);
   assert.equal(work.serviceWorkers, 'block');

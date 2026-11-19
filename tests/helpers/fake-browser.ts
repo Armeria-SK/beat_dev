@@ -1,5 +1,5 @@
 import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle, type WorkContextOptions, type WorkLaunchOptions } from '../../src/tools/browser/driver.ts';
-import type { RouteRefusal } from '../../src/tools/browser/route.ts';
+import type { RouteRefusal, SubmitPermit } from '../../src/tools/browser/route.ts';
 
 // 試験用の偽のブラウザ。ページの URL・題・本文・ariaSnapshot の文・要素の状態を持ち、開いた記録を残す
 
@@ -12,6 +12,8 @@ export interface FakeEffect {
   dialogs?: number;
   downloads?: number;
   fileChoosers?: number;
+  // 送信の守り（D-8）が断った要求の数（本物では横取りが数える）
+  blocked?: number;
   // 操作が失敗する（隠れている・重なっているなど）
   fail?: 'act_failed' | 'timeout';
 }
@@ -23,10 +25,12 @@ export interface FakeRow {
   // 要素の type 属性（password など）と autocomplete 属性
   type?: string;
   autocomplete?: string;
+  // 押すとフォームを送る部品か（本物では elementFacts が要素から読む）
+  submits?: boolean;
   effect?: FakeEffect;
 }
 
-export interface FakeAct { kind: 'click' | 'fill'; role: string; name: string; nth: number; text?: string; submit?: boolean }
+export interface FakeAct { kind: 'click' | 'fill'; role: string; name: string; nth: number; text?: string; submit?: boolean; permit?: SubmitPermit | undefined }
 
 export interface FakeSite {
   title?: string;
@@ -57,6 +61,8 @@ export class FakePage implements PageHandle {
   #url = 'about:blank';
   #site: FakeSite | undefined;
   #refusal: RouteRefusal | undefined;
+  // いまの送信の許し（permitSubmits）
+  permit: SubmitPermit | undefined;
   constructor(browser: FakeBrowser) { this.browser = browser; }
 
   url(): string { return this.#url; }
@@ -88,13 +94,13 @@ export class FakePage implements PageHandle {
     const rows = this.#rows(target.role, target.name);
     const row = rows[target.nth];
     if (rows.length !== target.count || row === undefined) return undefined;
-    return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete };
+    return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete, form: { inForm: row.submits === true, submits: row.submits === true } };
   }
 
   #act(act: FakeAct, target: ElementTarget, effect: FakeEffect | undefined): ActionEvents {
     // 本物と同じ: 実行の直前に数が違えば、触らない
     if (this.#rows(target.role, target.name).length !== target.count) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    this.acts.push(act);
+    this.acts.push({ ...act, permit: this.permit });
     if (effect?.fail === 'act_failed') throw new BrowserFailure('act_failed', 'browser.act_failed');
     if (effect?.fail === 'timeout') throw new BrowserFailure('timeout', 'browser.timeout', { sec: 1 });
     if (effect?.navigate !== undefined) {
@@ -102,7 +108,7 @@ export class FakePage implements PageHandle {
       this.#url = effect.navigate;
     }
     for (let i = 0; i < (effect?.popups ?? 0); i++) this.browser.popup();
-    return { dialogs: effect?.dialogs ?? 0, downloads: effect?.downloads ?? 0, fileChoosers: effect?.fileChoosers ?? 0 };
+    return { dialogs: effect?.dialogs ?? 0, downloads: effect?.downloads ?? 0, fileChoosers: effect?.fileChoosers ?? 0, blocked: effect?.blocked ?? 0 };
   }
 
   async click(target: ElementTarget, _timeoutMs: number): Promise<ActionEvents> {
@@ -113,6 +119,7 @@ export class FakePage implements PageHandle {
     return this.#act({ kind: 'fill', role: target.role, name: target.name, nth: target.nth, text, submit }, target, submit ? this.#rows(target.role, target.name)[target.nth]?.effect : undefined);
   }
 
+  permitSubmits(permit: SubmitPermit | undefined): void { this.permit = permit; }
   async screenshot(): Promise<Buffer> { return this.#site?.png ?? TINY_PNG; }
   async close(): Promise<void> { this.closed = true; this.browser.pageList = this.browser.pageList.filter(p => p !== this); }
 }

@@ -534,10 +534,15 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
 
 const NO_GIT: OutboundEnv = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };
 
-export function outboundOfCall(tool: Pick<ToolDef, 'mcp' | 'submits'>, check: PreCheck | undefined, language: Language): Outbound | undefined {
+// フォームの送信か: 事前の判定を持つ道具は、要素を調べた結果（check.submits）で見る（9-1b）。持たない道具は、道具の印（tool.submits）のまま送信に数える
+export function submitsOf(tool: Pick<ToolDef, 'submits' | 'preCheck'>, check: PreCheck | undefined): boolean {
+  return tool.preCheck ? check?.submits === true : tool.submits === true;
+}
+
+export function outboundOfCall(tool: Pick<ToolDef, 'mcp' | 'submits' | 'preCheck'>, check: PreCheck | undefined, language: Language): Outbound | undefined {
   if (check?.outbound) return check.outbound;
   if (tool.mcp) return outboundOf({ tool: 'mcp', sends: check?.sends, removes: check?.removes }, { ...NO_GIT, language });
-  if (tool.submits) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
+  if (submitsOf(tool, check)) return outboundOf({ tool: 'browser', submits: true }, { ...NO_GIT, language });
   return undefined;
 }
 

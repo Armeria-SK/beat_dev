@@ -12,7 +12,7 @@ import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from '../
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, fetchSiteAllows, grantOf, loopbackHost, loopbackOrigin, tunnelVerdict, TUNNEL_HEAD_MAX, type BrowserGrant } from '../src/tools/browser/loopback.ts';
 import { routeVerdict } from '../src/tools/browser/route.ts';
 import { BrowserSession, MAX_TABS_TOTAL, type BrowserSessionDeps } from '../src/tools/browser/session.ts';
-import { browserClose, browserOpen, browserRead, browserScreenshot } from '../src/tools/builtin/browser.ts';
+import { browserClick, browserClose, browserOpen, browserRead, browserScreenshot, browserType } from '../src/tools/builtin/browser.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { FakeBrowserDriver, type FakeBrowser } from './helpers/fake-browser.ts';
 import { testConfig } from './helpers.ts';
@@ -511,19 +511,19 @@ function toolRig(t: TestContext, change: (config: AppConfig) => void = () => und
   return { driver, session, config, ctx };
 }
 
-test('道具の一覧: 開く・読む・撮る・閉じるは会話・タスク・子の担当。押す・入れるは会話だけ。振り返りと考える実行には browser_* が無い（T9 の一覧の壁）', () => {
+test('道具の一覧: 6 つとも会話・タスク・子の担当（押す・入れるは 9-1b から）。振り返りと考える実行には browser_* が無い（T9 の一覧の壁）', () => {
   const tools = builtinTools();
   const browserNames = (kind: string) => tools.filter(tool => tool.name.startsWith('browser_') && (tool.allowedIn as readonly string[]).includes(kind)).map(tool => tool.name).sort();
   assert.deepEqual(browserNames('chat'), ['browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
-  assert.deepEqual(browserNames('task'), ['browser_close', 'browser_open', 'browser_read', 'browser_screenshot']);
-  assert.deepEqual(browserNames('agent'), ['browser_close', 'browser_open', 'browser_read', 'browser_screenshot']);
+  assert.deepEqual(browserNames('task'), ['browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
+  assert.deepEqual(browserNames('agent'), ['browser_click', 'browser_close', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
   assert.deepEqual(browserNames('review'), []);
   assert.deepEqual([...SCOUT_TOOLS].filter(name => name.startsWith('browser_')), []);
 });
 
-test('T9: 考える実行・振り返りの文脈では、4 つの道具とも事前の判定と実行の頭で断る（grantOf の壁）。ブラウザは起動しない', async t => {
+test('T9: 考える実行・振り返りの文脈では、6 つの道具とも事前の判定と実行の頭で断る（grantOf の壁）。ブラウザは起動しない', async t => {
   const r = toolRig(t);
-  const inputs: Array<[ToolDef, unknown]> = [[browserOpen, { url: 'https://example.com/' }], [browserRead, {}], [browserScreenshot, {}], [browserClose, {}]];
+  const inputs: Array<[ToolDef, unknown]> = [[browserOpen, { url: 'https://example.com/' }], [browserRead, {}], [browserScreenshot, {}], [browserClose, {}], [browserClick, { ref: 'e1' }], [browserType, { ref: 'e1', text: 'a' }]];
   for (const over of [{ scout: true as const }, { kind: 'review' as const }]) {
     for (const [tool, input] of inputs) {
       const check = await tool.preCheck!(input as never, r.ctx(over));

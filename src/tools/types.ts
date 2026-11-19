@@ -73,6 +73,8 @@ export interface PreCheck {
   // 事前の判定: この呼び出しが外へ送りうる / 消しうる。MCP の道具の申告（outbound.ts の outboundOfCall が読む）
   sends?: boolean;
   removes?: boolean;
+  // 事前の判定: この呼び出しがページのフォームを送る（ブラウザの押す・入れるが、要素を調べて決める。9-1b）。送るに数え（outbound.ts）、会話の外では断って質問票へ（pipeline.ts）
+  submits?: boolean;
   outbound?: Outbound;
   writes?: string[];
   cwd?: string;
@@ -124,6 +126,9 @@ export interface ToolContext {
   // この会話が、これまでの実行のどこかで「よそから来た文を読んだ」ことがあるか（taint はこの実行だけ。これは会話ぜんぶ。読めないときは「ある」側）。
   // 無いとき（試験など）は「ない」として扱う。browser_open の事前の確かめが、この実行で読んでいなくても、会話が読んだあとなら確かめるために見る
   conversationTainted?: (() => boolean) | undefined;
+  // 持ち主が自分で書いた文の束（9-1b の D-7）。会話はその会話の持ち主の発言（添付を除く）、タスクは持ち主の頼み（owner_request）、子の担当は親のもの。
+  // AI が書いた文・Web の中身・添付は入らない。ブラウザの押す・入れるが、持ち主が書いた URL のサイトかを見るのに使う。無い・読めないときは空とみなす
+  ownerText?: (() => string[]) | undefined;
   // この実行で、検索が自動アクセスの判定（ボット判定）で続けて止められた回数（成功・別の失敗で 0 に戻る）
   searchBlocks?: number | undefined;
   // この実行で、task_create で作った・task_update で触ったタスクの id（会話の実行が終わるとき、会話で進んだ分を渡す先を決める）
@@ -198,7 +203,8 @@ export interface ToolDef<I = any> {
   networkCall?: (input: I) => boolean;
   // 外の MCP サーバーの道具（src/mcp/tool.ts が付ける）。計画モードには渡さない（planAllows）
   mcp?: { server: string; tool: string };
-  // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さず（planAllows）、毎回の承認が要る。6a にはこれを付ける道具は無い
+  // ブラウザで押す・入れるなど、ページの中で送信になりうる操作の道具（6b の browser_click / browser_type）。計画モードには渡さない（planAllows）。
+  // 送るに数えるか・会話の外で断るかは、事前の判定を持つ道具ではその PreCheck.submits で決める（9-1b）。持たない道具はこの印で決める（outbound.ts の submitsOf）
   submits?: true;
   planOk?: true;
   replayable?: false;

@@ -9,7 +9,7 @@ import { isEdgeExecutable } from '../../shared/browser-path.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 import { isLoopbackUrl } from './loopback.ts';
-import { listedNavigationVerdict, loopbackVerdict, routeVerdict, type RouteRefusal, type RouteVerdict } from './route.ts';
+import { listedNavigationVerdict, loopbackVerdict, navigationMethodVerdict, routeVerdict, type RouteRefusal, type RouteVerdict, type SendGuard, type SubmitPermit } from './route.ts';
 
 export type BrowserFailureCode =
   | 'disabled' | 'no_browser' | 'launch_failed' | 'profile_busy' | 'paused' | 'tab_limit' | 'no_tab'
@@ -41,6 +41,7 @@ export const REFUSAL_KEYS: Record<RouteRefusal, BrowserMessageKey> = {
   downgrade: 'browser.blocked_downgrade',
   listed: 'browser.blocked_listed',
   loopback: 'browser.blocked_loopback',
+  submit: 'browser.blocked_submit',
 };
 
 export interface LaunchOptions {
@@ -56,6 +57,9 @@ export interface LaunchOptions {
   // 操作の一覧（tools.browser.sites）を、遷移のたびに読む関数。一覧のサイトへの確かめを出せない遷移（リダイレクトなど）を断るのに使う。
   // 省くと（ログイン用の窓など）この守りは働かない
   sites?: (() => readonly string[]) | undefined;
+  // 送信の守り（9-1b の D-8）。attended: 持ち主が見ている実行（送信の許しの無い GET 以外の遷移を断る）/ unattended: 人のいない実行（加えて、公開のホストへの GET・HEAD・OPTIONS 以外の要求を全部断る）。
+  // 省くと（ログイン用の窓。持ち主が自分で操作する）この守りは働かない
+  sendGuard?: SendGuard | undefined;
 }
 
 // 作業用のブラウザ（プロファイルを残さない chromium.launch）の起動の選択。proxy は土台の中継（公開の決まりだけ・ループバックなし）
@@ -64,6 +68,7 @@ export type WorkLaunchOptions = Pick<LaunchOptions, 'channel' | 'executablePath'
 // 作業用の文脈（会話ごと）。proxy はその文脈だけの中継。loopback は「許されたループバックの URL か」（許しが無ければ undefined = ループバックは全部断る）
 export interface WorkContextOptions extends Pick<LaunchOptions, 'proxy' | 'viewport' | 'locale' | 'actionTimeoutMs' | 'sites'> {
   loopback?: ((url: string) => boolean) | undefined;
+  sendGuard: SendGuard;
 }
 
 export interface WorkBrowserHandle {
@@ -81,9 +86,34 @@ export interface ElementDetail extends ElementState {
   // <input> は DOM の type（ブラウザが正規化したもの）、それ以外は type 属性。小文字。無ければ undefined
   type: string | undefined;
   autocomplete: string | undefined;
+  // フォームとの関係（D-5）。submits: 押すとフォームが送られる部品（form に属する submit / image、formaction・formmethod を持つボタン。label は label.control、部品の中の要素はその部品で見る）
+  form: { inForm: boolean; submits: boolean };
 }
-// 操作のあいだに起きたページ側の出来事。数だけ（ダイアログの文などページの文字は持たない）
-export interface ActionEvents { dialogs: number; downloads: number; fileChoosers: number }
+// 操作のあいだに起きたページ側の出来事。数だけ（ダイアログの文などページの文字は持たない）。blocked: 送信の守り（D-8）が断った要求の数
+export interface ActionEvents { dialogs: number; downloads: number; fileChoosers: number; blocked: number }
+
+// 探し直した要素の属性とフォームとの関係を、要素から読む。ブラウザの中で動く（locator.evaluate に渡す）ので、この関数の外の名前を使わない。
+// 試験は jsdom の要素で同じ関数を呼ぶ
+export function elementFacts(el: Element): { type: string | null; autocomplete: string | null; inForm: boolean; submits: boolean } {
+  const tagOf = (node: Element): string => node.tagName.toLowerCase();
+  const typed = tagOf(el) === 'input' ? (el as HTMLInputElement).type : el.getAttribute('type');
+  const autocomplete = (el.getAttribute('autocomplete') ?? '').trim().toLowerCase() || null;
+  const node: Element = tagOf(el) === 'label' && (el as HTMLLabelElement).control ? (el as HTMLLabelElement).control! : el;
+  const part: Element = node.closest('button, input') ?? node;
+  const tag = tagOf(part);
+  const formOwner = tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea' ? (part as HTMLButtonElement).form : null;
+  const kind = tag === 'button' ? (part as HTMLButtonElement).type : tag === 'input' ? (part as HTMLInputElement).type : '';
+  const submitPart = tag === 'button' ? kind === 'submit' : tag === 'input' && (kind === 'submit' || kind === 'image');
+  const buttonLike = tag === 'button' || (tag === 'input' && (kind === 'submit' || kind === 'image' || kind === 'button'));
+  const overrides = buttonLike && (part.hasAttribute('formaction') || part.hasAttribute('formmethod'));
+  const owned = formOwner !== null && formOwner !== undefined;
+  return {
+    type: typed ? typed.trim().toLowerCase() : null,
+    autocomplete,
+    inForm: owned || node.closest('form') !== null,
+    submits: (owned && submitPart) || overrides,
+  };
+}
 
 export interface PageHandle {
   url(): string;
@@ -99,6 +129,8 @@ export interface PageHandle {
   // ダイアログは閉じ（beforeunload だけ離れる）、ダウンロードは断り、ファイル選択は閉じて、数を返す
   click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents>;
   fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents>;
+  // 押す・入れるのあいだだけ効く送信の許し（D-8）。any: 承認された送信 / loopback: 許されたループバックで通った操作（ループバックへの送信だけ）/ undefined: 許しなし
+  permitSubmits(permit: SubmitPermit | undefined): void;
   // 見えている範囲だけの PNG
   screenshot(): Promise<Buffer>;
   // 要求の横取りが最後に断った遷移の理由（goto の前に消し、断られたら入る）
@@ -260,7 +292,9 @@ class PlaywrightPage implements PageHandle {
   refusal: RouteRefusal | undefined;
   // goto の最中だけ入る、browser_open が確かめを済ませた入口の URL（その最初の要求は、一覧のサイトの URL でも断らない）
   entry: string | undefined;
-  #events: ActionEvents = { dialogs: 0, downloads: 0, fileChoosers: 0 };
+  // 送信の許し（permitSubmits）。押す・入れるの終わり（遷移を待つ間も）まで効く
+  permit: SubmitPermit | undefined;
+  #events: ActionEvents = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
   constructor(page: Page) {
     this.page = page;
     // ページ側の出来事には、いつも自分で答える（放っておくとページが止まる）。中身は読まない
@@ -307,18 +341,19 @@ class PlaywrightPage implements PageHandle {
   async locate(target: ElementTarget): Promise<ElementDetail | undefined> {
     const one = await this.#locator(target);
     if (!one) return undefined;
-    const attrs = await one.evaluate((el: Element) => {
-      const input = el instanceof HTMLInputElement ? el.type : el.getAttribute('type');
-      return { type: input ? input.trim().toLowerCase() : null, autocomplete: (el.getAttribute('autocomplete') ?? '').trim().toLowerCase() || null };
-    });
-    return { visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined };
+    const attrs = await one.evaluate(elementFacts);
+    return {
+      visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined,
+      // 読めない形なら送信とみなす（迷ったら聞く側）
+      form: { inForm: attrs.inForm === true, submits: attrs.submits !== false },
+    };
   }
 
   // 操作の前に出来事の数を 0 に戻し、あとで返す
   async #act(target: ElementTarget, timeoutMs: number, work: (one: Locator) => Promise<void>): Promise<ActionEvents> {
     const one = await this.#locator(target);
     if (!one) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0 };
+    this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
     try {
       await work(one);
     } catch (e) {
@@ -342,6 +377,9 @@ class PlaywrightPage implements PageHandle {
     });
   }
 
+  permitSubmits(permit: SubmitPermit | undefined): void { this.permit = permit; }
+  // 送信の守りが、このページ（とその枠）の要求を断った
+  noteBlocked(): void { this.#events.blocked++; }
   screenshot(): Promise<Buffer> { return this.page.screenshot({ type: 'png', fullPage: false }); }
   lastRefusal(): RouteRefusal | undefined { return this.refusal; }
   async close(): Promise<void> { await this.page.close({ runBeforeUnload: false }); }
@@ -360,9 +398,11 @@ export class PlaywrightBrowser implements BrowserHandle {
   readonly #sites: () => readonly string[];
   // 許されたループバックの URL か（作業用の文脈で許しがあるときだけ）。持ち主のプロファイル・許しの無い文脈は、ループバックを全部断る
   readonly #loopback: (url: string) => boolean;
+  // 送信の守り（D-8）。undefined なら働かない（ログイン用の窓）
+  readonly #sendGuard: SendGuard | undefined;
 
-  constructor(context: BrowserContext, sites: () => readonly string[] = () => [], loopback?: ((url: string) => boolean) | undefined) {
-    this.#context = context; this.#sites = sites; this.#loopback = loopback ?? (() => false);
+  constructor(context: BrowserContext, sites: () => readonly string[] = () => [], loopback?: ((url: string) => boolean) | undefined, sendGuard?: SendGuard | undefined) {
+    this.#context = context; this.#sites = sites; this.#loopback = loopback ?? (() => false); this.#sendGuard = sendGuard;
   }
 
   wrap(page: Page): PlaywrightPage {
@@ -399,6 +439,10 @@ export class PlaywrightBrowser implements BrowserHandle {
       let final: RouteVerdict = verdict;
       if (final.allow && isLoopbackUrl(request.url())) final = await this.#loopbackVerdict(request, frame, mainNavigation ? owner : undefined);
       if (final.allow && mainNavigation) final = await this.#listedVerdict(request, frame.page(), owner);
+      if (final.allow && this.#sendGuard !== undefined) {
+        final = navigationMethodVerdict({ method: request.method(), navigation: request.isNavigationRequest(), url: request.url(), permit: owner?.permit, guard: this.#sendGuard, allowed: this.#loopback });
+        if (!final.allow) owner?.noteBlocked();
+      }
       if (final.allow) { await route.continue(); return; }
       if (owner && mainNavigation) owner.refusal = final.reason;
       await route.abort('blockedbyclient');
@@ -476,7 +520,7 @@ export class PlaywrightDriver implements BrowserDriver {
       try {
         const context = await chromium.launchPersistentContext(options.profileDir, playwrightOptions({ ...options, channel }));
         context.setDefaultTimeout(options.actionTimeoutMs);
-        const browser = new PlaywrightBrowser(context, options.sites);
+        const browser = new PlaywrightBrowser(context, options.sites, undefined, options.sendGuard);
         try { await browser.install(); } catch (e) { await context.close().catch(() => undefined); throw e; }
         return browser;
       } catch (e) {
@@ -514,7 +558,7 @@ class PlaywrightWorkBrowser implements WorkBrowserHandle {
     const context = await this.#browser.newContext(workContextOptions(options));
     try {
       context.setDefaultTimeout(options.actionTimeoutMs);
-      const handle = new PlaywrightBrowser(context, options.sites, options.loopback);
+      const handle = new PlaywrightBrowser(context, options.sites, options.loopback, options.sendGuard);
       await handle.install();
       return handle;
     } catch (e) {
