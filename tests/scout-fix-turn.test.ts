@@ -478,7 +478,8 @@ test('8-6b: cancelling a Pre-fix through task_update also removes its branch', {
   const ctx = { runId: 'r1', conversationId: 'c1', kind: 'chat', config: s.app.config(), signal: new AbortController().signal, log: () => undefined, services: { db: s.app.db, tasks: s.app.tasks } } as unknown as ToolContext;
   const done = await taskUpdate.execute({ id: proposal.id, status: 'cancelled' }, ctx);
   assert.notEqual(done.isError, true, done.content);
-  for (let i = 0; i < 50 && beatBranches(s.product).length; i++) await new Promise(resolve => setTimeout(resolve, 100));
+  // task_update は片付けを待たない。onFinished が始めた片付けが行と経過まで書き終えるのを待つ（ここで片付けを呼ぶと、知らせの道の試験にならない）
+  for (let i = 0; i < 100 && (s.fixRows()[0]!.state !== 'discarded' || s.events(proposal.id, 'worktree').length === 0); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.deepEqual(beatBranches(s.product), []);
   assert.equal(s.fixRows()[0]!.state, 'discarded');
   assert.equal(s.events(proposal.id, 'worktree').length, 1);
