@@ -37,6 +37,7 @@ export interface LiveState {
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   notices: ReadonlyMap<string, RunNotice[]>;
   lastMessage: ReadonlyMap<string, number>;
+  cutAt: ReadonlyMap<string, number>;
   revisions: ReadonlyMap<string, number>;
   edits: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
@@ -54,7 +55,7 @@ export interface LiveState {
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), lastMessage: new Map(), revisions: new Map(), edits: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
+  notices: new Map(), lastMessage: new Map(), cutAt: new Map(), revisions: new Map(), edits: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
@@ -83,7 +84,7 @@ export type Action =
   | { type: 'unread'; count: number }
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'checklist'; conversationId: string; items: ChecklistItem[] }
-  | { type: 'clearNotices'; conversationId: string }
+  | { type: 'clearNotices'; conversationId: string; runId?: string | undefined }
   | { type: 'notice'; conversationId: string; notice: RunNotice }
   | { type: 'interrupt'; conversationId: string; on: boolean };
 
@@ -114,13 +115,29 @@ function without<T>(set: ReadonlySet<T>, value: T): ReadonlySet<T> {
 const draftsWith = (s: LiveState, runId: string, change: (d: LiveDraft) => LiveDraft): LiveDraft[] =>
   s.drafts.map(d => (d.runId === runId ? change(d) : d));
 
-function addNotice(s: LiveState, conversationId: string, notice: RunNotice): LiveState {
+function addNotice(s: LiveState, conversationId: string, notice: RunNotice, place = true): LiveState {
   const last = s.lastMessage.get(conversationId);
-  const placed = notice.after === undefined && last !== undefined ? { ...notice, after: last } : notice;
+  const placed = place && notice.after === undefined && last !== undefined ? { ...notice, after: last } : notice;
   return { ...s, notices: new Map(s.notices).set(conversationId, mergeNotice(s.notices.get(conversationId) ?? [], placed)) };
 }
 
+function placeLoose(s: LiveState, conversationId: string, messageId: number): LiveState {
+  const list = s.notices.get(conversationId);
+  if (!list?.some(n => n.after === undefined)) return s;
+  return { ...s, notices: new Map(s.notices).set(conversationId, list.map(n => (n.after === undefined ? { ...n, after: messageId - 0.5 } : n))) };
+}
+
+function dropNotices(s: LiveState, conversationId: string, drop: (n: RunNotice) => boolean): LiveState {
+  const list = s.notices.get(conversationId);
+  if (!list?.some(drop)) return s;
+  const kept = list.filter(n => !drop(n));
+  const notices = new Map(s.notices);
+  if (kept.length) notices.set(conversationId, kept); else notices.delete(conversationId);
+  return { ...s, notices };
+}
+
 const HIDDEN_WARNINGS: ReadonlySet<string> = new Set(['compacted', 'output_continued']);
+const PASSING_WARNINGS: ReadonlySet<string> = new Set(['retrying']);
 
 function bump(s: LiveState, conversationId: string): LiveState {
   return { ...s, revisions: new Map(s.revisions).set(conversationId, (s.revisions.get(conversationId) ?? 0) + 1) };
@@ -131,10 +148,12 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'run.start': {
       const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '', startedAt: now, waitingSince: now }];
       const known = s.conversations.some(c => c.id === e.conversationId);
-      const last = s.lastMessage.get(e.conversationId);
-      const marked = s.interrupting.has(e.conversationId) ? addNotice(s, e.conversationId, { runId: e.runId, kind: 'interrupted', ...(last !== undefined ? { after: last - 0.5 } : {}) }) : s;
+      const cut = s.cutAt.get(e.conversationId);
+      const cutAt = new Map(s.cutAt);
+      cutAt.delete(e.conversationId);
+      const marked = s.interrupting.has(e.conversationId) ? addNotice(s, e.conversationId, { runId: e.runId, kind: 'interrupted', ...(cut !== undefined ? { after: cut } : {}) }, false) : s;
       return {
-        state: library({ ...marked, drafts, interrupting: without(s.interrupting, e.conversationId) }),
+        state: library({ ...marked, cutAt, drafts, interrupting: without(s.interrupting, e.conversationId) }),
         effects: [...(known ? [] : refresh('conversations')), { kind: 'checklist', conversationId: e.conversationId }, ...refresh('worker')],
       };
     }
@@ -149,13 +168,13 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'warning':
       if (HIDDEN_WARNINGS.has(e.code)) return { state: s, effects: [] };
       return {
-        state: addNotice(e.code === 'queued_not_started' ? { ...s, interrupting: without(s.interrupting, e.conversationId) } : s, e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message, params: e.params, ...(e.code === 'context_trimmed' ? { key: 'context_trimmed' } : {}) }),
+        state: addNotice(e.code === 'queued_not_started' ? { ...s, interrupting: without(s.interrupting, e.conversationId) } : s, e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message, params: e.params, ...(e.code === 'context_trimmed' || PASSING_WARNINGS.has(e.code) ? { key: e.code } : {}) }),
         effects: [],
       };
     case 'compaction':
       return { state: addNotice(s, e.conversationId, { runId: e.runId, kind: 'compaction', key: 'compaction', summarized: e.summarized }), effects: [] };
     case 'message.saved': {
-      const state = { ...bump(s, e.conversationId), lastMessage: new Map(s.lastMessage).set(e.conversationId, Math.max(e.messageId, s.lastMessage.get(e.conversationId) ?? 0)) };
+      const state = { ...placeLoose(bump(s, e.conversationId), e.conversationId, e.messageId), lastMessage: new Map(s.lastMessage).set(e.conversationId, Math.max(e.messageId, s.lastMessage.get(e.conversationId) ?? 0)) };
       return {
         state: e.role === 'assistant' ? { ...state, drafts: draftsWith(state, e.runId, d => ({ ...d, text: '', waitingSince: now })) } : state,
         effects: e.role === 'user' ? refresh('conversations') : [],
@@ -177,8 +196,12 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       return { state: edited, effects: [] };
     }
     case 'run.end': {
-      let state: LiveState = bump(library({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }), e.conversationId);
-      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) return { state, effects: refresh('conversations', 'worker', 'drafts') };
+      let state: LiveState = dropNotices(bump(library({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }), e.conversationId), e.conversationId, n => n.runId === e.runId && n.kind === 'warning' && PASSING_WARNINGS.has(n.code));
+      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) {
+        const last = s.lastMessage.get(e.conversationId);
+        if (last !== undefined) state = { ...state, cutAt: new Map(state.cutAt).set(e.conversationId, last) };
+        return { state, effects: refresh('conversations', 'worker', 'drafts') };
+      }
       if (!e.ok && e.errorKind === 'cancelled') state = addNotice(state, e.conversationId, { runId: e.runId, kind: 'stopped' });
       else if (!e.ok) {
         state = addNotice(state, e.conversationId, {
@@ -275,11 +298,6 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
       return { state: { ...s, notices, interrupting: without(s.interrupting, a.conversationId) }, effects: [] };
     }
     case 'notice': return { state: addNotice(s, a.conversationId, a.notice), effects: [] };
-    case 'clearNotices': {
-      if (!s.notices.has(a.conversationId)) return { state: s, effects: [] };
-      const notices = new Map(s.notices);
-      notices.delete(a.conversationId);
-      return { state: { ...s, notices }, effects: [] };
-    }
+    case 'clearNotices': return { state: dropNotices(s, a.conversationId, n => a.runId === undefined || n.runId === a.runId), effects: [] };
   }
 }

@@ -30,19 +30,21 @@ afterEach(async () => {
 
 const DENIED = toolText('en', 'pipeline.denied', { reasons: 'This is outside the allowed folders: D:/elsewhere' });
 
-async function renderChat(notices: RunNotice[]) {
+const MESSAGES = [
+  { id: 1, role: 'user', text: 'find three.module', runId: 'r1', createdAt: 10 },
+  { id: 2, role: 'assistant', text: '', runId: 'r1', createdAt: 11, toolCalls: [{ id: 'k', name: 'file_search', input: JSON.stringify({ name: 'three.module*.js', path: 'D:/elsewhere' }) }] },
+  { id: 3, role: 'tool', text: DENIED, runId: 'r1', createdAt: 12, toolName: 'file_search', toolCallId: 'k', isError: true },
+  { id: 4, role: 'assistant', text: 'First answer.', runId: 'r1', createdAt: 13 },
+  { id: 5, role: 'user', text: 'and next?', runId: 'r2', createdAt: 20 },
+  { id: 6, role: 'assistant', text: 'Second answer.', runId: 'r2', createdAt: 21 },
+];
+
+async function renderChat(notices: RunNotice[], messages: unknown[] = MESSAGES) {
   globalThis.fetch = (async (path: string | URL | Request) => {
     const url = String(path);
     const out = url === `/api/conversations/${CHAT}/messages` ? {
       conversation: { id: CHAT, title: 'Search', created_at: 0, last_message_at: 0, permission_mode: 'auto' },
-      messages: [
-        { id: 1, role: 'user', text: 'find three.module', runId: 'r1', createdAt: 10 },
-        { id: 2, role: 'assistant', text: '', runId: 'r1', createdAt: 11, toolCalls: [{ id: 'k', name: 'file_search', input: JSON.stringify({ name: 'three.module*.js', path: 'D:/elsewhere' }) }] },
-        { id: 3, role: 'tool', text: DENIED, runId: 'r1', createdAt: 12, toolName: 'file_search', toolCallId: 'k', isError: true },
-        { id: 4, role: 'assistant', text: 'First answer.', runId: 'r1', createdAt: 13 },
-        { id: 5, role: 'user', text: 'and next?', runId: 'r2', createdAt: 20 },
-        { id: 6, role: 'assistant', text: 'Second answer.', runId: 'r2', createdAt: 21 },
-      ],
+      messages,
       pending: [], builds: [], activeRun: null,
     } : url === `/api/conversations/${CHAT}/checklist` ? { items: [], tainted: false, updatedAt: null } : url === '/api/models' ? { models: [], routing: { chat: [] } } : undefined;
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
@@ -85,4 +87,32 @@ test('ui/Conversation（DOM）: 「許したフォルダの外」で断られた
   const out = thread.querySelector('.bt-tool .ui-tool__out')!;
   assert.match(out.textContent!, /^Not run \(denied\):\n- This is outside the allowed folders: D:\/elsewhere$/u);
   assert.doesNotMatch(thread.textContent!, /Think of another way/u);
+});
+
+test('ui/Conversation（DOM）: 失敗のお知らせが 2 つあるとき、操作のボタン（Retry など）は会話の最後の発言の後にある新しい方だけに付け、古い方は文だけにする', async () => {
+  const container = await renderChat([
+    { runId: 'r1', kind: 'error', errorKind: 'timeout', errorMessage: 'first failure', after: 1 },
+    { runId: 'r2', kind: 'error', errorKind: 'timeout', errorMessage: 'second failure', after: 2 },
+  ], [
+    { id: 1, role: 'user', text: 'first try', runId: 'r1', createdAt: 10 },
+    { id: 2, role: 'user', text: 'second try', runId: 'r2', createdAt: 20 },
+  ]);
+  const buttons = [...container.querySelectorAll('.bt-thread button')].map(b => b.textContent);
+  assert.deepEqual(buttons.filter(b => b === 'Retry'), ['Retry'], `Retry はちょうど 1 つ: ${buttons.join(' / ')}`);
+  const notices = [...container.querySelectorAll('.bt-thread > .bt-notice')];
+  const old = notices.find(n => /first failure/u.test(n.textContent ?? ''))!;
+  const fresh = notices.find(n => /second failure/u.test(n.textContent ?? ''))!;
+  assert.equal(old.querySelectorAll('button').length, 0, '古い失敗には押せるものを付けない');
+  assert.equal(fresh.querySelectorAll('button').length, 1);
+});
+
+test('ui/Conversation（DOM）: 古い失敗が context の溢れ・認証でも、モデルの切り替えや Open settings は付けない', async () => {
+  const container = await renderChat([
+    { runId: 'r1', kind: 'error', errorKind: 'context_overflow', errorMessage: 'too long', after: 1 },
+    { runId: 'r2', kind: 'error', errorKind: 'auth', errorMessage: 'bad key', after: 1 },
+  ], [
+    { id: 1, role: 'user', text: 'first try', runId: 'r1', createdAt: 10 },
+    { id: 2, role: 'user', text: 'second try', runId: 'r2', createdAt: 20 },
+  ]);
+  assert.equal(container.querySelectorAll('.bt-thread > .bt-notice button').length, 0, '最後の発言より前の失敗は、どれも文だけ');
 });

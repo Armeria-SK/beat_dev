@@ -39,7 +39,7 @@ export interface ConversationProps {
   revision: number;
   disconnected: boolean;
   onReconnect: () => void;
-  onClearNotices: (id: string) => void;
+  onClearNotices: (id: string, runId?: string) => void;
   onInterrupt: (id: string, on: boolean) => void;
   panes?: PanesToggle | undefined;
   waits?: Record<string, WaitReason> | undefined;
@@ -494,9 +494,13 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     }
   };
 
+  const lastError = notices.filter((n): n is Extract<RunNotice, { kind: 'error' }> => n.kind === 'error').at(-1);
+  const lastId = messages.at(-1)?.id;
+  const newestError = lastError && (lastError.after === undefined || lastId === undefined || lastError.after >= lastId) ? lastError : undefined;
+
   const retry = async () => {
     if (!id) return;
-    onClearNotices(id);
+    if (newestError) onClearNotices(id, newestError.runId);
     setFailure(null);
     try { await api.retry(id); } catch (error) { await fail(error, { label: t('ui.fail.retry'), run: () => void retry() }); }
   };
@@ -511,10 +515,11 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
 
   function runFailure(n: Extract<RunNotice, { kind: 'error' }>): ReactNode {
     const text = noticeText(t, n);
-    const retryAction = canRetry ? { label: t('ui.fail.retry'), run: () => void retry() } : null;
+    const live = n === newestError;
+    const retryAction = live && canRetry ? { label: t('ui.fail.retry'), run: () => void retry() } : null;
     switch (n.errorKind) {
-      case 'context_overflow': return failNotice(t('ui.fail.context'), text, useAlternative(() => void retry()) ?? openSettings);
-      case 'auth': return failNotice(t('ui.fail.unreachable'), text, openSettings);
+      case 'context_overflow': return failNotice(t('ui.fail.context'), text, live ? useAlternative(() => void retry()) ?? openSettings : null);
+      case 'auth': return failNotice(t('ui.fail.unreachable'), text, live ? openSettings : null);
       case 'timeout': case 'rate_limit': case 'provider_error': return failNotice(t('ui.fail.unreachable'), text, retryAction);
       default: return failNotice(t('ui.fail.reply'), text, retryAction);
     }
