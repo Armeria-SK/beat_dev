@@ -314,7 +314,7 @@ export function App() {
   }, [settingsOpen]);
 
   const closeSettings = closer.fire;
-  const clearNotices = useCallback((id: string) => dispatch({ type: 'clearNotices', conversationId: id }), [dispatch]);
+  const clearNotices = useCallback((id: string, runId?: string) => dispatch({ type: 'clearNotices', conversationId: id, runId }), [dispatch]);
   const interrupt = useCallback((id: string, on: boolean) => dispatch({ type: 'interrupt', conversationId: id, on }), [dispatch]);
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);
   const setUnread = useCallback((count: number) => dispatch({ type: 'unread', count }), [dispatch]);

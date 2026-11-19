@@ -12,11 +12,10 @@ const SETTLED_MAX = 20;
 const settle = (d: LiveDraft, callId: string, gate: ToolGate | undefined): SettledTool[] | undefined =>
   (d.activeTool && d.toolCallId === callId ? [...(d.settled ?? []), { callId, name: d.activeTool, input: d.activeInput ?? '', ...(gate ? { gate } : {}) }].slice(-SETTLED_MAX) : d.settled);
 
-export type RunNotice = { runId: string; key?: string | undefined } & (
+export type RunNotice = { runId: string; key?: string | undefined; after?: number | undefined } & (
   | { kind: 'switch'; from: string; to: string; reason: string }
   | { kind: 'warning'; code: string; message: string; params?: Record<string, unknown> | undefined }
   | { kind: 'compaction'; summarized: number }
-  | { kind: 'denied'; tool: string; detail: string }
   | { kind: 'memory'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { kind: 'stopped' }
   | { kind: 'interrupted' }
@@ -37,6 +36,8 @@ export interface LiveState {
   streaming: ReadonlySet<string>;
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   notices: ReadonlyMap<string, RunNotice[]>;
+  lastMessage: ReadonlyMap<string, number>;
+  cutAt: ReadonlyMap<string, number>;
   revisions: ReadonlyMap<string, number>;
   edits: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
@@ -54,7 +55,7 @@ export interface LiveState {
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), edits: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
+  notices: new Map(), lastMessage: new Map(), cutAt: new Map(), revisions: new Map(), edits: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
@@ -83,7 +84,7 @@ export type Action =
   | { type: 'unread'; count: number }
   | { type: 'tasks'; tasks: Task[] }
   | { type: 'checklist'; conversationId: string; items: ChecklistItem[] }
-  | { type: 'clearNotices'; conversationId: string }
+  | { type: 'clearNotices'; conversationId: string; runId?: string | undefined }
   | { type: 'notice'; conversationId: string; notice: RunNotice }
   | { type: 'interrupt'; conversationId: string; on: boolean };
 
@@ -114,9 +115,29 @@ function without<T>(set: ReadonlySet<T>, value: T): ReadonlySet<T> {
 const draftsWith = (s: LiveState, runId: string, change: (d: LiveDraft) => LiveDraft): LiveDraft[] =>
   s.drafts.map(d => (d.runId === runId ? change(d) : d));
 
-function addNotice(s: LiveState, conversationId: string, notice: RunNotice): LiveState {
-  return { ...s, notices: new Map(s.notices).set(conversationId, mergeNotice(s.notices.get(conversationId) ?? [], notice)) };
+function addNotice(s: LiveState, conversationId: string, notice: RunNotice, place = true): LiveState {
+  const last = s.lastMessage.get(conversationId);
+  const placed = place && notice.after === undefined && last !== undefined ? { ...notice, after: last } : notice;
+  return { ...s, notices: new Map(s.notices).set(conversationId, mergeNotice(s.notices.get(conversationId) ?? [], placed)) };
 }
+
+function placeLoose(s: LiveState, conversationId: string, messageId: number): LiveState {
+  const list = s.notices.get(conversationId);
+  if (!list?.some(n => n.after === undefined)) return s;
+  return { ...s, notices: new Map(s.notices).set(conversationId, list.map(n => (n.after === undefined ? { ...n, after: messageId - 0.5 } : n))) };
+}
+
+function dropNotices(s: LiveState, conversationId: string, drop: (n: RunNotice) => boolean): LiveState {
+  const list = s.notices.get(conversationId);
+  if (!list?.some(drop)) return s;
+  const kept = list.filter(n => !drop(n));
+  const notices = new Map(s.notices);
+  if (kept.length) notices.set(conversationId, kept); else notices.delete(conversationId);
+  return { ...s, notices };
+}
+
+const HIDDEN_WARNINGS: ReadonlySet<string> = new Set(['compacted', 'output_continued']);
+const PASSING_WARNINGS: ReadonlySet<string> = new Set(['retrying']);
 
 function bump(s: LiveState, conversationId: string): LiveState {
   return { ...s, revisions: new Map(s.revisions).set(conversationId, (s.revisions.get(conversationId) ?? 0) + 1) };
@@ -127,11 +148,12 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'run.start': {
       const drafts = [...s.drafts.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '', startedAt: now, waitingSince: now }];
       const known = s.conversations.some(c => c.id === e.conversationId);
-      const notices = new Map(s.notices);
-      if (s.interrupting.has(e.conversationId)) notices.set(e.conversationId, [{ runId: e.runId, kind: 'interrupted' }]);
-      else notices.delete(e.conversationId);
+      const cut = s.cutAt.get(e.conversationId);
+      const cutAt = new Map(s.cutAt);
+      cutAt.delete(e.conversationId);
+      const marked = s.interrupting.has(e.conversationId) ? addNotice(s, e.conversationId, { runId: e.runId, kind: 'interrupted', ...(cut !== undefined ? { after: cut } : {}) }, false) : s;
       return {
-        state: library({ ...s, drafts, notices, interrupting: without(s.interrupting, e.conversationId) }),
+        state: library({ ...marked, cutAt, drafts, interrupting: without(s.interrupting, e.conversationId) }),
         effects: [...(known ? [] : refresh('conversations')), { kind: 'checklist', conversationId: e.conversationId }, ...refresh('worker')],
       };
     }
@@ -144,15 +166,16 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       return { state: { ...s, drafts, streaming: s.streaming.has(e.conversationId) ? s.streaming : new Set(s.streaming).add(e.conversationId) }, effects: [] };
     }
     case 'warning':
-      if (e.code === 'compacted') return { state: s, effects: [] };
+      if (HIDDEN_WARNINGS.has(e.code)) return { state: s, effects: [] };
       return {
-        state: addNotice(e.code === 'queued_not_started' ? { ...s, interrupting: without(s.interrupting, e.conversationId) } : s, e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message, params: e.params, ...(e.code === 'context_trimmed' ? { key: 'context_trimmed' } : {}) }),
+        state: addNotice(e.code === 'queued_not_started' ? { ...s, interrupting: without(s.interrupting, e.conversationId) } : s, e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message, params: e.params, ...(e.code === 'context_trimmed' || PASSING_WARNINGS.has(e.code) ? { key: e.code } : {}) }),
         effects: [],
       };
     case 'compaction':
       return { state: addNotice(s, e.conversationId, { runId: e.runId, kind: 'compaction', key: 'compaction', summarized: e.summarized }), effects: [] };
     case 'message.saved': {
-      const state = bump(s, e.conversationId);
+      const cut = s.interrupting.has(e.conversationId) && !s.cutAt.has(e.conversationId) ? { cutAt: new Map(s.cutAt).set(e.conversationId, e.messageId - 0.5) } : {};
+      const state = { ...placeLoose(bump(s, e.conversationId), e.conversationId, e.messageId), ...cut, lastMessage: new Map(s.lastMessage).set(e.conversationId, Math.max(e.messageId, s.lastMessage.get(e.conversationId) ?? 0)) };
       return {
         state: e.role === 'assistant' ? { ...state, drafts: draftsWith(state, e.runId, d => ({ ...d, text: '', waitingSince: now })) } : state,
         effects: e.role === 'user' ? refresh('conversations') : [],
@@ -171,14 +194,15 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'tool.result': {
       const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId, e.gate), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
       const edited = e.ok && e.decision !== 'deny' && EDIT_TOOLS.has(e.name) ? { ...state, edits: new Map(state.edits).set(e.conversationId, (state.edits.get(e.conversationId) ?? 0) + 1) } : state;
-      return {
-        state: e.decision === 'deny' ? addNotice(edited, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : edited,
-        effects: [],
-      };
+      return { state: edited, effects: [] };
     }
     case 'run.end': {
-      let state: LiveState = bump(library({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }), e.conversationId);
-      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) return { state, effects: refresh('conversations', 'worker', 'drafts') };
+      let state: LiveState = dropNotices(bump(library({ ...s, drafts: s.drafts.filter(d => d.runId !== e.runId), streaming: without(s.streaming, e.conversationId) }), e.conversationId), e.conversationId, n => n.runId === e.runId && n.kind === 'warning' && PASSING_WARNINGS.has(n.code));
+      if (!e.ok && e.errorKind === 'cancelled' && s.interrupting.has(e.conversationId)) {
+        const last = s.lastMessage.get(e.conversationId);
+        if (last !== undefined) state = { ...state, cutAt: new Map(state.cutAt).set(e.conversationId, last) };
+        return { state, effects: refresh('conversations', 'worker', 'drafts') };
+      }
       if (!e.ok && e.errorKind === 'cancelled') state = addNotice(state, e.conversationId, { runId: e.runId, kind: 'stopped' });
       else if (!e.ok) {
         state = addNotice(state, e.conversationId, {
@@ -266,18 +290,19 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
     case 'tasks': return { state: { ...s, tasks: mergeTasks(s.tasks, a.tasks) }, effects: [] };
     case 'checklist': return { state: { ...s, checklists: new Map(s.checklists).set(a.conversationId, a.items) }, effects: [] };
     case 'interrupt': {
-      if (a.on) return { state: { ...s, interrupting: new Set(s.interrupting).add(a.conversationId) }, effects: [] };
-      const kept = (s.notices.get(a.conversationId) ?? []).filter(n => n.kind !== 'interrupted');
+      if (a.on) {
+        const cutAt = new Map(s.cutAt);
+        cutAt.delete(a.conversationId);
+        return { state: { ...s, cutAt, interrupting: new Set(s.interrupting).add(a.conversationId) }, effects: [] };
+      }
+      const list = s.notices.get(a.conversationId) ?? [];
+      const latest = s.interrupting.has(a.conversationId) ? -1 : list.findLastIndex(n => n.kind === 'interrupted');
+      const kept = list.filter((_, i) => i !== latest);
       const notices = new Map(s.notices);
       if (kept.length) notices.set(a.conversationId, kept); else notices.delete(a.conversationId);
       return { state: { ...s, notices, interrupting: without(s.interrupting, a.conversationId) }, effects: [] };
     }
     case 'notice': return { state: addNotice(s, a.conversationId, a.notice), effects: [] };
-    case 'clearNotices': {
-      if (!s.notices.has(a.conversationId)) return { state: s, effects: [] };
-      const notices = new Map(s.notices);
-      notices.delete(a.conversationId);
-      return { state: { ...s, notices }, effects: [] };
-    }
+    case 'clearNotices': return { state: dropNotices(s, a.conversationId, n => a.runId === undefined || n.runId === a.runId), effects: [] };
   }
 }

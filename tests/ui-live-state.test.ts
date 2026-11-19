@@ -181,9 +181,9 @@ test('ui/live-state: 会話の中の動き（返事の文・道具の呼び出�
   const s4 = run(s3, ev({ type: 'tool.result', runId: 'r', conversationId: 'c', callId: 'x', name: 'shell_run', ok: false, decision: 'deny', preview: 'head\nno way\nmore' }));
   assert.equal(s4.drafts[0]!.activeTool, undefined);
   assert.deepEqual(s4.drafts[0]!.settled, [{ callId: 'x', name: 'shell_run', input: '{}' }], '結果が届いた呼び出しは、保存された発言を読むまで行を残すために覚える');
-  assert.deepEqual(s4.notices.get('c'), [{ runId: 'r', kind: 'denied', tool: 'shell_run', detail: 'no way more' }]);
+  assert.equal(s4.notices.has('c'), false, '断られた道具は理由を道具の行の中だけに出し、会話に別の警告の行を足さない');
   const failed = reduce(s4, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'timeout', errorMessage: 'slow' }));
-  assert.deepEqual(failed.state.notices.get('c')!.at(-1), { runId: 'r', kind: 'error', errorKind: 'timeout', errorCode: undefined, errorParams: undefined, errorMessage: 'slow', hint: undefined, measured: undefined, required: undefined });
+  assert.deepEqual(failed.state.notices.get('c')!.at(-1), { runId: 'r', after: 1, kind: 'error', errorKind: 'timeout', errorCode: undefined, errorParams: undefined, errorMessage: 'slow', hint: undefined, measured: undefined, required: undefined });
   const stopped = run(s4, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'cancelled' }));
   assert.equal(stopped.notices.get('c')!.at(-1)!.kind, 'stopped');
   assert.equal(run(stopped, { type: 'clearNotices', conversationId: 'c' }).notices.has('c'), false);
@@ -197,11 +197,63 @@ test('ui/live-state: 要約の件数のお知らせは同じ実行の中で置�
   assert.equal(reduce(EMPTY, { type: 'resync', drafts: [] }).state.epoch, 1, 'つなぎ直しで、開いている会話を読み直す');
 });
 
-test('ui/live-state: 新しい実行が始まると、その会話の前の実行のお知らせは片づける（会話の最後に古い失敗や警告を残さない）', () => {
-  const s = run(EMPTY, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'timeout' }), ev({ type: 'compaction', runId: 'r1', conversationId: 'd', summarized: 2 }));
-  const next = run(s, ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
-  assert.equal(next.notices.has('c'), false);
+test('ui/live-state: お知らせは起きた位置（その会話で最後に保存された発言の番号）を持ち、新しい実行が始まっても消さない（会話の流れに残り、話が進めば上へ流れる）', () => {
+  const saved = (id: number, role = 'user'): Action => ev({ type: 'message.saved', runId: 'r1', conversationId: 'c', messageId: id, role });
+  const s = run(EMPTY, saved(4), ev({ type: 'compaction', runId: 'r1', conversationId: 'c', summarized: 2 }), saved(5, 'assistant'), ev({ type: 'warning', runId: 'r1', conversationId: 'c', code: 'context_trimmed', message: 'x', params: { count: 3 } }));
+  assert.deepEqual(s.notices.get('c')!.map(n => [n.kind, n.after]), [['compaction', 4], ['warning', 5]]);
+  const ended = run(s, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'timeout' }), ev({ type: 'compaction', runId: 'r1', conversationId: 'd', summarized: 2 }));
+  const next = run(ended, saved(9), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.deepEqual(next.notices.get('c')!.map(n => [n.kind, n.after]), [['compaction', 4], ['warning', 5], ['error', 5]], '前の実行のお知らせも、起きた位置に残す');
   assert.equal(next.notices.get('d')?.length, 1, 'ほかの会話のお知らせは残す');
+  assert.deepEqual(next.notices.get('d')![0]!.after, undefined, '発言の番号を知らない会話では位置を持たない（会話の最後に出す）');
+  assert.equal(run(next, saved(3)).lastMessage.get('c'), 9, '古い番号で位置を戻さない');
+});
+
+test('ui/live-state: 出力の上限で続きを頼んだ知らせ（output_continued）は画面に出さない。続けても切れた知らせ（output_continue_limit）などは出す', () => {
+  const warn = (code: string): Action => ev({ type: 'warning', runId: 'r', conversationId: 'c', code, message: code });
+  assert.equal(run(EMPTY, warn('output_continued')).notices.has('c'), false);
+  assert.equal(run(EMPTY, warn('compacted')).notices.has('c'), false);
+  assert.deepEqual(run(EMPTY, warn('output_continued'), warn('output_continue_limit'), warn('context_trimmed')).notices.get('c')!.map(n => n.kind === 'warning' && n.code), ['output_continue_limit', 'context_trimmed']);
+});
+
+test('ui/live-state: 割り込み（Interrupted）の知らせは、止まった実行の最後の発言のすぐ後に位置を持つ（待っていた発言が 2 つ流れ込んでも、その間に入らない）', () => {
+  const saved = (id: number, role: string, runId: string): Action => ev({ type: 'message.saved', runId, conversationId: 'c', messageId: id, role });
+  const s = run(EMPTY, saved(7, 'assistant', 'r1'), { type: 'interrupt', conversationId: 'c', on: true }, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'cancelled' }),
+    saved(8, 'user', 'r2'), saved(9, 'user', 'r2'), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.deepEqual(s.notices.get('c'), [{ runId: 'r2', kind: 'interrupted', after: 7 }]);
+  assert.equal(s.cutAt.has('c'), false, '使った止まった位置は片づける');
+});
+
+test('ui/live-state: 止まった実行の最後の発言の番号を知らないまま割り込んだときは、最初に保存された発言（割り込んだ持ち主の発言）の直前に Interrupted を置く', () => {
+  const s = run(EMPTY, { type: 'interrupt', conversationId: 'c', on: true }, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'cancelled' }),
+    ev({ type: 'message.saved', runId: 'r2', conversationId: 'c', messageId: 8, role: 'user' }), ev({ type: 'message.saved', runId: 'r2', conversationId: 'c', messageId: 9, role: 'user' }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.deepEqual(s.notices.get('c'), [{ runId: 'r2', kind: 'interrupted', after: 7.5 }]);
+  const partial = run(EMPTY, { type: 'interrupt', conversationId: 'c', on: true }, ev({ type: 'message.saved', runId: 'r1', conversationId: 'c', messageId: 5, role: 'assistant' }), ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'cancelled' }),
+    ev({ type: 'message.saved', runId: 'r2', conversationId: 'c', messageId: 6, role: 'user' }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.deepEqual(partial.notices.get('c'), [{ runId: 'r2', kind: 'interrupted', after: 5 }], '止まった実行が最後に保存した発言の後');
+});
+
+test('ui/live-state: 位置の分からないうちに出たお知らせ（読み込み直後・Changes の Undo）は、次に保存された発言の直前に位置を持つ', () => {
+  const s = run(EMPTY, { type: 'notice', conversationId: 'c', notice: { runId: 'undo:1', kind: 'undo', projectId: 'p', batch: null, undone: 1, refused: 0, more: 0 } });
+  assert.equal(s.notices.get('c')![0]!.after, undefined);
+  const placed = run(s, ev({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 3, role: 'user' }), ev({ type: 'message.saved', runId: 'r', conversationId: 'c', messageId: 4, role: 'assistant' }));
+  assert.equal(placed.notices.get('c')![0]!.after, 2.5);
+});
+
+test('ui/live-state: やり直し中（retrying）の知らせは同じ実行の中で 1 つに置き換え、その実行が終われば消える（履歴に残さない）', () => {
+  const retrying = (attempt: number, runId = 'r'): Action => ev({ type: 'warning', runId, conversationId: 'c', code: 'retrying', message: 'm', params: { attempt } });
+  const during = run(EMPTY, retrying(1), retrying(2), retrying(1, 'other'), ev({ type: 'warning', runId: 'r', conversationId: 'c', code: 'context_trimmed', message: 'x' }));
+  assert.deepEqual(during.notices.get('c')!.map(n => [n.runId, n.kind === 'warning' && n.code]), [['r', 'retrying'], ['other', 'retrying'], ['r', 'context_trimmed']]);
+  const ended = run(during, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: true }));
+  assert.deepEqual(ended.notices.get('c')!.map(n => [n.runId, n.kind === 'warning' && n.code]), [['other', 'retrying'], ['r', 'context_trimmed']], 'ほかの実行の分と、ほかの知らせは残す');
+  const failed = run(run(EMPTY, retrying(1)), ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: false, errorKind: 'timeout' }));
+  assert.deepEqual(failed.notices.get('c')!.map(n => n.kind), ['error'], '失敗で終わっても、やり直し中の知らせは残さない');
+});
+
+test('ui/live-state: Retry で片づけるのは、失敗した実行のお知らせだけ', () => {
+  const s = run(EMPTY, ev({ type: 'compaction', runId: 'r1', conversationId: 'c', summarized: 2 }), ev({ type: 'run.end', runId: 'r2', conversationId: 'c', ok: false, errorKind: 'timeout' }));
+  assert.deepEqual(run(s, { type: 'clearNotices', conversationId: 'c', runId: 'r2' }).notices.get('c')!.map(n => n.runId), ['r1']);
+  assert.equal(run(s, { type: 'clearNotices', conversationId: 'c' }).notices.has('c'), false, 'runId が無ければ全部');
 });
 
 test('ui/live-state: タスクの変化と削除で、タスクの画面を読み直す番号が進む。消したタスクは数から外れ、一覧を読み直す（残る過去の実行には task.changed が来ないため）', () => {
@@ -243,7 +295,7 @@ test('ui/live-state: 割り込みの発言が始まらなかった知らせ（qu
   assert.equal(dropped.interrupting.has('c'), false);
   assert.deepEqual(dropped.notices.get('c')!.map(n => n.kind), ['warning'], '知らせそのものは出す');
   const next = run(dropped, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: true }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
-  assert.equal(next.notices.get('c'), undefined, '次のふつうの実行に Interrupted は付かない');
+  assert.deepEqual(next.notices.get('c')!.map(n => n.kind), ['warning'], '次のふつうの実行に Interrupted は付かない');
 });
 
 test('ui/live-state: 返事を待ち始めた時刻（「考え中 N 秒」の元）は、実行の始まり・道具の結果・返事の保存で進む', () => {

@@ -170,7 +170,6 @@ export interface SubmitDeps {
   cancelPending: (id: string, pendingId: string) => Promise<unknown>;
   send: (target: string, text: string, attachmentIds: string[], interrupt: boolean) => Promise<{ queued?: boolean | undefined; effortReset?: boolean | undefined }>;
   isGone: (error: unknown) => boolean;
-  clearNotices: (target: string) => void;
   interrupt: (target: string, on: boolean) => void;
 }
 
@@ -196,7 +195,6 @@ export async function submitMessage(i: SubmitInput, d: SubmitDeps): Promise<Subm
         try { await d.cancelPending(i.conversationId, old.id); replaced = old; } catch (error) { if (!d.isGone(error)) throw error; }
       }
     }
-    d.clearNotices(i.target);
     if (force) d.interrupt(i.target, true);
     const sent = await d.send(i.target, i.text, i.attachmentIds, force);
     if (force && !sent.queued) d.interrupt(i.target, false);
