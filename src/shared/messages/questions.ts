@@ -42,6 +42,14 @@ const en = {
   'legacy_stop': 'Stop here',
   'legacy_none': 'The task is waiting for your reply.',
   'legacy_stopped': 'The owner chose to stop here.',
+  'ask_shown': 'The owner sees {count} question(s) as a card. Stop here; their answers arrive as their next message (they may type something else instead).',
+  'ask_once': 'Ask only once per reply: the owner already sees your questions. Stop here; their answers arrive as their next message.',
+  'ask_not_in_chat': 'ask_owner works only in a conversation with the owner',
+  'ask_duplicate_question': 'Two questions have the same text: {question}',
+  'ask_duplicate_label': 'The question "{header}" has the same option twice: {label}',
+  'ask_hidden': 'The {field} has invisible or control characters (line breaks included). Write it as plain visible text',
+  'ask_blank': 'The {field} is empty. Write it as visible text',
+  'ask_other_label': 'Remove the option "{label}": the card always adds "Something else" with a text field',
 } as const;
 
 export type QuestionMessageKey = keyof typeof en;

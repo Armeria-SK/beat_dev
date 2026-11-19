@@ -85,7 +85,8 @@ test('3-2-s 要件の聞き取りの文: ふつうの形は 700 トークン以�
     assert.match(text, /plan_write/u);
     assert.match(text, /acceptance_write/u);
     assert.match(text, /once locked[^.]*acceptance_change/u, '固定のあとは acceptance_change で案を出すと言う（2 つは同時に渡らない）');
-    assert.match(text, /at most 3/u);
+    assert.match(text, /ask with ask_owner/u, '選んでもらう質問は ask_owner で聞く');
+    assert.doesNotMatch(text, /letter|A\/B\/C|\(A, B, C/iu, '文字で A/B/C の選択肢を並べさせない');
     assert.doesNotMatch(text, /[^\x09\x0A\x20-\x7E]/u, 'モデル向けの文は ASCII の英語');
   }
   assert.equal(REQUIREMENTS_COMPACT_BELOW, 32_000);
