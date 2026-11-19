@@ -134,7 +134,7 @@ export interface RemovedTask { id: string; title: string; events: number; keptRu
 const SOURCE_MARK_ACTORS = ['mesh', 'build'] as const;
 export const PLAN_GIST_LABEL = 'Plan the owner approved for this build (excerpt):';
 export const ACCEPTANCE_ITEMS_LABEL = 'Acceptance items the owner approved for this build:';
-export const OUTSIDE_PLAN_NOTE = 'note: this plan was written by a run that had read text from elsewhere; the owner approved it by starting the build';
+export const OUTSIDE_PLAN_NOTE = 'note: this plan or its acceptance items were written by a run that had read text from elsewhere; the owner approved them by starting the build';
 interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string; items?: string[]; outside?: true }
 
 function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefined {

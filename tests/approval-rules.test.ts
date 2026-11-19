@@ -21,6 +21,8 @@ import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { buildMcpTool, heldValues } from '../src/mcp/tool.ts';
+import type { BrowserDriver } from '../src/tools/browser/driver.ts';
+import { BrowserSession } from '../src/tools/browser/session.ts';
 import type { AskKind, HeldValue, PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -1086,11 +1088,12 @@ test('AP-1b N3: 外を読んだタスクの実行で、ほかのファイルを�
 
 // ── AP-1f: the loopback mark (code.self_touch) is left off only for <loopback>:<plain digits> that are not beat's port. Literal references only (R9) ──
 
-const loopbackScript = async (r: Rig, name: string, body: string, command = `node scripts/${name}.mjs`) => {
+const loopbackScript = async (r: Rig, name: string, body: string, ctx: ToolContext = r.ctx) => {
+  const command = `node scripts/${name}.mjs`;
   mkdirSync(join(r.ws, 'scripts'), { recursive: true });
   writeFileSync(join(r.ws, 'scripts', `${name}.mjs`), `${body}\n`);
-  const pre = shellPreCheck({ command }, r.ctx);
-  const out = await r.call('shell_run', { command });
+  const pre = shellPreCheck({ command }, ctx);
+  const out = await r.call('shell_run', { command }, ctx);
   return { pre, out };
 };
 
@@ -1137,6 +1140,11 @@ test('AP-1f T-G8: beat のポート・ポートの無いループバック・組
     ['split-digits', "fetch('http://localhost:" + digits.slice(0, 2) + "' + '" + digits.slice(2) + "/');"],
     ['brace-shell', `execSync('bash -c "curl http://local{host,}:${digits[0]}{${digits.slice(1)},}/"');`],
     ['api', "fetch('http://localhost:5173/api/pending');"],
+    ['newline-in-port', 'fetch(`http://127.0.0.1:' + digits.slice(0, 2) + '\n' + digits.slice(2) + '/settings`);'],
+    ['escaped-port', "fetch('http://lvh.me:\\x" + (0x30 + Number(digits[0])).toString(16) + digits.slice(1) + "/');"],
+    ['newline-in-host', 'fetch(`http://local\nhost:' + digits + '/`);'],
+    ['zero-host', `http.request({ host: '0', port: ${port} });`],
+    ['lvh-me', `fetch('http://lvh.me:${port}/');`],
   ];
   for (const [name, body] of variants) {
     const { pre, out } = await loopbackScript(r, name, body);
@@ -1149,13 +1157,44 @@ test('AP-1f T-G8: beat のポート・ポートの無いループバック・組
   assert.deepEqual(r.ran, []);
 });
 
-test('AP-1f T-G8: beat のポートを設定で変えると、新しいポートで印が付き、前のポートの数字だけなら付かない', async t => {
+test('AP-1f T-G8（審査で反転: 既定の 4777 はいつも beat のポート）: beat のポートを設定で変えると新しいポートで印が付き、既定の 4777 にも付いたまま', async t => {
   const r = rig(t, c => { c.server.port = 5173; });
   const moved = await loopbackScript(r, 'moved', "await fetch('http://localhost:5173/');");
   assert.ok(moved.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(moved.pre.reasonKeys));
   assert.equal(moved.out.decidedBy, 'pending');
   const old = await loopbackScript(r, 'old', "await fetch('http://localhost:4777/');");
-  assert.ok(!old.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(old.pre.reasonKeys));
+  assert.ok(old.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(old.pre.reasonKeys));
+  assert.equal(old.out.decidedBy, 'pending');
+});
+
+test('AP-1f T-G8 試しの beat: beat が 4888 で動いていても、本物の beat の 4777 を叩くスクリプトには印が付く', async t => {
+  const r = rig(t, c => { c.server.port = 4888; });
+  for (const [name, body] of [['real', "await fetch('http://localhost:4777/');"], ['trial', "await fetch('http://127.0.0.1:4888/');"]] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.equal(out.decidedBy, 'pending', name);
+  }
+});
+
+test('AP-1f T-G8 提供元のポート: 設定のローカルの提供元（11434）を叩くスクリプトには印が付く', async t => {
+  const r = rig(t);
+  assert.ok(r.ctx.config.providers.some(p => p.baseUrl === 'http://127.0.0.1:11434/v1'), '前提: ローカルの提供元が 11434');
+  const { pre, out } = await loopbackScript(r, 'provider', "await fetch('http://localhost:11434/v1/models');");
+  assert.ok(pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(pre.reasonKeys));
+  assert.equal(out.decidedBy, 'pending');
+});
+
+test('AP-1f T-G8 前のポート: 設定のポートを変えて反映する前も、起動したときのポート（ブラウザの見た beat のポート）に印が付く', async t => {
+  const r = rig(t, c => { c.server.port = 4888; });
+  let current: AppConfig = r.ctx.config;
+  const session = new BrowserSession({ driver: {} as BrowserDriver, config: () => current, paths: { browserProfile: join(r.ws, 'profile') } });
+  current = { ...r.ctx.config, server: { ...r.ctx.config.server, port: 4999 } };
+  const withSession = { ...r.ctx, config: current, services: { browser: session } } as unknown as ToolContext;
+  const old = await loopbackScript(r, 'served', "await fetch('http://localhost:4888/');", withSession);
+  assert.ok(old.pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(old.pre.reasonKeys));
+  assert.equal(old.out.decidedBy, 'pending');
+  const without = shellPreCheck({ command: 'node scripts/served.mjs' }, { ...r.ctx, config: current });
+  assert.ok(!without.reasonKeys?.includes('code.self_touch'), '対照: 設定だけでは前のポートが分からない');
 });
 
 test('AP-1b N7: 外を読んだ実行でも、送る（curl → origin）・消す・MCP の名前の送るの決まりに当たる呼び出しは通る。外を読んだ実行の send・delete の行から決まりを作れる', async t => {

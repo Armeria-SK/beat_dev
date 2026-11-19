@@ -93,6 +93,8 @@ const LOOPBACK_ALL = new RegExp(LOOPBACK.source, 'giu');
 const HOST_WORD = /\[[^[\]\s]*\]|[\w%-]+(?:\.[\w%-]+)*/gu;
 const HOST_HINT = /localhost|ip6-|[\d:%]/iu;
 const PLAIN_PORT = /^:(\d+)(?:$|[\s/?#)\]}>,;&|]|(['"`])(?!\s*[+.[]))/u;
+const ESCAPED = /\\x([0-9a-f]{2})|\\u\{([0-9a-f]{1,6})\}|\\u([0-9a-f]{4})/giu;
+const NUMBER_SCAN_FROM = 1024;
 
 function loopbackWord(word: string): boolean {
   if (!HOST_HINT.test(word)) return false;
@@ -101,23 +103,32 @@ function loopbackWord(word: string): boolean {
   try { return loopbackHost(new URL(`http://${word}/`).hostname.replace(/\.+$/u, '')); } catch { return false; }
 }
 
-function touchesLoopback(text: string, server: SelfServer): boolean {
-  const { ports } = selfPortsOf(server);
-  let found = false;
+const decodedCopy = (text: string): string => text
+  .replace(ESCAPED, (whole, x?: string, braced?: string, u?: string) => {
+    const point = parseInt(x ?? braced ?? u ?? '', 16);
+    return point <= 0x10ffff ? String.fromCodePoint(point) : whole;
+  })
+  .replace(/[\t\n\r]/gu, '');
+
+function touchesLoopback(text: string, server: SelfServer, beatPorts: ReadonlySet<number>): boolean {
+  const ports = new Set([...selfPortsOf(server).ports, ...beatPorts]);
+  const named = [...ports].filter(port => port >= NUMBER_SCAN_FROM);
+  if (named.length) {
+    const number = new RegExp(String.raw`\b0*(?:${named.join('|')})\b`, 'u');
+    if (number.test(text) || number.test(decodedCopy(text))) return true;
+  }
   const marks = (end: number): boolean => {
-    found = true;
     const port = PLAIN_PORT.exec(text.slice(end, end + 64));
     return !port || ports.has(Number(port[1]));
   };
   for (const match of text.matchAll(LOOPBACK_ALL)) if (marks(match.index + match[0].length)) return true;
   for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index + match[0].length)) return true;
-  if (found && new RegExp(String.raw`\b0*(?:${[...ports].join('|')})\b`, 'u').test(text)) return true;
-  return selfTarget(text, server) !== undefined;
+  return selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined;
 }
 
-export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer): string[] {
+export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: ReadonlySet<number>): string[] {
   const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
-  if (touchesLoopback(text, server)) found.push(LOOPBACK_MARKER);
+  if (touchesLoopback(text, server, beatPorts)) found.push(LOOPBACK_MARKER);
   const lower = text.toLowerCase();
   for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !found.includes(host)) found.push(host);
   return found;
