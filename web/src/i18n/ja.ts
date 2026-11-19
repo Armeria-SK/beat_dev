@@ -555,4 +555,10 @@ export const ja = {
   'ui.files.hiddenNote': '秘密の情報らしいファイルなので、中身はここに出しません。',
   'ui.files.binaryNote': '文字のファイルではないので、中身はここに出しません。',
   'ui.files.ignoreUnchecked': '無視するファイルの決まり（.gitignore）を確かめられなかったので、ファイルの中身は出しません。',
+  'ui.set.rules.desc': 'Pending で「もう聞かない」と選んだものです（製品ごと）。よそから来た文を読んだ会話やタスクでは使いません。外すと、次の呼び出しから beat がまた聞きます。',
+  'ui.set.rules.empty': "まだ決まりはありません。Pending の項目で「Approve, and don't ask again in this product」を選ぶと足せます。",
+  'ui.pending.rememberTitle': 'これからこの製品では、次のものを聞かずに動かします:',
+  'ui.pending.rememberNote': "よそから来た文を読んでいない実行だけです。Settings › Skills & tools › Don't ask again で外せます。",
+  'ui.pending.rememberPush': 'この製品の push は聞かずに動きます。あなたが見ていないコミットも送ります（push が送るものを beat が確かめる手順も飛ばします）。',
+  'ui.set.rules.push': 'push は聞かずに動き、見ていないコミットも送ります',
 } satisfies { [K in ExplainKey]?: Dict[K] };

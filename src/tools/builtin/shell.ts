@@ -8,6 +8,7 @@ import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactKeyEcho, redactOpenKey, redactSecrets } from '../../shared/redaction.ts';
 import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals.ts';
+import { ruleShapeField } from '../approval-rules.ts';
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
@@ -173,7 +174,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }
     : run && 'run' in run ? { productRun: run.run } : run && 'secret' in run ? { ownerReason: pendingText('en', 'owner_secret_commit', { path: run.secret }) }
     : run && 'secretMessage' in run ? { ownerReason: pendingText('en', 'owner_secret_message') } : {};
-  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(gitStagingOnly(verdict.statements) ? { gitStaging: true as const } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...ruleShapeField(verdict.decision, verdict.statements, ctx.project?.root, outbound, { scripts: verdict.scripts, ownHooksDir: verdict.ownHooksDir, git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }) : undefined, ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data), config: ctx.config }), ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(gitStagingOnly(verdict.statements) ? { gitStaging: true as const } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };

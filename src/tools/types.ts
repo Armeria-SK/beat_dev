@@ -16,6 +16,7 @@ import type { Decision } from './hooks/shell-guard.ts';
 import type { Outbound } from './hooks/outbound.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
+import type { ShellRuleShape } from './approval-rules.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
@@ -83,6 +84,8 @@ export interface PreCheck {
   reasonKeys?: string[];
   productRun?: 'product-code' | 'product-git';
   ownerReason?: string;
+  // J-5: the shape a "don't ask again in this product" rule would have (shell.ts only; built from the parsed statements, never from the model)
+  ruleShape?: ShellRuleShape;
 }
 
 // 実行の直前に、パイプライン（承認なし）または Pending の再実行（replay.ts）が道具へ渡す、この 1 回の呼び出しの承認の結果
@@ -113,6 +116,8 @@ export interface ToolContext {
   project?: { id: string; root?: string | undefined } | undefined;
   // 振り返りの実行だけ: 記憶の道具が書く製品の id（振り返りの会話の製品。作業フォルダは渡さない）
   memoryProject?: string | undefined;
+  // 振り返りの実行だけ: 依頼文の記録の中身（見出し・札を外したもの）と、持ち主の発言（添付を外したもの、1 発言 1 要素）。記憶の道具が、記録に触れていない記憶を直さない・消さないために照らす
+  reviewEvidence?: { record: string; owner: readonly string[] } | undefined;
   taint: { tainted: boolean; sources: string[] };
   // この会話が、これまでの実行のどこかで「よそから来た文を読んだ」ことがあるか（taint はこの実行だけ。これは会話ぜんぶ。読めないときは「ある」側）。
   // 無いとき（試験など）は「ない」として扱う。browser_open の事前の確かめが、この実行で読んでいなくても、会話が読んだあとなら確かめるために見る

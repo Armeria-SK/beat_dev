@@ -62,8 +62,10 @@ export interface PendingAction {
   task_title: string | null; project_name: string | null; conversation_title?: string | null; project_archived?: boolean;
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
   created_at: number; decided_at: number | null; ran_at: number | null;
+  rule?: { shown: string; push?: true } | null;
 }
-export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingKind, number>>; notParked: number }
+export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingKind, number>>; notParked: number; ruled?: Record<string, number> }
+export interface ApprovalRule { id: number; project_id: string; project_name: string | null; archived: boolean; kind: 'judge' | 'send' | 'delete' | 'policy'; tool: string; shown: string; created_at: number; push?: true }
 export interface PendingCounts { waiting: number; byProject: Record<string, number>; acceptanceChanges: Record<string, number>; judgedToday: { allowed: number; parked: number } }
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionFix = 'queued' | 'running' | 'done' | 'failed';
@@ -115,7 +117,7 @@ export interface NewProject { root: string; name?: string; checkCommand?: string
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
-export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' };
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
@@ -260,9 +262,11 @@ export interface CuriosityItem {
 export interface ReviewJob {
   id: number; kind?: 'memory' | 'skill'; trigger: string; triggerLabel: string; status: 'pending' | 'running' | 'done' | 'failed'; note: string | null;
   conversation_id: string | null; task_id: string | null; run_id: string | null; created_at: number; finished_at: number | null;
-  changes: MemoryEvent[];
+  changes: Array<MemoryEvent | MemoryFileChange>;
   project_id?: string | null;
 }
+// 振り返りが変えた製品の記憶のファイル（memory_file_events）。after はファイルの場所（memory/<name>.md）
+export interface MemoryFileChange { id: string; source: 'file'; project_id: string; name: string; action: string; actor: string; summary: string | null; tainted: number; before: null; after: string; undone_at: null; created_at: number }
 
 export interface TemplatesView { rules: string; files: Array<{ name: string; content: string }> }
 export interface OnboardingView { done: boolean; steps: { user: boolean; identity: boolean; persona: boolean; model: boolean } }
@@ -380,7 +384,9 @@ export const api = {
   pending: (query: PendingQuery) =>
     call<{ items: PendingAction[] }>(`/api/pending?status=${query.status}${inProject(query.project, '&')}${query.before === undefined ? '' : `&before=${query.before}`}${query.earlier ? '&earlier=1' : ''}`),
   pendingCounts: () => call<PendingCounts>('/api/pending/counts'),
-  approvePending: (id: number) => call<{ item?: PendingAction }>(`/api/pending/${id}/approve`, { method: 'POST', body: '{}' }),
+  approvePending: (id: number, remember = false) => call<{ item?: PendingAction }>(`/api/pending/${id}/approve`, { method: 'POST', body: remember ? '{"remember":true}' : '{}' }),
+  approvalRules: () => call<{ items: ApprovalRule[] }>('/api/approval-rules'),
+  removeApprovalRule: (id: number) => call<{ removed: number }>(`/api/approval-rules/${id}`, { method: 'DELETE' }),
   rejectPending: (id: number, reason: string) => call<{ item?: PendingAction }>(`/api/pending/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
   questions: (query: QuestionQuery) =>
     call<{ items: Question[] }>(`/api/questions?status=${query.status}${query.projectId ? `&projectId=${encodeURIComponent(query.projectId)}` : ''}${query.before === undefined ? '' : `&before=${query.before}`}`),

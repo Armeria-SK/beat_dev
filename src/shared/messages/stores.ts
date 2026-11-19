@@ -29,6 +29,13 @@ const en = {
   'memfile.changed': 'The note was changed since it was opened. Open it again and retry',
   'memfile.no_version': 'There is no such version of this note',
   'memfile.unusable': 'The memory folder or file of this product cannot be used (it is a link or not a plain file)',
+  'memfile.review_no_evidence': 'Left "{name}" as it is: a review changes or removes a note only with evidence, words copied exactly from the record under review that show why. If the record does not mention this note, leave it',
+  'memfile.review_short': 'Left "{name}" as it is: the evidence is too short. Copy at least {min} characters from the record, or one whole message of the user that has at least {whole} characters',
+  'memfile.review_not_found': 'Left "{name}" as it is: the evidence was not found in the record under review (headings and labels added by beat do not count). Copy the words exactly, or leave the note if the record does not mention it',
+  'memfile.review_owner_words': 'Left "{name}" as it is: the user checked this note, so the evidence must be the user\'s own words, copied exactly from what the user wrote. Files attached to a message and lines added by beat do not count. If the user did not contradict the note, leave it',
+  'memfile.review_full': 'Not saved: this product\'s memory is full ({max} notes). A review cannot make room, so do not remove notes for this. Say in your final reply what could not be saved because memory is full',
+  'memfile.full_title': 'Product memory is full',
+  'memfile.full_body': 'A memory review could not save a note because this product already has {max} memory notes. Merge or delete notes on the Memory screen',
 
   'skill.bad_name': 'Use lowercase letters, digits and hyphens for the name, up to 63 characters (example: weekly-report)',
   'skill.empty_description': 'The description is empty (say in one sentence when this procedure is used)',

@@ -13,11 +13,12 @@ import { guardText } from '../shared/messages/guard.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
+import { matchRule, ruleCandidate, type RuleCandidate, type RuleHit } from './approval-rules.ts';
 import { judgeOnce, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
 import { forgetAllow, involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
 import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
-import { newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
+import { carriesHeld, newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { QuestionError } from '../questions/store.ts';
@@ -42,6 +43,8 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 export const JUDGE_REUSE = 'judge-reuse';
 
 export const NO_JUDGE = 'no-judge';
+
+export const OWNER_RULE = 'owner-rule';
 
 export const SELF_TOUCH_KEY = 'code.self_touch';
 export const OPAQUE_CONTROL_KEY = 'shape.control_opaque';
@@ -138,7 +141,7 @@ export function readFilesOf(check: PreCheck | undefined): { files: string[]; mor
 
 interface ParkRequest {
   tool: ToolDef; args: unknown; ctx: ToolContext; pending: PendingStore; first: PreCheck | undefined; cwd: string;
-  kind: PendingKind; reason: string; checks: string[]; outbound: Outbound | undefined; tainted: boolean;
+  kind: PendingKind; reason: string; checks: string[]; outbound: Outbound | undefined; tainted: boolean; rule: RuleCandidate | undefined;
 }
 
 async function parkCall(r: ParkRequest): Promise<number> {
@@ -150,7 +153,7 @@ async function parkCall(r: ParkRequest): Promise<number> {
     ...(sendOrDelete ? { outbound: { kind: sendOrDelete.kind, reason: sendOrDelete.reason, targets: sendOrDelete.targets } } : {}),
     ...(sendOrDelete?.kind === 'delete' ? { targets: sendOrDelete.targets } : {}),
     files: read.files, filesMore: read.more, places: first?.places, created: first?.created, pushes: first?.pushes,
-    runId: ctx.runId, runKind: ctx.kind, conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId ?? null, projectId: ctx.project?.id ?? null, tainted: r.tainted,
+    runId: ctx.runId, runKind: ctx.kind, conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId ?? null, projectId: ctx.project?.id ?? null, tainted: r.tainted, ...(r.rule ? { rule: r.rule } : {}),
   });
   return parked.id;
 }
@@ -235,6 +238,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
   let autoWhy: string | undefined;
   let sameAs: number | undefined;
+  let ruleGate: RuleHit | undefined;
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
     const capped = capOutput(outcome.output, language, ctx.outputTokens);
     const gate: ToolGate | undefined = outcome.decidedBy === 'pending' && approvalId?.startsWith('pending:') ? { by: 'pending', id: Number(approvalId.slice('pending:'.length)) }
@@ -242,6 +246,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' && autoWhy !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300) }
       : outcome.decidedBy === JUDGE_REUSE && outcome.decision === 'allow' && autoWhy !== undefined && sameAs !== undefined ? { by: 'judge', reason: autoWhy.slice(0, 300), same: sameAs }
       : outcome.decidedBy === NO_JUDGE && outcome.decision === 'allow' ? { by: 'no-judge' }
+      : outcome.decidedBy === OWNER_RULE && outcome.decision === 'allow' && ruleGate !== undefined ? { by: 'rule', id: ruleGate.id, shown: ruleGate.shown }
       : undefined;
     const tagged = ctx.kind === 'task' && call.name !== 'tool_search' ? 1 : 0;
     const row = deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, evidence_no, created_at)
@@ -363,7 +368,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   let judgedId: string | undefined;
   let earlier: PreCheck | undefined;
-  const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound): Promise<ToolCallOutcome> => {
+  const candidateFor = (parkKind: PendingKind, check: PreCheck | undefined, out: Outbound | undefined): RuleCandidate | undefined => {
+    try { return ruleCandidate({ tool, args, ctx, tainted: tainted || ctx.taint.tainted, parkKind, check, outbound: out, askKinds, policyAsk }); } catch { return undefined; }
+  };
+  const ruleFor = (candidate: RuleCandidate | undefined): RuleHit | undefined => {
+    if (!candidate || !ctx.project?.id) return undefined;
+    // A call carrying a value beat holds (the same list the Pending card hides) never goes by a rule; without that list, no rule at all
+    try { return deps.pending && !carriesHeld([JSON.stringify(args) ?? '', candidate.base, candidate.shown, ...(first?.ruleShape?.words ?? [])], deps.pending.heldFor(tool)) ? matchRule(deps.db, ctx.project.id, candidate) : undefined; } catch { return undefined; }
+  };
+  const park =async (kind: PendingKind, reason: string, parkOutbound: Outbound | undefined = outbound, offer = false): Promise<ToolCallOutcome> => {
     const sendOrDelete = parkOutbound?.kind === 'send' || parkOutbound?.kind === 'delete' ? parkOutbound : undefined;
     const parkReasons = [...new Set([...(sendOrDelete ? [sendOrDelete.reason] : []), ...reasons])];
     if (noOneToAsk(ctx)) return refuse('deny', 'pending',toolText(language, 'pipeline.denied', { reasons: parkReasons.join('\n- ') }));
@@ -373,7 +386,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (/^[\\/]{2}/u.test(parkCwd) || /^[\\/]{2}/u.test(ctx.workspace)) return refuse('deny', 'pending', pendingText('en', 'network_cwd', { path: parkCwd }));
     let parkedId: number;
     try {
-      parkedId = await parkCall({ tool, args, ctx, pending: deps.pending, first, cwd: parkCwd, kind, reason, checks: parkReasons, outbound: parkOutbound, tainted });
+      parkedId = await parkCall({ tool, args, ctx, pending: deps.pending, first, cwd: parkCwd, kind, reason, checks: parkReasons, outbound: parkOutbound, tainted, rule: offer ? candidateFor(kind, first, parkOutbound) : undefined });
     } catch (error) {
       return refuse('deny', 'pending', pendingText('en', 'park_failed', { detail: (error as Error).message }));
     }
@@ -396,7 +409,12 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : owned.length ? { kind: 'owner', reason: pendingText('en', 'owner_protected', { reasons: reasons.join('; ') }) }
       : taskTaint ? { kind: 'owner', reason: pendingText('en', 'owner_task_taint', { name: tool.name }) }
       : undefined;
-    if (parkAs) return park(parkAs.kind, parkAs.reason);
+    const ruleBlockers = hookAsks.length > 0 || (first?.ownerReason !== undefined && decision === 'ask') || owned.length > 0 || taskTaint;
+    const ruleKind = parkAs !== undefined && !ruleBlockers && (parkAs.kind === 'send' || parkAs.kind === 'delete' || parkAs.kind === 'policy');
+    const parkRule = ruleKind && parkAs ? ruleFor(candidateFor(parkAs.kind, first, outbound)) : undefined;
+    if (parkAs && parkRule) {
+      decision = 'allow'; decidedBy = OWNER_RULE; ruleGate = parkRule; judgedId = `rule:${parkRule.id}`;
+    } else if (parkAs) return park(parkAs.kind, parkAs.reason, outbound, ruleKind);
     if (decision === 'ask') {
       if (noOneToAsk(ctx)) return refuse('deny', decidedBy,toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
       if (stepFour && first?.productRun !== undefined) {
@@ -412,9 +430,10 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         if (noJudge && judgeKeys.includes(OPAQUE_CONTROL_KEY)) return park('owner', pendingText('en', 'owner_no_judge_opaque', { reasons: reasons.join('; ') }));
         if (noJudge && !(deps.lastUserRequest?.() ?? '').trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
         if (noJudge && tool.mcp && tool.effect === 'write') return park('owner', pendingText('en', 'owner_no_judge_mcp', { server: tool.mcp.server, tool: tool.mcp.tool }));
+        const ruled = ruleFor(candidateFor('judge', first, outbound));
         const classify = deps.autoClassify;
         const summary = callSummary() ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
-        const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) => noJudge ? undefined :
+        const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) => noJudge || ruled ? undefined :
           deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
         const judgeInput: ClassifierInput = {
           userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
@@ -426,16 +445,17 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         };
         let judgeModel: unknown;
         try { judgeModel = judgeIdentity(deps.config?.() ?? ctx.config, ctx.model?.id); } catch { judgeModel = undefined; }
-        const cacheKey = noJudge || judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
+        const cacheKey = ruled || noJudge || judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
           judgeInput, input: args, workspace: ctx.workspace, cwd: cwdNow, taintSources: ctx.taint.sources.length,
           reasonKeys: judgeKeys, askKinds: [...askKinds], bind: first?.bind ?? null, judge: judgeModel,
         });
         const known = cacheKey === undefined ? undefined : rememberedAllow(ctx, cacheKey);
         const reused = known && known.snapshot === await snapshotNow() ? known : undefined;
         let verdict: AutoVerdict;
-        if (noJudge) verdict = { decision: 'allow', reason: '' };
+        if (ruled) verdict = { decision: 'allow', reason: '' };
+        else if (noJudge) verdict = { decision: 'allow', reason: '' };
         else if (reused) verdict = { decision: 'allow', reason: reused.reason };
-        else if (!classify) { noteJudge('failed', 'no_judge', { ms: 0 }); return park('judge_failed', pendingText('en', 'judge_failed_no_judge')); }
+        else if (!classify) { noteJudge('failed', 'no_judge', { ms: 0 }); return park('judge_failed', pendingText('en', 'judge_failed_no_judge'), outbound, true); }
         else {
           autoEvent('checking');
           const judged = await judgeOnce(judgeInput, classify, ctx.signal, judgeLimitsFor(ctx, deps));
@@ -455,8 +475,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         }
         if (verdict.decision !== 'allow' || verdict.failed) {
           autoEvent('asked');
-          if (verdict.failed) return park('judge_failed', pendingText('en', `judge_failed_${verdict.failed}`));
-          return park('judge', verdict.reason ? pendingText('en', 'judge_asked', { reason: verdict.reason }) : pendingText('en', 'judge_asked_no_reason'));
+          if (verdict.failed) return park('judge_failed', pendingText('en', `judge_failed_${verdict.failed}`), outbound, true);
+          return park('judge', verdict.reason ? pendingText('en', 'judge_asked', { reason: verdict.reason }) : pendingText('en', 'judge_asked_no_reason'), outbound, true);
         }
         let changed: string[] | undefined;
         if (tool.preCheck) {
@@ -469,6 +489,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
             if (refused || fresh.length) changed = fresh;
           } catch (error) { changed = [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })]; }
         }
+        if (!changed && ruled && ruleFor(candidateFor('judge', first, outbound))?.id !== ruled.id) changed = [toolText(language, 'pipeline.changed_rule')];
         if (changed) { autoEvent('asked'); return refuse('deny', decidedBy, toolText(language, 'pipeline.changed_judging', { reasons: changed.join('\n- ') })); }
         const late = outboundOfCall(tool, first, language);
         if (late?.kind === 'deny') { autoEvent('asked'); return refuse('deny', 'outbound', toolText(language, 'pipeline.denied', { reasons: late.reason })); }
@@ -480,7 +501,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           : undefined;
         if (ownerNow) { autoEvent('asked'); return park(ownerNow.kind, ownerNow.reason); }
         decision = 'allow';
-        if (noJudge) {
+        if (ruled) {
+          decidedBy = OWNER_RULE; ruleGate = ruled; judgedId = `rule:${ruled.id}`;
+        } else if (noJudge) {
           decidedBy = NO_JUDGE;
           judgedId = deps.approvals.recordAuto({ runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, reasons }, guardText(language, 'pipeline.no_judge_reason'));
         } else {

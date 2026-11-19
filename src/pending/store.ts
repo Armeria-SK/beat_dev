@@ -10,6 +10,7 @@ import { realish } from '../tools/hooks/scope.ts';
 import type { Decision } from '../tools/hooks/shell-guard.ts';
 import type { HeldValue, PreCheck, RunKind, ToolDef } from '../tools/types.ts';
 import { identityOf } from '../projects/created.ts';
+import { pushRule, storedCandidate, type RuleCandidate } from '../tools/approval-rules.ts';
 import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
 export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
@@ -43,6 +44,7 @@ export interface ParkInput {
   projectId?: string | null | undefined;
   tainted?: boolean | undefined;
   outbound?: ParkedOutbound | undefined;
+  rule?: RuleCandidate | undefined;
 }
 
 export interface ParkedOutbound { kind: string; reason?: string; targets: string[] }
@@ -67,6 +69,7 @@ export interface PendingState {
   pushes?: Array<{ dir: string | null; parsed?: boolean }>;
   pushed?: string;
   tips?: string[];
+  rule?: RuleCandidate;
   rest?: RestingCard;
   held?: string[];
 }
@@ -93,6 +96,7 @@ export interface PendingView {
   preview: PreviewFile[]; files: PathFact[]; effect: PendingEffect | null; fetched: boolean; run_kind: string; conversation_id: string; task_id: string | null; task_title: string | null;
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
+  rule: { shown: string; push?: true } | null;
 }
 
 export interface PendingChange { id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
@@ -115,7 +119,7 @@ export interface PendingCounts {
   judgedToday: { allowed: number; parked: number };
 }
 
-export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number }
+export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number; ruled: Record<string, number> }
 
 export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined }
 
@@ -144,6 +148,19 @@ export function cleanReason(text: string | undefined): string | null {
 }
 
 const unique = (items: readonly string[]): string[] => [...new Set(items)].sort();
+
+// J-5: the row offers "don't ask again in this product" only when a code-built shape was stored at park time, the run had a product and had not read outside text, and it is still waiting
+export function rememberable(row: Pick<PendingRow, 'project_id' | 'tainted' | 'status' | 'tool' | 'run_kind'>, state: Pick<PendingState, 'rule' | 'held'>): boolean {
+  const rule = storedCandidate(state.rule);
+  return rule !== undefined && rule.tool === row.tool && row.project_id !== null && row.tainted === 0 && row.status === 'waiting' && !state.held?.length
+    && !((row.tool === 'task_create' || row.tool === 'task_update') && row.run_kind !== 'chat');
+}
+
+const ruleView = (rule: RuleCandidate): { shown: string; push?: true } => ({ shown: rule.shown, ...(pushRule(rule) ? { push: true as const } : {}) });
+
+export function storedRule(row: Pick<PendingRow, 'state'>): RuleCandidate | undefined {
+  return storedCandidate(parseJson<PendingState>(row.state, {}).rule);
+}
 
 const realOf = (path: string): string => { try { return realish(path); } catch { return path; } };
 
@@ -180,8 +197,8 @@ export function realCwd(cwd: string): string | null {
 
 const plain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-function render(tool: ToolDef, input: unknown): { title: string; shown: string; raw: string; parts: PendingParts } {
-  const mask = (text: string): string => redactSecrets(tool.redact ? tool.redact(text) : text);
+function render(tool: ToolDef, input: unknown, exact: readonly string[] = []): { title: string; shown: string; raw: string; parts: PendingParts } {
+  const mask = (text: string): string => redactSecrets(tool.redact ? tool.redact(text) : text, exact);
   let summary: { title: string; body: string; cwd?: string } | undefined;
   try { summary = tool.summarize?.(input as never, 'en'); } catch { summary = undefined; }
   const title = summary?.title ?? tool.name;
@@ -246,6 +263,13 @@ function heldMarker(held: readonly HeldValue[]): { mark: Mark; sources: string[]
   return { mark, sources };
 }
 
+// J-5: whether any of the texts carries a value beat holds (a key of a provider or an MCP server), in the forms the card marks
+export function carriesHeld(texts: readonly string[], held: readonly HeldValue[]): boolean {
+  const marker = heldMarker(held);
+  for (const text of texts) marker.mark(text);
+  return marker.sources.length > 0;
+}
+
 function approvalCard(tool: ToolDef, input: unknown, title: string, mark: Mark): { shown: string; parts: PendingParts } {
   let summary: { title: string; body: string; cwd?: string } | undefined;
   try { summary = tool.summarize?.(input as never, 'en'); } catch { summary = undefined; }
@@ -268,11 +292,19 @@ function approvalCard(tool: ToolDef, input: unknown, title: string, mark: Mark):
   return { shown: lines.join('\n'), parts };
 }
 
-function settled(row: PendingRow, state: PendingState | null): { shown: string; masked: number; state: string | null } {
-  if (!state?.rest) return { shown: row.shown, masked: row.masked, state: state === null ? null : JSON.stringify(state) };
+// The settled row keeps the card it had before it was raw (rest), with every value beat holds marked, also where the pattern redaction does not see a key (a reason, a check, the parked outbound)
+function settled(row: PendingRow, state: PendingState | null, held: readonly HeldValue[]): { shown: string; masked: number; state: string | null; reason: string; checks: string } {
+  const marker = heldMarker(held.map(h => ({ ...h, source: h.source.replace(/["\\\p{Cc}]/gu, '') })));
+  const out = settledRaw(row, state);
+  return { shown: marker.mark(out.shown), masked: out.masked, state: out.state === null ? null : marker.mark(out.state), reason: marker.mark(row.reason), checks: marker.mark(row.checks) };
+}
+
+function settledRaw(row: PendingRow, state: PendingState | null): { shown: string; masked: number; state: string | null } {
+  if (!state?.rest) { if (state) delete state.rule; return { shown: row.shown, masked: row.masked, state: state === null ? null : JSON.stringify(state) }; }
   const { rest, ...others } = state;
   delete others.preview;
   delete others.held;
+  delete others.rule;
   return { shown: rest.shown, masked: rest.masked, state: JSON.stringify({ ...others, parts: rest.parts, ...(rest.preview ? { preview: rest.preview } : {}) }) };
 }
 
@@ -291,7 +323,7 @@ function effectOf(snapshot: Snapshot | undefined): PendingEffect | null {
 }
 
 export interface PendingStoreOptions {
-  tools: { get(name: string): ToolDef | undefined };
+  tools: { get(name: string): ToolDef | undefined; list?(): ToolDef[] };
   dataDir: string;
   now?: (() => number) | undefined;
   onChange?: ((change: PendingChange) => void) | undefined;
@@ -304,7 +336,31 @@ export class PendingStore {
 
   constructor(db: DatabaseSync, options: PendingStoreOptions) { this.#db = db; this.#o = options; }
 
-  #held(tool: ToolDef): HeldValue[] { return [...(this.#o.held?.() ?? []), ...(tool.held?.() ?? [])]; }
+  // Every value beat holds: the providers' keys, every registered tool's (each MCP server's env and header keys) and the tool's own, once each. A key of one server in another tool's call is marked too
+  #allHeld(tool?: ToolDef): HeldValue[] {
+    const of = (t: ToolDef): readonly HeldValue[] => { try { return t.held?.() ?? []; } catch { return []; } };
+    const seen = new Map<string, HeldValue>();
+    for (const h of [...(this.#o.held?.() ?? []), ...(this.#o.tools.list?.() ?? []).flatMap(of), ...(tool ? of(tool) : [])]) if (!seen.has(h.value)) seen.set(h.value, h);
+    return [...seen.values()];
+  }
+
+  #held(tool: ToolDef): HeldValue[] { return this.#allHeld(tool); }
+
+  // The values the card hides for this tool, for the rule lookup in the pipeline (same source as the card)
+  heldFor(tool: ToolDef): HeldValue[] { return this.#held(tool); }
+
+  #heldOf(name: string): HeldValue[] { return this.#allHeld(this.#o.tools.get(name)); }
+
+  // Settings lists a rule learned before its value became held with the value marked (the stored row keeps it)
+  markHeld(text: string): string { return heldMarker(this.#allHeld()).mark(text); }
+
+  // rememberable, checked again against the values held now (a key added after the row was parked): the approve route and the row view use this
+  rememberableNow(row: PendingRow, state: PendingState = parseJson<PendingState>(row.state, {})): boolean {
+    if (!rememberable(row, state)) return false;
+    const tool = this.#o.tools.get(row.tool);
+    const rule = storedCandidate(state.rule)!;
+    return tool !== undefined && !carriesHeld([row.input, rule.base, rule.shown], this.#held(tool));
+  }
 
   #now(): number { return this.#o.now?.() ?? Date.now(); }
 
@@ -319,9 +375,11 @@ export class PendingStore {
     if (tool.replayable === false) throw new PendingError('not_replayable', { tool: input.tool });
     if (tool.preCheck && !input.check) throw new PendingError('check_required', { tool: input.tool });
     const toolMask = (text: string): string => (tool.redact ? tool.redact(text) : text);
-    const { title, shown, raw, parts } = render(tool, input.input);
+    const heldNow = this.#held(tool);
+    const { title, shown, raw, parts } = render(tool, input.input, heldNow.map(h => h.value).filter(v => v.trim().length >= HELD_MIN));
     const restMasked = Math.max(0, marks(shown) - marks(raw));
-    const marker = heldMarker(this.#held(tool));
+    const marker = heldMarker(heldNow);
+    const hide = heldMarker(heldNow).mark;
     const card = approvalCard(tool, input.input, title, marker.mark);
     const targets = (input.targets ?? []).map(t => resolve(input.cwd, t));
     const files = (input.files ?? []).map(f => resolve(input.cwd, f));
@@ -355,12 +413,13 @@ export class PendingStore {
       ...(cardPreview?.length ? { preview: cardPreview } : {}),
       ...(input.outbound ? { outbound: parkedOutbound(input.outbound, toolMask) } : {}),
       ...(files.length ? { sent: boundFacts(files) } : {}),
+      ...(input.rule && input.projectId && !input.tainted && masked === 0 && !carriesHeld([input.rule.base, input.rule.shown, ...(input.check?.ruleShape?.words ?? [])], heldNow) ? { rule: input.rule } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
       rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text), this.#held(tool).map(h => h.value)) })) } : {}) },
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(
-      input.tool, JSON.stringify(input.input), card.shown, masked, input.cwd, input.kind, redactSecrets(toolMask(input.reason)), JSON.stringify((input.checks ?? []).map(c => redactSecrets(toolMask(c)))),
+      input.tool, JSON.stringify(input.input), card.shown, masked, input.cwd, input.kind, hide(redactSecrets(toolMask(input.reason))), JSON.stringify((input.checks ?? []).map(c => hide(redactSecrets(toolMask(c))))),
       bind ?? null, JSON.stringify(state), files.length ? JSON.stringify(files) : null,
       input.runId, input.runKind, input.conversationId, input.taskId ?? null, input.projectId ?? null, input.tainted ? 1 : 0, this.#now(),
     );
@@ -391,6 +450,7 @@ export class PendingStore {
       task_id: row.task_id, task_title: task?.title ?? null, project_id: row.project_id, project_name: project?.name ?? null, tainted: row.tainted === 1,
       status: row.status, reject_reason: row.reject_reason, exit_code: row.exit_code, output_preview: row.output_preview,
       created_at: row.created_at, decided_at: row.decided_at, ran_at: row.ran_at,
+      rule: this.rememberableNow(row, state) ? ruleView(storedCandidate(state.rule)!) : null,
     };
   }
 
@@ -454,7 +514,9 @@ export class PendingStore {
     const notParked = Number((this.#db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE decided_by = 'not-parked' AND created_at >= ?${callWhere}`).get(...args) as { n: number }).n);
     const parked: Record<string, number> = {};
     for (const r of this.#db.prepare(`SELECT kind, COUNT(*) AS n FROM pending_actions WHERE created_at >= ?${parkWhere} GROUP BY kind`).all(...args) as Array<{ kind: string; n: number }>) parked[r.kind] = Number(r.n);
-    return { allowed, parked, notParked };
+    const ruled: Record<string, number> = {};
+    for (const r of this.#db.prepare(`SELECT COALESCE((SELECT ar.kind FROM approval_rules ar WHERE 'rule:' || ar.id = tool_calls.approval_id), 'removed') AS kind, COUNT(*) AS n FROM tool_calls WHERE decided_by = 'owner-rule' AND decision = 'allow' AND created_at >= ?${callWhere} GROUP BY 1`).all(...args) as Array<{ kind: string; n: number }>) ruled[r.kind] = Number(r.n);
+    return { allowed, parked, notParked, ruled };
   }
 
   #require(id: number): PendingRow {
@@ -480,11 +542,11 @@ export class PendingStore {
     const erased = current.input === '';
     const state = parseJson<PendingState | null>(current.state, null);
     const nextState = state && result.fetched !== undefined ? { ...state, fetched: result.fetched } : state;
-    const rest = settled(current, nextState);
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', shown = ?, masked = ?, state = ?
+    const rest = settled(current, nextState, this.#heldOf(current.tool));
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ?
       WHERE id = ? AND status = 'running'`).run(
       result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output), erased ? null : result.fullRef ?? null,
-      result.status === 'ran' || result.status === 'failed' ? now : null, now, rest.shown, rest.masked, rest.state, id,
+      result.status === 'ran' || result.status === 'failed' ? now : null, now, rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id,
     );
     if (Number(changed.changes) !== 1) return this.view(id);
     const row = this.row(id)!;
@@ -494,9 +556,9 @@ export class PendingStore {
 
   reject(id: number, reason?: string): PendingView {
     const before = this.#require(id);
-    const rest = settled(before, parseJson<PendingState | null>(before.state, null));
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ? WHERE id = ? AND status = 'waiting'`)
-      .run(cleanReason(reason), this.#now(), rest.shown, rest.masked, rest.state, id);
+    const rest = settled(before, parseJson<PendingState | null>(before.state, null), this.#heldOf(before.tool));
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'rejected', reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
+      .run(cleanReason(reason), this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
     if (Number(changed.changes) !== 1) throw new PendingError('not_waiting', { id, status: this.row(id)?.status ?? before.status });
     const row = this.row(id)!;
     this.#changed(row);
@@ -508,9 +570,9 @@ export class PendingStore {
     for (const id of ids) {
       const rows = this.#db.prepare("SELECT * FROM pending_actions WHERE conversation_id = ? AND status = 'waiting'").all(id) as unknown as PendingRow[];
       for (const row of rows) {
-        const rest = settled(row, parseJson<PendingState | null>(row.state, null));
-        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '', shown = ?, masked = ?, state = ? WHERE id = ? AND status = 'waiting'`)
-          .run(this.#now(), rest.shown, rest.masked, rest.state, row.id);
+        const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
+        const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
+          .run(this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, row.id);
         if (Number(changed.changes) === 1) { count += 1; this.#changed(this.row(row.id)!); }
       }
     }
@@ -520,9 +582,9 @@ export class PendingStore {
   closeInterrupted(): number {
     let closed = 0;
     for (const row of this.#db.prepare("SELECT * FROM pending_actions WHERE status = 'running'").all() as unknown as PendingRow[]) {
-      const rest = settled(row, parseJson<PendingState | null>(row.state, null));
-      const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', shown = ?, masked = ?, state = ? WHERE id = ? AND status = 'running'`)
-        .run(pendingText('en', 'interrupted'), this.#now(), rest.shown, rest.masked, rest.state, row.id);
+      const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
+      const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'running'`)
+        .run(pendingText('en', 'interrupted'), this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, row.id);
       closed += Number(result.changes);
     }
     return closed;

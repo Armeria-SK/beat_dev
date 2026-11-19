@@ -9,7 +9,7 @@ import { isInside, realish } from './scope.ts';
 import type { FactWord, StatementFacts } from './shell-guard.ts';
 
 export type OutboundKind = 'send' | 'delete' | 'deny';
-export interface Outbound { kind: OutboundKind; reason: string; targets: string[] }
+export interface Outbound { kind: OutboundKind; reason: string; targets: string[]; keys?: string[] }
 
 export type OutboundFacts =
   | { tool: 'shell'; statements: readonly StatementFacts[] }
@@ -510,10 +510,10 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
   const say = (h: Hit): string => outboundText(language, h.key, h.params);
   switch (facts.tool) {
     case 'mcp':
-      if (facts.removes === true) return { kind: 'delete', reason: say(hit('delete', 'delete.tool')), targets: [] };
-      return facts.sends === false ? undefined : { kind: 'send', reason: say(hit('send', 'send.tool')), targets: [] };
+      if (facts.removes === true) return { kind: 'delete', reason: say(hit('delete', 'delete.tool')), targets: [], keys: ['delete.tool'] };
+      return facts.sends === false ? undefined : { kind: 'send', reason: say(hit('send', 'send.tool')), targets: [], keys: ['send.tool'] };
     case 'browser':
-      return facts.submits ? { kind: 'send', reason: say(hit('send', 'send.browser_submit')), targets: [] } : undefined;
+      return facts.submits ? { kind: 'send', reason: say(hit('send', 'send.browser_submit')), targets: [], keys: ['send.browser_submit'] } : undefined;
     case 'other': return undefined;
     default:
   }
@@ -526,9 +526,10 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
   const deletes = hits.find(h => h.kind === 'delete');
   const sends = hits.find(h => h.kind === 'send');
   const targets = [...new Set(hits.flatMap(h => h.targets))];
-  if (deletes && sends) return { kind: 'delete', reason: `${say(deletes)} / ${say(sends)}`, targets };
+  const keys = [...new Set(hits.map(h => h.key))].sort();
+  if (deletes && sends) return { kind: 'delete', reason: `${say(deletes)} / ${say(sends)}`, targets, keys };
   const first = (deletes ?? sends)!;
-  return { kind: first.kind, reason: say(first), targets };
+  return { kind: first.kind, reason: say(first), targets, keys };
 }
 
 const NO_GIT: OutboundEnv = { isTracked: () => false, isClean: () => false, isCreated: () => false, pushUrls: () => undefined, pushRemote: () => undefined };

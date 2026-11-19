@@ -554,6 +554,12 @@ export const EXPLAIN_KEYS = [
   'ui.files.hiddenNote',
   'ui.files.binaryNote',
   'ui.files.ignoreUnchecked',
+  'ui.set.rules.desc',
+  'ui.set.rules.empty',
+  'ui.pending.rememberTitle',
+  'ui.pending.rememberNote',
+  'ui.pending.rememberPush',
+  'ui.set.rules.push',
 ] as const satisfies readonly DictKey[];
 
 export type ExplainKey = typeof EXPLAIN_KEYS[number];
@@ -574,4 +580,6 @@ export const NOT_EXPLAIN: Partial<Record<DictKey, string>> = {
   'ui.pending.rejectReason': 'Field label: text that names an input stays a name (placeholders inside the input are guidance and are translated)',
   'ui.ob.style.friendly.example': 'Sample of the speaking style the agent will use, shown as an example',
   'ui.ob.model.keyOptional': 'Field label: text that names an input stays a name (placeholders inside the input are guidance and are translated)',
+  'runs.by.ownerRule': 'Label of who decided, next to the other decided-by labels (a name)',
+  'ui.pending.remember': 'Button label',
 };
