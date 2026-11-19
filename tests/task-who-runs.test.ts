@@ -187,13 +187,13 @@ test('5-1: beat が決めたタスクの中からは user にならない（requ
   assert.equal(s.app.tasks.judgeRequest(forged.id), '');
 });
 
-test('5-1: 外を読んだ印のある元のタスクの子は、判定役の頼みが空', async t => {
+test('5-1（AP-1a で反転: 印は持ち主の控えを消さない）: 外を読んだ印のある元のタスクの子も、判定役の頼みは元の持ち主の控え', async t => {
   const s = await setup(t);
   const parent = s.app.tasks.create({ title: 'Built from a fetched page', origin: 'user', actor: 'user', ownerRequest: true });
   s.app.tasks.markUntrusted(parent.id, 'build', 'read outside');
   const child = s.app.tasks.create({ title: 'child', origin: 'user', actor: 'beat', spawnedBy: parent.id });
-  assert.equal(s.app.tasks.judgeRequest(parent.id), '');
-  assert.equal(s.app.tasks.judgeRequest(child.id), '');
+  assert.equal(s.app.tasks.judgeRequest(parent.id), 'Built from a fetched page');
+  assert.equal(s.app.tasks.judgeRequest(child.id), 'Built from a fetched page');
 });
 
 test('5-1: 承認に「見ていた版」を渡すと、そのあと題や本文が変わっていれば断り、同じなら承認する。渡さなければ今までどおり', async t => {
@@ -214,7 +214,7 @@ test('5-1: 承認に「見ていた版」を渡すと、そのあと題や本文
   assert.equal(s.app.tasks.approve(other.id).status, 'ready');
 });
 
-test('5-1: 子・途中の親・元のどれかに外を読んだ印（計画書の目次・Build・再実行の印・外を読んだ実行の文）があれば、子の判定役の頼みは空', async t => {
+test('5-1（AP-1a N6 で反転: 鎖に印があっても根の持ち主の控えだけを返す）: 子・途中の親・元のどれかに外を読んだ印（計画書の目次・Build・再実行の印・外を読んだ実行の文）があっても、子の判定役の頼みは根の持ち主の控えで、子・途中の親・メモの文は入らない', async t => {
   const s = await setup(t);
   const root = () => s.app.tasks.create({ title: 'Owner job', body: 'owner words', origin: 'user', actor: 'user', ownerRequest: true });
   const child = (parent: string, title = 'child') => s.app.tasks.create({ title, origin: 'user', actor: 'beat', spawnedBy: parent });
@@ -223,7 +223,7 @@ test('5-1: 子・途中の親・元のどれかに外を読んだ印（計画書
   const meshChild = child(r1.id);
   const cleanSibling = child(r1.id, 'sibling');
   s.app.tasks.markUntrusted(meshChild.id, 'mesh', 'read notes');
-  assert.equal(s.app.tasks.judgeRequest(meshChild.id), '');
+  assert.equal(s.app.tasks.judgeRequest(meshChild.id), 'Owner job\nowner words');
   assert.equal(s.app.tasks.judgeRequest(cleanSibling.id), 'Owner job\nowner words');
 
   const r2 = root();
@@ -231,22 +231,22 @@ test('5-1: 子・途中の親・元のどれかに外を読んだ印（計画書
   const grand = child(middle.id, 'grand');
   assert.equal(s.app.tasks.judgeRequest(grand.id), 'Owner job\nowner words');
   s.app.tasks.markUntrusted(middle.id, 'build', 'built from fetched');
-  assert.equal(s.app.tasks.judgeRequest(grand.id), '');
+  assert.equal(s.app.tasks.judgeRequest(grand.id), 'Owner job\nowner words');
 
   const r3 = root();
   const replayed = child(r3.id, 'replayed');
   s.app.tasks.markUntrusted(replayed.id, 'beat', 'made by an approved Pending row from a run that read outside text');
-  assert.equal(s.app.tasks.judgeRequest(replayed.id), '');
+  assert.equal(s.app.tasks.judgeRequest(replayed.id), 'Owner job\nowner words');
 
   const r4 = root();
   const noted = child(r4.id, 'noted');
   s.app.tasks.update(noted.id, { appendNote: 'from the page' }, 'beat', s.taintedRun());
-  assert.equal(s.app.tasks.judgeRequest(noted.id), '');
+  assert.equal(s.app.tasks.judgeRequest(noted.id), 'Owner job\nowner words', 'メモの文は入らない');
 
   const r5 = root();
   const underNoted = child(r5.id, 'under noted root');
   s.app.tasks.update(r5.id, { appendNote: 'from the page' }, 'beat', s.taintedRun());
-  assert.equal(s.app.tasks.judgeRequest(underNoted.id), '');
+  assert.equal(s.app.tasks.judgeRequest(underNoted.id), 'Owner job\nowner words', '根のメモの文も入らない');
 });
 
 test('5-1: spawned_by をたどる守り: 輪・100 段を超える鎖・消えた親・元が beat の決めたタスクなら空', async t => {
@@ -279,7 +279,7 @@ test('5-1: spawned_by をたどる守り: 輪・100 段を超える鎖・消え�
   }
 });
 
-test('5-1: 持ち主のタスクの実行の中で作った繰り返しは、その回の判定役の頼みが元のタスクの頼み。ひな形か回に印があれば空', async t => {
+test('5-1（AP-1a N6 で反転）: 持ち主のタスクの実行の中で作った繰り返しは、その回の判定役の頼みが元のタスクの頼み。ひな形か回に印があっても元の控えのままで、AI の文は入らない', async t => {
   const s = await setup(t);
   const parent = s.app.tasks.create({ title: 'Owner job', body: 'owner words', origin: 'user', actor: 'user', ownerRequest: true });
   await taskMakes(s, parent.id, { title: 'AI weekly', body: 'AI text', repeat: '0 9 * * MON' });
@@ -289,22 +289,23 @@ test('5-1: 持ち主のタスクの実行の中で作った繰り返しは、そ
   assert.equal(run.spawned_by, null);
   assert.equal(s.app.tasks.judgeRequest(run.id), 'Owner job\nowner words');
   s.app.tasks.markUntrusted(run.id, 'beat', 'replayed');
-  assert.equal(s.app.tasks.judgeRequest(run.id), '');
+  assert.equal(s.app.tasks.judgeRequest(run.id), 'Owner job\nowner words');
   s.app.tasks.finish(run.id, 'done', null, 'user');
   const next = s.app.tasks.spawnNow(template.id as string)!;
   assert.equal(s.app.tasks.judgeRequest(next.id), 'Owner job\nowner words');
   s.app.tasks.markUntrusted(template.id as string, 'mesh', 'read notes');
-  assert.equal(s.app.tasks.judgeRequest(next.id), '');
+  assert.equal(s.app.tasks.judgeRequest(next.id), 'Owner job\nowner words');
+  assert.doesNotMatch(s.app.tasks.judgeRequest(next.id), /AI/u);
 });
 
-test('5-1: 予定の回から切り出した子は、予定のひな形に外を読んだ実行の文があれば判定役の頼みが空', async t => {
+test('5-1（AP-1a N6 で反転）: 予定の回から切り出した子は、予定のひな形に外を読んだ実行の文があっても判定役の頼みはひな形の持ち主の控えで、その文は入らない', async t => {
   const s = await setup(t);
   const template = s.app.tasks.create({ title: 'Weekly', origin: 'user', actor: 'user', cron: '0 9 * * MON', ownerRequest: true });
   const run = s.app.tasks.spawnNow(template.id)!;
   const child = s.app.tasks.create({ title: 'child of run', origin: 'user', actor: 'beat', spawnedBy: run.id });
   assert.equal(s.app.tasks.judgeRequest(child.id), 'Weekly');
   s.app.tasks.update(template.id, { appendNote: 'from the page' }, 'beat', s.taintedRun());
-  assert.equal(s.app.tasks.judgeRequest(child.id), '');
+  assert.equal(s.app.tasks.judgeRequest(child.id), 'Weekly');
 });
 
 test('7-4: beat が決めたタスク（今すぐ実行で動かしたもの）の中で作ったタスクは、繰り返しも一回きりも提案になる（実行待ちのまま動かないタスクを作らない）', async t => {

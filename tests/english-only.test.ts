@@ -38,6 +38,7 @@ const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   },
   'web/src/weekdays.ts': { strings: ['月', '火', '水', '木', '金', '土', '日'], reason: 'API に送る曜日の値（src/tasks/schedule.ts の DAY_MAP と対）' },
   'src/tools/builtin/table-core.ts': { strings: ['\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}'], reason: 'FORMULA_LEADS: 全角の ＝ ＋ － ＠ で始まるセルも式として無害化する（CSV の式の注入。安全）' },
+  'src/tools/builtin/ask.ts': { strings: ['その他', 'そのほか', 'ほか', '他'], reason: 'OTHER_LABELS: ask_owner の選択肢に日本語の「その他」を書かせない（カードが Something else を足すため）' },
   'src/engine/chat.ts': { strings: ['\u{3000}'], reason: 'toFullWidth: 子の答えの中の区切りを全角にして、区切りの偽装を防ぐ（空白は全角の空白に。安全）' },
   'src/engine/persona.ts': { strings: ['基本情報', '名前', '話し方', '名前', '呼び方', '^-[ \\t]*(?:${labels})[ \\t]*[:\u{FF1A}][ \\t]*'], reason: '見出しと行の名前: 持ち主の日本語の SOUL.md / USER.md の節と行（区切りの全角のコロンも）を読んで探し、見出しが日本語のファイルに節・行を足すときも日本語の名前で書く' },
   'src/memory/review.ts': { strings: ['/^(?:変更なし|No changes?)[\u{3002}.!\u{FF01}]?$/iu'], reason: 'isNoProposal: モデルが日本語で書いた「変更なし」（と句読点）も拾う' },

@@ -26,13 +26,13 @@ async function productPlanRequest(t: Parameters<typeof startApp>[0], configure: 
   const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text: 'x', projectId: made.body.project.id, permissionMode: 'plan' });
   await settled(s.app, sent.body.runId);
   const last = s.adapter().calls.at(-1)!;
-  return { tools: last.tools.length, toolTokens: estimateToolTokens(last.tools), request: estimateRequest(`${last.system.frozen}\n${last.system.dynamic}`, [], last.tools).tokens };
+  return { tools: last.tools.length, toolTokens: estimateToolTokens(last.tools), request: estimateRequest(`${last.system.frozen}\n${last.system.dynamic}`, [], last.tools, 1, last.system.tail).tokens };
 }
 
 test('T-1 tool-tokens: 既定の設定とブラウザオンの写しで表を出し、製品の計画モードの数は量の線の試験の組み立てと同じ（40% 以下）', async t => {
   for (const [label, configure] of [['default', () => undefined], ['browser', (c: AppConfig) => { c.tools.browser.enabled = true; }]] as const) {
     const measured = await measure(shaped(configure));
-    assert.equal(measured.available, 12_672);
+    assert.equal(measured.available, 45_875);
     const plan = row(measured, 'product plan');
     const direct = await productPlanRequest(t, configure);
     assert.equal(plan.tools, direct.tools, label);
@@ -64,7 +64,7 @@ test('T-1 tool-tokens: 新しいプロセスで設定のファイルを渡すと
   writeFileSync(file, JSON.stringify(config));
   const before = readFileSync(file, 'utf8');
   const out = execFileSync(process.execPath, ['scripts/tool-tokens.ts', '--config', file], { encoding: 'utf8', env: { ...process.env, ZQ_KEY_7C1F: 'sk-ant-test-0000000000000000' } });
-  assert.match(out, /^available: 12672$/mu);
+  assert.match(out, /^available: 45875$/mu);
   assert.match(out, /^\| product plan \| \d+ \| \d+ \| \d+ \| \d+\.\d% \|$/mu);
   assert.match(out, /^\| agent child \| off \|/mu);
   for (const value of ['zq-', '7c1f', '7C1F', 'Asia/Tokyo', 'sk-ant', '127.0.0.1', dir]) assert.ok(!out.includes(value), value);

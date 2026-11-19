@@ -80,9 +80,12 @@ test('6-2: 2 秒以内に終わるコマンドはふつうの結果（終了コ�
   s.adapter().scripts = [call('shell_output', { id: 'bg-2', waitSec: 1 }), reply('ok')];
   await s.send(uuid(1), { text: 'read it' });
   const first = s.calls().at(-2)!;
-  assert.match(first.system.dynamic, /Background commands of this conversation as of now, including any you just started/u);
-  assert.match(first.system.dynamic, /Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart/u, 'backlog: numbers restart per boot');
-  assert.match(first.system.dynamic, /- bg-2 \[running(?:, unread output)?\] node tick\.js/u);
+  assert.match(first.system.tail, /Background commands of this conversation as of now, including any you just started/u);
+  assert.match(first.system.tail, /Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart/u, 'backlog: numbers restart per boot');
+  assert.match(first.system.tail, /- bg-2 \[running(?:, unread output)?\] node tick\.js/u);
+  assert.doesNotMatch(first.system.dynamic, /Background commands/u, 'S1: 一覧は実行のあいだ同じ部分（dynamic）には入れない');
+  const lastSent = first.messages.at(-1)!;
+  assert.match(lastSent.role === 'assistant' ? '' : lastSent.tail ?? '', /- bg-2 \[running/u, 'S1: 一覧は最後の発言に付けて送る');
   const read = s.results().at(-1)!;
   assert.match(read, /^bg-2: running/u, read);
   assert.match(read, /tick \d+/u);
@@ -96,6 +99,7 @@ test('6-2: 一覧の節は 0 件なら空で、system に何も足さない', as
   s.adapter().scripts = [reply('ok')];
   await s.send(uuid(1), { text: 'hi', projectId: shop.id });
   assert.doesNotMatch(s.calls().at(-1)!.system.dynamic, /Background commands/u);
+  assert.doesNotMatch(s.calls().at(-1)!.system.tail, /Background commands/u);
 });
 
 test('6-2: 計画モードには shell_run と shell_stop が渡らず shell_output は渡る。振り返りにはどれも渡らない。製品の無い会話には shell_output / shell_stop が渡らない', async t => {
@@ -388,7 +392,7 @@ test('6-2: 取得したものを流すコマンドを裏で動かすと、読ん
   assert.match(s.results().at(-2)!, /Started in the background as bg-1/u, s.results().at(-2));
   assert.equal(s.app.runs.get(first)!.tainted, 1);
   assert.equal(s.app.background.get('bg-1')!.fetched, true);
-  const section = s.calls().at(-1)!.system.dynamic;
+  const section = s.calls().at(-1)!.system.tail;
   assert.match(section, /not the owner's instructions/u);
   assert.match(section, /- bg-1 \[running[^\]]*\] curl[^\n]*\(cwd: [^)\n]*\)\n/u, 'started before anything was read: no mark');
   assert.match(section, /- bg-2 \[running[^\]]*\] node tick\.js \(cwd: [^)\n]*\) \(started after reading text that came from elsewhere\)/u);

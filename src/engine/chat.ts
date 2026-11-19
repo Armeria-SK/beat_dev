@@ -10,7 +10,8 @@ import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
 import { UPSTREAM_KEEP, upstreamText } from '../providers/http.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
-import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
+import { ProviderError, providerError, type ModelRequest, type ProviderAdapter } from '../providers/types.ts';
+import { stripsThinkingOnText } from '../providers/anthropic.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ProductMemory } from '../memory/files.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
@@ -21,7 +22,7 @@ import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
-import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
+import { makeFence, newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
 import type { QuestionStore } from '../questions/store.ts';
 import { rootsLister, runProject, type RunWorktree } from '../projects/run.ts';
@@ -57,7 +58,7 @@ import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
-import { buildDynamic, buildSnapshot, recordFileVersions, requirementsText } from './workspace.ts';
+import { buildDynamic, buildSnapshot, buildTail, fenceTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { ownWords, stripAttachments } from '../uploads/store.ts';
 
@@ -86,12 +87,17 @@ function withThinkingFor(message: ChatMessage, target?: { provider: string; mode
   return rest;
 }
 
+// 見積もりに数える system の文（固定・実行のあいだ同じ部分）。tail は、発言に付けた分を発言として、まだ付けていない次の分を #assemble の pending として数える
+const systemText = (system: ModelRequest['system']): string => `${system.frozen}\n${system.dynamic}`;
+
 function forModel(message: ChatMessage): ChatMessage {
   if (message.role !== 'tool' || !message.gate) return message;
   const copy = { ...message };
   delete copy.gate;
   return copy;
 }
+const clean = (message: ChatMessage, fence: ReturnType<typeof makeFence> | undefined): ChatMessage =>
+  (fence && message.role !== 'assistant' && message.content.includes(fence.nonce) ? { ...message, content: fence.clean(message.content) } : message);
 // 人のいない実行（タスク・振り返り・子の担当）を区切る回数
 export const UNATTENDED_ITERATION_CEILING = 100;
 // アプリ全体で同時に動かせる子の担当の数（これを越えたら待たずに busy を返す）
@@ -262,6 +268,9 @@ export class ChatEngine {
   #runMode = new Map<string, PermissionMode>();
   #runFence = new Map<string, string>();
   #runIndex = new Map<string, string>();
+  // 実行ごとの tail: 付けて送った発言（保存した発言の id → 文）と、最後に送った節と時刻（S1。前に送った tail は以後も同じ文で送る）。
+  // carriers: 時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
+  #runTail = new Map<string, { attached: Map<number, string>; sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background', number>> }>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
   // 考えるだけで上限に達したあと、その実行で上げた返事の上限（実行 → モデルの ID → 上限。上げたモデルにだけ、#assemble がそのモデルの許す範囲で使う）
   #outputCap = new Map<string, Map<string, number>>();
@@ -452,7 +461,7 @@ export class ChatEngine {
     const last = this.#d.runs.latestChat(conversationId);
     if (!last || last.tainted !== 1) return false;
     let wrappedUp = true;
-    try { const found = JSON.parse(last.flags) as string[]; wrappedUp = found.includes('max_iterations') || found.includes('output_truncated'); } catch { }
+    try { const found = JSON.parse(last.flags) as string[]; wrappedUp = found.includes('max_iterations') || found.includes('output_truncated') || found.includes('asked_owner'); } catch { }
     return !(last.ok === 1 && !wrappedUp);
   }
 
@@ -782,6 +791,7 @@ export class ChatEngine {
         this.#runMode.delete(runId);
         this.#runFence.delete(runId);
         this.#runIndex.delete(runId);
+        this.#runTail.delete(runId);
         this.#loaded.delete(runId);
         this.#outputCap.delete(runId);
         this.#reviewEvidence.delete(runId);
@@ -1048,6 +1058,7 @@ export class ChatEngine {
       if (!d.tools) return finishOk(call.text, call.stop);
 
       let invalidThisRound = 0;
+      let askedOwner = false;
       for (const toolCall of call.toolCalls) {
         if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
         counters.toolCalls++;
@@ -1061,6 +1072,7 @@ export class ChatEngine {
         recordTaint();
         countDone(toolCall.name, outcome);
         if (outcome.invalidArguments) invalidThisRound++;
+        if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
         const toolSaved = d.conversations.append(conversationId, {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
           ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
@@ -1070,6 +1082,10 @@ export class ChatEngine {
       if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
       // タスクの終え方（完了・途中経過・質問）が決まったら、モデルを呼び直さずに終える
       if (task && task.control.value.outcome !== 'none') return finishOk(call.text, 'end_turn');
+      if (kind === 'chat' && askedOwner) {
+        flags.push('asked_owner');
+        return finishOk(call.text, 'end_turn');
+      }
       invalidStreak = invalidThisRound === call.toolCalls.length ? invalidStreak + 1 : 0;
       if (invalidStreak >= MAX_INVALID_STREAK) {
         const language = languageOf(config);
@@ -1148,7 +1164,7 @@ export class ChatEngine {
       let text = '';
       let usage: Usage = {};
       for await (const event of adapter.stream({
-        model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, d.status.limits(model).maxOutput), signal,
+        model, system: { frozen: prompt.system, dynamic: '', tail: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, d.status.limits(model).maxOutput), signal,
       })) {
         if (event.type === 'text') text += event.delta;
         else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, usage); }
@@ -1204,7 +1220,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, listed, system, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject });
+        const { toolDefs, listed, system, pending, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject, sendTail: true });
         const run = this.#loaded.get(p.runId);
         if (run) {
           run.sent.clear();
@@ -1215,7 +1231,7 @@ export class ChatEngine {
         const effort = p.effort && modelEfforts(model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
         let fitted;
         try {
-          fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
+          fitted = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: pending });
         } catch (error) {
           if (!(error instanceof ContextOverflow)) throw error;
           last = { kind: 'context_overflow', message: engineText(language, 'fit.overflow', { required: error.required.toLocaleString('en-US'), available: error.available.toLocaleString('en-US') }), code: 'engine.fit.overflow', params: { required: error.required, available: error.available }, retryable: false, route,
@@ -1284,7 +1300,7 @@ export class ChatEngine {
         // 上げられるなら、捨てて同じ呼び出しを上げた上限でやり直す。上げるのは 1 回の呼び出しで 1 度、上限は planned だけから決まる頭打ち
         // （raisedOutputFor）までで、いまのやり取り（古い発言を外しても残る分）が入りきる量を超えない
         if (stop === 'max_tokens' && !text.trim() && !toolCalls.length && !raisedOnce && capacity > 0) {
-          const room = Math.floor(capacity * CONTEXT_FILL_RATIO) - irreducibleEstimate({ system: `${system.frozen}\n${system.dynamic}`, messages: fitted.messages, tools: apiTools, factor }).tokens;
+          const room = Math.floor(capacity * CONTEXT_FILL_RATIO) - irreducibleEstimate({ system: systemText(system), messages: fitted.messages, tools: apiTools, factor, tail: pending }).tokens;
           const raised = Math.min(raisedOutputFor(model, capacity, planned, d.status.get(model.id)?.maxOutput), room);
           if (raised > maxOutput) {
             raisedOnce = true;
@@ -1325,7 +1341,7 @@ export class ChatEngine {
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
   // startedMode: 実行を始めたときの権限モード（実行の中でだけ渡す。使用量の数え方は次の実行のためなので、会話のいまのモードで数える）
-  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }) {
+  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined; sendTail?: boolean }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
@@ -1354,19 +1370,58 @@ export class ChatEngine {
     const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language, memory: planMemory, worktree } : undefined;
     const mesh = this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist, background].filter(Boolean).join('\n\n');
-    const system = { frozen: p.snapshot, dynamic };
+    // dynamic は実行のあいだ変わらない部分だけ（日付まで）。時刻・Checklist・裏のコマンドは tail へ（S1。dynamic が変わると後ろの履歴が全部書き直しになる）
+    const now = d.now?.() ?? new Date();
+    const fence = this.#fence(p.runId);
+    const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
+    const sections = { checklist, background };
+    const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
     // 考える部分を送り返すかはここだけで決め、呼び出し・道具の結果の量・続きの見積もり・使用量の表示が同じ履歴を使う。
     // 送り返すのは、それを書いた提供元・モデルへ送り、要約の無い会話で、考える部分の量も数えて古い発言を 1 つも外さずに入りきるときだけ（前の発言が変わると API が断る）
-    let history = stored.map(m => withThinkingFor(forModel(m.message), conversation?.summary ? undefined : { provider: model.provider, model: model.model }));
+    // 実行の中では、道具の結果・発言から実行の nonce を消す（tail の印を装えないように）
+    let history = stored.map(m => withThinkingFor(clean(forModel(m.message), p.runId ? fence : undefined), conversation?.summary ? undefined : { provider: model.provider, model: model.model }));
+    // この実行で発言に付けて送った tail は、同じ発言に同じ文で付け直す。モデルを呼ぶとき（sendTail）だけ、変わった分を最後の user / tool の発言に付けて覚える
+    const tails = p.runId ? this.#runTail.get(p.runId) ?? { attached: new Map<number, string>(), carriers: {} } : undefined;
+    const withTails = (list: ChatMessage[]) => (tails?.attached.size ? list.map((m, i) => { const tail = tails.attached.get(stored[i]!.id); return tail !== undefined && m.role !== 'assistant' ? { ...m, tail } : m; }) : list);
+    history = withTails(history);
+    if (tails && p.sendTail) {
+      const last = stored.at(-1);
+      if (last && last.message.role !== 'assistant' && !tails.attached.has(last.id)) {
+        // いまの文を載せた発言が、要約で消えたか、削られて送る範囲から外れるなら、前に送ったことにしないで全部を付け直す（削る量は全体の tail を足した多めの見積もり）
+        const carried = Object.values(tails.carriers);
+        let lost = false;
+        if (carried.length) {
+          let removed = 0;
+          try { removed = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: system.tail }).removed; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
+          const window = new Set(stored.slice(removed).map(m => m.id));
+          lost = carried.some(id => !window.has(id));
+        }
+        const next = nextTail(lost ? undefined : tails.sent, config.timezone, language, now, sections);
+        if (next) {
+          if (lost) tails.carriers = {};
+          tails.carriers.time = last.id;
+          for (const key of ['checklist', 'background'] as const) {
+            if (lost || (tails.sent?.[key] ?? '') !== sections[key]) { if (sections[key]) tails.carriers[key] = last.id; else delete tails.carriers[key]; }
+          }
+          tails.attached.set(last.id, fenceTail(next.text, fence.nonce)); tails.sent = next.sent; this.#runTail.set(p.runId!, tails);
+          history = withTails(history);
+        }
+      }
+    }
+    // 古い Anthropic の考えるモデル（stripsThinkingOnText）に考える部分を送り返すとき、adapter は tail を全部 system の後ろに置く。
+    // 送り返すかは adapter が最後に決めるので、ここでは送り返しうるとき全体の tail も数える（多めの見積もり）
+    const oldThinking = config.providers.find(x => x.id === model.provider)?.kind === 'anthropic' && stripsThinkingOnText(model.model) && history.some(m => m.role === 'assistant' && m.thinking);
+    // まだ発言に付けていない、次に送る tail（見積もり用）。モデルを呼ぶときは、付けた分は発言が数えるので、system の後ろに置くとき（最後が assistant）だけ。
+    // それ以外（使用量・道具の結果の量・続きの見積もり）は、次の呼び出しで付きうる全体
+    const pending = !p.sendTail || oldThinking || stored.at(-1)?.message.role === 'assistant' ? system.tail : '';
     let replay = false;
     if (history.some(m => m.role === 'assistant' && m.thinking)) {
-      try { replay = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor }).removed === 0; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
+      try { replay = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: pending }).removed === 0; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
       if (!replay) history = history.map(m => withThinkingFor(m));
     }
-    return { toolDefs, listed, system, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor };
+    return { toolDefs, listed, system, pending, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
@@ -1374,7 +1429,7 @@ export class ChatEngine {
   #toolResultTokens(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): { tokens: number | undefined; available: number | undefined } {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
-    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
+    const { tokens } = irreducibleEstimate({ system: systemText(built.system), messages: built.history, tools: built.apiTools, factor: built.factor, tail: built.pending });
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
   }
 
@@ -1391,7 +1446,7 @@ export class ChatEngine {
   #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }, pending: ChatMessage[]): boolean {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return true;
-    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: [...built.history, ...pending], tools: built.apiTools, factor: built.factor });
+    const { tokens } = irreducibleEstimate({ system: systemText(built.system), messages: [...built.history, ...pending], tools: built.apiTools, factor: built.factor, tail: built.pending });
     return tokens <= built.available;
   }
 
@@ -1405,9 +1460,15 @@ export class ChatEngine {
       if (runId) this.#runIndex.set(runId, body);
     }
     if (!body) return '';
-    let nonce = runId ? this.#runFence.get(runId) : PLACEHOLDER_NONCE;
-    if (!nonce) { nonce = newNonce(); this.#runFence.set(runId!, nonce); }
-    return wrapMeshIndex(body, nonce);
+    return wrapMeshIndex(body, this.#fence(runId).nonce);
+  }
+
+  // 実行ごとの印（mesh の索引と tail が同じ nonce を使う）。実行の外（使用量）は同じ長さの仮の nonce
+  #fence(runId: string | undefined): ReturnType<typeof makeFence> {
+    if (!runId) return makeFence(PLACEHOLDER_NONCE);
+    let nonce = this.#runFence.get(runId);
+    if (!nonce) { nonce = newNonce(); this.#runFence.set(runId, nonce); }
+    return makeFence(nonce);
   }
 
   // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。
@@ -1437,7 +1498,7 @@ export class ChatEngine {
     const project = runProject(d.projects, d.conversations.projectOf(conversationId));
     const snapshot = existing?.snapshot ?? this.#buildSnapshotText(language, conversationId, project).text;
     const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat', project });
-    const { tokens } = estimateRequest(`${built.system.frozen}\n${built.system.dynamic}`, built.history, built.apiTools, built.factor);
+    const { tokens } = estimateRequest(systemText(built.system), built.history, built.apiTools, built.factor, built.pending);
     return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
   }
 
@@ -1563,7 +1624,7 @@ export class ChatEngine {
       release = await d.limiter.acquire(c.route.provider.id, () => c.route.provider.maxParallel, c.signal);
       let text = '';
       for await (const event of c.adapter.stream({
-        model: c.route.model, system: { frozen: compactSystem(language), dynamic: '' },
+        model: c.route.model, system: { frozen: compactSystem(language), dynamic: '', tail: '' },
         messages: [{ role: 'user', content: prompt }], tools: [], maxOutputTokens, signal: c.signal,
       })) if (event.type === 'text') text += event.delta;
       if (!text.trim()) return false;

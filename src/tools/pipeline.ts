@@ -329,6 +329,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     }
   }
   const fetchToJudge = SHELL_FETCH_TO_JUDGE.on && ctx.taint.tainted && tool.name === 'shell_run' && first?.fetched === true && decision !== 'deny';
+  // The egress kind only the taint adds here is not part of a rule's keys (AP-1, Q5); one the pre-check gave stays
+  const fetchEgress = fetchToJudge && !askKinds.has('egress');
   if (fetchToJudge) {
     decision = worst(decision, 'ask');
     askKinds.add('egress');
@@ -369,7 +371,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   let judgedId: string | undefined;
   let earlier: PreCheck | undefined;
   const candidateFor = (parkKind: PendingKind, check: PreCheck | undefined, out: Outbound | undefined): RuleCandidate | undefined => {
-    try { return ruleCandidate({ tool, args, ctx, tainted: tainted || ctx.taint.tainted, parkKind, check, outbound: out, askKinds, policyAsk }); } catch { return undefined; }
+    try { return ruleCandidate({ tool, args, ctx, parkKind, check, outbound: out, askKinds, policyAsk, fetchEgress }); } catch { return undefined; }
   };
   const ruleFor = (candidate: RuleCandidate | undefined): RuleHit | undefined => {
     if (!candidate || !ctx.project?.id) return undefined;
@@ -400,16 +402,14 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const stepFour = !fetchToJudge && first?.productRun !== undefined && tool.name === 'shell_run' && Boolean(ctx.project?.root) && [...askKinds].every(kind => (first?.askKinds ?? []).includes(kind));
     const owned = decision === 'ask' ? ownerKeysOf(keys).filter(key => !(stepFour && key === GIT_IDENTITY_KEY)) : [];
     const ownerPolicy = decision === 'ask' && keys.some(key => POLICY_KEYS.has(key));
-    const taskTaint = decision === 'ask' && unattendedRun(ctx) && tool.escalateOnTaint === true && askKinds.has('taint');
     const parkAs: { kind: PendingKind; reason: string } | undefined = sendOrDelete ? { kind: sendOrDelete.kind as PendingKind, reason: sendOrDelete.reason }
       : hookAsks.length ? { kind: 'hook', reason: hookAsks.join('; ') }
       : policyAsk ? { kind: 'policy', reason: guardText(language, 'pipeline.policy_ask', { name: tool.name }) }
       : ownerPolicy ? { kind: 'policy', reason: reasons.join('; ') }
       : first?.ownerReason !== undefined && decision === 'ask' ? { kind: 'owner', reason: first.ownerReason }
       : owned.length ? { kind: 'owner', reason: pendingText('en', 'owner_protected', { reasons: reasons.join('; ') }) }
-      : taskTaint ? { kind: 'owner', reason: pendingText('en', 'owner_task_taint', { name: tool.name }) }
       : undefined;
-    const ruleBlockers = hookAsks.length > 0 || (first?.ownerReason !== undefined && decision === 'ask') || owned.length > 0 || taskTaint;
+    const ruleBlockers = hookAsks.length > 0 || ownerPolicy || (first?.ownerReason !== undefined && decision === 'ask') || owned.length > 0;
     const ruleKind = parkAs !== undefined && !ruleBlockers && (parkAs.kind === 'send' || parkAs.kind === 'delete' || parkAs.kind === 'policy');
     const parkRule = ruleKind && parkAs ? ruleFor(candidateFor(parkAs.kind, first, outbound)) : undefined;
     if (parkAs && parkRule) {
@@ -427,6 +427,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         });
         const noJudge = runsWithoutJudge(ctx, deps);
         if (noJudge && judgeKeys.includes(SELF_TOUCH_KEY)) return park('owner', pendingText('en', 'owner_no_judge_self', { reasons: reasons.join('; ') }));
+        // AP-1c sends this to the judge; with the judge off nobody would decide it, so it still waits for the owner
+        if (noJudge && unattendedRun(ctx) && tool.escalateOnTaint === true && askKinds.has('taint')) return park('owner', pendingText('en', 'owner_task_taint', { name: tool.name }));
         if (noJudge && judgeKeys.includes(OPAQUE_CONTROL_KEY)) return park('owner', pendingText('en', 'owner_no_judge_opaque', { reasons: reasons.join('; ') }));
         if (noJudge && !(deps.lastUserRequest?.() ?? '').trim()) return park('owner', pendingText('en', 'owner_no_judge_request'));
         if (noJudge && tool.mcp && tool.effect === 'write') return park('owner', pendingText('en', 'owner_no_judge_mcp', { server: tool.mcp.server, tool: tool.mcp.tool }));

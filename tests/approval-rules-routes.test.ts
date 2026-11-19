@@ -60,24 +60,24 @@ test('J-5 口: remember の Approve で候補どおりの決まりが 1 つ。�
   assert.match(JSON.stringify(bad.body), /rule id/u);
 });
 
-test('J-5 口: 候補の無い行・外を読んだ行・製品の無い行・タスクの実行の task_create の行は 409 で、行は待ちのまま、決まりは増えない。本文なしの Approve は今までどおり', async t => {
+test('J-5 口: 候補の無い行・製品の無い行・タスクの実行の task_create の行は 409 で、行は待ちのまま、決まりは増えない。本文なしの Approve は今までどおり。AP-1（Q1）で反転: 外を読んだ行は 202 で決まりが 1 つ', async t => {
   const s = await setup(t);
-  const rows = [await s.park({ rule: undefined }), await s.park({ tainted: true }), await s.park({ projectId: null }), await s.park({ tool: 'task_create', runKind: 'task' })];
+  const rows = [await s.park({ rule: undefined }), await s.park({ projectId: null }), await s.park({ tool: 'task_create', runKind: 'task' })];
   for (const row of rows) {
     assert.equal(row.rule, null, `row ${row.id} offers no choice`);
     const res = await s.json(`/api/pending/${row.id}/approve`, 'POST', { remember: true });
     assert.equal(res.status, 409, `row ${row.id}`);
     assert.equal(s.app.pending.row(row.id)!.status, 'waiting');
   }
-  const later = await s.park();
-  s.app.db.prepare('UPDATE pending_actions SET tainted = 1 WHERE id = ?').run(later.id);
-  assert.equal(s.app.pending.view(later.id)!.rule, null, 'a row marked tainted after parking offers no choice');
-  assert.equal((await s.json(`/api/pending/${later.id}/approve`, 'POST', { remember: true })).status, 409);
   assert.deepEqual(await s.rules(), []);
   assert.equal((await s.json(`/api/pending/${rows[0]!.id}/approve`, 'POST', { remember: 'yes' })).status, 400);
   const plain = await s.api(`/api/pending/${rows[0]!.id}/approve`, { method: 'POST' });
   assert.equal(plain.status, 202, 'no body: approve as before');
   assert.deepEqual(await s.rules(), []);
+  const tainted = await s.park({ tainted: true });
+  assert.deepEqual(tainted.rule, { shown: CANDIDATE.shown }, 'a row from a run that read outside text offers the choice');
+  assert.equal((await s.json(`/api/pending/${tainted.id}/approve`, 'POST', { remember: true })).status, 202);
+  assert.equal((await s.rules()).length, 1);
 });
 
 test('J-5 口: Origin の無い書き込みは今までどおり断る（決まりも足さない・消さない）', async t => {

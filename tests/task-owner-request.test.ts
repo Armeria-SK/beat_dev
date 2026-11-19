@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { PLAN_GIST_LABEL } from '../src/tasks/store.ts';
+import { OUTSIDE_PLAN_NOTE, PLAN_GIST_LABEL } from '../src/tasks/store.ts';
 import { fakeModel, settled, startApp, uuid, planChat } from './app-setup.ts';
 import { reply, tempDir, type Script, withLoad } from './helpers.ts';
 
@@ -105,7 +105,7 @@ test('4-J 確かめ: Build のタスクの owner_request は決まった文で�
   assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}\n${PLAN_GIST_LABEL}\n# Plan`);
 });
 
-test('4-J 確かめ: 汚れた計画書の Build は owner_request を持たず、頼みは今までどおり空', async t => {
+test('4-J 確かめ（AP-1a N1 で反転: Build を押した計画は外を読んでいても持ち主の頼み、Q3）: 汚れた計画書の Build も owner_request を持ち、頼みに要点と外を読んだ計画の注記が入る', async t => {
   const s = await setup(t);
   const product = await s.product('tainted-build');
   assert.equal((await s.json(`/api/projects/${product.id}/plan`, 'PUT', { content: '# Plan', baseHash: null, conversationId: planChat(s.app, product.id) })).status, 200);
@@ -115,11 +115,11 @@ test('4-J 確かめ: 汚れた計画書の Build は owner_request を持たず�
   const built = await s.build(product.id);
   assert.equal(built.status, 201, JSON.stringify(built.body));
   const taskId = built.body.task.id as string;
-  assert.equal(s.ownerRequest(taskId), null);
-  assert.equal(s.app.tasks.judgeRequest(taskId), '');
+  assert.notEqual(s.ownerRequest(taskId), null);
+  assert.equal(s.app.tasks.judgeRequest(taskId), `Build: ${product.name}\n${OUTSIDE_PLAN_NOTE}\n${PLAN_GIST_LABEL}\n# Plan`);
 });
 
-test('4-J 確かめ: 持ち主のタスクでも、計画書や Build が汚れた印（mesh・build）が付けば頼みは空。外を読んだ実行のメモの印が先に付いていても同じ', async t => {
+test('4-J 確かめ（AP-1a N2 で反転: 持ち主の控えはあとの印で消えない）: 持ち主のタスクに計画書や Build が汚れた印（mesh・build）が付いても頼みは持ち主の文のまま。外を読んだ実行のメモの印が先に付いていても同じ', async t => {
   for (const actor of ['mesh', 'build']) {
     const s = await setup(t);
     const id = await s.ownerTask({ title: 'Owner task', when: LATER });
@@ -127,11 +127,12 @@ test('4-J 確かめ: 持ち主のタスクでも、計画書や Build が汚れ�
     assert.equal(s.app.tasks.judgeRequest(id), 'Owner task', actor);
     s.app.tasks.markUntrusted(id, actor, 'read a plan written after reading elsewhere');
     s.app.tasks.markUntrusted(id, actor, 'again');
-    assert.equal(s.app.tasks.judgeRequest(id), '', actor);
+    assert.equal(s.app.tasks.judgeRequest(id), 'Owner task', actor);
     const marks = s.app.tasks.events(id).filter(e => e.kind === 'context' && e.run_id === 'untrusted-input');
     assert.deepEqual(marks.map(e => e.actor), [actor], `${actor}: 印はタスクごとに 1 つのまま、計画書の汚れの印に置き換わる`);
+    assert.equal(s.app.tasks.textTainted(id), true, `${actor}: 実行は外を読んだ扱い`);
     s.app.tasks.update(id, { appendNote: 'y' }, 'beat', s.taintedRun());
-    assert.equal(s.app.tasks.judgeRequest(id), '', `${actor}: あとのメモの印で戻らない`);
+    assert.equal(s.app.tasks.judgeRequest(id), 'Owner task', `${actor}: あとのメモの文は入らない`);
   }
 });
 
@@ -181,7 +182,7 @@ test('4-J 確かめ: 外を読んだ実行の文が本文にあるとき、持�
   assert.equal(s.app.tasks.judgeRequest(id), '');
 });
 
-test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ会話のきれいな実行がメモを書いたら、新しい会話で始めたタスクの実行も外を読んだ扱いで始まり、task_create は持ち主に聞く', async t => {
+test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ会話のきれいな実行がメモを書いたら、新しい会話で始めたタスクの実行も外を読んだ扱いで始まる。AP-1c（Q2）で、task_create は持ち主でなく判定役が決める（ask なら judge の行）', async t => {
   const s = await setup(t);
   const id = await s.ownerTask({ title: 'Owner task', body: 'owner body', when: LATER });
   const chat = uuid(91);
@@ -195,14 +196,14 @@ test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ�
   assert.equal(s.app.runs.get(second.body.runId as string)?.tainted, 0, '前提: 書いた実行そのものは外を読んでいない');
   assert.equal(s.app.tasks.judgeRequest(id), 'Owner task\nowner body', '前提: 頼みは持ち主の文');
 
-  s.adapter().scripts = [call('task_create', { title: 'SPAWNED', requested_by_user: true, when: LATER }), reply('done')];
+  s.adapter().scripts = [call('task_create', { title: 'SPAWNED', requested_by_user: true, when: LATER }), reply('{"decision":"ask","reason":"check"}'), reply('done')];
   const started = s.app.engine.runTask(s.app.tasks.get(id)!, s.app.conversations.create({ kind: 'task' }).id, 'Do the task');
   assert.ok(started.ok);
   await started.done;
   assert.equal(s.app.runs.get(started.runId)?.tainted, 1);
   const rows = s.app.pending.list({ status: 'waiting' });
-  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'owner', true]], '判定役に回さず持ち主（Pending の owner）に聞く');
-  assert.match(rows[0]!.reason, /this run read outside content, and task_create would change tasks/u);
+  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'judge', true]], 'the judge decides, not the owner kind');
+  assert.match(rows[0]!.reason, /the judge wants the owner to decide: check/u);
   assert.equal(s.app.db.prepare("SELECT 1 FROM tasks WHERE title = 'SPAWNED'").get(), undefined);
 });
 

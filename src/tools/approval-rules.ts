@@ -31,7 +31,7 @@ export interface RuleCandidate { kind: RuleKind; tool: string; base: string; key
 // What the shell pre-check knows beyond the statements: the script files the command runs, and a git runner to check where a repository lives
 export interface ShapeEnv { scripts?: readonly string[] | undefined; ownHooksDir?: string | null | undefined; git?: ((dir: string, args: string[]) => string | undefined) | undefined; ownerHooks?: (() => boolean) | undefined; config?: HasPolicies | undefined }
 export interface RuleHit { id: number; shown: string }
-export interface RuleView { id: number; project_id: string; project_name: string | null; archived: boolean; kind: RuleKind; tool: string; shown: string; created_at: number; push?: true }
+export interface RuleView { id: number; project_id: string; project_name: string | null; archived: boolean; kind: RuleKind; tool: string; shown: string; created_at: number; push?: true; outside?: true }
 
 const SHOWN_MAX = 300;
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
@@ -266,12 +266,12 @@ export interface CandidateInput {
   tool: Pick<ToolDef, 'name' | 'mcp' | 'submits'>;
   args: unknown;
   ctx: Pick<ToolContext, 'kind' | 'parent' | 'project' | 'scout'>;
-  tainted: boolean;
   parkKind: string;
   check: PreCheck | undefined;
   outbound: Outbound | undefined;
   askKinds: Iterable<AskKind>;
   policyAsk: boolean;
+  fetchEgress?: boolean | undefined;
 }
 
 // Every path the pre-check names (read or written), through links, must be inside the product the run belongs to. Words the pre-check does not read as paths (a git remote name,
@@ -289,7 +289,10 @@ function pathsInside(check: PreCheck | undefined, root: string | undefined): boo
 
 function keysOf(input: CandidateInput): string[] {
   const out = new Set<string>([...(input.check?.reasonKeys ?? []), ...(input.outbound?.keys ?? [])]);
-  for (const kind of input.askKinds) out.add(kind === 'policy' ? 'policy.tool' : `ask:${kind}`);
+  for (const kind of input.askKinds) {
+    if (kind === 'taint' || (kind === 'egress' && input.fetchEgress === true)) continue;
+    out.add(kind === 'policy' ? 'policy.tool' : `ask:${kind}`);
+  }
   if (input.policyAsk) out.add('policy.tool');
   return [...out].sort();
 }
@@ -301,7 +304,7 @@ function urlArg(args: unknown): string | undefined {
 // The one shape a call has for its Pending kind, or none. Used both to offer the choice when parking and to look a rule up, so the two can never disagree
 export function ruleCandidate(input: CandidateInput): RuleCandidate | undefined {
   const { tool, ctx, check, outbound } = input;
-  if (!ctx.project?.id || ctx.kind === 'review' || ctx.scout === true || input.tainted || ruleBlocked(tool.name, ctx)) return undefined;
+  if (!ctx.project?.id || ctx.kind === 'review' || ctx.scout === true || ruleBlocked(tool.name, ctx)) return undefined;
   const keys = keysOf(input);
   if (keys.some(k => NEVER_KEYS.has(k)) || !pathsInside(check, ctx.project.root)) return undefined;
   const shape = tool.name === 'shell_run' ? check?.ruleShape : undefined;
@@ -376,10 +379,18 @@ export function pushRule(candidate: Pick<RuleCandidate, 'tool' | 'base'>): boole
   } catch { return false; }
 }
 
+// AP-1 (Q1, Q6): rules apply after a run read outside text too, so the screen says so where a send, delete or push rule is offered and listed
+export function outsideRule(candidate: Pick<RuleCandidate, 'kind' | 'tool' | 'base'>): boolean {
+  return candidate.kind === 'send' || candidate.kind === 'delete' || pushRule(candidate);
+}
+
 export function listRules(db: DatabaseSync): RuleView[] {
   const rows = db.prepare(`SELECT r.id, r.project_id, p.name AS project_name, p.archived_at, r.kind, r.tool, r.base, r.shown, r.created_at
-    FROM approval_rules r LEFT JOIN projects p ON p.id = r.project_id ORDER BY p.name, r.id`).all() as Array<Omit<RuleView, 'archived' | 'push'> & { archived_at: number | null; base: string }>;
-  return rows.map(({ archived_at, base, ...r }) => ({ ...r, id: Number(r.id), created_at: Number(r.created_at), archived: archived_at !== null && archived_at !== undefined, ...(pushRule({ tool: r.tool, base }) ? { push: true as const } : {}) }));
+    FROM approval_rules r LEFT JOIN projects p ON p.id = r.project_id ORDER BY p.name, r.id`).all() as Array<Omit<RuleView, 'archived' | 'push' | 'outside'> & { archived_at: number | null; base: string }>;
+  return rows.map(({ archived_at, base, ...r }) => ({
+    ...r, id: Number(r.id), created_at: Number(r.created_at), archived: archived_at !== null && archived_at !== undefined,
+    ...(pushRule({ tool: r.tool, base }) ? { push: true as const } : {}), ...(outsideRule({ kind: r.kind, tool: r.tool, base }) ? { outside: true as const } : {}),
+  }));
 }
 
 export function removeRule(db: DatabaseSync, id: number): boolean {

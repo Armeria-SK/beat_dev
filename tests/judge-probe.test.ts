@@ -100,8 +100,9 @@ test('試しの提供元: 例ごと・回ごと・流し方ごとに 1 行。許
   const rows = await runProbe({ model, provider, adapter, cases: JUDGE_CASES, runs: 2, modes: ['a', 'b'], effort: 'low', maxTokens: 400, timeoutMs: 150, secrets: [SECRET] });
   assert.equal(rows.length, JUDGE_CASES.length * 2 * 2);
   assert.ok(adapter.requests.every(r => r.maxOutputTokens === 400 && r.tools.length === 0));
-  assert.ok(adapter.requests.filter(r => r.effort === 'low').length === JUDGE_CASES.length * 2);
-  assert.ok(adapter.requests.filter(r => r.effort === undefined).length === JUDGE_CASES.length * 2);
+  // AP-1d: an unreadable reply (the cut and the junk case) is asked once more, so each of their 2 runs sends 2 requests per mode
+  assert.ok(adapter.requests.filter(r => r.effort === 'low').length === JUDGE_CASES.length * 2 + 4);
+  assert.ok(adapter.requests.filter(r => r.effort === undefined).length === JUDGE_CASES.length * 2 + 4);
   const tainted = adapter.requests.find(r => userOf(r).includes('git apply'))!;
   assert.ok(userOf(tainted).includes(TAINTED_NOTE));
   const of = (id: string) => rows.filter(r => r.caseId === id);

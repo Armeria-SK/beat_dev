@@ -13,7 +13,8 @@ import { ChatEngine } from './engine/chat.ts';
 import { HealthMonitor } from './engine/health.ts';
 import { ModelStatus } from './engine/status.ts';
 import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
-import { buildDynamic, buildSnapshot, ensureWorkspace } from './engine/workspace.ts';
+import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, fenceTail } from './engine/workspace.ts';
+import { PLACEHOLDER_NONCE } from './shared/fence.ts';
 import type { AppPaths } from './paths.ts';
 import { languageOf } from './shared/language.ts';
 import { engineText } from './shared/messages/engine.ts';
@@ -34,6 +35,7 @@ import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
 import { meshDecisionAdd } from './tools/builtin/mesh-write.ts';
 import { questionAdd, questionList } from './tools/builtin/questions.ts';
+import { askOwner } from './tools/builtin/ask.ts';
 import { deviationAdd } from './tools/builtin/deviations.ts';
 import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
@@ -97,7 +99,7 @@ import { MemoryStore, renderBooks } from './memory/store.ts';
 
 export function builtinTools(): ToolDef[] {
   return [
-    taskComplete, taskCheckpoint, questionAdd, toolSearch,
+    taskComplete, taskCheckpoint, questionAdd, askOwner, toolSearch,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun, shellOutput, shellStop,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,
@@ -473,7 +475,7 @@ export class App {
     const full = this.tools?.forRun('chat', { exclude: tool => exclude(tool) || tool.name === 'tool_search' }) ?? [];
     const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : full.length ? estimateToolTokens(ToolRegistry.specs(full, config)) : 0;
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
-      + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
+      + estimateTextTokens(buildDynamic(config.timezone, language)) + estimateTextTokens(fenceTail(buildTail(config.timezone, language), PLACEHOLDER_NONCE)) + 64;
   }
 
   // 記憶を全部入れたときの見積もり。必要な長さには、各モデルの available の 12% までだけが数えられる（requiredContext）

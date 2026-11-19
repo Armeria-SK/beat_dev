@@ -69,6 +69,8 @@ export interface CreateTask {
   acceptanceItems?: readonly string[] | undefined;
   ownerRequest?: boolean | undefined;
   ownerPlan?: string | undefined;
+  ownerItems?: readonly string[] | undefined;
+  ownerPlanOutside?: boolean | undefined;
   spawnedBy?: string | undefined;
   proposal?: Proposal | undefined;
   scoutRun?: true | undefined;
@@ -131,16 +133,19 @@ const TEXT_EVENTS = TEXT_EVENT_KINDS.map(kind => `'${kind}'`).join(', ');
 export interface RemovedTask { id: string; title: string; events: number; keptRuns: number }
 const SOURCE_MARK_ACTORS = ['mesh', 'build'] as const;
 export const PLAN_GIST_LABEL = 'Plan the owner approved for this build (excerpt):';
-interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string }
+export const ACCEPTANCE_ITEMS_LABEL = 'Acceptance items the owner approved for this build:';
+export const OUTSIDE_PLAN_NOTE = 'note: this plan or its acceptance items were written by a run that had read text from elsewhere; the owner approved them by starting the build';
+interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string; items?: string[]; outside?: true }
 
 function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefined {
   if (!raw) return undefined;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return undefined; }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const { title, body, doneCriteria, plan } = value as Record<string, unknown>;
+  const { title, body, doneCriteria, plan, items, outside } = value as Record<string, unknown>;
   if (typeof title !== 'string' || typeof body !== 'string' || (doneCriteria !== null && typeof doneCriteria !== 'string')) return undefined;
-  return { title, body, doneCriteria, ...(typeof plan === 'string' && plan ? { plan } : {}) };
+  const lines = Array.isArray(items) ? items.filter((line): line is string => typeof line === 'string' && line !== '') : [];
+  return { title, body, doneCriteria, ...(typeof plan === 'string' && plan ? { plan } : {}), ...(lines.length ? { items: lines } : {}), ...(outside === true ? { outside: true as const } : {}) };
 }
 
 function firstLine(text: string | null): string | null {
@@ -275,7 +280,6 @@ export class TaskStore {
       const chain = this.#spawnChain(start);
       const root = chain?.at(-1);
       if (!chain || !root || this.beatDecided(root.id)) return '';
-      if ([task, ...chain].some(link => this.#sourceTainted(link.id, link.parent_id) || this.#textTainted(link.id, link.parent_id))) return '';
       return this.#ownerText(root) ?? '';
     }
     const owner = this.#ownerText(task);
@@ -288,8 +292,10 @@ export class TaskStore {
     const holder = task.owner_request === null && task.parent_id ? this.get(task.parent_id) : task;
     const owner = ownerRequestOf(holder?.owner_request);
     if (!owner || !holder) return undefined;
-    if (this.#sourceTainted(task.id, task.parent_id)) return '';
-    return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria, ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : [])].filter(Boolean).join('\n');
+    return [
+      owner.title, ...(owner.outside ? [OUTSIDE_PLAN_NOTE] : []), holder.acceptance_items === null ? owner.body : '', owner.doneCriteria,
+      ...(owner.items ? [ACCEPTANCE_ITEMS_LABEL, ...owner.items] : []), ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : []),
+    ].filter(Boolean).join('\n');
   }
 
   #spawnChain(task: Task): Task[] | undefined {
@@ -318,6 +324,8 @@ export class TaskStore {
       body: patch.body !== undefined ? patch.body : current.body,
       doneCriteria: patch.doneCriteria !== undefined ? patch.doneCriteria : current.doneCriteria,
       ...(current.plan ? { plan: current.plan } : {}),
+      ...(current.items ? { items: current.items } : {}),
+      ...(current.outside ? { outside: true as const } : {}),
     };
     this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
   }
@@ -325,11 +333,6 @@ export class TaskStore {
   textTainted(id: string): boolean {
     const task = this.get(id);
     return task !== undefined && this.#textTainted(task.id, task.parent_id);
-  }
-
-  #sourceTainted(taskId: string, parentId: string | null): boolean {
-    return this.#db.prepare(`SELECT 1 FROM task_events WHERE task_id IN (?, ?) AND run_id = ? AND kind = 'context' AND actor IN (${SOURCE_MARK_ACTORS.map(() => '?').join(', ')}) LIMIT 1`)
-      .get(taskId, parentId ?? taskId, UNTRUSTED_RUN, ...SOURCE_MARK_ACTORS) !== undefined;
   }
 
   #textTainted(taskId: string, parentId: string | null): boolean {
@@ -372,7 +375,10 @@ export class TaskStore {
       if (input.propose) runAt = null;
       else status = 'scheduled';
     }
-    const ownerRequest: OwnerRequest | null = input.ownerRequest ? { title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}) } : null;
+    const ownerRequest: OwnerRequest | null = input.ownerRequest ? {
+      title, body: input.body ?? '', doneCriteria: input.doneCriteria ?? null, ...(input.ownerPlan ? { plan: input.ownerPlan } : {}),
+      ...(input.ownerItems?.length ? { items: [...input.ownerItems] } : {}), ...(input.ownerPlanOutside ? { outside: true as const } : {}),
+    } : null;
     this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, project_id, acceptance_items, owner_request, spawned_by, proposal, proposed_by, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${input.scoutRun ? `'${SCOUT_RUN}'` : 'NULL'}, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,

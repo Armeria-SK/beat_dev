@@ -5,7 +5,9 @@ import { providerText, type ProviderMessageKey } from '../shared/messages/provid
 
 export interface ModelRequest {
   model: ModelConfig;
-  system: { frozen: string; dynamic: string };
+  // frozen: 会話で固定の部分。dynamic: 1 つの実行のあいだ変わらない部分（日付まで）。tail: いまの時刻・Checklist・裏のコマンドの一覧の全体（毎回変わってよい）。
+  // tail は、発言に付けた分（ChatMessage.tail）を送るときは使わず、最後が assistant のとき・古い考えるモデルのときだけ system の後ろに置く
+  system: { frozen: string; dynamic: string; tail: string };
   messages: ChatMessage[];
   tools: ToolSpec[];
   maxOutputTokens: number;

@@ -200,6 +200,12 @@ export class BrowserSession {
     return tab?.conversationId === conversationId ? tab.kind : undefined;
   }
 
+  // beat 自身のポート（起動の時の設定と、作ってから見たもの）。中継・提供元・MCP は含まない
+  selfPorts(): ReadonlySet<number> {
+    this.#noteSelfPorts();
+    return new Set(this.#selfPorts);
+  }
+
   // ループバックの断るポート（D-3）。設定・これまで見た beat のポート・いま動いている中継すべてのポートから、呼ぶたびに作る
   loopbackDenied(): ReadonlySet<number> {
     this.#noteSelfPorts();

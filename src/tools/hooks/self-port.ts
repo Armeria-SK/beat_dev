@@ -26,7 +26,7 @@ const MAX_DEPTH = 6;
 const WORK_BUDGET = 300_000;
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
-function loopbackHost(host: string): boolean {
+export function loopbackHost(host: string): boolean {
   const bare = host.replace(/^\[|\]$/gu, '').toLowerCase();
   if (LOOPBACK_NAME.test(bare)) return true;
   if (/^0x[0-9a-f]+$/u.test(bare) || /^\d{8,10}$/u.test(bare)) {

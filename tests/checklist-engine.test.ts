@@ -92,12 +92,15 @@ test('一覧は毎回の system の「毎回組み立てる部分」に入る（
   const [before, afterWrite, nextRun] = s.adapter().calls;
   assert.equal(s.adapter().calls.length, 3);
   const heading = toolText('en', 'checklist.section');
-  assert.ok(!before!.system.dynamic.includes(heading), '書く前は見出しが無い');
+  assert.ok(!before!.system.tail.includes(heading), '書く前は見出しが無い');
   for (const request of [afterWrite!, nextRun!]) {
-    assert.ok(request.system.dynamic.includes(`${heading}\n- [ ] ${OPEN}\n- [>] ${ACTIVE}`), '見出しと、終わっていない項目が並びの順に入る');
-    assert.ok(!request.system.dynamic.includes(DONE), '済みの項目は入らない');
-    assert.ok(!request.system.dynamic.includes(toolText('en', 'checklist.section_tainted')), '外から読んでいない一覧に、印の文は付かない');
+    assert.ok(request.system.tail.includes(`${heading}\n- [ ] ${OPEN}\n- [>] ${ACTIVE}`), '見出しと、終わっていない項目が並びの順に入る');
+    assert.ok(!request.system.tail.includes(DONE), '済みの項目は入らない');
+    assert.ok(!request.system.tail.includes(toolText('en', 'checklist.section_tainted')), '外から読んでいない一覧に、印の文は付かない');
   }
+  assert.ok(!afterWrite!.system.dynamic.includes(heading), 'S1: 一覧は実行のあいだ同じ部分（dynamic）には入れない');
+  const lastSent = afterWrite!.messages.at(-1)!;
+  assert.ok(lastSent.role !== 'assistant' && lastSent.tail?.includes(`${heading}\n- [ ] ${OPEN}`), 'S1: 書いた直後の呼び出しで、最後の発言（道具の結果）に付けて送る');
   assert.equal(afterWrite!.system.frozen, before!.system.frozen, '固定の system は変わらない');
   assert.equal(nextRun!.system.frozen, before!.system.frozen);
   assert.ok(!nextRun!.system.frozen.includes(OPEN) && !nextRun!.system.frozen.includes(heading), '一覧は固定の system に入れない');
@@ -108,15 +111,15 @@ test('全部 済み の一覧は、system に見出しも項目も入れない',
   await run(s, [call('checklist_write', { items: [{ text: DONE, status: 'done' }] }), reply('書きました')]);
   await run(s, [reply('次です')]);
   const last = s.adapter().calls.at(-1)!;
-  assert.ok(!last.system.dynamic.includes(toolText('en', 'checklist.section')));
-  assert.ok(!last.system.dynamic.includes(DONE));
+  assert.ok(!last.system.tail.includes(toolText('en', 'checklist.section')));
+  assert.ok(!last.system.tail.includes(DONE));
 });
 
 test('一覧の見出しは英語で入る', async t => {
   const s = await setup(t);
   await run(s, [call('checklist_write', { items: [{ text: 'check the price', status: 'pending' }] }), reply('saved')]);
   const last = s.adapter().calls.at(-1)!;
-  assert.ok(last.system.dynamic.includes(`${toolText('en', 'checklist.section')}\n- [ ] check the price`));
+  assert.ok(last.system.tail.includes(`${toolText('en', 'checklist.section')}\n- [ ] check the price`));
 });
 
 test('使用量の見積もり（contextUsage）にも一覧の分が入る（実行と同じ組み立てを通る）', async t => {
@@ -138,7 +141,7 @@ for (const language of ['en'] as const) {
     const second = send(s, 'next', [call('shell_run', PROBE), reply('done')]);
     await expectAsked(s, second);
     assert.equal(s.app.runs.get(second)!.tainted, 1, '実行の記録にも印が残る');
-    const system = s.adapter().calls[3]!.system.dynamic;
+    const system = s.adapter().calls[3]!.system.tail;
     assert.ok(system.includes(toolText(language, 'checklist.section_tainted')), '一覧の見出しに、外から読んだ印の文が付く');
   });
 }

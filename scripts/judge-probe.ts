@@ -88,7 +88,7 @@ async function classify(options: ProbeOptions, limiter: EndpointLimiter, prompt:
   try {
     let text = '';
     for await (const event of adapter.stream({
-      model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(options.maxTokens, maxOutputFor(model, model.contextLength ?? Infinity)), effort, signal,
+      model, system: { frozen: prompt.system, dynamic: '', tail: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(options.maxTokens, maxOutputFor(model, model.contextLength ?? Infinity)), effort, signal,
     })) {
       if (event.type === 'text') text += event.delta;
       else if (event.type === 'done' && event.stop === 'max_tokens') { note.truncated = true; note.raw = text; throw new TruncatedReply(); }
@@ -104,7 +104,7 @@ async function holdSlot(options: ProbeOptions, limiter: EndpointLimiter, signal:
   const done = (async () => {
     try {
       for await (const _event of adapter.stream({
-        model, system: { frozen: CONTENTION_SYSTEM, dynamic: '' }, messages: [{ role: 'user', content: CONTENTION_USER }], tools: [], maxOutputTokens: Math.min(CONTENTION_TOKENS, maxOutputFor(model, model.contextLength ?? Infinity)), signal,
+        model, system: { frozen: CONTENTION_SYSTEM, dynamic: '', tail: '' }, messages: [{ role: 'user', content: CONTENTION_USER }], tools: [], maxOutputTokens: Math.min(CONTENTION_TOKENS, maxOutputFor(model, model.contextLength ?? Infinity)), signal,
       })) { if (signal.aborted) break; }
     } catch { } finally { release(); }
   })();

@@ -144,7 +144,7 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 
 const streamModel: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, maxOutputTokens: 1024, vision: false };
 const streamRequest: ModelRequest = {
-  model: streamModel, system: { frozen: 'あなたは beat', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
+  model: streamModel, system: { frozen: 'あなたは beat', dynamic: '', tail: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
   tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
 };
 
@@ -437,7 +437,7 @@ test('F1: 上げた上限は、同じ実行の次の組み立ての「使える�
 test('F1: 上げる上限は、いまのやり取りと合わせてコンテキストの 95% に入りきる量まで', async t => {
   const s = await setup(t, big(40_000));
   s.adapter().scripts.push(thinkingOnly, reply('おわり'));
-  await s.run('abcdefg '.repeat(9_000));
+  await s.run('abcdefg '.repeat(8_800));
   const calls = s.adapter().calls;
   assert.equal(calls.length, 2);
   const second = calls[1]!;
