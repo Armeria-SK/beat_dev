@@ -4,6 +4,7 @@ import { isSensitiveName, redactSecrets } from '../../../src/shared/redaction.ts
 import { en } from '../i18n/en.ts';
 import { t, type PlainKey } from '../i18n/index.ts';
 import { PATTERNS } from '../settings/mcp-model.ts';
+import { EDIT_TOOLS } from './changes.ts';
 import type { UiIconName } from './icons.ts';
 
 export type ToolVerb = 'edit' | 'run' | 'search' | 'helper' | 'tool';
@@ -26,7 +27,7 @@ export interface ToolRowView {
 
 export interface ToolResult { text: string; isError: boolean }
 
-const EDIT = new Set(['file_write', 'file_edit', 'table_write']);
+const EDIT = EDIT_TOOLS;
 const SEARCH = new Set([
   'file_read', 'file_list', 'file_search', 'doc_read', 'image_view',
   'web_search', 'web_fetch', 'browser_read',

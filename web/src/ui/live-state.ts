@@ -1,6 +1,7 @@
 import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, QuestionCounts, Task, TaskStatus, ToolGate } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
+import { EDIT_TOOLS } from './changes.ts';
 
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; projectId?: string | null; buildChat?: { chat: string; conversation: string | null } }
 
@@ -37,6 +38,7 @@ export interface LiveState {
   checklists: ReadonlyMap<string, ChecklistItem[]>;
   notices: ReadonlyMap<string, RunNotice[]>;
   revisions: ReadonlyMap<string, number>;
+  edits: ReadonlyMap<string, number>;
   interrupting: ReadonlySet<string>;
   taskRevision: number;
   planRevisions: ReadonlyMap<string, number>;
@@ -52,7 +54,7 @@ export interface LiveState {
 
 export const EMPTY: LiveState = {
   conversations: [], conversationsMore: {}, conversationsSettled: false, projects: [], projectsLoaded: false, skillDrafts: 0, unread: 0, tasks: new Map(), drafts: [], streaming: new Set(), checklists: new Map(),
-  notices: new Map(), revisions: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
+  notices: new Map(), revisions: new Map(), edits: new Map(), interrupting: new Set(), taskRevision: 0, planRevisions: new Map(), libraryRevision: 0, pendingCounts: null, pendingWaiting: [], pendingRevision: 0, questionCounts: null, questionRevision: 0, backgroundRevision: 0, epoch: 0,
 };
 
 const library = (s: LiveState): LiveState => ({ ...s, libraryRevision: s.libraryRevision + 1 });
@@ -168,8 +170,9 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       };
     case 'tool.result': {
       const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId, e.gate), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
+      const edited = e.ok && e.decision !== 'deny' && EDIT_TOOLS.has(e.name) ? { ...state, edits: new Map(state.edits).set(e.conversationId, (state.edits.get(e.conversationId) ?? 0) + 1) } : state;
       return {
-        state: e.decision === 'deny' ? addNotice(state, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : state,
+        state: e.decision === 'deny' ? addNotice(edited, e.conversationId, { runId: e.runId, kind: 'denied', tool: e.name, detail: e.preview.split('\n').slice(1, 3).join(' ') }) : edited,
         effects: [],
       };
     }

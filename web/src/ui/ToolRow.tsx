@@ -86,7 +86,8 @@ function ToolLine({ item, enter, pending, terminal, changes }: { item: ToolItem;
   } else meta = item.gate && item.gate.by !== 'judge' && item.gate.by !== 'no-judge' && item.gate.by !== 'rule' ? gateMeta(t, item, pending) : <>{metaNode(t, view.meta)}{gateMeta(t, item, pending)}</>;
   const job = view.meta?.kind === 'background' ? view.meta.id : null;
   const terminalLink = job && terminal ? <a className="bt-tool__link ui-tool__terminal" href="#" onClick={e => { e.preventDefault(); terminal(job); }}>{t('ui.tool.openTerminal')}</a> : null;
-  const edited = changes && item.result && !item.result.isError ? editPath(item.name, item.input) : null;
+  const ran = item.gate?.by !== 'pending' && item.gate?.by !== 'not-parked';
+  const edited = changes && ran && item.result && !item.result.isError ? editPath(item.name, item.input) : null;
   const changesLink = edited && changes ? <a className="bt-tool__link ui-tool__changes" href="#" onClick={e => { e.preventDefault(); changes(edited); }}>{t('ui.changes.open')}</a> : null;
   const helperLink = running?.helperConversation ? <a className="bt-tool__link" href={routeHash({ view: 'chat', id: running.helperConversation })}>{t('ui.tool.openHelper')}</a> : null;
   return (

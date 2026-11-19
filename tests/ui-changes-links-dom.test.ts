@@ -98,3 +98,30 @@ test('ui/ChangesRedo（DOM）: Redo を押すと組の id で口を呼び、「r
   assert.equal(container.textContent!.trim(), '· redone');
   assert.ok(container.querySelector('button') === null, 'やり直したあとは押せない');
 });
+
+test('ui/ChangesRedo（DOM）: どのファイルもやり直せなかったときは「redone」と言わず、理由を出して Redo を残す', async () => {
+  globalThis.fetch = (async () => reply({ redone: [], refused: [{ path: 'src/a.ts', reason: 'changed' }] })) as typeof fetch;
+  const { container } = await render(createElement('div', { className: 'bt-notice' }, createElement(RedoAction, { projectId: 'p1', batch: 'batch-refused' })));
+  await click(byText(container, 'button', 'Redo'));
+  await settle();
+  assert.ok(!/redone$/u.test(container.textContent!.trim()) && !container.textContent!.includes('· redone'), 'redone と言わない');
+  assert.match(container.textContent!, /1 could not be redone: src\/a\.ts: /u);
+  assert.ok(byText(container, 'button', 'Redo'), 'Redo は残る');
+});
+
+test('ui/ToolRow（DOM）: Pending に止まった Edit・動かなかった Edit の行には「Open in Changes」を出さない', async () => {
+  const row = (key: string, gate: unknown) => ({ key, name: 'file_edit', input: JSON.stringify({ path: `src/${key}.ts`, old: 'a', new: 'b' }), result: { text: 'Waiting in Pending', isError: false }, gate });
+  const rows = [row('parked', { by: 'pending', id: 'pa1' }), row('blocked', { by: 'not-parked' }), row('ran', { by: 'no-judge' })];
+  const { container } = await render(createElement(ToolGroup, { rows, isNew: () => false, changes: () => {} }));
+  const links = [...container.querySelectorAll('.ui-tool__changes')];
+  assert.equal(links.length, 1, '動いた行だけ');
+  assert.ok(links[0]!.closest('.bt-tool')?.textContent?.includes('src/ran.ts'));
+});
+
+test('ui/live-state: 書く道具の結果（ok）が来るたびに、その会話の書いた回数が増える。失敗・断られた・読むだけの道具では増えない', () => {
+  const result = (name: string, ok = true, decision = 'allow') => ({ type: 'event' as const, hidden: false, event: { type: 'tool.result' as const, runId: 'r1', conversationId: 'c1', callId: name, name, ok, decision, preview: '' } });
+  let state = EMPTY;
+  for (const action of [result('file_edit'), result('file_write'), result('table_write'), result('file_edit', false), result('file_edit', true, 'deny'), result('file_read'), result('shell_run')]) state = reduce(state, action).state;
+  assert.equal(state.edits.get('c1'), 3);
+  assert.equal(state.edits.get('c2'), undefined);
+});

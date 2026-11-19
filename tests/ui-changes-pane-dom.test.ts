@@ -6,8 +6,8 @@ import type { ChangedFile, ChangesView } from '../web/src/api.ts';
 
 // beat 8-5b: Changes の欄（Design ChangesPane）。差分の形・符号・省略、Undo（確かめなし）で塊が去り Notice の知らせ、Redo、動いているあいだの 409、測る点の切り替え、hidden に Undo なし、ブランチの差分に Undo なし
 
-type Source = { kind: 'product'; productId: string; conversationId: string | undefined; isGit: boolean } | { kind: 'branch'; productId: string; worktreeId: string };
-type Props = { source: Source; revision: string; focus?: { path: string; n: number } | null; onUndone?: (notice: unknown) => void };
+type Source = { kind: 'product'; productId: string; conversationId: string | undefined; isGit: boolean; root?: string | null } | { kind: 'branch'; productId: string; worktreeId: string };
+type Props = { source: Source; revision: string; focus?: { path: string; n: number } | null; onFocusUsed?: () => void; onUndone?: (notice: unknown) => void };
 const { ChangesPane } = await loadTsx<{ ChangesPane: ComponentType<Props> }>('../web/src/ui/panes/ChangesPane.tsx', import.meta.url);
 
 const realFetch = globalThis.fetch;
@@ -23,7 +23,7 @@ const old: ChangedFile = { path: 'src/old.ts', status: 'deleted', added: 0, remo
 const env: ChangedFile = { path: '.env', status: 'modified', added: 0, removed: 0, hidden: true, undo: false, hunks: null };
 const big: ChangedFile = { path: 'assets/logo.png', status: 'modified', added: 0, removed: 0, hidden: false, undo: true, hunks: null };
 
-interface Server { calls: string[]; bodies: unknown[]; files: ChangedFile[]; redo: ChangesView['redo']; undo: { status: number; body: unknown } | null; redoReply: { status: number; body: unknown } | null }
+interface Server { calls: string[]; bodies: unknown[]; files: ChangedFile[]; redo: ChangesView['redo']; undo: { status: number; body: unknown } | null; redoReply: { status: number; body: unknown } | null; more?: number; hold?: ((url: URL) => Promise<void> | null) | undefined }
 
 function serve(server: Server) {
   globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
@@ -31,16 +31,18 @@ function serve(server: Server) {
     server.calls.push(`${init?.method ?? 'GET'} ${url.pathname}${url.search}`);
     if (init?.body) server.bodies.push(JSON.parse(String(init.body)));
     const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const held = server.hold?.(url);
+    if (held) await held;
     if (url.pathname === '/api/projects/p1/changes') {
       const base = url.searchParams.get('base');
       if (base === 'build' && !server.files.length) return reply({ error: 'project', code: 'project.changes_no_base', message: 'There is nothing to compare with yet' }, 404);
       const kind = base ?? 'build';
-      return reply({ base: { kind, ref: null, at: null }, files: server.files, more: 0, redo: server.redo });
+      return reply({ base: { kind, ref: null, at: null }, files: server.files, more: server.more ?? 0, redo: server.redo });
     }
     if (url.pathname === '/api/projects/p1/changes/undo') {
       if (server.undo) return reply(server.undo.body, server.undo.status);
-      const body = JSON.parse(String(init!.body)) as { paths: string[] | 'all' };
-      const undone = body.paths === 'all' ? server.files.filter(f => f.undo).map(f => f.path) : body.paths;
+      const body = JSON.parse(String(init!.body)) as { paths: string[] };
+      const undone = body.paths;
       server.files = server.files.filter(f => !undone.includes(f.path));
       server.redo = { id: BATCH, created_at: Date.now(), paths: undone };
       return reply({ undone, refused: [], redo: BATCH, more: 0 });
@@ -124,12 +126,58 @@ test('ui/ChangesPane（DOM）: ファイルの Undo は確かめなしで口を�
   assert.ok(container.querySelector('.ui-changes__redo') === null, 'Redo したら Redo の行は消える');
 });
 
-test('ui/ChangesPane（DOM）: Undo all は paths: "all"', async () => {
-  const { container, state } = await show([queue, backoff, env]);
+test('ui/ChangesPane（DOM）: Undo all は欄に出ている戻せるファイルだけを名指しで送る（"all" は送らない。欄に無いファイルを戻さない）。欄に入りきらない数は知らせの more', async () => {
+  const { container, state, notices } = await show([queue, backoff, env], {}, { more: 7 });
   await click(byText(container, '.bt-pane__bar button', 'Undo all'));
   await wait(300);
-  assert.deepEqual(state.bodies[0], { base: 'build', paths: 'all' });
+  assert.deepEqual(state.bodies[0], { base: 'build', paths: ['src/upload/queue.ts', 'src/upload/backoff.ts'] });
+  assert.deepEqual(notices, [{ projectId: 'p1', batch: BATCH, undone: 2, refused: 0, more: 7 }]);
   assert.deepEqual([...container.querySelectorAll('.bt-diff')].map(b => b.getAttribute('data-path')), ['.env'], 'hidden だけ残る');
+});
+
+test('ui/ChangesPane（DOM）: ファイル 1 つの Undo の知らせには more を付けない', async () => {
+  const { container, notices } = await show([queue, backoff], {}, { more: 7 });
+  await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
+  await settle();
+  assert.deepEqual(notices, [{ projectId: 'p1', batch: BATCH, undone: 1, refused: 0, more: 0 }]);
+});
+
+test('ui/ChangesPane（DOM）: 測る点を変えて読み直しを待つあいだは、前の一覧の Undo を押せない（新しい元で古い一覧のファイルを戻さない）。読み終えたら新しい元で送る', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const { container, state } = await show([queue], {}, { hold: url => (url.searchParams.get('base') === 'commit' ? gate : null) });
+  const select = () => container.querySelector('select.bt-select') as HTMLSelectElement;
+  await update(() => { select().value = 'conversation'; select().dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+  await update(() => { select().value = 'commit'; select().dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+  assert.equal(state.calls.at(-1), 'GET /api/projects/p1/changes?base=commit');
+  const undo = byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo') as HTMLButtonElement;
+  assert.ok(undo.disabled, '読み直し待ちのあいだ、ファイルの Undo は押せない');
+  assert.ok((byText(container, '.bt-pane__bar button', 'Undo all') as HTMLButtonElement).disabled, 'Undo all も押せない');
+  await click(undo);
+  await settle();
+  assert.deepEqual(state.bodies, [], '何も送らない');
+  await update(async () => { release(); await gate; });
+  await settle();
+  await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
+  await settle();
+  assert.deepEqual(state.bodies, [{ base: 'commit', paths: ['src/upload/queue.ts'] }]);
+});
+
+test('ui/ChangesPane（DOM）: 「この会話」で読んだ一覧の Undo は、会話の id を付けて送る', async () => {
+  const { container, state } = await show([queue]);
+  const select = container.querySelector('select.bt-select') as HTMLSelectElement;
+  await update(() => { select.value = 'conversation'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+  await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
+  await settle();
+  assert.deepEqual(state.bodies, [{ base: 'records', conversation: 'c1', paths: ['src/upload/queue.ts'] }]);
+});
+
+test('ui/ChangesPane（DOM）: 欄を開く前の Undo（サーバーが覚えている古いまとまり）には Redo の行を出さない', async () => {
+  const { container } = await show([queue], {}, { redo: { id: '99999999-1111-4222-8333-444455556666', created_at: Date.now() - 3_600_000, paths: ['src/x.ts'] } });
+  assert.ok(container.querySelector('.ui-changes__redo') === null);
 });
 
 test('ui/ChangesPane（DOM）: タスクが動いているあいだの 409 は、塊を残したまま理由を出す。会話には知らせない', async () => {
@@ -181,15 +229,45 @@ test('ui/ChangesPane（DOM）: 空のときは No changes と測る点。Build �
   assert.equal(byText(container, 'button', 'Undo all'), undefined);
 });
 
-test('ui/ChangesPane（DOM）: Edit の行や Files から来たら、そのファイルの塊へ動いて印を付ける。無ければ一言', async () => {
-  const { container, root, props } = await show([queue, backoff], { focus: { path: 'D:\\work\\uploader\\src\\upload\\backoff.ts', n: 1 } });
+const ROOT = { kind: 'product' as const, productId: 'p1', conversationId: 'c1', isGit: true, root: 'D:\\work\\uploader' };
+
+test('ui/ChangesPane（DOM）: Edit の行や Files から来たら、そのファイルの塊へ動いて印を付ける。無ければ一言。頼みは使ったら返す', async () => {
+  let used = 0;
+  const { container, root, props } = await show([queue, backoff], { source: ROOT, focus: { path: 'D:\\work\\uploader\\src\\upload\\backoff.ts', n: 1 }, onFocusUsed: () => { used++; } });
   await settle();
   assert.ok(block(container, 'src/upload/backoff.ts')!.classList.contains('is-focus'));
   assert.ok(document.activeElement === block(container, 'src/upload/backoff.ts'), 'その塊に focus');
+  assert.equal(used, 1, '使ったと 1 回だけ伝える');
   await update(() => root.render(createElement(ChangesPane, { ...props, focus: { path: 'src/nothing.ts', n: 2 } })));
   await settle();
   assert.equal(text(container.querySelector('.ui-changes__note[role="status"]')), 'src/nothing.ts has no changes here.');
   assert.ok(container.querySelector('.is-focus') === null);
+});
+
+test('ui/ChangesPane（DOM）: 開いたままの欄に後から書かれたファイルでも、頼みが来たら読み直してから探す。「ここに無い」は次の読み直しで消える', async () => {
+  const { container, root, props, state } = await show([queue], { source: ROOT });
+  state.files = [queue, backoff];
+  await update(() => root.render(createElement(ChangesPane, { ...props, focus: { path: 'src/upload/backoff.ts', n: 1 } })));
+  await settle();
+  await settle();
+  assert.equal(state.calls.filter(c => c.startsWith('GET')).length, 2, '頼みで読み直す');
+  assert.ok(container.querySelector('.ui-changes__note[role="status"]') === null, '「無い」と言わない');
+  assert.ok(block(container, 'src/upload/backoff.ts')!.classList.contains('is-focus'));
+  await update(() => root.render(createElement(ChangesPane, { ...props, focus: { path: 'src/later.ts', n: 2 } })));
+  await settle();
+  assert.ok(container.querySelector('.ui-changes__note[role="status"]'), 'まだ無いファイルは一言');
+  state.files = [queue, backoff, { ...queue, path: 'src/later.ts' }];
+  await update(() => root.render(createElement(ChangesPane, { ...props, focus: null, revision: '1' })));
+  await settle();
+  assert.ok(container.querySelector('.ui-changes__note[role="status"]') === null, '読み直したら古い一言は消える');
+});
+
+test('ui/ChangesPane（DOM）: 製品の外の絶対パス（同じ名前でも）には動かず「ここに無い」', async () => {
+  await show([queue], { source: ROOT, focus: { path: 'X:\\elsewhere\\src\\upload\\queue.ts', n: 1 } }).then(async ({ container }) => {
+    await settle();
+    assert.ok(container.querySelector('.is-focus') === null);
+    assert.equal(text(container.querySelector('.ui-changes__note[role="status"]')), 'X:\\elsewhere\\src\\upload\\queue.ts has no changes here.');
+  });
 });
 
 test('ui/ChangesPane（DOM）: タスクのブランチの差分（あとで worktree のカードから開く形）は、同じ欄で Undo を出さない', async () => {
@@ -209,4 +287,23 @@ test('ui/ChangesPane（DOM）: 読めなければ理由と Retry', async () => {
   await settle();
   assert.match(text(container.querySelector('.bt-notice--warn'))!, /^Could not load the changes · git could not be run safely/u);
   assert.ok(byText(container, 'button', 'Retry'));
+});
+
+test('ui/ChangesPane（DOM）: 読めなくても測る点の箱は残り、別の元（この会話）に切り替えて読める', async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (path: string | URL | Request) => {
+    const url = new URL(String(path), 'http://x');
+    calls.push(`${url.pathname}${url.search}`);
+    if (!url.searchParams.get('base')) return new Response(JSON.stringify({ error: 'project', code: 'project.changes_not_git', message: 'This product folder is not a git repository' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ base: { kind: 'records', ref: null, at: null }, files: [queue], more: 0, redo: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const { container } = await render(createElement(ChangesPane, { source: { kind: 'product', productId: 'p1', conversationId: 'c1', isGit: true }, revision: '0' }));
+  await settle();
+  assert.ok(container.querySelector('.bt-notice--warn'));
+  const select = container.querySelector('select.bt-select') as HTMLSelectElement | null;
+  assert.ok(select !== null, '箱が残る');
+  await update(() => { select.value = 'conversation'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+  assert.equal(calls.at(-1), '/api/projects/p1/changes?base=records&conversation=c1');
+  assert.ok(block(container, 'src/upload/queue.ts'));
 });

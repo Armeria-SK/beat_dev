@@ -1,4 +1,6 @@
-import type { ChangedFile, ChangesScope } from '../api.ts';
+import type { ChangedFile, ChangeRefusal, ChangesScope, RefusedChange } from '../api.ts';
+import type { t } from '../i18n/index.ts';
+import type { PlainKey } from '../i18n/types.ts';
 
 export type ChangesPick = 'build' | 'commit' | 'records' | 'conversation';
 
@@ -33,16 +35,38 @@ export function scopeOf(pick: ChangesPick | null, conversation: string | undefin
   return { base: pick };
 }
 
-const norm = (path: string): string => path.replace(/\\/gu, '/').replace(/^\.\//u, '').toLowerCase();
+const norm = (path: string): string => path.replace(/\\/gu, '/').replace(/^(\.\/)+/u, '').replace(/\/+$/u, '').toLowerCase();
+const absolute = (path: string): boolean => /^(\/|[a-z]:\/)/u.test(path);
 
-export function matchChange(files: readonly ChangedFile[], wanted: string): ChangedFile | undefined {
-  const target = norm(wanted.trim());
+export function matchChange(files: readonly ChangedFile[], wanted: string, root: string | null): ChangedFile | undefined {
+  let target = norm(wanted.trim());
   if (!target) return undefined;
-  let best: ChangedFile | undefined;
-  for (const file of files) {
-    const own = norm(file.path);
-    if (own === target) return file;
-    if (target.endsWith(`/${own}`) && (!best || own.length > best.path.length)) best = file;
+  if (absolute(target)) {
+    const base = root ? norm(root) : '';
+    if (!base || !target.startsWith(`${base}/`)) return undefined;
+    target = target.slice(base.length + 1);
   }
-  return best;
+  return files.find(file => norm(file.path) === target);
+}
+
+export const EDIT_TOOLS: ReadonlySet<string> = new Set(['file_write', 'file_edit', 'table_write']);
+
+const SHOWN_REFUSALS = 3;
+const WHY: Record<ChangeRefusal, PlainKey> = {
+  not_changed: 'ui.changes.why.not_changed',
+  hidden: 'ui.changes.why.hidden',
+  unsafe_path: 'ui.changes.why.unsafe_path',
+  link: 'ui.changes.why.link',
+  not_kept: 'ui.changes.why.not_kept',
+  too_large: 'ui.changes.why.too_large',
+  cannot_keep: 'ui.changes.why.cannot_keep',
+  same_file: 'ui.changes.why.same_file',
+  changed: 'ui.changes.why.changed',
+  failed: 'ui.changes.why.failed',
+};
+
+export function refusalText(tr: typeof t, refused: readonly RefusedChange[]): string {
+  const shown = refused.slice(0, SHOWN_REFUSALS).map(r => `${r.path}: ${tr(WHY[r.reason])}`);
+  const rest = refused.length - shown.length;
+  return [...shown, ...(rest > 0 ? [tr('ui.changes.more', rest)] : [])].join(' · ');
 }

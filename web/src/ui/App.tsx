@@ -388,6 +388,8 @@ export function App() {
   const undone = useCallback((notice: UndoneNotice) => {
     if (chatId) dispatch({ type: 'notice', conversationId: chatId, notice: { runId: `undo:${notice.batch ?? Date.now()}`, kind: 'undo', ...notice } });
   }, [chatId, dispatch]);
+  let paneEdits = 0;
+  if (paneProduct) for (const [id, n] of live.edits) if (id === chatId || conversations.some(c => c.id === id && c.project_id === paneProduct)) paneEdits += n;
 
   return (
     <div className={`ui-frame${drawer ? ' is-drawer-open' : ''}`}>
@@ -454,7 +456,7 @@ export function App() {
           </main>
         )}
         {paneProduct && paneCount > 0 && (
-          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting} onUndone={undone}
+          <Panes panes={panes} productId={paneProduct} scope={chatId ?? 'new'} inert={drawer} isGit={convoProduct?.is_git ?? true} taskRevision={`${live.taskRevision}:${live.epoch}`} backgroundRevision={`${live.backgroundRevision}:${live.epoch}`} waits={worker?.waiting} productRoot={convoProduct?.root ?? null} editRevision={paneEdits} onUndone={undone}
             revision={`${live.planRevisions.get(paneProduct) ?? 0}:${live.epoch}:${runningIn(drafts, conversations, paneProduct)}`}
             pending={{ waiting: live.pendingWaiting, counts: live.pendingCounts, projects, conversations, revision: pendingRevision, count: live.pendingCounts ? pendingFor(live.pendingCounts, paneProduct) : 0 }}
             questions={{ counts: live.questionCounts, revision: questionRevision, fixRevision, count: questionsFor(live.questionCounts, paneProduct) }}

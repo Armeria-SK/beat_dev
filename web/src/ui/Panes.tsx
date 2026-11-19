@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import type { WaitReason } from '../api.ts';
 import { useT } from '../i18n/index.ts';
@@ -68,6 +68,7 @@ export interface PanesState {
   openTerminal: (jobId: string) => void;
   changesFocus: ChangesFocus | null;
   openChanges: (path: string) => void;
+  changesUsed: () => void;
 }
 
 export function usePanes(productId: string | null): PanesState {
@@ -78,6 +79,7 @@ export function usePanes(productId: string | null): PanesState {
   const [reveal, setReveal] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState<TerminalFocus | null>(null);
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
+  const changesUsed = useCallback(() => setChangesFocus(null), []);
   const views = useMemo(() => openable({ productId }), [productId]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
@@ -131,6 +133,7 @@ export function usePanes(productId: string | null): PanesState {
       if (single) setSingleView('changes');
       else if (!shown.some(p => p.view === 'changes')) keep(shown.length ? selectView(shown, shown.length - 1, 'changes') : openView(shown, views, 'changes'));
     },
+    changesUsed,
   };
 }
 
@@ -166,7 +169,7 @@ export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: num
 
 export type PaneKanban = Omit<KanbanPaneProps, 'productId'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits, onUndone }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined; onUndone?: ((notice: UndoneNotice) => void) | undefined }) {
+export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits, productRoot, editRevision, onUndone }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined; productRoot?: string | null | undefined; editRevision?: number | undefined; onUndone?: ((notice: UndoneNotice) => void) | undefined }) {
   const t = useT();
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
@@ -182,7 +185,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
         const { count: _count, ...board } = kanban;
         return <KanbanPane key={productId} productId={productId} {...board} />;
       }
-      case 'changes': return <ChangesPane key={`${productId}:${scope}`} source={{ kind: 'product', productId, conversationId: scope === 'new' ? undefined : scope, isGit }} revision={revision} focus={panes.changesFocus} onUndone={onUndone} />;
+      case 'changes': return <ChangesPane key={`${productId}:${scope}`} source={{ kind: 'product', productId, conversationId: scope === 'new' ? undefined : scope, isGit, root: productRoot }} revision={`${revision}:${editRevision ?? 0}`} focus={panes.changesFocus} onFocusUsed={panes.changesUsed} onUndone={onUndone} />;
       case 'files': return <FilesPane key={productId} productId={productId} revision={revision} onOpenChanges={panes.openChanges} />;
       case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
