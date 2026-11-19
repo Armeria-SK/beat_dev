@@ -5,7 +5,7 @@ import { formatDateTimeSmart, useT } from '../../i18n/index.ts';
 import { useNow } from '../hooks.ts';
 import { buildBoard, KANBAN_PAGE, prefixOf, RUNS_WINDOW, sessionCards, type Card } from '../kanban.ts';
 import type { LiveDraft } from '../live-state.ts';
-import { ModeSwitch } from '../ModeSwitch.tsx';
+import { ScoutModeSwitch } from '../ScoutModeSwitch.tsx';
 import { finishedSince, miniBoard, productLookKey, productTiles, runningRows, scopeRunning, taskOwners, ticksEverySecond } from '../overview.ts';
 import { Button, CountBadge, Icon, Notice, Pill } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
@@ -93,7 +93,7 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
           <h1 className="bt-screen__title bt-screen__title--lg">{t('ui.home.away')}</h1>
         </div>
         <div className="bt-screen__tools">
-          <ModeSwitch project={project} onProject={onProject} />
+          <ScoutModeSwitch project={project} onProject={onProject} />
           {scoutState && canThinkNow(scoutState, project.scout_mode) && <Button disabled={thinking} onClick={() => void thinkNow()}>{t('ui.scout.thinkNow')}</Button>}
           <a className="bt-btn bt-btn--icon" href={routeHash({ view: 'productSettings', id })} aria-label={t('ui.product.settings')} title={t('ui.product.settings')}><Icon name="sliders" /></a>
         </div>

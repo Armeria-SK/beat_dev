@@ -129,7 +129,7 @@ function PrefixDiff({ prefix }: { prefix: PreFix }) {
     <div className="bt-diff" aria-label={t('ui.kanban.prefix.diff')} data-prefix-diff>
       <span className="bt-diff__file"><span>{t('ui.kanban.prefix.files', prefix.files)}</span><span><span className="bt-add">+{prefix.added}</span> <span className="bt-del">−{prefix.removed}</span></span></span>
       {prefixDiff(prefix.diff).map((line, i) => (
-        <span key={i} className={line.kind === 'same' ? 'bt-diff__line' : `bt-diff__line bt-diff__line--${line.kind}`} title={line.text}>{line.text}</span>
+        <span key={i} className={`bt-diff__line bt-diff__line--${line.kind}`} title={line.text}>{line.text}</span>
       ))}
     </div>
   );
@@ -240,7 +240,7 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
   const branchy = merge || (column === 'failed' && branchLeft(task));
   const held = branchy ? task.worktree?.held ?? null : null;
   const checking = column === 'check' && awaitsCheck(task);
-  const label = pendingFix ? t(proposal?.kind === 'feature' ? 'ui.kanban.prefix.feature' : 'ui.kanban.prefix.bug')
+  const label = pendingFix ? t('ui.kanban.prefix.bug')
     : proposal && column === 'proposed' ? t(proposal.kind === 'bug' ? 'ui.kanban.proposal.bug' : 'ui.kanban.proposal.feature') : column === 'approved' ? t('ui.kanban.queued')
     : merge ? t(prefix ? 'ui.kanban.prefix.mergeIt' : 'ui.kanban.mergeIt') : column === 'check' ? t('ui.kanban.checkIt')
     : column === 'done' && mergedBranch(task) ? t(prefix ? 'ui.kanban.prefix.merged' : 'ui.kanban.merged') : t('ui.kanban.task');
@@ -492,8 +492,8 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     const changes = onOpenChanges && project && (!prefix || worktree) ? () => onOpenChanges({ productId: project, ...(worktree ? { worktreeId: worktree.id, branch: worktree.branch } : {}) }) : undefined;
     return (
       <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0} questions={questionsByTask.get(task.id) ?? 0} wait={waits?.[task.id]}
-        onApprove={() => void act(task.id, () => runTaskOp('approve', task, { prefixBranch: prefix?.branch }))}
-        onReject={reason => void act(task.id, async () => { const ok = await runTaskOp('reject', task, { reason, prefixBranch: prefix?.branch }); if (ok) setRejecting(null); return ok; })}
+        onApprove={() => void act(task.id, () => runTaskOp('approve', task))}
+        onReject={reason => void act(task.id, async () => { const ok = await runTaskOp('reject', task, { reason }); if (ok) setRejecting(null); return ok; })}
         onRejecting={on => setRejecting(on ? task.id : null)}
         list={(task.project_id && data?.lists.get(task.project_id)) || null}
         deviations={(task.project_id && data?.deviations.get(task.project_id)?.filter(row => row.by === 'task' && row.task === task.id)) || []}

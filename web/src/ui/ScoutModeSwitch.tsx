@@ -8,7 +8,7 @@ import { reportOpError } from './task-ops.ts';
 
 const MODE_KEY = { off: 'ui.scout.mode.off', research: 'ui.scout.mode.research', fix: 'ui.scout.mode.fix' } as const satisfies Record<ScoutMode, string>;
 
-export function ModeSwitch({ project, onProject }: { project: Project; onProject?: ((project: Project) => void) | undefined }) {
+export function ScoutModeSwitch({ project, onProject }: { project: Project; onProject?: ((project: Project) => void) | undefined }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
   const pick = async (mode: ScoutMode) => {

@@ -181,10 +181,10 @@ export const proposalOf = (task: Pick<Task, 'proposal'>): Proposal | null => tas
 
 export const PREFIX_DIFF_LINES = 6;
 
-export const prefixOf = (task: Pick<Task, 'proposal'>): PreFix | null => task.proposal?.prefix ?? null;
+export const prefixOf = (task: Partial<Pick<Task, 'prefix'>>): PreFix | null => task.prefix ?? null;
 
 export const prefixDiff = (lines: readonly string[]): DiffLine[] => lines.slice(0, PREFIX_DIFF_LINES).map(line => (
-  line.startsWith('+') ? { kind: 'add', text: `+ ${line.slice(1)}` } : line.startsWith('-') ? { kind: 'del', text: `− ${line.slice(1)}` } : { kind: 'same', text: `  ${line}` }
+  line.startsWith('+') ? { kind: 'add', text: `+ ${line.slice(1)}` } : { kind: 'del', text: `− ${line.slice(1)}` }
 ));
 
 export function firstSentences(text: string, count = 2): string {

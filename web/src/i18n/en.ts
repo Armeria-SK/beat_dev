@@ -664,7 +664,6 @@ export const en = {
   'ui.kanban.proposal.offPlan': 'Outside the plan',
   'ui.kanban.proposal.goal': (goal: string) => `for: ${goal}`,
   'ui.kanban.prefix.bug': 'Pre-fix · bug',
-  'ui.kanban.prefix.feature': 'Pre-fix · feature',
   'ui.kanban.prefix.checks': 'Checks passed',
   'ui.kanban.prefix.diff': 'Diff',
   'ui.kanban.prefix.files': (n: number) => `${n} ${pluralEn(n, { one: 'file', other: 'files' })}`,

@@ -18,6 +18,7 @@ interface HomeProps { id: string; project: Project | undefined; conversations: C
 
 const { Kanban } = await loadTsx<{ Kanban: ComponentType<KanbanProps> }>('../web/src/ui/screens/Kanban.tsx', import.meta.url);
 const { ProductHome } = await loadTsx<{ ProductHome: ComponentType<HomeProps> }>('../web/src/ui/screens/ProductHome.tsx', import.meta.url);
+const { TaskScreen } = await loadTsx<{ TaskScreen: ComponentType<{ id: string; revision: string; worker: null; projects: readonly Project[]; pending: number }> }>('../web/src/ui/screens/Task.tsx', import.meta.url);
 const { ProductSettings } = await loadTsx<{ ProductSettings: ComponentType<{ project: Project; onProject: (p: Project) => void }> }>('../web/src/ui/screens/ProductSettings.tsx', import.meta.url);
 
 const PRODUCT = 'prod-abc123';
@@ -33,8 +34,8 @@ const project = (over: Partial<Project> = {}): Project => ({
 
 const DIFF = ['-    for (let i = 0; i < items.length - 1; i++)', '+    for (let i = 0; i < items.length; i++)', '+<b>bold</b> **not markdown** [link](http://x)', '-a', '+b', '-c', '+seventh line', '-eighth line'];
 const PREFIX: PreFix = { branch: BRANCH, base: '1234567890abcdef1234567890abcdef12345678', checks: 'passed', files: 1, added: 4, removed: 4, diff: DIFF };
-const proposal = (prefix: PreFix | null): Proposal => ({
-  kind: 'bug', why: 'The loop stops one short when the queue is restored from disk. A second sentence stays off the pre-fix card.', area: ['src/upload/'], size: 'S', goal: 'Reliable uploads', evidence: null, ledger: null, prefix,
+const proposal = (): Proposal => ({
+  kind: 'bug', why: 'The loop stops one short when the queue is restored from disk. A second sentence stays off the pre-fix card.', area: ['src/upload/'], size: 'S', goal: 'Reliable uploads', evidence: null, ledger: null,
 });
 const worktree = (state: string) => ({ id: 'f1e2d3c4', branch: BRANCH, base: PREFIX.base, state, files: 1, added: 4, removed: 4, note: null });
 
@@ -42,7 +43,7 @@ function task(extra: Partial<Task>): Task {
   return {
     id: 't1', title: 'Queue drops the last item on restart', body: '', next_action: null, done_criteria: null, status: 'inbox', origin: 'self', priority: 2,
     cron: null, cron_text: null, run_at: null, parent_id: null, waiting_text: null, conversation_id: null, result_summary: null, attempts: 0, max_attempts: 3,
-    created_at: Date.now() - 60_000, updated_at: Date.now() - 60_000, completed_at: null, project_id: PRODUCT, proposal: proposal(PREFIX), ...extra,
+    created_at: Date.now() - 60_000, updated_at: Date.now() - 60_000, completed_at: null, project_id: PRODUCT, proposal: proposal(), prefix: PREFIX, ...extra,
   };
 }
 
@@ -99,12 +100,10 @@ test('ui/kanban (8-6c): prefixDiff keeps at most 6 lines, shows "+" and "−" as
     { kind: 'add', text: '+     for (let i = 0; i < items.length; i++)' },
     { kind: 'add', text: '+ <b>bold</b> **not markdown** [link](http://x)' },
   ]);
-  assert.deepEqual(prefixDiff(['context']), [{ kind: 'same', text: '  context' }]);
   assert.deepEqual(prefixDiff([]), []);
-  assert.equal(prefixOf({ proposal: proposal(null) }), null);
-  assert.equal(prefixOf({ proposal: { kind: 'bug', why: '', area: [], size: 'S', goal: null, evidence: null, ledger: null } }), null, 'a proposal from before 8-6b has no prefix key');
-  assert.equal(prefixOf({ proposal: null }), null);
-  assert.equal(prefixOf({ proposal: proposal(PREFIX) })?.branch, BRANCH);
+  assert.equal(prefixOf({ prefix: null }), null);
+  assert.equal(prefixOf({}), null, 'a task view from before 8-6b has no prefix key');
+  assert.equal(prefixOf({ prefix: PREFIX })?.branch, BRANCH, 'prefix is read from the top of the task view (8-6b contract)');
 });
 
 test('ui/Kanban（DOM, 8-6c）: a pre-fix in Proposed reads "Pre-fix · bug" with "Checks passed", one sentence, the diff (6 lines, as plain text, not Markdown), the branch, and Approve / Open diff / Reject', async () => {
@@ -136,7 +135,7 @@ test('ui/Kanban（DOM, 8-6c）: a pre-fix in Proposed reads "Pre-fix · bug" wit
 });
 
 test('ui/Kanban（DOM, 8-6c）: without a working-copy row the pre-fix card has no Open diff (it would show the product Changes instead); a proposal without prefix keeps the plain proposal card', async () => {
-  board(() => ({ active: [task({}), task({ id: 't2', title: 'Plain', proposal: proposal(null) })], finished: [], awaiting: [] }));
+  board(() => ({ active: [task({}), task({ id: 't2', title: 'Plain', prefix: null })], finished: [], awaiting: [] }));
   const { container } = await render(createElement(Kanban, props({ onOpenChanges: () => {} })));
   await settle();
   const card = cardIn(container, 'proposed')!;
@@ -199,21 +198,22 @@ test('ui/Kanban（DOM, 8-6c）: Reject on a pre-fix asks for a reason, posts can
 });
 
 test('ui/task-ops (8-6c): a plain proposal keeps the Undo on approve and reject; a pre-fix does not', async () => {
-  const run = async (prefixBranch?: string) => {
+  const run = async (prefix?: PreFix) => {
     const toastsSeen: FeedbackItem[] = [];
     const reply = async () => ({ task: { id: 't1' } }) as never;
     const deps: TaskOpDeps = { api: { taskAction: reply, unapproveTask: reply, cancelTask: reply, answerTask: reply, stop: reply }, toast: item => { toastsSeen.push(item); } };
-    await runTaskOp('approve', { id: 't1', title: 'x' }, { prefixBranch }, deps);
-    await runTaskOp('reject', { id: 't1', title: 'x' }, { reason: '', prefixBranch }, deps);
+    const one = { id: 't1', title: 'x', ...(prefix ? { prefix } : {}) };
+    await runTaskOp('approve', one, {}, deps);
+    await runTaskOp('reject', one, { reason: '' }, deps);
     return toastsSeen.map(item => [item.title, item.action !== undefined]);
   };
   assert.deepEqual(await run(), [[en['ui.task.toast.approved'], true], [en['ui.task.toast.rejected'], true]]);
-  assert.deepEqual(await run(BRANCH), [[en['ui.task.toast.prefixApproved'], false], [en['ui.task.toast.rejected'], false]]);
+  assert.deepEqual(await run(PREFIX), [[en['ui.task.toast.prefixApproved'], false], [en['ui.task.toast.rejected'], false]]);
 });
 
 test('ui/ProductHome（DOM, 8-6c）: with a check command "Research and pre-fix" is pressable and sends PATCH scoutMode fix; the mini board tags a pre-fix proposal "pre-fix"', async () => {
   let saved: Project | null = null;
-  board(() => ({ active: [task({}), task({ id: 't2', title: 'Plain', proposal: proposal(null) })], finished: [], awaiting: [] }),
+  board(() => ({ active: [task({}), task({ id: 't2', title: 'Plain', prefix: null })], finished: [], awaiting: [] }),
     (path, method) => (path === `/api/projects/${PRODUCT}` && method === 'PATCH' ? { body: { project: project({ scout_mode: 'fix' }) } } : undefined));
   const { container } = await render(createElement(ProductHome, { id: PRODUCT, project: project(), conversations: [], drafts: [], checklists: new Map(), worker: null, revision: 0, onProject: p => { saved = p; } }));
   await settle();
@@ -254,4 +254,34 @@ test('ui/ProductSettings（DOM, 8-6c）: the product settings have the same mode
   await click(options[0]!);
   await settle();
   assert.deepEqual(sent.map(s => [s.method, s.body]), [['PATCH', { scoutMode: 'off' }]]);
+});
+
+test('ui/Task（DOM, 8-6c review）: on the task screen a pre-fix is approved without an Undo, and rejected without an Undo (the decision comes from task.prefix, not from the caller)', async () => {
+  const inbox = task({ worktree: worktree('branch') });
+  serve((path, method) => {
+    if (path === '/api/tasks/t1' && method === 'GET') return { body: { task: inbox, events: [], runs: [] } };
+    if (path === '/api/tasks/t1/approve' && method === 'POST') return { body: { task: { ...inbox, status: 'done' } } };
+    if (path === '/api/tasks/t1/cancel' && method === 'POST') return { body: { task: { ...inbox, status: 'cancelled' } } };
+    return undefined;
+  });
+  const approve = await render(createElement(TaskScreen, { id: 't1', revision: '0', worker: null, projects: [project()], pending: 0 }));
+  await settle();
+  await click(byText(approve.container, 'button', en['ui.kanban.approve']));
+  await settle();
+  const approved = toasts.find(item => item.title === en['ui.task.toast.prefixApproved']);
+  assert.ok(approved, JSON.stringify(toasts.map(item => item.title)));
+  assert.equal(approved.body, `Branch ${BRANCH} is ready to merge`);
+  assert.equal(approved.action, undefined, 'no Undo: unapprove would fail with not_approved');
+  await cleanup();
+  toasts.length = 0;
+  const reject = await render(createElement(TaskScreen, { id: 't1', revision: '0', worker: null, projects: [project()], pending: 0 }));
+  await settle();
+  await click(byText(reject.container, 'button', en['ui.kanban.reject']));
+  const form = reject.container.querySelector<HTMLElement>('form.ui-task__reject')!;
+  await click(byText(form, 'button', en['ui.kanban.reject']));
+  await settle();
+  assert.ok(sent.some(item => item.path === '/api/tasks/t1/cancel'));
+  const rejected = toasts.find(item => item.title === en['ui.task.toast.rejected']);
+  assert.ok(rejected);
+  assert.equal(rejected.action, undefined, 'no Undo: uncancel would bring back a proposal whose branch is gone');
 });
