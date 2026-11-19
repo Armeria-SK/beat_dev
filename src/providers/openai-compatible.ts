@@ -16,6 +16,9 @@ type OpenAiMessage =
 
 const imagePart = (img: ImageRef) => ({ type: 'image_url' as const, image_url: { url: `data:${img.mediaType};base64,${img.data}` } });
 
+// 発言に付けた tail（ChatMessage.tail、S1）は、その発言の中身の末尾に足す（新しい発言は作らない: 交互を強いる型でも壊れない）
+const withTail = (content: string, m: ChatMessage): string => (m.role !== 'assistant' && m.tail ? `${content}\n\n${m.tail}` : content);
+
 export function toOpenAiMessages(system: string, messages: readonly ChatMessage[], vision: boolean): OpenAiMessage[] {
   const out: OpenAiMessage[] = [];
   if (system) out.push({ role: 'system', content: system });
@@ -31,16 +34,16 @@ export function toOpenAiMessages(system: string, messages: readonly ChatMessage[
       if (vision && m.images?.length) {
         out.push({ role: 'user', content: [
           ...m.images.map(imagePart),
-          { type: 'text' as const, text: m.content },
+          { type: 'text' as const, text: withTail(m.content, m) },
         ] });
-      } else out.push({ role: 'user', content: m.content });
+      } else out.push({ role: 'user', content: withTail(m.content, m) });
     } else if (m.role === 'assistant') {
       out.push({
         role: 'assistant', content: m.content || null,
         ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map(c => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.raw ?? JSON.stringify(c.arguments ?? {}) } })) } : {}),
       });
     } else {
-      out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
+      out.push({ role: 'tool', tool_call_id: m.toolCallId, content: withTail(m.content, m) });
       if (vision && m.images?.length) shown.push({ id: m.toolCallId, images: m.images });
     }
   }
@@ -77,6 +80,25 @@ class ToolCallAssembler {
   }
 }
 
+// 送る本文。tail は発言に付けた分をその発言に足す。最後が assistant のときだけ、tail の全体を system の後ろに置く（今までの形）
+export function openAiBody(req: ModelRequest, provider: Pick<ProviderConfig, 'server'>): Record<string, unknown> {
+  const tail = req.messages.at(-1)?.role === 'assistant' ? req.system.tail : '';
+  const system = [req.system.frozen, req.system.dynamic, tail].filter(Boolean).join('\n\n');
+  return {
+    model: req.model.model,
+    messages: toOpenAiMessages(system, req.messages, req.model.vision),
+    stream: true,
+    stream_options: { include_usage: true },
+    ...(provider.server === 'openai' ? { max_completion_tokens: req.maxOutputTokens } : { max_tokens: req.maxOutputTokens }),
+    ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
+    ...(req.effort ? { reasoning_effort: req.effort } : {}),
+    ...(req.tools.length ? {
+      tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
+      parallel_tool_calls: false,
+    } : {}),
+  };
+}
+
 export class OpenAiCompatibleAdapter implements ProviderAdapter {
   readonly provider: ProviderConfig;
   readonly #env: Env;
@@ -101,20 +123,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
   async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
     const base = this.#base();
     const headers = this.#headers();
-    const system = [req.system.frozen, req.system.dynamic].filter(Boolean).join('\n\n');
-    const body: Record<string, unknown> = {
-      model: req.model.model,
-      messages: toOpenAiMessages(system, req.messages, req.model.vision),
-      stream: true,
-      stream_options: { include_usage: true },
-      ...(this.provider.server === 'openai' ? { max_completion_tokens: req.maxOutputTokens } : { max_tokens: req.maxOutputTokens }),
-      ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
-      ...(req.effort ? { reasoning_effort: req.effort } : {}),
-      ...(req.tools.length ? {
-        tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
-        parallel_tool_calls: false,
-      } : {}),
-    };
+    const body = openAiBody(req, this.provider);
     const { signal, timeout } = withTimeout(req.signal, this.provider.timeoutMs);
     let response: Response;
     try {

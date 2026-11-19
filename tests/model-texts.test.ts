@@ -11,7 +11,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from '../src/engine/prompts.ts';
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
-import { buildDynamic, buildSnapshot, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
+import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { bookPressureText, reviewLabel, reviewPrompt, reviewWindow, TRIGGER_TEXT, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
@@ -137,13 +137,15 @@ test('起動: 新しい作業フォルダには英語の初期値が入り、す
 
 // ── 返事の言語・system ──
 
-test('buildDynamic: 現在時刻の行と返事の言語の指示を返す', () => {
+test('buildDynamic: 日付（時刻なし）の行と返事の言語の指示を返す。時刻は buildTail（S1: 実行のあいだ dynamic を変えない）', () => {
   const now = new Date('2026-11-04T20:00:00Z');
   const en = buildDynamic('Asia/Tokyo', 'en', now);
-  assert.match(en, /^Current time: Thu, Nov 5, 2026, 05:00 \(Asia\/Tokyo\)\nReply in the language the user writes in \(the language of the user's own words, not of these instructions, templates or tool results\)\.$/u);
+  assert.match(en, /^Current date: Thu, Nov 5, 2026 \(Asia\/Tokyo\)\nReply in the language the user writes in \(the language of the user's own words, not of these instructions, templates or tool results\)\.$/u);
   assert.doesNotMatch(en, CJK);
   assert.equal(buildDynamic('Asia/Tokyo', undefined, now), en, '言語を渡さなくても同じ');
-  assert.match(buildDynamic('America/New_York', 'en', now), /Wed, Nov 4, 2026, 15:00 \(America\/New_York\)/u, 'タイムゾーンに合わせる');
+  assert.equal(buildDynamic('Asia/Tokyo', 'en', new Date('2026-11-05T14:59:00Z')), en, '同じ日のうちは時刻が変わっても同じ');
+  assert.match(buildDynamic('America/New_York', 'en', now), /Wed, Nov 4, 2026 \(America\/New_York\)/u, 'タイムゾーンに合わせる');
+  assert.equal(buildTail('America/New_York', 'en', now), 'Current time: Wed, Nov 4, 2026, 15:00 (America/New_York)');
 });
 
 test('buildSnapshot: ルールと見出しで組み立てる', t => {
@@ -161,7 +163,7 @@ test('baseTokens: ルールと動的な部分の長さで見積もる', async t 
   const s = await startApp(t);
   const given = () => s.app.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' || isBrowserTool(tool.name) || tool.name === 'acceptance_change' });
   const rest = () => estimateToolTokens(ToolRegistry.specs(given().filter(isCore))) + estimateTextTokens(deferredSection(given().filter(tool => !isCore(tool)), s.app.config())) + 64; // 既定では agent_run と browser_* は無効で、モデルに渡らない。acceptance_change は acceptance_write と同時には渡らない
-  const expected = estimateTextTokens(buildSnapshot(s.paths, { skills: '' }).text) + estimateTextTokens(buildDynamic(s.app.config().timezone)) + rest();
+  const expected = estimateTextTokens(buildSnapshot(s.paths, { skills: '' }).text) + estimateTextTokens(buildDynamic(s.app.config().timezone)) + estimateTextTokens(buildTail(s.app.config().timezone)) + rest();
   assert.equal(s.app.baseTokens(), expected);
 });
 

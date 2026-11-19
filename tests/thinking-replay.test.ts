@@ -19,7 +19,7 @@ import { FakeAdapter, reply, tempDir, testConfig, withLoad, type Script } from '
 const provider: ProviderConfig = { id: 'claude', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 1, timeoutMs: 10_000 };
 const model = (name: string): ModelConfig => ({ id: 'm', provider: 'claude', model: name, contextLength: 200_000, maxOutputTokens: 1024, vision: false });
 const request = (name: string, messages: ChatMessage[]): ModelRequest => ({
-  model: model(name), system: { frozen: 's', dynamic: '' }, messages, tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
+  model: model(name), system: { frozen: 's', dynamic: '', tail: '' }, messages, tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
 });
 const sseBody = (events: unknown[]) => events.map(e => `event: ${(e as { type: string }).type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 const okStream = () => new Response(sseBody([

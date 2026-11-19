@@ -144,7 +144,7 @@ test('切れた呼び出しのあとに正しく終われば、続けて切れ�
 
 const streamModel: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, maxOutputTokens: 1024, vision: false };
 const streamRequest: ModelRequest = {
-  model: streamModel, system: { frozen: 'あなたは beat', dynamic: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
+  model: streamModel, system: { frozen: 'あなたは beat', dynamic: '', tail: '' }, messages: [{ role: 'user', content: 'こんにちは' }],
   tools: [], maxOutputTokens: 1024, signal: new AbortController().signal,
 };
 

@@ -33,13 +33,21 @@ function withThinking(text: Block[], calls: Block[], blocks: readonly ThinkingBl
 }
 
 // replay: 送る先の提供元とモデル。考える部分は、それを書いた提供元とモデルが同じときだけ、受け取ったまま送り返す（ほかのモデル・提供元には送らない）
-export function toAnthropicMessages(messages: readonly ChatMessage[], vision: boolean, replay?: { provider: string; model: string }): Anthropic.MessageParam[] {
+// tails: 発言に付けた tail（ChatMessage.tail）を、その発言の後ろに text ブロックとして置くか（S1）。区切りは tail より前の最後のブロックに付ける
+export function toAnthropicMessages(messages: readonly ChatMessage[], vision: boolean, replay?: { provider: string; model: string }, tails = true): Anthropic.MessageParam[] {
   const out: Array<{ role: 'user' | 'assistant'; content: Block[] }> = [];
+  const tailBlocks = new Set<Block>();
   const push = (role: 'user' | 'assistant', blocks: Block[]) => {
     if (!blocks.length) return;
     const last = out.at(-1);
     if (last && last.role === role) last.content.push(...blocks);
     else out.push({ role, content: blocks });
+  };
+  const pushTail = (m: ChatMessage) => {
+    if (!tails || m.role === 'assistant' || !m.tail) return;
+    const block: Block = { type: 'text', text: m.tail };
+    tailBlocks.add(block);
+    push('user', [block]);
   };
   for (const m of messages) {
     if (m.role === 'user') {
@@ -47,6 +55,7 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
       if (vision) for (const img of m.images ?? []) blocks.push(imageBlock(img));
       blocks.push({ type: 'text', text: m.content || '(empty message)' });
       push('user', blocks);
+      pushTail(m);
     } else if (m.role === 'assistant') {
       const text: Block[] = m.content ? [{ type: 'text', text: m.content }] : [];
       const calls: Block[] = (m.toolCalls ?? []).map(call => {
@@ -60,14 +69,53 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
       const images = vision ? m.images ?? [] : [];
       const content = images.length ? [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...images.map(imageBlock)] : m.content;
       push('user', [{ type: 'tool_result', tool_use_id: m.toolCallId, content, ...(m.isError ? { is_error: true } : {}) }]);
+      pushTail(m);
     }
   }
-  // 会話の末尾にキャッシュの区切りを置き、次のターンで前半を再利用できるようにする
-  const lastBlock = out.at(-1)?.content.at(-1);
-  if (lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
-    (lastBlock as { cache_control?: typeof EPHEMERAL }).cache_control = EPHEMERAL;
-  }
+  // 会話の末尾にキャッシュの区切りを置き、次のターンで前半を再利用できるようにする。最後の tail は区切りの後ろ（毎回の入力）に残す。
+  // 前の呼び出しの区切りの位置（最後の assistant の前の user の発言）にも区切りを置く: API は区切りから 20 ブロックまでしか前の書き込みを探さないので、
+  // 1 回で 20 ブロックより多く増えても前半を読めるように（区切りは道具・固定の system と合わせて 4 つまで）
+  const mark = (message: { content: Block[] } | undefined) => {
+    const block = message?.content.filter(b => !tailBlocks.has(b)).at(-1);
+    if (block && block.type !== 'thinking' && block.type !== 'redacted_thinking') (block as { cache_control?: typeof EPHEMERAL }).cache_control = EPHEMERAL;
+  };
+  mark(out.at(-1));
+  const lastAssistant = out.findLastIndex(m => m.role === 'assistant');
+  if (out.at(-1)?.role === 'user' && lastAssistant > 0) mark(out[lastAssistant - 1]);
   return out;
+}
+
+// 考える部分を送り返すとき、tool_result 以外の文を user の発言に足すとキャッシュが外れ考える部分が消えるモデル
+// （Opus 4.5 より前の Opus・Sonnet 4.6 より前の Sonnet・Haiku 5.5 より前の Haiku・Claude 3。prompt-caching の文書）。名前の分からないモデルは当てはめない
+const PRESERVES_FROM: Record<string, number> = { opus: 4.5, sonnet: 4.6, haiku: 5.5 };
+export function stripsThinkingOnText(model: string): boolean {
+  if (/claude-3/u.test(model)) return true;
+  const m = /claude-(opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?!\d)/u.exec(model);
+  return m ? Number(m[2]) + Number(m[3] ?? 0) / 10 < PRESERVES_FROM[m[1]!]! : false;
+}
+
+// 送る本文（stream の有無を除く）。tail は、発言に付けた分をその発言の後ろに置く。最後が assistant のとき、
+// または古い考えるモデルに考える部分を送り返すときだけ、tail の全体を system の後ろに置く（区切りは付けない）
+export function anthropicBody(req: ModelRequest, replay?: { provider: string; model: string }) {
+  const inMessages = !(replay && stripsThinkingOnText(req.model.model));
+  const lastRole = req.messages.at(-1)?.role;
+  const system: Anthropic.TextBlockParam[] = [];
+  if (req.system.frozen) system.push({ type: 'text', text: req.system.frozen, cache_control: EPHEMERAL });
+  if (req.system.dynamic) system.push({ type: 'text', text: req.system.dynamic });
+  if (req.system.tail && (!inMessages || lastRole === 'assistant')) system.push({ type: 'text', text: req.system.tail });
+  const tools: Anthropic.Tool[] = req.tools.map((t, i, all) => ({
+    name: t.name, description: t.description, input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+    ...(i === all.length - 1 ? { cache_control: EPHEMERAL } : {}),
+  }));
+  return {
+    model: req.model.model,
+    max_tokens: req.maxOutputTokens,
+    system,
+    messages: toAnthropicMessages(req.messages, req.model.vision, replay, inMessages),
+    ...(tools.length ? { tools } : {}),
+    ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
+    ...(req.effort ? { output_config: { effort: req.effort as NonNullable<Anthropic.OutputConfig['effort']> } } : {}),
+  };
 }
 
 function mapStop(reason: string | null | undefined): StopReason {
@@ -143,13 +191,6 @@ export class AnthropicAdapter implements ProviderAdapter {
   async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
     let client: Anthropic;
     try { client = this.#clientFor(); } catch (error) { throw classifyAnthropicError(error, req.signal, this.#secrets()); }
-    const system: Anthropic.TextBlockParam[] = [];
-    if (req.system.frozen) system.push({ type: 'text', text: req.system.frozen, cache_control: EPHEMERAL });
-    if (req.system.dynamic) system.push({ type: 'text', text: req.system.dynamic });
-    const tools: Anthropic.Tool[] = req.tools.map((t, i, all) => ({
-      name: t.name, description: t.description, input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-      ...(i === all.length - 1 ? { cache_control: EPHEMERAL } : {}),
-    }));
     const tooling: Record<string, { id: string; name: string; json: string }> = {};
     const thinking: Record<string, ThinkingBlock> = {};
     let calls = 0;
@@ -157,13 +198,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     let stop: StopReason = 'other';
     try {
       const create = (replay: boolean) => client.messages.create({
-        model: req.model.model,
-        max_tokens: req.maxOutputTokens,
-        system,
-        messages: toAnthropicMessages(req.messages, req.model.vision, replay ? { provider: this.provider.id, model: req.model.model } : undefined),
-        ...(tools.length ? { tools } : {}),
-        ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
-        ...(req.effort ? { output_config: { effort: req.effort as NonNullable<Anthropic.OutputConfig['effort']> } } : {}),
+        ...anthropicBody(req, replay ? { provider: this.provider.id, model: req.model.model } : undefined),
         stream: true,
       }, { signal: req.signal });
       const replay = !this.#noReplay.has(req.model.model) && req.messages.some(m => m.role === 'assistant' && m.thinking?.provider === this.provider.id && m.thinking.model === req.model.model && m.thinking.blocks.length > 0);

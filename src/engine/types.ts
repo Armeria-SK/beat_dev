@@ -35,11 +35,13 @@ export interface ImageRef {
   data: string;
 }
 
+// tail: その実行でこの発言に付けて送った、毎回変わる部分（時刻・Checklist・裏のコマンド）。実行のあいだだけエンジンが付け、DB には書かない。
+// 一度送った tail は、同じ実行の以後の呼び出しでも同じ文で同じ場所に送る（前の発言を変えると、考える部分の送り返しとキャッシュが崩れる）
 export type ChatMessage =
-  | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true; note?: 'pending' | 'continue'; fetched?: true }
+  | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true; note?: 'pending' | 'continue'; fetched?: true; tail?: string }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[]; thinking?: ThinkingRecord }
   // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
-  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; gate?: ToolGate };
+  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; gate?: ToolGate; tail?: string };
 
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
 
