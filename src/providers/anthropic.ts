@@ -94,11 +94,13 @@ export function classifyAnthropicError(error: unknown, signal: AbortSignal, secr
   return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error), secrets).slice(0, UPSTREAM_KEEP) });
 }
 
-// 送り返した考える部分を API が断った 400 か（署名が合わない・前の発言が変わって別の会話のものになった）
+// 送り返した考える部分を API が断った 400 か（署名が合わない・前の発言が変わって別の会話のものになった）。断りの文は、どの発言のどのブロックかを頭に付けて
+// その thinking / redacted_thinking ブロックを名指しする（実際の API: "messages.1.content.0: Invalid `signature` in `thinking` block"）。考える深さの設定の誤りなど、ほかの 400 は送り直さない
+const THINKING_REJECTED = /^messages\.\d+\.content\.\d+: .*`(?:redacted_)?thinking` block/u;
 function thinkingRejected(error: unknown): boolean {
   if (!(error instanceof Anthropic.APIError) || error.status !== 400) return false;
   const body = error.error as { error?: { message?: string } } | undefined;
-  return /signature|thinking/i.test(body?.error?.message ?? error.message ?? '');
+  return THINKING_REJECTED.test(body?.error?.message ?? '');
 }
 
 export class AnthropicAdapter implements ProviderAdapter {

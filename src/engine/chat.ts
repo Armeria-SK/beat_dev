@@ -49,7 +49,7 @@ import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, looksLikeTextToolCall } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, Usage } from './types.ts';
-import { estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
+import { estimateMessageTokens, estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
@@ -76,6 +76,14 @@ export function resumePoint(text: string): string {
   if (at < 0) return text;
   const tail = text.slice(at + 1);
   return tail.length <= RESUME_WORD_MAX && !/[\u3000-\u9fff\uff00-\uffef]/u.test(tail) ? text.slice(0, at + 1) : text;
+}
+
+// 考える部分（thinking）を、target と同じ提供元・モデルが書いたときだけ残す。target が無ければ外す
+function withThinkingFor(message: ChatMessage, target?: { provider: string; model: string }): ChatMessage {
+  if (message.role !== 'assistant' || !message.thinking) return message;
+  if (target && message.thinking.provider === target.provider && message.thinking.model === target.model) return message;
+  const { thinking: _thinking, ...rest } = message;
+  return rest;
 }
 
 function forModel(message: ChatMessage): ChatMessage {
@@ -212,14 +220,13 @@ type Failure = { kind: EngineErrorKind; message: string; code?: string; params?:
 
 type CallResult =
   | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; truncated: boolean; estimate: number; thinking?: ThinkingRecord }
-  | { ok: false; cancelled: boolean; partial: string; failure: Failure; route?: Route };
+  | { ok: false; cancelled: boolean; partial: string; failure: Failure; route?: Route; usage?: Usage };
 
-function sumUsage(a: Usage, b: Usage): Usage {
-  const out: Usage = { ...a };
+function addUsageTo(into: Usage, u: Usage): Usage {
   for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
-    if (typeof b[key] === 'number') out[key] = (out[key] ?? 0) + b[key]!;
+    if (typeof u[key] === 'number') into[key] = (into[key] ?? 0) + u[key]!;
   }
-  return out;
+  return into;
 }
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -254,6 +261,8 @@ export class ChatEngine {
   #runFence = new Map<string, string>();
   #runIndex = new Map<string, string>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
+  // 考えるだけで上限に達したあと、その実行で上げた返事の上限（#assemble がモデルの許す範囲で使う）
+  #outputCap = new Map<string, number>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
   #hardStops = new Map<string, AbortController>();
@@ -771,6 +780,7 @@ export class ChatEngine {
         this.#runFence.delete(runId);
         this.#runIndex.delete(runId);
         this.#loaded.delete(runId);
+        this.#outputCap.delete(runId);
         this.#reviewEvidence.delete(runId);
         this.#stopped.delete(runId);
         this.#hardStops.delete(runId);
@@ -893,11 +903,7 @@ export class ChatEngine {
     let taintRecorded = false;
     // 会話にも「外から読んだことがある」印を付ける（自動承認の判定役には、この会話は「よそから来た文を読んだ」と伝わる）
     const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); if (kind === 'chat' || kind === 'agent') d.conversations.markTainted(conversationId); };
-    const addUsage = (u: Usage) => {
-      for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
-        if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
-      }
-    };
+    const addUsage = (u: Usage) => addUsageTo(usage, u);
     const finishOk = (text: string, stop: StopReason, split?: { split: true }): EngineResult => {
       if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
@@ -940,14 +946,14 @@ export class ChatEngine {
 
     const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
-    const output = { cap: 0 };
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       this.#injectNotes(runId, conversationId, ctx);
       recordTaint();
-      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject, output });
+      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
+        if (call.usage) addUsage(call.usage);
         return finishFail(call.failure);
       }
       index = call.index;
@@ -1146,11 +1152,12 @@ export class ChatEngine {
     }
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined; output?: { cap: number } }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
-    // 考えるだけで上限に達して捨てた呼び出しの使用量（実行の使用量に足す）
-    let spent: Usage = {};
+    // 考えるだけで上限に達して捨てた呼び出しの使用量（成功でも失敗でも実行の使用量に足す）。上限を上げるのは 1 回の呼び出しで 1 度だけ
+    const spent: Usage = {};
+    let raisedOnce = false;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
     const language = languageOf(d.config());
     let last: Failure = { kind: 'internal', message: engineText(language, 'run.no_model'), code: 'engine.run.no_model', retryable: false };
@@ -1168,22 +1175,26 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available: assembled, maxOutput: planned, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject });
+        const { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject });
         const run = this.#loaded.get(p.runId);
         if (run) {
           run.sent.clear();
           for (const tool of toolDefs) run.sent.add(tool.name);
         }
         const toolNames = new Set([...toolDefs.map(t => t.name), ...listed.map(t => t.name), ...(run?.loaded ?? [])]);
-        // この実行で上限を上げたあとは、そのモデルで許す範囲で上げたままにする（上げた分だけ、古い発言を削り始める境目を下げる）
-        const providerMax = d.status.get(model.id)?.maxOutput;
-        const maxOutput = Math.min(raisedOutputFor(model, capacity, planned, providerMax), Math.max(planned, p.output?.cap ?? 0));
-        const available = maxOutput > planned ? contextAvailable(capacity, maxOutput) : assembled;
         // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
         const effort = p.effort && modelEfforts(model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
+        const fit = (messages: ChatMessage[]) => fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages, tools: apiTools, available, factor });
+        // 考える部分は、古い発言を 1 つも外さずに（考える部分の量も数えて）入りきるときだけ送り返す。前の発言が変わると API が断るため
+        const replayable = history.some(m => m.role === 'assistant' && m.thinking);
+        let whole: ReturnType<typeof fitMessages> | undefined;
+        if (replayable) {
+          try { const all = fit(history); if (all.removed === 0) whole = all; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
+        }
+        const replay = whole !== undefined;
         let fitted;
         try {
-          fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
+          fitted = whole ?? fit(replayable ? history.map(m => withThinkingFor(m)) : history);
         } catch (error) {
           if (!(error instanceof ContextOverflow)) throw error;
           last = { kind: 'context_overflow', message: engineText(language, 'fit.overflow', { required: error.required.toLocaleString('en-US'), available: error.available.toLocaleString('en-US') }), code: 'engine.fit.overflow', params: { required: error.required, available: error.available }, retryable: false, route,
@@ -1248,13 +1259,16 @@ export class ChatEngine {
           break;
         } finally { release?.(); }
 
-        // 考えるだけで上限に達し、文も呼び出しも無い返事は、続きを頼んでも続ける元が無い（考えた中身は送り返せない）。
-        // 上限を上げられるなら、捨てて同じ呼び出しを上げた上限でやり直す（上限は上がる一方で頭打ちがあるので、繰り返しは止まる）
-        if (stop === 'max_tokens' && !text.trim() && !toolCalls.length && p.output) {
-          const raised = raisedOutputFor(model, capacity, maxOutput, providerMax);
+        // 考えるだけで上限に達し、文も呼び出しも無い返事は、続きを頼んでも続ける元が無い（切れた考える部分は保存も送り返しもしない）。
+        // 上げられるなら、捨てて同じ呼び出しを上げた上限でやり直す。上げるのは 1 回の呼び出しで 1 度、上限は planned だけから決まる頭打ち
+        // （raisedOutputFor）までで、いまのやり取り（古い発言を外しても残る分）が入りきる量を超えない
+        if (stop === 'max_tokens' && !text.trim() && !toolCalls.length && !raisedOnce && capacity > 0) {
+          const room = Math.floor(capacity * CONTEXT_FILL_RATIO) - irreducibleEstimate({ system: `${system.frozen}\n${system.dynamic}`, messages: fitted.messages, tools: apiTools, factor }).tokens;
+          const raised = Math.min(raisedOutputFor(model, capacity, planned, d.status.get(model.id)?.maxOutput), room);
           if (raised > maxOutput) {
-            p.output.cap = raised;
-            spent = sumUsage(spent, usage);
+            raisedOnce = true;
+            this.#outputCap.set(p.runId, raised);
+            addUsageTo(spent, usage);
             if (!p.flags.includes('output_raised')) p.flags.push('output_raised');
             d.log?.(`[INFO] model ${model.id} used the whole output limit (${maxOutput}) on thinking; retrying the call with ${raised}`);
             attempt--; continue;
@@ -1270,14 +1284,19 @@ export class ChatEngine {
             if (!p.flags.includes('text_tool_calls')) p.flags.push('text_tool_calls');
           }
         }
-        this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
+        // 送り返した考える部分の量は見積もりでしかない（API の数え方と合うとは限らない）ので、その呼び出しでは切り捨ての疑いも補正の学習もしない
+        if (!replay) this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
         if (effort && !p.flags.includes(`effort:${effort}`)) p.flags.push(`effort:${effort}`);
+        // 考える部分は、上限で切れていない返事の、署名のあるブロックだけ持つ（上限で切れたブロックにも署名は付くが、途中で切れた考えを次の呼び出しに送り返さない）
+        const signed = stop === 'max_tokens' ? [] : thoughts.filter(b => b.type === 'redacted_thinking' || b.signature);
+        const thinking: ThinkingRecord | undefined = signed.length
+          ? { provider: provider.id, model: model.model, blocks: signed, tokens: Math.max(0, (usage.outputTokens ?? 0) - estimateMessageTokens({ role: 'assistant', content: text, toolCalls })) }
+          : undefined;
         // truncated は書き換える前の停止理由で決める（ツール呼び出しが付いても、出力の上限で切れた返事は切れたまま）
-        const thinking: ThinkingRecord | undefined = thoughts.length ? { provider: provider.id, model: model.model, blocks: thoughts } : undefined;
-        return { ok: true, index, text, toolCalls, usage: sumUsage(spent, usage), stop: toolCalls.length ? 'tool_use' : stop, truncated: stop === 'max_tokens', estimate: fitted.estimate.tokens, ...(thinking ? { thinking } : {}) };
+        return { ok: true, index, text, toolCalls, usage: addUsageTo({ ...spent }, usage), stop: toolCalls.length ? 'tool_use' : stop, truncated: stop === 'max_tokens', estimate: fitted.estimate.tokens, ...(thinking ? { thinking } : {}) };
       }
     }
-    return { ok: false, cancelled: false, partial: '', failure: last };
+    return { ok: false, cancelled: false, partial: '', failure: last, usage: spent };
   }
 
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
@@ -1295,7 +1314,10 @@ export class ChatEngine {
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config);
-    const { capacity, maxOutput } = d.status.limits(model);
+    const { capacity, maxOutput: planned } = d.status.limits(model);
+    // 考えるだけで上限に達してこの実行で上げた上限は、そのモデルで上げてよい範囲で、使える量の見積もりすべてに効かせる
+    const raisedCap = p.runId ? this.#outputCap.get(p.runId) : undefined;
+    const maxOutput = raisedCap ? Math.min(raisedOutputFor(model, capacity, planned, d.status.get(model.id)?.maxOutput), Math.max(planned, raisedCap)) : planned;
     const available = contextAvailable(capacity, maxOutput);
     const conversation = d.conversations.get(p.conversationId);
     const upto = conversation?.summary_upto ?? 0;
@@ -1310,10 +1332,11 @@ export class ChatEngine {
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist, background].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
-    const history = stored.map(m => forModel(m.message));
+    // 考える部分は、それを書いた提供元・モデルへ送るときだけ持たせる（要約で前の発言が変わった会話では送り返さない）
+    const history = stored.map(m => withThinkingFor(forModel(m.message), conversation?.summary ? undefined : { provider: model.provider, model: model.model }));
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
-    return { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, factor };
+    return { toolDefs, listed, system, history, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、

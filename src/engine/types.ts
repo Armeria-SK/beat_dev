@@ -24,8 +24,9 @@ export type ThinkingBlock =
   | { type: 'thinking'; thinking: string; signature: string; at: number; lead?: true }
   | { type: 'redacted_thinking'; data: string; at: number; lead?: true };
 
-// 返事の考える部分。書いた提供元とモデル（provider の id とモデルの名前）が同じ相手に送るときだけ送り返す
-export interface ThinkingRecord { provider: string; model: string; blocks: ThinkingBlock[] }
+// 返事の考える部分。書いた提供元とモデル（provider の id とモデルの名前）が同じ相手に送るときだけ送り返す。
+// tokens: 送り返すときの量の見積もり（その返事の出力のトークンから、文と呼び出しの分を引いたもの。考える部分の中身は見えないため）
+export interface ThinkingRecord { provider: string; model: string; blocks: ThinkingBlock[]; tokens: number }
 
 export interface AttachmentMeta { id: string; name: string; kind: 'text' | 'pdf' | 'image' }
 
