@@ -188,13 +188,16 @@ export type TaskControl =
   | { outcome: 'yield'; reason: string }
   | { outcome: 'failed'; reason: string };
 
+// 説明を変える実行の場（beat 8-6b: 製品が Research and pre-fix か）
+export interface DescribeScope { fixProduct?: boolean }
+
 export interface HeldValue { source: string; value: string }
 
 export interface ToolDef<I = any> {
   name: string;
   description: string;
   // 設定で変わる説明（モデルへ渡すときに description の代わりに使う）
-  describe?: (config: AppConfig) => string;
+  describe?: (config: AppConfig, scope?: DescribeScope) => string;
   input: TSchema;
   effect: ToolEffect;
   allowedIn: readonly RunKind[];

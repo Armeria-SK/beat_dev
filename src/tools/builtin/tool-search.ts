@@ -80,7 +80,7 @@ export const toolSearch: ToolDef<{ query: string }> = {
     }
     ctx.deferred.load(found.map(t => t.name));
     const byName = new Map(found.map(t => [t.name, t]));
-    const specs = ToolRegistry.specs(found, ctx.config);
+    const specs = ToolRegistry.specs(found, ctx.config, { fixProduct: ctx.project ? ctx.services?.projects?.get(ctx.project.id)?.scout_mode === 'fix' : false });
     return {
       content: [toolText(language, 'tool_search.loaded', { count: specs.length }), ...specs.map(spec => {
         const body = `${spec.description}\nInput: ${JSON.stringify(spec.inputSchema)}`;

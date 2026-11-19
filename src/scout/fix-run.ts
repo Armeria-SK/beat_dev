@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import type { Conversations } from '../db/conversations.ts';
 import type { ChatEngine } from '../engine/chat.ts';
+import type { EngineErrorKind } from '../engine/types.ts';
 import { checkCommandOf, folderMissing, type ProjectStore } from '../projects/store.ts';
 import type { WorktreeRow } from '../projects/worktree.ts';
 import { scoutText } from '../shared/messages/scout.ts';
@@ -27,9 +28,12 @@ export interface FixRunDeps {
 
 export type FixRunResult =
   | { ok: true; row: WorktreeRow; runId: string; result: FixFinish }
-  | { ok: false; reason: 'not_proposal' | 'no_check' | 'no_model' | 'copy_failed' | 'run_failed'; detail: string };
+  | { ok: false; reason: 'not_proposal' | 'no_check' | 'no_model' | 'copy_failed' | 'run_failed'; detail: string; runId?: string; errorKind?: EngineErrorKind };
 
-export async function runFix(d: FixRunDeps, proposalId: string, options: { signal?: AbortSignal } = {}): Promise<FixRunResult> {
+// onStart: 直す実行が動き出したとき（ワーカーが止める先と数を覚える。8-6b）
+export interface FixRunOptions { signal?: AbortSignal; onStart?: (runId: string, taskId: string) => void }
+
+export async function runFix(d: FixRunDeps, proposalId: string, options: FixRunOptions = {}): Promise<FixRunResult> {
   const proposalRow = d.tasks.get(proposalId);
   const proposal = readProposal(proposalRow?.proposal);
   if (!proposalRow || !proposal || proposalRow.status !== 'inbox' || !proposalRow.project_id) return { ok: false, reason: 'not_proposal', detail: 'not an open proposal of a product' };
@@ -49,10 +53,10 @@ export async function runFix(d: FixRunDeps, proposalId: string, options: { signa
     return { ok: false, reason: 'copy_failed', detail: made.reason };
   }
   const row = made.row;
-  const fail = async (detail: string): Promise<FixRunResult> => {
+  const fail = async (detail: string, ended?: { runId: string; errorKind: EngineErrorKind }): Promise<FixRunResult> => {
     await d.fixes.discardFixCopy(row.id, detail);
-    d.tasks.finish(task.id, 'failed', detail.slice(0, 300), 'worker');
-    return { ok: false, reason: 'run_failed', detail };
+    d.tasks.finish(task.id, 'failed', detail.slice(0, 300), 'worker', ended?.runId);
+    return { ok: false, reason: 'run_failed', detail, ...(ended ? { runId: ended.runId, errorKind: ended.errorKind } : {}) };
   };
   const conversationId = randomUUID();
   if (!d.tasks.claim(task.id, FIX_LEASE_MS, conversationId)) return fail('the run row could not be claimed');
@@ -74,8 +78,9 @@ export async function runFix(d: FixRunDeps, proposalId: string, options: { signa
       { id: row.id, path: row.path!, productRoot: project.root, branch: row.branch, base: row.base, ceiling: dirname(row.path!), job }, scoutText('en', 'proposal.untrusted'));
     if (!started.ok) return await fail(started.errorMessage.split('\n')[0] ?? 'the run did not start');
     d.tasks.event(task.id, 'run', 'worker', null, started.runId);
+    options.onStart?.(started.runId, task.id);
     const ended = await started.done;
-    if (!ended.ok) { await job.close(); return await fail(ended.errorMessage.split('\n')[0] ?? 'the run failed'); }
+    if (!ended.ok) { await job.close(); return await fail(ended.errorMessage.split('\n')[0] ?? 'the run failed', { runId: started.runId, errorKind: ended.errorKind }); }
     const result = await d.fixes.finishFixCopy(row.id, { check, job, ...(options.signal ? { signal: options.signal } : {}) });
     d.tasks.finish(task.id, 'done', result.kept ? `Fix kept on ${result.branch}` : `Fix not kept: ${result.reason}`, 'worker', started.runId);
     return { ok: true, row: d.fixes.get(row.id)!, runId: started.runId, result };

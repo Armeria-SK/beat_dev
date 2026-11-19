@@ -14,7 +14,7 @@ export const projectJa = {
   'fixed_on_conversation': "会話の製品は変えられません",
   'bad_scout_mode': "scoutMode は off・research・fix のどれかにしてください",
   'scout_mode_key': "モードは scoutMode で送ってください（scout_mode は返事にだけあります）",
-  'scout_fix_later': "Research and pre-fix はあとで入ります。今は Off か Research only を選んでください",
+  'scout_fix_needs_check': "Research and pre-fix には確かめのコマンドが要ります（直しが通るかを確かめてから残すため）。先に確かめのコマンドを決めてください",
   'scout_off': "この製品では scout がオフです。先に Research only を選んでください",
   'scout_no_model': "scout に使えるモデルが設定されていません。Settings › Models（Scout）で選んでください",
   'scout_cloud_zero': "scout のモデルはクラウドのモデルで、scout.cloudRunsPerHour が 0 なので、scout は動きません",

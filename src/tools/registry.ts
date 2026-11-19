@@ -1,6 +1,6 @@
 import type { AppConfig } from '../config/schema.ts';
 import type { ToolSpec } from '../engine/types.ts';
-import type { RunKind, ToolDef } from './types.ts';
+import type { DescribeScope, RunKind, ToolDef } from './types.ts';
 
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'file_read', 'file_list', 'file_search', 'file_write', 'file_edit', 'shell_run', 'shell_output', 'shell_stop', 'web_search', 'web_fetch', 'skill_view', 'history_search',
@@ -60,7 +60,7 @@ export class ToolRegistry {
     return this.list().filter(t => t.allowedIn.includes(kind) && !options.exclude?.(t));
   }
 
-  static specs(tools: readonly ToolDef[], config?: AppConfig): ToolSpec[] {
-    return tools.map(t => ({ name: t.name, description: (config && t.describe?.(config)) ?? t.description, inputSchema: t.input as unknown as Record<string, unknown> }));
+  static specs(tools: readonly ToolDef[], config?: AppConfig, scope?: DescribeScope): ToolSpec[] {
+    return tools.map(t => ({ name: t.name, description: (config && t.describe?.(config, scope)) ?? t.description, inputSchema: t.input as unknown as Record<string, unknown> }));
   }
 }

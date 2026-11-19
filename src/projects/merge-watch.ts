@@ -64,10 +64,12 @@ export interface MergeWatchDeps {
 }
 
 // 取り込み待ちのタスク（done で、いちばん新しい作業コピーの行が branch）。tasks.awaiting と合わせて Kanban の Awaiting check に出す
+// 承認した Pre-fix（beat 8-6b）は、その提案を直したいちばん新しい fix の行が branch
 export function mergeWaiting(db: DatabaseSync, project?: string | null): Task[] {
   const where = project === undefined ? '' : project === null ? ' AND t.project_id IS NULL' : ' AND t.project_id = ?';
   return db.prepare(`SELECT t.* FROM tasks t WHERE t.status = 'done'${where}
-    AND (SELECT w.state FROM worktrees w WHERE w.task_id = t.id AND w.kind = 'task' ORDER BY w.created_at DESC, w.id DESC LIMIT 1) = 'branch'
+    AND ((SELECT w.state FROM worktrees w WHERE w.task_id = t.id AND w.kind = 'task' ORDER BY w.created_at DESC, w.id DESC LIMIT 1) = 'branch'
+      OR (t.proposal IS NOT NULL AND (SELECT w.state FROM worktrees w WHERE w.proposal_id = t.id AND w.kind = 'fix' ORDER BY w.created_at DESC, w.id DESC LIMIT 1) = 'branch'))
     AND (t.project_id IS NULL OR t.project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
     ORDER BY COALESCE(t.completed_at, t.updated_at) DESC LIMIT 200`).all(...(project ? [project] : [])) as unknown as Task[];
 }

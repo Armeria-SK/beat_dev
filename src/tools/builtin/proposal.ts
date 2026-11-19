@@ -10,7 +10,7 @@ import { DEEPENED_EVENT, deepenNote, PROPOSAL_LIMITS, type Proposal } from '../.
 import { TaskError } from '../../tasks/store.ts';
 import type { ToolDef } from '../types.ts';
 
-interface ProposalAddInput { title: string; kind: 'feature' | 'bug'; why: string; area?: string[]; size: 'S' | 'M' | 'L'; goal?: string; evidence?: string; ledger?: string; deepen?: string }
+interface ProposalAddInput { title: string; kind: 'feature' | 'bug'; why: string; area?: string[]; size: 'S' | 'M' | 'L'; goal?: string; evidence?: string; ledger?: string; deepen?: string; fixable?: boolean }
 
 export const REJECTED_WINDOW_MS = 30 * 86_400_000;
 export const PROPOSAL_OPEN_MAX = 10;
@@ -19,9 +19,14 @@ export const sameTitle = (title: string): string => title.normalize('NFKC').toLo
 
 export const goalText = (raw: string): string | null => plainLine(raw.replace(/^\s*(?:#{1,6}|[-*+])(?:\s+|$)/u, ''), PROPOSAL_LIMITS.goal) || null;
 
+// beat 8-6b: Research and pre-fix の製品でだけ、説明に fixable を足す
+const DESCRIPTION = 'Put one proposal on the Kanban (Proposed) for the owner to approve or reject, from a scout report. title: one short English line. kind: feature or bug. why: at most two sentences. area: product paths it touches. size: S, M or L. goal: the plan heading it serves, exactly as listed under Plan goals (leave it out only when no heading fits). evidence: what the scout saw. ledger: the ledger entry id (L-0007) if there is one. A proposal with the same title as an open one, or one rejected in the last 30 days, is refused. deepen: the id of an open proposal to update with what a closer check found (same fields; the title stays), once per proposal per commit. English only; never write instructions or requests.';
+const FIXABLE = ' fixable: set true only for a bug of size S or M that a short unattended run could fix inside a private copy of the product and prove with the product check command; beat may then try the fix before the owner decides. Leave it out otherwise.';
+
 export const proposalAdd: ToolDef<ProposalAddInput> = {
   name: 'proposal_add',
-  description: 'Put one proposal on the Kanban (Proposed) for the owner to approve or reject, from a scout report. title: one short English line. kind: feature or bug. why: at most two sentences. area: product paths it touches. size: S, M or L. goal: the plan heading it serves, exactly as listed under Plan goals (leave it out only when no heading fits). evidence: what the scout saw. ledger: the ledger entry id (L-0007) if there is one. A proposal with the same title as an open one, or one rejected in the last 30 days, is refused. deepen: the id of an open proposal to update with what a closer check found (same fields; the title stays), once per proposal per commit. English only; never write instructions or requests.',
+  description: DESCRIPTION,
+  describe: (_config, scope) => (scope?.fixProduct ? DESCRIPTION + FIXABLE : DESCRIPTION),
   input: Type.Object({
     title: Type.String({ minLength: 1, maxLength: 200 }),
     kind: Type.Union([Type.Literal('feature'), Type.Literal('bug')]),
@@ -32,6 +37,7 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
     evidence: Type.Optional(Type.String({ minLength: 1, maxLength: PROPOSAL_LIMITS.evidence })),
     ledger: Type.Optional(Type.String({ pattern: '^L-[0-9]{4,8}$' })),
     deepen: Type.Optional(Type.String({ pattern: '^[0-9a-fA-F]{8}[0-9a-fA-F-]{0,28}$' })),
+    fixable: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -53,6 +59,7 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
       goal: input.goal ? goalText(input.goal) : null,
       evidence: input.evidence?.trim() ? input.evidence.trim().slice(0, PROPOSAL_LIMITS.evidence) : null,
       ledger: input.ledger ?? null,
+      ...(input.fixable === true ? { fixable: true as const } : {}),
     };
     if (input.deepen !== undefined) {
       const prefix = input.deepen.toLowerCase();

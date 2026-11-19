@@ -12,7 +12,8 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 import { projectFilterOf, usableProjectId } from './routes-projects.ts';
 import { answerQuestion } from './routes-questions.ts';
-import { maskedEvents, maskedLastRun, maskedTaskView } from './task-view.ts';
+import { branchRowOf, maskedEvents, maskedLastRun, maskedTaskView } from './task-view.ts';
+import { latestFixRow, prefixOf } from '../scout/fix.ts';
 import { AcceptanceError } from '../projects/acceptance.ts';
 import { GateError, itemSummary, ownerDecide } from '../projects/gate.ts';
 import { mergeWaiting, type BranchAction } from '../projects/merge-watch.ts';
@@ -74,6 +75,21 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const task = getTask(id);
     if (isScoutRun(task)) throw problem(409, 'task', 'scout_run');
     return task;
+  };
+  // beat 8-6b D-8: Pre-fix（直しの付いた未処理の提案）の Approve はタスクを動かさず、取り込み待ちにする
+  const prefixOfInbox = (task: Task) => (task.status === 'inbox' && task.proposal !== null ? prefixOf(app.db, app.kv, task.id) : null);
+  const approveTask = (task: Task): Task => {
+    const prefix = prefixOfInbox(task);
+    return prefix ? app.tasks.approvePrefix(task.id, taskText(languageOf(app.config()), 'summary.prefix_approved', { branch: prefix.branch })) : app.tasks.approve(task.id);
+  };
+  // Pre-fix の Reject: 提案を取り消したあと、beat の作ったブランチを捨てる（持ち主のコミットが乗っていれば残す）
+  const dropPrefixBranch = async (task: Task): Promise<void> => {
+    const row = latestFixRow(app.db, task.id);
+    if (!row || row.state !== 'branch') return;
+    const done = await app.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
+    const kept = !done.ok || done.branchKept;
+    if (kept) app.log(`[WARN] The pre-fix branch ${row.branch} was kept: ${done.ok ? done.note ?? 'not removed' : done.reason}`);
+    app.tasks.event(task.id, 'worktree', 'user', taskText(languageOf(app.config()), kept ? 'event.prefix_branch_kept' : 'event.prefix_rejected', { branch: row.branch }));
   };
 
   router.add('GET', '/api/tasks', ({ res, url }) => {
@@ -198,7 +214,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
         if (!child) throw new TaskError('error.previous_unfinished');
         task = child;
       } else if (task.status === 'inbox') {
-        task = app.tasks.approve(task.id);
+        task = approveTask(task);
+        if (task.status === 'done') { sendJson(res, 200, { task: view(task) }); return; }
       } else if (task.status !== 'ready' || task.attempts >= task.max_attempts) {
         // 取り消した予定のひな形は、予定に戻したうえで今回の実行を 1 つ作る（前の実行が残っていれば、予定も戻さずに断る）
         const template = task.cron !== null && task.parent_id === null;
@@ -219,7 +236,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   router.add('POST', '/api/tasks/:id/approve', ({ res, params }) => {
-    try { sendJson(res, 200, { task: view(app.tasks.approve(ownerTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
+    try { sendJson(res, 200, { task: view(approveTask(ownerTask(params[0]!))) }); } catch (error) { taskProblem(error); }
   });
 
   router.add('POST', '/api/tasks/:id/unapprove', ({ res, params }) => {
@@ -240,6 +257,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
+    const prefixed = status === 'cancelled' && prefixOfInbox(task) !== null;
     let updated: Task;
     try {
       updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
@@ -247,7 +265,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
       app.worker.stopTask(task.id);
       app.kv.delete(splitKey(task.id));
     }
-    sendJson(res, 200, { task: view(updated) });
+    if (prefixed) await dropPrefixBranch(task);
+    sendJson(res, 200, { task: view(app.tasks.get(task.id) ?? updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
   router.add('POST', '/api/tasks/:id/uncancel', ({ res, params }) => {
@@ -287,9 +306,13 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   // ── 取り込み待ちのブランチ（beat 8-3）。触るのは表 worktrees にあるそのタスクの行だけ ──
   const branchRow = (task: Task) => {
-    const row = app.worktrees.forTask(task.id);
+    const row = branchRowOf(app, task);
     if (!row) throw problem(409, 'task', 'no_branch');
     return row;
+  };
+  const decidedBranchRow = (task: Task) => {
+    if (task.status === 'inbox') throw problem(409, 'task', 'prefix_undecided');
+    return branchRow(task);
   };
   const branchDone = (res: Parameters<typeof sendJson>[0], task: Task, done: BranchAction) => {
     if (!done.ok) {
@@ -321,14 +344,14 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const tip = requireString(body, 'tip', { optional: true, max: 64 });
     const files = requireString(body, 'files', { optional: true, max: 64 });
     if ((tip === undefined) !== (files === undefined)) throw problem(400, 'task', 'branch_confirm_pair');
-    branchDone(res, task, await app.mergeWatch.markMerged(branchRow(task).id, tip !== undefined && files !== undefined ? { tip, print: files } : undefined));
+    branchDone(res, task, await app.mergeWatch.markMerged(decidedBranchRow(task).id, tip !== undefined && files !== undefined ? { tip, print: files } : undefined));
   });
   router.add('POST', '/api/tasks/:id/discard', async ({ req, res, params }) => {
     const task = ownerTask(params[0]!);
     const body = requireObject(await readJson(req));
     const tip = requireString(body, 'tip', { max: 64 })!;
     const files = requireString(body, 'files', { max: 64 })!;
-    branchDone(res, task, await app.mergeWatch.discard(branchRow(task).id, { tip, print: files }));
+    branchDone(res, task, await app.mergeWatch.discard(decidedBranchRow(task).id, { tip, print: files }));
   });
 
   // ── ワーカー ──

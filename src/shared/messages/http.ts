@@ -23,6 +23,7 @@ const en = {
   'already_finished': 'This task has already finished',
   'scout_run': 'This is a scout run. beat starts and stops it by itself, so it cannot be changed here',
   'no_branch': 'This task has no branch waiting to be merged',
+  'prefix_undecided': 'Approve or reject this pre-fix first',
   'branch_busy': 'beat is already handling this branch. Try again in a moment',
   'branch_moved': 'The branch changed after you looked at it. Look at its commits again before discarding it',
   'branch_changed': 'The files in the working copy changed after you looked at them. Look at them again before discarding it',

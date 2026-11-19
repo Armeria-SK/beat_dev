@@ -368,8 +368,11 @@ export function createWebServer(app: App): WebServer {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
     const project = projectFilterOf(url);
     const filter = projectWhere('engine_runs', project);
-    const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
-      .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null }>;
+    // beat 8-6b: 直す番の実行（Think · pre-fix）には、その直しのブランチ fix_branch を付ける。ほかは null
+    const rows = app.db.prepare(`SELECT engine_runs.*, ${projectOfSql('engine_runs')} AS project_id,
+      (SELECT w.branch FROM worktrees w JOIN tasks t ON t.id = w.task_id WHERE w.kind = 'fix' AND t.conversation_id = engine_runs.conversation_id LIMIT 1) AS fix_branch
+      FROM engine_runs WHERE 1 = 1${filter.sql} ORDER BY started_at DESC LIMIT ?`)
+      .all(...filter.args, limit) as unknown as Array<RunRow & { project_id: string | null; fix_branch: string | null }>;
     sendJson(res, 200, { runs: rows.map(r => ({ ...r, flags: JSON.parse(r.flags) as string[] })), total: todayCount(app, 'engine_runs', undefined, project), judged: app.pending.judged(todayStart(app), project), judgeOff: judgeOff(app.config()) });
   });
 

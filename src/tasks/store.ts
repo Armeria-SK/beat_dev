@@ -575,6 +575,21 @@ export class TaskStore {
     return this.#changed(id);
   }
 
+  // beat 8-6b D-8: Pre-fix の Approve。タスクを動かさず、提案を done・origin user にして取り込み待ちにする。
+  // 提案の文は外の読みから来たので、持ち主の頼み（owner_request）には写さない（#adopt と違い、印に頼らずいつも NULL）
+  approvePrefix(id: string, summary: string): Task {
+    transaction(this.#db, () => {
+      const task = this.get(id);
+      if (!task || task.status !== 'inbox' || task.proposal === null) throw new TaskError('error.not_proposal');
+      this.#db.prepare("UPDATE tasks SET proposed_by = CASE WHEN origin != 'user' AND proposed_by IS NULL THEN origin ELSE proposed_by END, origin = 'user', owner_request = NULL WHERE id = ?").run(id);
+      this.event(id, 'approved', 'user');
+      this.#writeFinish(id, 'done', summary, 'user');
+    });
+    const task = this.#changed(id);
+    this.onFinished?.(task);
+    return task;
+  }
+
   #adopt(task: Task): void {
     if (task.origin !== 'user' && task.proposed_by === null) {
       const request = this.#textTainted(task.id, task.parent_id) ? null : JSON.stringify({ title: task.title, body: task.body, doneCriteria: null, aiText: true } satisfies OwnerRequest);

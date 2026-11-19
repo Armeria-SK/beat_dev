@@ -118,7 +118,8 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const docLanguage = body.docLanguage === null ? null : languageTagOf(body.docLanguage);
     if (body.docLanguage !== undefined && docLanguage === undefined) throw problem(400, 'invalid_field', 'bad_language', { field: 'docLanguage', params: { field: 'docLanguage' } });
     if (body.scoutMode !== undefined && !(SCOUT_MODES as readonly unknown[]).includes(body.scoutMode)) throw projectProblem(400, new ProjectError('bad_scout_mode'));
-    if (body.scoutMode === 'fix') throw projectProblem(400, new ProjectError('scout_fix_later'));
+    // Research and pre-fix は確かめのコマンドのある製品だけ（Q-P8-10。同じ PATCH で書いた確かめのコマンドも数える）
+    if (body.scoutMode === 'fix' && !guarded(() => (rawCheck !== undefined ? checkCommandOf(rawCheck) : current.check_command))) throw projectProblem(400, new ProjectError('scout_fix_needs_check'));
     const changed = guarded(() => app.projects.update(current.id, {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),

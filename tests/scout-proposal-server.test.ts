@@ -100,7 +100,7 @@ test('proposal text: control, bidi and invisible characters are refused (they ca
   assert.equal(readProposal(JSON.stringify({ ...PROPOSAL, why: `a${ch(0x202e)}b` })), null, 'a stored value with such characters reads as null');
 });
 
-test('PATCH /api/projects/:id scoutMode: off and research are saved; fix is refused until it arrives; other values are refused', async t => {
+test('PATCH /api/projects/:id scoutMode: off and research are saved; fix needs a check command (8-6b); other values are refused', async t => {
   const s = await setup(t);
   const patch = (body: unknown) => s.json(`/api/projects/${s.projectId}`, 'PATCH', body);
   const research = await patch({ scoutMode: 'research' });
@@ -111,7 +111,16 @@ test('PATCH /api/projects/:id scoutMode: off and research are saved; fix is refu
   assert.equal(kept.body.project.scout_mode, 'research', 'a patch without scoutMode keeps it');
   const fix = await patch({ scoutMode: 'fix' });
   assert.equal(fix.status, 400);
-  assert.equal(fix.body.code, 'project.scout_fix_later');
+  assert.equal(fix.body.code, 'project.scout_fix_needs_check');
+  assert.equal(s.app.projects.get(s.projectId)!.scout_mode, 'research', 'the refused fix mode changes nothing');
+  const blank = await patch({ scoutMode: 'fix', checkCommand: '   ' });
+  assert.equal(blank.body.code, 'project.scout_fix_needs_check', 'a blank check command in the same patch does not count');
+  const withCheck = await patch({ scoutMode: 'fix', checkCommand: 'npm test' });
+  assert.equal(withCheck.status, 200, JSON.stringify(withCheck.body));
+  assert.equal(withCheck.body.project.scout_mode, 'fix');
+  const again = await patch({ scoutMode: 'fix' });
+  assert.equal(again.status, 200, 'the saved check command counts');
+  assert.equal((await patch({ scoutMode: 'research' })).status, 200);
   for (const value of ['auto', 1, null, '']) {
     const r = await patch({ scoutMode: value });
     assert.equal(r.status, 400, String(value));

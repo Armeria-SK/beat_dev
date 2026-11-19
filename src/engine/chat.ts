@@ -1428,7 +1428,7 @@ export class ChatEngine {
     const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen, loaded);
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
-    const specs = ToolRegistry.specs(toolDefs, config);
+    const specs = ToolRegistry.specs(toolDefs, config, { fixProduct: p.project ? d.projects?.get(p.project.id)?.scout_mode === 'fix' : false });
     const { capacity, maxOutput: planned } = d.status.limits(model);
     // 考えるだけで上限に達してこの実行で上げた上限は、上げたそのモデルにだけ（予備のモデルに替わったら引き継がない）、使える量の見積もりすべてに効かせる
     const raisedCap = p.runId ? this.#outputCap.get(p.runId)?.get(model.id) : undefined;
