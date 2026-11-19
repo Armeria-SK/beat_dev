@@ -3,21 +3,27 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { recordToolWrite } from '../../changes/record.ts';
 import { atomicWriteFile } from '../../config/store.ts';
+import type { Language } from '../../config/schema.ts';
+import { prefixLength } from '../../engine/tokens.ts';
 import { languageOf } from '../../shared/language.ts';
 import { appendDelta, lineDelta } from '../../shared/line-delta.ts';
 import { guardText } from '../../shared/messages/guard.ts';
+import { redactSecrets } from '../../shared/redaction.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { approvalPaths } from '../approvals.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import { isToolConfigPath } from '../hooks/tool-config.ts';
 import { mainWrites, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { askBeforeRegister, growSkills } from '../skills/store.ts';
+import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import { isUnderDownloads } from './downloads-core.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git', instructions: 'file.instructions' } as const;
 
 const MAX_READ_BYTES = 512 * 1024;
+const DEFAULT_READ_LINES = 2000;
+const PAGE_NOTE_ROOM = 400;
 const MAX_DELTA_BYTES = 4 * 1024 * 1024;
 const MAX_WRITE_CHARS = 1_000_000;
 
@@ -66,7 +72,7 @@ const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A pat
 
 export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }> = {
   name: 'file_read',
-  description: 'Read a text file. With offset (the line to start from, starting at 1) and limit (how many lines) you can read just part of it.',
+  description: 'Read a text file. Without limit it returns up to 2,000 lines; when more remain, the result ends with the offset to read on from. With offset (the line to start from, starting at 1) and limit (how many lines) you can read just part of it.',
   input: Type.Object({ path: PathArg, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'agent'],
@@ -86,12 +92,29 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
     if (text.includes('\u0000')) return { content: toolText(language, 'file.binary'), isError: true };
     const lines = text.split(/\r?\n/u);
     const start = (input.offset ?? 1) - 1;
-    const end = input.limit ? start + input.limit : lines.length;
-    const body = lines.slice(start, end).join('\n');
-    const more = end < lines.length ? `\n\n${toolText(language, 'file.more', { total: lines.length, from: start + 1, to: end, next: end + 1 })}` : '';
-    return { content: body + more };
+    return { content: readPage(lines, start, Math.min(lines.length, start + (input.limit ?? DEFAULT_READ_LINES)), language, ctx.outputTokens) };
   },
 };
+
+function readPage(lines: readonly string[], start: number, end: number, language: Language, tokens: number | undefined): string {
+  const budget = tokens ?? Infinity;
+  const page = (to: number) => lines.slice(start, to).join('\n') + (to < lines.length ? `\n\n${toolText(language, 'file.more', { total: lines.length, from: start + 1, to, next: to + 1 })}` : '');
+  const fits = (text: string) => {
+    const redacted = redactSecrets(text);
+    return prefixLength(redacted, TOOL_OUTPUT_LIMIT, budget) >= redacted.length;
+  };
+  let to = end;
+  let text = page(to);
+  if (start >= end || fits(text)) return text;
+  const whole = lines.slice(start, end).join('\n');
+  to = start + whole.slice(0, prefixLength(whole, TOOL_OUTPUT_LIMIT - PAGE_NOTE_ROOM, budget - PAGE_NOTE_ROOM / 3.5)).split('\n').length - 1;
+  while (to > start && !fits(text = page(to))) to = start + Math.floor((to - start) * 0.9);
+  if (to > start) return text;
+  const line = redactSecrets(lines[start] ?? '');
+  const shown = prefixLength(line, TOOL_OUTPUT_LIMIT - PAGE_NOTE_ROOM, budget - PAGE_NOTE_ROOM / 3.5);
+  const more = start + 1 < lines.length ? toolText(language, 'file.line_cut_more', { next: start + 2 }) : '';
+  return `${line.slice(0, shown)}\n\n${toolText(language, 'file.line_cut', { line: start + 1, total: lines.length, chars: line.length.toLocaleString('en-US'), shown: shown.toLocaleString('en-US'), more })}`;
+}
 
 export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwrite' | 'append' | 'create' }> = {
   name: 'file_write',

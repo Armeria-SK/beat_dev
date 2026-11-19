@@ -146,6 +146,21 @@ export interface RunResult {
   spawnError?: string;
   stdoutTail?: string;
   stderrTail?: string;
+  rest?: { out: StreamRest; err: StreamRest };
+}
+
+export interface StreamRest { text: string; skipped: number }
+
+function restOf(tail: Buffer, skipped: number): StreamRest {
+  let start = 0;
+  while (start < tail.length && start < 3 && (tail[start]! & 0xc0) === 0x80) start++;
+  if (skipped > 0) {
+    const newline = tail.indexOf(0x0a, start);
+    const space = newline >= 0 ? -1 : tail.findIndex((byte, i) => i >= start && (byte === 0x20 || byte === 0x09));
+    const cut = newline >= 0 ? newline : space;
+    if (cut >= 0 && cut < tail.length - 1) start = cut + 1;
+  }
+  return { text: tail.subarray(start).toString('utf8'), skipped: skipped + start };
 }
 
 export function runProcess(file: string, args: readonly string[], opts: RunOptions): Promise<RunResult> {
@@ -166,18 +181,28 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
     let full: WriteStream | undefined; let fullPath: string | undefined;
     const backlog: Array<[string, Buffer]> = [];
     const tails = { out: Buffer.alloc(0), err: Buffer.alloc(0) };
+    const dropped = { out: { tail: Buffer.alloc(0), skipped: 0 }, err: { tail: Buffer.alloc(0), skipped: 0 } };
     const onData = (stream: 'out' | 'err') => (chunk: Buffer) => {
       total += chunk.length;
       if (opts.tailBytes) {
         const joined = Buffer.concat([tails[stream], chunk]);
         tails[stream] = joined.length > opts.tailBytes ? joined.subarray(joined.length - opts.tailBytes) : joined;
       }
+      let headLength = 0;
       if (kept < opts.maxBytes) {
         const part = chunk.subarray(0, opts.maxBytes - kept);
+        headLength = part.length;
         kept += part.length;
         if (stream === 'out') stdout += part.toString('utf8'); else stderr += part.toString('utf8');
         if (part.length < chunk.length) truncated = true;
       } else truncated = true;
+      if (opts.tailBytes && headLength < chunk.length) {
+        const rest = dropped[stream];
+        const joined = Buffer.concat([rest.tail, chunk.subarray(headLength)]);
+        const over = Math.max(0, joined.length - opts.tailBytes);
+        rest.skipped += over;
+        rest.tail = joined.subarray(over);
+      }
       if (opts.fullOutputDir && opts.outputId) {
         if (!full && truncated) {
           mkdirSync(opts.fullOutputDir, { recursive: true });
@@ -209,7 +234,7 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
       resolve({
         exitCode: code, stdout, stderr, truncated, totalBytes: total, timedOut, aborted, durationMs: Date.now() - started,
         ...(fullPath ? { fullOutputPath: fullPath } : {}), ...(spawnError ? { spawnError } : {}),
-        ...(opts.tailBytes ? { stdoutTail: tails.out.toString('utf8'), stderrTail: tails.err.toString('utf8') } : {}),
+        ...(opts.tailBytes ? { stdoutTail: tails.out.toString('utf8'), stderrTail: tails.err.toString('utf8'), rest: { out: restOf(dropped.out.tail, dropped.out.skipped), err: restOf(dropped.err.tail, dropped.err.skipped) } } : {}),
       });
     };
     const settleSoon = (reap = false) => {

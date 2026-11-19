@@ -78,7 +78,7 @@ export const shellOutput: ToolDef<{ id: string; waitSec?: number }> = {
     if ((input.waitSec ?? 0) > 0 && await jobs.wait(input.id, ctx.conversationId, input.waitSec ?? 0, ctx.signal) === undefined) return unknown(input.id, ctx);
     const read = jobs.read(input.id, ctx.conversationId);
     if (!read) return unknown(input.id, ctx);
-    return { content: readText(read, languageOf(ctx.config)), ...marked(read) };
+    return { content: readText(read, languageOf(ctx.config)), keepTail: true, ...marked(read) };
   },
 };
 
@@ -100,6 +100,6 @@ export const shellStop: ToolDef<{ id: string }> = {
     if (!read) return unknown(input.id, ctx);
     const language = languageOf(ctx.config);
     const lead = toolText(language, before.state === 'running' ? 'bg.stopped' : 'bg.already_ended', { id: input.id });
-    return { content: readText(read, language, lead), ...marked(read) };
+    return { content: readText(read, language, lead), keepTail: true, ...marked(read) };
   },
 };

@@ -128,7 +128,7 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   assert.equal(results.length, 3);
   for (const text of results) {
     assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果は、道具の仕様と今のやり取りを引いた残りの一部（約 8,700 文字より小さい）: ${text.length}`);
-    assert.match(text, /only \d,\d{3} of [\d,]+ characters were returned/u);
+    assert.match(text, /\n\n\[Lines 1 to \d+ of 600\. Read on with offset=\d+\]$/u, 'TE-3: file_read は行の切れ目で切り、続きの offset を必ず書く');
   }
   assert.ok(results[0]!.length > results[1]!.length && results[1]!.length > results[2]!.length, '結果が積まれるほど、次の結果に許す量は小さくなる');
   const last = small.adapter().calls.at(-1)!;
@@ -140,7 +140,8 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   large.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
   assert.ok((await (await large.send('一覧を読んで')).done).ok);
   const big = large.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
-  assert.match(big, /only 16,000 of [\d,]+ characters were returned/u, '大きなコンテキストでは、今までどおり 16,000 文字');
+  assert.match(big, /\n\n\[Lines 1 to \d+ of 1199\. Read on with offset=\d+\]$/u, '大きなコンテキストでは 16,000 文字に収まる所で行の切れ目で切り、続きの offset を書く（TE-3）');
+  assert.ok(big.length > 15_000 && big.length <= 16_000 + '[file_read] '.length, `16,000 文字近くまで使う: ${big.length}`);
 });
 
 // 道具の数が 24 → 31 に増えて、固定の分（system と道具の仕様）が 16k の約 4 割になっても、結果が入りきらなくならない。

@@ -354,3 +354,49 @@ test('X1 fetched は印を付ける向きにしか働かない: 失敗の結果�
   const after = await observe(s, 'plain_write', {}, chain);
   assert.deepEqual([after.asked, after.judged], [false, false], 'fetched で印が付いたあとの書き込みも確かめない');
 });
+
+// ── TE-3: 「尻も大事」の印（ToolOutput.keepTail）──
+
+const SECRET_BODY = 'Zq7Wm3Xr9Lp2Vn5Tb8Hc4Jd6Kf1Gs0';
+const SECRET = `sk-ant-api03-${SECRET_BODY}`;
+
+function assertNoSecretPiece(content: string): void {
+  for (let i = 0; i + 6 <= SECRET_BODY.length; i++) assert.equal(content.includes(SECRET_BODY.slice(i, i + 6)), false, `秘密のかけら ${SECRET_BODY.slice(i, i + 6)} が出た`);
+}
+
+const fixed = (name: string, content: string, keepTail?: boolean): ToolDef => tool([], name, 'read', { async execute() { return { content, ...(keepTail ? { keepTail } : {}) }; } });
+
+test('TE-3: 印の無い道具は今までどおり頭だけ（16,000 字と、残りは出さないの文）', async t => {
+  const s = setup(t, [fixed('plain', `${'x'.repeat(20_000)}END-OF-OUTPUT`)]);
+  const out = await s.call('plain', {});
+  assert.equal(out.output.content, `${'x'.repeat(16_000)}\n\n[The output was long, so only 16,000 of 20,013 characters were returned. The rest is not shown]`);
+});
+
+test('TE-3: 印の付いた結果は、頭 6 割・尻 4 割を残し、間に省略の行を置く', async t => {
+  const content = `HEAD-START${'m'.repeat(30_000)}TAIL-END`;
+  const s = setup(t, [fixed('marked', content, true)]);
+  const out = (await s.call('marked', {})).output.content;
+  const note = '[The output was long (30,018 characters), so only its first 9,600 and last 6,400 characters were returned. 14,018 characters in the middle were left out. The rest is not shown]';
+  assert.equal(out, `${content.slice(0, 9_600)}\n\n${note}\n\n${content.slice(-6_400)}`);
+  assert.ok(out.startsWith('HEAD-START') && out.endsWith('TAIL-END'));
+});
+
+test('TE-3: 印の付いた結果は、使える量（outputTokens）が小さくても尻が残る', async t => {
+  const content = `HEAD-START${'m'.repeat(30_000)}TAIL-END`;
+  const s = setup(t, [fixed('marked', content, true)]);
+  const out = (await s.call('marked', {}, s.makeCtx({ outputTokens: 600 }))).output.content;
+  assert.ok(out.startsWith('HEAD-START') && out.endsWith('TAIL-END'), out.slice(-200));
+  assert.ok(out.length < 2_400, `${out.length}`);
+});
+
+test('TE-3: 伏せ字は切る前に全文へ効く。秘密が頭の切れ目・尻の切れ目をまたいでも、かけらも出ない', async t => {
+  const atHead = `${'a'.repeat(9_580)} ${SECRET} ${'b'.repeat(20_000)}`;
+  const atTail = `${'a'.repeat(20_000)} ${SECRET} ${'b'.repeat(6_400 - 31)}`;
+  const s = setup(t, [fixed('head_cut', atHead, true), fixed('tail_cut', atTail, true), fixed('plain_cut', atHead)]);
+  for (const name of ['head_cut', 'tail_cut', 'plain_cut']) {
+    const out = (await s.call(name, {})).output.content;
+    assertNoSecretPiece(out);
+    assert.match(out, /were returned/u, `${name}: 切れている`);
+  }
+  assert.equal(atTail.length - 6_400 > atTail.indexOf(SECRET) && atTail.length - 6_400 < atTail.indexOf(SECRET) + SECRET.length, true, '前提: 伏せる前の文で尻を切ると、切れ目が秘密の途中に来る');
+});

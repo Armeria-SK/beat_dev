@@ -27,7 +27,7 @@ import { pendingText } from '../../shared/messages/pending.ts';
 import { parseRemotes, type Remote } from '../../projects/remotes.ts';
 import type { ShellKind } from '../hooks/shell-lex.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
-import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
+import { findExecutable, resolveShell, runProcess, scrubEnv, type StreamRest } from '../shell/runner.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { BACKGROUND_OUTPUT_CHARS, BACKGROUND_SETTLE_SEC, jobLines, jobState, newest } from './shell-bg.ts';
 
@@ -52,7 +52,14 @@ function resolveCwd(input: ShellInput, ctx: ToolContext): { cwd: string } | { pr
 }
 
 const PREVIEW_CHARS = 8000;
+const SHELL_TAIL_BYTES = 16_384;
 const FINGERPRINT_LIMIT_BYTES = 1_048_576;
+
+function headAndTail(head: string, rest: StreamRest | undefined, language: Language): string {
+  if (!rest || (rest.text === '' && rest.skipped === 0)) return head;
+  if (rest.skipped === 0) return head + rest.text;
+  return `${head.trimEnd()}\n${toolText(language, 'shell.omitted', { bytes: rest.skipped.toLocaleString('en-US') })}\n${rest.text}`;
+}
 
 const sha256 = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
 
@@ -303,7 +310,7 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
       ...(skipped > 0 ? [toolText(language, 'bg.skipped', { bytes: skipped.toLocaleString('en-US') })] : []),
       shown ? `${toolText(language, 'shell.bg_so_far')}\n${shown}` : toolText(language, 'shell.bg_none_yet'),
     ];
-    return { content: shellTranscript(input.command, toolText(language, 'shell.bg_started', { id: read.id, shell: shell.name, cwd }), parts), ...mark };
+    return { content: shellTranscript(input.command, toolText(language, 'shell.bg_started', { id: read.id, shell: shell.name, cwd }), parts), keepTail: true, ...mark };
   }
   if (read.spawnError !== undefined) {
     jobs.forget(read.id, ctx.conversationId);
@@ -323,6 +330,7 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
   else jobs.forget(read.id, ctx.conversationId);
   return {
     content: shellTranscript(input.command, header, parts),
+    keepTail: true,
     isError: read.exitCode !== 0,
     ...(truncated ? { fullRef: read.logPath } : {}),
     ...(typeof read.exitCode === 'number' ? { exitCode: read.exitCode } : {}),
@@ -384,7 +392,7 @@ export const shellRun: ToolDef<ShellInput> = {
     try {
       result = await runProcess(shell.file, shell.args(input.command), {
         cwd: cwd.cwd, env: placeEnv(ctx, { ...child.env, ...gitRun?.env }), timeoutMs: timeoutSec * 1000, signal: ctx.signal,
-        maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
+        maxBytes: settings.outputCapBytes, tailBytes: Math.min(SHELL_TAIL_BYTES, settings.outputCapBytes), fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
         ...(shell.stdin ? { input: shell.stdin(input.command) } : {}),
         ...(fixJob ? { onSpawn: (spawned: ChildProcess) => fixJob.add(spawned) } : {}),
       });
@@ -393,13 +401,16 @@ export const shellRun: ToolDef<ShellInput> = {
     if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };
     const header = toolText(language, 'shell.header', { shell: shell.name, cwd: cwd.cwd, code: result.exitCode ?? '—', seconds: (result.durationMs / 1000).toFixed(1) });
     const parts: string[] = [];
-    if (result.stdout.trim()) parts.push(result.stdout.trimEnd());
-    if (result.stderr.trim()) parts.push(`[stderr]\n${result.stderr.trimEnd()}`);
+    const stdout = headAndTail(result.stdout, result.rest?.out, language);
+    const stderr = headAndTail(result.stderr, result.rest?.err, language);
+    if (stdout.trim()) parts.push(stdout.trimEnd());
+    if (stderr.trim()) parts.push(`[stderr]\n${stderr.trimEnd()}`);
     if (result.truncated) parts.push(toolText(language, 'shell.truncated', { total: result.totalBytes.toLocaleString('en-US'), cap: settings.outputCapBytes.toLocaleString('en-US'), tail: result.fullOutputPath ? toolText(language, 'shell.truncated_tail', { path: result.fullOutputPath }) : '' }));
     if (result.timedOut) parts.push(toolText(language, 'shell.timeout', { seconds: timeoutSec }));
     if (result.aborted) parts.push(toolText(language, 'shell.aborted'));
     return {
       content: shellTranscript(input.command, header, parts),
+      keepTail: true,
       isError: result.timedOut || result.aborted || result.exitCode !== 0,
       ...(result.fullOutputPath ? { fullRef: result.fullOutputPath } : {}),
       ...(typeof result.exitCode === 'number' ? { exitCode: result.exitCode } : {}),
