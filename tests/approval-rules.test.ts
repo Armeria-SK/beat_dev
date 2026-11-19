@@ -359,12 +359,38 @@ test('J-5 送る・消す・方針: 覚えた形は積まずに動く。別の�
   assert.equal((await r.call('shell_run', { command: DEL }, fresh())).decidedBy, 'owner-rule');
   assert.equal((await r.call('shell_run', { command: DEL.replace('out.txt', 'two.txt') }, fresh())).decidedBy, 'pending', 'other path');
 
+  // AP-1 review (G4, Claude Code's ask-over-allow), reversed: the owner's own Ask list (tools.shell.ask) always reaches the owner and offers no rule
   await r.call('shell_run', { command: ASKED }, fresh());
   const asked = r.waiting().find(row => row.kind === 'policy')!;
-  assert.ok(asked?.rule, 'the owner Ask list row offers a rule');
-  r.remember(asked.id);
-  assert.equal((await r.call('shell_run', { command: ASKED }, fresh())).decidedBy, 'owner-rule');
-  assert.equal((await r.call('shell_run', { command: ASKED, cwd: 'other' }, fresh({ project: { id: 'p2', root: r.other } }))).decidedBy, 'pending', 'other product');
+  assert.ok(asked, 'the owner Ask list row is a policy row');
+  assert.equal(asked.rule, null, 'the owner Ask list row offers no rule');
+  assert.equal((await r.call('shell_run', { command: ASKED }, fresh())).decidedBy, 'pending', 'asked again');
+});
+
+test('AP-1 G4（持ち主の Ask の一覧）: 持ち主の確かめの一覧（tools.shell.ask・guard.needs_approval）に当たる呼び出しは、DB に決まりを入れても、きれいな実行でも外を読んだ実行（会話・タスク）でも、判定役を呼ばずに policy の行で持ち主へ。選び方も出さない', async t => {
+  const r = rig(t);
+  const fresh = (c: Partial<ToolContext> = {}): ToolContext => ({ ...r.ctx, taint: { tainted: false, sources: [] }, ...c });
+  await r.call('shell_run', { command: ASKED }, fresh());
+  const row = r.waiting()[0]!;
+  assert.deepEqual([row.kind, row.rule], ['policy', null]);
+  assert.ok(shellPreCheck({ command: ASKED }, r.ctx).reasonKeys?.includes('guard.needs_approval'), 'the owner Ask list key');
+  // The rule the reviewer could make before this fix: the same shape and keys, put in directly
+  const candidate = candidateOf(r, ASKED, 'policy', {}, { askKinds: ['owner'] });
+  assert.ok(candidate, 'ruleCandidate still builds the shape: only the pipeline keeps it from use');
+  widen(r, addRule(r.db, { projectId: 'p1', candidate, fromPending: row.id, now: 1 }), ['guard.needs_approval']);
+  const runs: Array<[string, ToolContext]> = [
+    ['clean chat', fresh()],
+    ['tainted chat', fresh({ taint: { tainted: true, sources: ['web_fetch'] } })],
+    ['tainted task', fresh({ kind: 'task', task: { id: 't1', control: { outcome: 'none' } }, taint: { tainted: true, sources: ['web_fetch'] } })],
+  ];
+  for (const [label, ctx] of runs) {
+    const out = await r.call('shell_run', { command: ASKED }, ctx);
+    assert.equal(out.decidedBy, 'pending', `${label}: ${out.output.content}`);
+    const parked = r.waiting()[0]!;
+    assert.deepEqual([parked.kind, parked.rule], ['policy', null], label);
+  }
+  assert.equal(r.judge.calls, 0);
+  assert.deepEqual(r.ran, []);
 });
 
 test('J-5 方針: Ask にした道具（シェルでない）は道具の名前で覚え、その製品でだけ積まない。フックが重なれば積み、選び方も出さない', async t => {

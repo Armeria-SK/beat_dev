@@ -181,9 +181,10 @@ export async function autoDecide(
     : undefined;
   const combined = AbortSignal.any([signal, stop.signal]);
   const failure = (): AutoVerdict => ({ decision: 'ask', reason: '', failed: expired ?? 'error' });
-  const prompt = buildClassifierPrompt(input);
+  let prompt: ClassifierPrompt | undefined;
   const once = async (step: JudgeCall | undefined): Promise<AutoVerdict> => {
     try {
+      prompt ??= buildClassifierPrompt(input);
       const reply = await Promise.race([
         step ? ask(prompt, combined, step) : ask(prompt, combined),
         new Promise<never>((_, reject) => {

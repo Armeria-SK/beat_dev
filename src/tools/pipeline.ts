@@ -409,7 +409,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       : first?.ownerReason !== undefined && decision === 'ask' ? { kind: 'owner', reason: first.ownerReason }
       : owned.length ? { kind: 'owner', reason: pendingText('en', 'owner_protected', { reasons: reasons.join('; ') }) }
       : undefined;
-    const ruleBlockers = hookAsks.length > 0 || (first?.ownerReason !== undefined && decision === 'ask') || owned.length > 0;
+    const ruleBlockers = hookAsks.length > 0 || ownerPolicy || (first?.ownerReason !== undefined && decision === 'ask') || owned.length > 0;
     const ruleKind = parkAs !== undefined && !ruleBlockers && (parkAs.kind === 'send' || parkAs.kind === 'delete' || parkAs.kind === 'policy');
     const parkRule = ruleKind && parkAs ? ruleFor(candidateFor(parkAs.kind, first, outbound)) : undefined;
     if (parkAs && parkRule) {
