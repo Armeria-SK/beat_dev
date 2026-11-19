@@ -261,7 +261,7 @@ test('5-3a: 持ち主の「今すぐ実行」で親を動かしても区切り�
   assert.equal(after.status, 'ready');
   assert.equal(after.attempts, 0);
   assert.equal(s.runs(root), 0);
-  assert.equal(s.app.kv.get(`task-idle:${parent.id}`), undefined);
+  assert.equal(s.app.kv.getJson<number>(`task-idle:${parent.id}`), 1, '仕事をしないで子を待つ回は、進展なしに 1 回数える（失敗の数 attempts には入らない）');
   assert.equal(s.events(parent.id, 'requeued').at(0)?.content, 'Waiting for 1 task(s) it made to finish');
   assert.equal(s.app.tasks.get(kid.id)!.parent_id, null);
 });

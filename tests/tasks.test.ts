@@ -465,6 +465,58 @@ test('すぐ終わる何もしない子を作って区切るだけの親（上�
   assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 1);
 });
 
+// 子を作って task_complete で子を待つ（yield）親（conductor ruling round 3）
+const yieldCycle = (s: Awaited<ReturnType<typeof setup>>, i: number, childWorks: boolean) => s.adapter().scripts.push(
+  toolCall('task_create', { title: `部分 ${i}` }), toolCall('task_complete', { summary: `部分 ${i} を待つ`, notify: false }),
+  ...(childWorks ? [work()] : []), toolCall('task_complete', { summary: `部分 ${i} 済み`, notify: false }),
+);
+const ranTicks = async (s: Awaited<ReturnType<typeof setup>>, n: number) => { let ran = 0; for (let i = 0; i < n; i++) if (await s.app.worker.tick() === 'ran') ran++; return ran; };
+
+test('すぐ終わる何もしない子を作って task_complete で待つだけの親（上限 1 の Build）は、3 回で止まる', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 待つだけ', { acceptanceItems: ['A-1'] });
+  for (let i = 0; i < 6 && s.app.tasks.get(parent.id)!.status !== 'failed'; i++) {
+    yieldCycle(s, i, false);
+    await ranTicks(s, 2);
+  }
+  assert.equal(s.app.tasks.get(parent.id)!.status, 'failed', '止まる');
+  assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 1);
+});
+
+test('子が仕事をする、task_complete で待つ親は止めず、親の 10 回目で 1 回だけ長く続いている知らせを出す', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 任せて待つ', { acceptanceItems: ['A-1'] });
+  for (let i = 1; i <= 11; i++) {
+    yieldCycle(s, i, true);
+    assert.equal(await ranTicks(s, 2), 2, `${i} 回目: 親と子が動く`);
+    assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', `${i} 回目: 止めない`);
+    assert.equal(longNotes(s).length, i < 10 ? 0 : 1, `${i} 回目の知らせの数`);
+  }
+});
+
+test('保険: Build の仲間は、進展なしの数に掛からない回り方でも、1 時間に 60 回動いたら止まって 1 回知らせ、枠が空けばまた動く', async t => {
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 1; });
+  const parent = s.userTask('Build: 回り続ける', { acceptanceItems: ['A-1'] });
+  let ran = 0;
+  for (let i = 0; i < 40; i++) {
+    yieldCycle(s, i, true);
+    const n = await ranTicks(s, 2);
+    ran += n;
+    if (n < 2) break;
+  }
+  assert.equal(ran, 60, '仲間の回数は 60 で止まる');
+  assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', '失敗にはしない（待つだけ）');
+  assert.equal(await ranTicks(s, 3), 0, 'それ以上は動かない');
+  const capped = s.app.notifications.list(100).filter(n => n.title.startsWith('Paused for a while'));
+  assert.equal(capped.length, 1, '知らせは 1 回');
+  assert.equal(capped[0]!.title, 'Paused for a while: Build: 回り続ける ran too many times this hour');
+  assert.equal(s.app.worker.status().waiting[parent.id]?.kind, 'budget', '画面には上限待ちと出る');
+  s.adapter().scripts.length = 0;
+  s.clock.now += HOUR + MIN;
+  yieldCycle(s, 99, true);
+  assert.ok(await ranTicks(s, 2) >= 1, '1 時間の枠が空けばまた動く');
+});
+
 test('区切りでない終わり・持ち主の操作（run-now・PATCH・answer・取り消し・取り消しを戻す・完了）で、続けての区切りの数は 0 に戻る', async t => {
   const s = await setup(t, c => { c.worker.maxRunsPerHour = 50; });
   const request = await serve(t, s);

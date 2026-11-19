@@ -73,7 +73,7 @@ const en = {
   'note.memo': 'Note: {text}',
   'note.memo_truncated': 'Note (the reply was cut off by the output limit and is incomplete): {text}',
   'stuck.question': '"{title}" ran {strikes} times in a row without making progress, so it was stopped. Run the task again?',
-  'stuck.why': 'Each of those runs either ended with a reply only (without task_complete, task_checkpoint or a question), or ended without any tool call that actually ran (calls held in Pending, refused or with invalid input, the task tools and question_add do not count), or grew too long while only reading.',
+  'stuck.why': 'Each of those runs either ended with a reply only (without task_complete, task_checkpoint or a question), or ended without any tool call that actually ran (calls held in Pending, refused or with invalid input, the task tools and question_add do not count), or grew too long without editing or running anything.',
   'stuck.reason': 'Stopped after {strikes} runs in a row without progress. The owner is asked in Questions.',
   'split.long_body': '"{title}" has run {runs} times in a row without finishing (each run ended at a checkpoint or was split). It keeps going; cancel it if it is stuck',
 
@@ -100,6 +100,8 @@ const en = {
   'notify.task_folder_missing': 'Tasks of the product "{name}" are waiting: its folder cannot be found',
   'notify.task_done': 'Task finished: {title}',
   'notify.task_question': 'I have a question: {title}',
+  'notify.build_cap.title': 'Paused for a while: {title} ran too many times this hour',
+  'notify.build_cap.body': 'This Build and the tasks it made ran {max} times in the last hour, so they wait until the hour frees up. If it is going round in circles, cancel it',
   'notify.task_long': 'Taking a long time: {title}',
   'notify.task_failed': 'Task failed: {title}',
   'notify.skill_draft': 'Please review the skill draft: {name}',

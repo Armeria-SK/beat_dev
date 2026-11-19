@@ -938,12 +938,12 @@ export class ChatEngine {
       conversationTainted: () => d.conversations.everTainted(conversationId),
     }, truncated);
     // 実際に動いた道具の呼び出しを「仕事」に数える（結果が誤りでも数える。Pending に預けた・断られた・引数の誤り・task_ / tool_search / question_add は数えない）。
-    // そのうち効果が write / exec の道具は、書き換え・実行の仕事（changeDone）にも数える
-    const countDone = (name: string, outcome: { decision: string; invalidArguments?: boolean }) => {
+    // そのうち書き換え・実行の仕事（changeDone）に数えるのは、効果が write の道具（結果を問わない）・誤りなく終わった exec の道具・子の担当（agent_run）
+    const countDone = (name: string, outcome: { output: { isError?: boolean }; decision: string; invalidArguments?: boolean }) => {
       if (outcome.decision !== 'allow' || outcome.invalidArguments || name.startsWith('task_') || name === 'tool_search' || name === 'question_add') return;
       counters.workDone++;
       const effect = tools?.registry.get(name)?.effect;
-      if (effect === 'write' || effect === 'exec') counters.changeDone++;
+      if (effect === 'write' || (effect === 'exec' && !outcome.output.isError) || name === 'agent_run') counters.changeDone++;
     };
     if (kind === 'task' && tools) {
       let inner = false;

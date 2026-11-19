@@ -48,6 +48,8 @@ const STAGNATION_LIMIT = 3;
 // 区切り（人のいない実行の回数の上限）が続いたとき、持ち主に 1 回だけ知らせる数。止めはしない
 // 終わり方を決めずに区切りで終わった回がこの数だけ続いたら、1 回だけ知らせる
 const LONG_RUN_NOTICE = 10;
+// Build の仲間（根と、spawned_by でたどれる子孫）が 1 時間に動ける回数の保険。上限で待たない Build の、まだ見つけていない回りっぱなしを止める（ふつうの Build は届かない。持ち主が変えられる仮の数）
+const BUILD_FAMILY_HOURLY_MAX = 60;
 export const splitKey = (id: string): string => `task-split:${id}`;
 const STOPPED_RESUME_MS = 20_000;
 const SKILL_REVIEW_IDLE_MS = 5 * 60_000;
@@ -286,12 +288,30 @@ export class Worker {
 
   // Build の根（受け入れの項目を持つ・生んだタスクが無い・直しのタスクでない）か、spawned_by をたどってそこに着くタスク。
   // 持ち主が押した仕事なので、1 時間の上限では待たせない（回数には数える）
-  #buildFamily(task: Task): boolean {
+  #familyRoot(task: Task): Task | undefined {
     const seen = new Set<string>();
     let root: Task | undefined = task;
     while (root?.spawned_by && !seen.has(root.id)) { seen.add(root.id); root = this.#d.tasks.get(root.spawned_by); }
     return root !== undefined && root.spawned_by === null && root.acceptance_items !== null
-      && this.#d.db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? LIMIT 1').get(root.id, OWNER_FIX) === undefined;
+      && this.#d.db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? LIMIT 1').get(root.id, OWNER_FIX) === undefined ? root : undefined;
+  }
+
+  #buildFamily(task: Task): boolean {
+    return this.#familyRoot(task) !== undefined;
+  }
+
+  // Build の仲間がこの 1 時間に BUILD_FAMILY_HOURLY_MAX 回動いていれば、窓が空く時刻（それまで仲間は動かない）。notify なら持ち主に 1 回知らせる
+  #familyFreeAt(task: Task, now: number, notify = false): number | undefined {
+    const root = this.#familyRoot(task);
+    if (!root) return undefined;
+    const runs = this.#d.db.prepare(`WITH RECURSIVE fam(id) AS (SELECT ? UNION SELECT t.id FROM tasks t JOIN fam ON t.spawned_by = fam.id)
+      SELECT e.created_at AS at FROM task_events e WHERE e.kind = 'run' AND e.created_at > ? AND e.task_id IN (SELECT id FROM fam) ORDER BY e.created_at`).all(root.id, now - 3_600_000) as Array<{ at: number }>;
+    if (runs.length < BUILD_FAMILY_HOURLY_MAX) return undefined;
+    if (notify) {
+      const language = this.#language();
+      this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.build_cap.title', { title: root.title }), body: taskText(language, 'notify.build_cap.body', { max: BUILD_FAMILY_HOURLY_MAX }), link: `#/tasks/${root.id}`, dedupKey: `build-cap:${root.id}`, projectId: root.project_id });
+    }
+    return runs[runs.length - BUILD_FAMILY_HOURLY_MAX]!.at + 3_600_000;
   }
 
   #beatSchedule(task: Task): boolean {
@@ -325,6 +345,8 @@ export class Worker {
     if (!this.#ownerWork(task)) return task.origin === 'self' || task.origin === 'curiosity' ? { kind: 'owner' } : c.worker.enabled ? null : { kind: 'off' };
     if (this.#d.tasks.openChildren(task.id) > 0) return null;
     if (hold) return { kind: hold };
+    const familyAt = this.#forced.has(task.id) ? undefined : this.#familyFreeAt(task, now);
+    if (familyAt !== undefined) return { kind: 'budget', at: familyAt };
     if (budgetAt !== undefined && !this.#forced.has(task.id) && !this.#buildFamily(task)) return { kind: 'budget', at: budgetAt };
     if (this.#busy(task)) return { kind: 'product' };
     if (this.#running.size >= c.worker.maxParallel || !room) return { kind: 'slots' };
@@ -377,7 +399,7 @@ export class Worker {
         this.#schedule(Math.max(1000, Math.min(at ?? Infinity, now + IDLE_POLL_MS) - now));
       };
       const own = c.worker.enabled;
-      const eligible = (t: Task): boolean => own || this.#ownerWork(t);
+      const eligible = (t: Task): boolean => (own || this.#ownerWork(t)) && this.#familyFreeAt(t, now, true) === undefined;
       const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t), ...(this.#d.places ? { placeFree: (t: Task) => !this.#busy(t) } : {}) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
@@ -623,7 +645,7 @@ export class Worker {
     if (!project || project.archived_at !== null) return 'stop.archived';
     if (project.scout_mode !== 'research') return 'stop.mode';
     const freeAt = this.#budgetFreeAt(c, this.#now());
-    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id) || this.#buildFamily(t)) })) return 'stop.owner';
+    if (this.#d.tasks.pickNext({ accept: t => this.#ownerWork(t) && (freeAt === undefined || this.#forced.has(t.id) || (this.#buildFamily(t) && this.#familyFreeAt(t, this.#now()) === undefined)) })) return 'stop.owner';
     return undefined;
   }
 
@@ -1088,7 +1110,7 @@ export class Worker {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
-    if (!(result.ok && result.split) && control.outcome !== 'checkpoint') this.#d.kv.delete(splitKey(task.id));
+    if (!(result.ok && result.split) && control.outcome !== 'checkpoint' && control.outcome !== 'yield') this.#d.kv.delete(splitKey(task.id));
     const answered = (this.#d.questions?.answeredDuringRun(task.id, runId).length ?? 0) > 0;
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
@@ -1103,7 +1125,10 @@ export class Worker {
       return;
     }
     if (control.outcome === 'yield') {
-      this.#d.kv.delete(idleKey);
+      // 子を待って区切る回も、途中経過と同じに数える（仕事をしていない回は進展なし。子が仕事をすれば、子の回が親の数を消す）
+      if ((result.ok && result.workDone > 0) || answered || decidedDuring(this.#d.db, task.id, runId)) this.#d.kv.delete(idleKey);
+      else if (this.#noProgress(task, runId)) return;
+      this.#continued(task);
       tasks.setReady(task.id, { reason: control.reason });
       return;
     }

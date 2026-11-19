@@ -29,6 +29,11 @@ const editTool: ToolDef<{ text: string }> = {
   async execute(input) { edits.push(input.text); return { content: 'edited' }; },
 };
 
+const shellTool: ToolDef<Record<string, never>> = {
+  name: 'fake_shell', description: 'Test tool: runs a command that fails (exit 1).', input: Type.Object({}), effect: 'exec', allowedIn: ['task'],
+  async execute() { return { content: `exit code 1\n${'error line '.repeat(3000)}`, isError: true, exitCode: 1 }; },
+};
+
 // 1 往復で道具を並べて呼ぶ
 const calls = (list: Array<[string, unknown]>): Script => async function* (req) {
   for (const [name, args] of list) {
@@ -59,7 +64,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { capacity
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.review = false;
   config.worker.maxRunsPerHour = 50;
-  config.tools.policies = { fake_big: 'allow', fake_edit: 'allow' };
+  config.tools.policies = { fake_big: 'allow', fake_edit: 'allow', fake_shell: 'allow' };
   options.edit?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   // 固定の system を大きくする（32k のモデルで、固定の分が使える量の 4 割を超える形）
@@ -69,7 +74,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { capacity
   }
   const clock = { now: Date.parse('2026-11-19T01:00:00Z') };
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, tools: [...builtinTools(), bigTool as unknown as ToolDef, editTool as unknown as ToolDef], adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, now: () => clock.now, workerTimers: false, tools: [...builtinTools(), bigTool as unknown as ToolDef, editTool as unknown as ToolDef, shellTool as unknown as ToolDef], adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   const lastRun = (kind = 'task') => app.db.prepare('SELECT * FROM engine_runs WHERE kind = ? ORDER BY rowid DESC LIMIT 1').get(kind) as { id: string; flags: string; iterations: number; ok: number; error_kind: string | null };
@@ -215,6 +220,19 @@ test('A-6 容量の分からないモデルでは区切らない（2 往復目�
   assert.ok(!JSON.parse(run.flags).includes('context_split'), run.flags);
   assert.equal(run.error_kind, 'context_overflow');
   assert.equal(s.adapter().calls.length, 1);
+});
+
+test('A-6 失敗し続けるコマンドだけで長くなって区切れる Build は、進展なしに数えて 3 回で止まる（誤りで終わった exec は書き換え・実行の仕事に数えない）', async t => {
+  const s = await setup(t, { capacity: 32_000 });
+  const task = s.app.tasks.create({ title: 'Build: failing command', origin: 'user', actor: 'user', acceptanceItems: ['A-1'] });
+  s.adapter().scripts = Array.from({ length: 80 }, () => call('fake_shell', {}));
+  let ran = 0;
+  for (let i = 0; i < 6 && s.app.tasks.get(task.id)!.status === 'ready'; i++) if (await s.app.worker.tick() === 'ran') ran++;
+  const runs = s.app.db.prepare("SELECT r.flags FROM engine_runs r JOIN tasks t ON t.conversation_id = r.conversation_id WHERE r.kind = 'task' AND t.id = ? ORDER BY r.rowid").all(task.id) as Array<{ flags: string }>;
+  assert.ok(runs.every(r => (JSON.parse(r.flags) as string[]).includes('context_split')), `前提: どの回も長さで区切れる: ${JSON.stringify(runs)}`);
+  assert.equal(ran, 3);
+  assert.equal(s.app.tasks.get(task.id)!.status, 'failed');
+  assert.equal(s.app.questions.list({ status: 'open', taskId: task.id }).filter(q => q.kind === 'stuck').length, 1);
 });
 
 test('A-6 会話の実行は、やり取りが余裕の 6 割を超えても区切らない', async t => {
