@@ -23,7 +23,7 @@ import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
 import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutsOn, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
-import { fixCandidate, markFixTried, recordFix } from '../scout/fix.ts';
+import { dropUnrecordedFixes, fixCandidate, markFixTried, recordFix } from '../scout/fix.ts';
 import { runFix } from '../scout/fix-run.ts';
 import type { FixCopies } from '../scout/fix-copy.ts';
 import { clearSleep, currentMarks, ownerRejectedSince, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
@@ -810,6 +810,7 @@ export class Worker {
     let runId: string | undefined;
     // 前の直す実行で消しきれなかった写し（Windows で消したファイルがまだ掴まれているなど）を、新しい写しを作る前に消し直す
     await this.#d.fixes!.sweepFixCopies().catch(() => undefined);
+    await dropUnrecordedFixes({ db: this.#d.db, kv, worktrees: this.#d.worktrees!, ...(this.#d.log ? { log: this.#d.log } : {}) }).catch(() => undefined);
     const result = await runFix({ tasks, conversations: this.#d.conversations, projects: this.#d.projects!, engine: this.#d.engine, fixes: this.#d.fixes! }, proposalId, {
       signal: abort.signal,
       onStart: (started, taskId) => {
@@ -833,6 +834,11 @@ export class Worker {
     if (runId) this.#scoutStops.delete(runId);
     try {
       if (stop || (!result.ok && result.errorKind === 'cancelled')) {
+        // 確かめが通ったあとに止まった直しは、持ち主に見せずにブランチごと捨てる（Pre-fix にしない）
+        if (result.ok && result.result.kept) {
+          const dropped = await this.#d.worktrees!.removeWorktree(result.row.id, { keepBranch: false, state: 'discarded' });
+          if (!dropped.ok || dropped.branchKept) this.#d.log?.(`[WARN] Could not remove the branch ${result.row.branch} of a stopped fix`);
+        }
         saveScoutState(kv, project.id, { until: now + SCOUT_SHORT_WAIT_MS });
         return 'ran';
       }

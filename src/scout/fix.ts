@@ -5,6 +5,7 @@ import { checkCommandOf, type ProjectRow } from '../projects/store.ts';
 import type { WorktreeRow, Worktrees } from '../projects/worktree.ts';
 import type { Language } from '../config/schema.ts';
 import { scoutText, type ScoutMessageKey } from '../shared/messages/scout.ts';
+import { taskText } from '../shared/messages/tasks.ts';
 import { readProposal } from '../tasks/proposal.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import type { FixReason } from './fix-copy.ts';
@@ -47,6 +48,28 @@ export function prefixOf(db: DatabaseSync, kv: KV, proposalId: string): Prefix |
   const kept = kv.getJson<Pick<Prefix, 'files' | 'added' | 'removed' | 'diff'>>(prefixKey(row.id));
   if (!kept || !Array.isArray(kept.diff)) return null;
   return { branch: row.branch, base: row.base, checks: 'passed', files: kept.files, added: kept.added, removed: kept.removed, diff: kept.diff.slice(0, 6) };
+}
+
+// 取り消した（Reject した）提案の Pre-fix のブランチを捨てる。どの取り消しの道（画面・チャットの task_update）からも呼ぶ。
+// 持ち主のコミットが乗っていれば残す（branch_moved）。消せなかったら行は removing のまま残り、見回り（sweepFixCopies）が消し直す
+export async function dropRejectedPrefix(d: Pick<FixRecordDeps, 'db' | 'tasks' | 'worktrees' | 'language' | 'log'>, proposalId: string): Promise<void> {
+  const task = d.tasks.get(proposalId);
+  const row = latestFixRow(d.db, proposalId);
+  if (task?.status !== 'cancelled' || !row || row.state !== 'branch') return;
+  const done = await d.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
+  const key = done.ok && !done.branchKept ? 'event.prefix_rejected' : done.ok && done.note === 'branch_moved' ? 'event.prefix_branch_kept' : 'event.prefix_branch_left';
+  if (key !== 'event.prefix_rejected') d.log?.(`[WARN] The pre-fix branch ${row.branch} was not removed: ${done.ok ? done.note ?? 'kept' : done.reason}`);
+  d.tasks.event(proposalId, 'worktree', 'user', taskText(d.language, key, { branch: row.branch }));
+}
+
+// 再起動などで recordFix まで届かなかった直し（branch の行なのに prefix が無い）は、持ち主が見ないブランチなので捨てる
+export async function dropUnrecordedFixes(d: Pick<FixRecordDeps, 'db' | 'kv' | 'worktrees' | 'log'>): Promise<void> {
+  const rows = d.db.prepare("SELECT * FROM worktrees WHERE kind = 'fix' AND state = 'branch'").all() as unknown as WorktreeRow[];
+  for (const row of rows) {
+    if (d.kv.get(prefixKey(row.id)) !== undefined) continue;
+    const done = await d.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
+    if (!done.ok || done.branchKept) d.log?.(`[WARN] Could not remove the unrecorded fix branch ${row.branch}: ${done.ok ? done.note ?? 'kept' : done.reason}`);
+  }
 }
 
 export interface FixRecordDeps {

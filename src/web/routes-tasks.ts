@@ -13,7 +13,7 @@ import { configProblem, domainProblem, problem, readJson, requireObject, require
 import { projectFilterOf, usableProjectId } from './routes-projects.ts';
 import { answerQuestion } from './routes-questions.ts';
 import { branchRowOf, maskedEvents, maskedLastRun, maskedTaskView } from './task-view.ts';
-import { latestFixRow, prefixOf } from '../scout/fix.ts';
+import { prefixOf } from '../scout/fix.ts';
 import { AcceptanceError } from '../projects/acceptance.ts';
 import { GateError, itemSummary, ownerDecide } from '../projects/gate.ts';
 import { mergeWaiting, type BranchAction } from '../projects/merge-watch.ts';
@@ -81,15 +81,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
   const approveTask = (task: Task): Task => {
     const prefix = prefixOfInbox(task);
     return prefix ? app.tasks.approvePrefix(task.id, taskText(languageOf(app.config()), 'summary.prefix_approved', { branch: prefix.branch })) : app.tasks.approve(task.id);
-  };
-  // Pre-fix の Reject: 提案を取り消したあと、beat の作ったブランチを捨てる（持ち主のコミットが乗っていれば残す）
-  const dropPrefixBranch = async (task: Task): Promise<void> => {
-    const row = latestFixRow(app.db, task.id);
-    if (!row || row.state !== 'branch') return;
-    const done = await app.worktrees.removeWorktree(row.id, { keepBranch: false, state: 'discarded' });
-    const kept = !done.ok || done.branchKept;
-    if (kept) app.log(`[WARN] The pre-fix branch ${row.branch} was kept: ${done.ok ? done.note ?? 'not removed' : done.reason}`);
-    app.tasks.event(task.id, 'worktree', 'user', taskText(languageOf(app.config()), kept ? 'event.prefix_branch_kept' : 'event.prefix_rejected', { branch: row.branch }));
   };
 
   router.add('GET', '/api/tasks', ({ res, url }) => {
@@ -257,7 +248,6 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw problem(409, 'task', 'already_finished');
     }
-    const prefixed = status === 'cancelled' && prefixOfInbox(task) !== null;
     let updated: Task;
     try {
       updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user', undefined, reason);
@@ -265,7 +255,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
       app.worker.stopTask(task.id);
       app.kv.delete(splitKey(task.id));
     }
-    if (prefixed) await dropPrefixBranch(task);
+    // Pre-fix の Reject: 取り消しの知らせ（onFinished）で始まったブランチの片付けを待ってから返す
+    if (status === 'cancelled') await app.dropRejectedPrefix(task.id);
     sendJson(res, 200, { task: view(app.tasks.get(task.id) ?? updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));

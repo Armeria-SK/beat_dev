@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
@@ -14,7 +14,10 @@ import type { Task } from '../src/tasks/store.ts';
 import { proposalAdd } from '../src/tools/builtin/proposal.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, fail, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { ProviderError } from '../src/providers/types.ts';
+import { taskUpdate } from '../src/tools/builtin/tasks.ts';
+import type { ToolContext } from '../src/tools/types.ts';
 import { toolCall } from './helpers/task-app.ts';
 
 // beat 8-6b: 直す番（考える番に直す提案があれば直す実行）・Pre-fix の Approve / Reject・モードの切り替えのサーバー側
@@ -118,10 +121,10 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }, opt
   app.projects.update(project.id, { scoutMode: options.mode ?? 'fix' });
   const build = app.tasks.create({ title: 'build', origin: 'user', actor: 'user', projectId: project.id, acceptanceItems: ['i1'] });
   app.tasks.finish(build.id, 'done', 'built', 'user');
-  const propose = (over: Partial<Omit<Proposal, 'fixable'>> & { fixable?: true | undefined } = {}, title = 'Fix the a.txt bug'): Task => {
+  const propose = (over: Partial<Omit<Proposal, 'fixable'>> & { fixable?: true | undefined } = {}, title = 'Fix the a.txt bug', untrusted = true): Task => {
     const { fixable, ...rest } = { ...BUG, ...over };
     const made = app.tasks.create({ title, body: 'x', origin: 'self', propose: true, projectId: project.id, proposal: { ...rest, ...(fixable ? { fixable } : {}) }, actor: 'beat' });
-    app.tasks.markUntrusted(made.id, 'scout', 'Proposed by a scout run');
+    if (untrusted) app.tasks.markUntrusted(made.id, 'scout', 'Proposed by a scout run');
     return made;
   };
   const model = (id = 'near') => adapters.get(id)!;
@@ -133,7 +136,7 @@ async function setup(t: { after: (fn: () => void | Promise<void>) => void }, opt
     const all = [...listed.body.active, ...listed.body.finished].filter((task: { id: string }) => task.id === id);
     return { card: all[0], awaiting: listed.body.awaiting.some((task: { id: string }) => task.id === id) };
   };
-  return { app, dir, paths, product, project, clock, json, propose, model, fixRows, events, scoutRows, card, logs };
+  return { app, dir, paths, product, project, clock, json, propose, model, fixRows, events, scoutRows, card, logs, adapters };
 }
 
 test('8-6b: a fix product still gets scout runs (no stop.mode), Think now does not say scout_off, and proposal_add explains fixable only there', { skip: !gitAvailable }, async t => {
@@ -395,4 +398,202 @@ test('8-6b: a fix run on a cloud model counts toward scout.cloudRunsPerHour', { 
   s.clock.now += SHORT_WAIT;
   assert.notEqual(await s.app.worker.tick(), 'ran', 'the hourly cloud cap (1) is used');
   assert.equal(s.fixRows().length, 1);
+});
+
+// review REVISE 1: 確かめが通ったあとに止めても、持ち主の見ないブランチ（Pre-fix の無い branch の行）を残さない
+const beatBranches = (product: string): string[] => branchesOf(product).filter(b => b.startsWith('refs/heads/beat/'));
+const unrecorded = (s: Awaited<ReturnType<typeof setup>>) => s.fixRows().filter(row => row.state === 'branch' && s.app.kv.get(`scout:prefix:${row.id}`) === undefined);
+
+test('8-6b: a stop that lands after the check passed leaves no beat branch and no branch row without a Pre-fix', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const proposal = s.propose();
+  const fixes = s.app.fixes;
+  const original = fixes.finishFixCopy.bind(fixes);
+  fixes.finishFixCopy = async (id, options) => {
+    const done = await original(id, options);
+    s.app.worker.setPaused(true);
+    await s.app.worker.tick();
+    return done;
+  };
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual(beatBranches(s.product), [], 'no beat branch the owner never saw');
+  assert.deepEqual(unrecorded(s), []);
+  assert.equal(s.fixRows()[0]!.state, 'discarded');
+  assert.equal((await s.card(proposal.id)).card.prefix, null);
+  assert.equal(s.app.kv.get(`scout:fix-tried:${proposal.id}`), undefined, 'a stopped fix may be tried again');
+});
+
+test('8-6b: after a restart in the middle of keeping a fix, the next fix turn removes the branch nobody recorded', { skip: !gitAvailable }, async t => {
+  for (const at of ['before_drop', 'before_record'] as const) {
+    const s = await setup(t);
+    s.propose();
+    s.model().scripts.push(editFix(), reply('done'));
+    assert.equal(await s.app.worker.tick(), 'ran');
+    const row = s.fixRows()[0]!;
+    assert.equal(row.state, 'branch');
+    // before_drop: update-ref は済んだが行は active のまま / before_record: 行は branch だが recordFix の前（prefix の kv が無い）
+    s.app.kv.delete(`scout:prefix:${row.id}`);
+    if (at === 'before_drop') s.app.db.prepare("UPDATE worktrees SET state = 'active' WHERE id = ?").run(row.id);
+    const other = s.propose({}, 'another bug');
+    s.clock.now += SHORT_WAIT;
+    s.model().scripts.push(editFix(), reply('done'));
+    await s.app.worker.tick();
+    assert.deepEqual(beatBranches(s.product).filter(b => b.endsWith(row.branch)), [], at);
+    assert.deepEqual(unrecorded(s), [], at);
+    assert.equal(s.app.fixes.get(row.id)!.state, 'discarded', at);
+    assert.ok(s.fixRows().some(r => r.proposal_id === other.id), `${at}: the next fix still ran`);
+  }
+});
+
+// review REVISE 2: Reject でブランチを消せなかった（ref の鍵が掴まれていた）ら、見回りが消し直す
+test('8-6b: a Reject whose branch delete failed is retried by the sweep until the branch is gone', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const proposal = s.propose();
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const row = s.fixRows()[0]!;
+  const lock = join(s.product, '.git', 'refs', 'heads', `${row.branch}.lock`);
+  writeFileSync(lock, '');
+  const rejected = await s.json(`/api/tasks/${proposal.id}/cancel`, 'POST', {});
+  assert.equal(rejected.status, 200);
+  assert.equal(beatBranches(s.product).length, 1, 'the lock kept the branch for now');
+  await s.app.fixes.sweepFixCopies();
+  assert.equal(beatBranches(s.product).length, 1);
+  assert.notEqual(s.fixRows()[0]!.state, 'discarded', 'not closed while the branch is still there');
+  rmSync(lock);
+  await s.app.fixes.sweepFixCopies();
+  assert.deepEqual(beatBranches(s.product), []);
+  assert.equal(s.fixRows()[0]!.state, 'discarded');
+  assert.deepEqual(s.events(proposal.id, 'worktree'), [`Pre-fix rejected, but the branch ${row.branch} could not be removed yet`]);
+});
+
+// review REVISE 3: チャットの task_update で取り消しても、Pre-fix のブランチを消す
+test('8-6b: cancelling a Pre-fix through task_update also removes its branch', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const proposal = s.propose();
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(beatBranches(s.product).length, 1);
+  const ctx = { runId: 'r1', conversationId: 'c1', kind: 'chat', config: s.app.config(), signal: new AbortController().signal, log: () => undefined, services: { db: s.app.db, tasks: s.app.tasks } } as unknown as ToolContext;
+  const done = await taskUpdate.execute({ id: proposal.id, status: 'cancelled' }, ctx);
+  assert.notEqual(done.isError, true, done.content);
+  for (let i = 0; i < 50 && beatBranches(s.product).length; i++) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(beatBranches(s.product), []);
+  assert.equal(s.fixRows()[0]!.state, 'discarded');
+  assert.equal(s.events(proposal.id, 'worktree').length, 1);
+});
+
+// review REVISE 4: 外から読んだ印の無い提案でも、Approve は提案の文を持ち主の頼みに写さない
+test('8-6b: approving a Pre-fix whose proposal is not marked untrusted still leaves owner_request empty', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const proposal = s.propose({}, 'Fix the a.txt bug', false);
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const approved = await s.json(`/api/tasks/${proposal.id}/approve`, 'POST', {});
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  assert.equal(s.app.tasks.get(proposal.id)!.owner_request, null);
+});
+
+// review REVISE 5: 止める条件の残り
+test('8-6b: a stop during the check command ends the check at once', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  writeFileSync(join(s.product, 'slow.js'), 'setTimeout(() => process.exit(0), 60000);\n');
+  gitIn(s.product, 'add', 'slow.js');
+  gitIn(s.product, 'commit', '-q', '-m', 'slow check');
+  s.app.projects.update(s.project.id, { checkCommand: 'node slow.js' });
+  const proposal = s.propose();
+  const fixes = s.app.fixes;
+  const original = fixes.finishFixCopy.bind(fixes);
+  let stopped = 0;
+  fixes.finishFixCopy = async (id, options) => {
+    const timer = setTimeout(() => { stopped = Date.now(); s.app.worker.setPaused(true); void s.app.worker.tick(); }, 3000);
+    try { return await original(id, options); } finally { clearTimeout(timer); }
+  };
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.ok(stopped > 0, 'the stop landed while the check ran');
+  assert.ok(Date.now() - stopped < 20_000, `the check was stopped, not waited for (${Date.now() - stopped} ms)`);
+  assert.deepEqual(beatBranches(s.product), []);
+  assert.deepEqual(s.events(proposal.id, 'prefix'), []);
+});
+
+test('8-6b: a fix run also stops when routing.scout is emptied or owner work is ready', { skip: !gitAvailable }, async t => {
+  for (const change of ['route', 'owner'] as const) {
+    const s = await setup(t);
+    const proposal = s.propose();
+    const held = gate();
+    s.model().scripts.push(held.script);
+    const running = s.app.worker.tick();
+    await held.started;
+    if (change === 'route') { const next = s.app.config(); next.routing.scout = []; await s.app.applyConfig(next, { probe: false }); }
+    if (change === 'owner') s.app.tasks.create({ title: 'Owner work', body: 'x', origin: 'user', projectId: s.project.id, actor: 'user' });
+    await s.app.worker.tick();
+    assert.equal(await running, 'ran', change);
+    for (let i = 0; i < 50 && s.fixRows()[0]!.state !== 'discarded'; i++) { await new Promise(resolve => setTimeout(resolve, 200)); await s.app.fixes.sweepFixCopies(); }
+    assert.equal(s.fixRows()[0]!.state, 'discarded', change);
+    assert.deepEqual(beatBranches(s.product), [], change);
+    assert.equal(s.app.kv.get(`scout:fix-tried:${proposal.id}`), undefined, change);
+  }
+});
+
+test('8-6b: a fix run that hits a rate limit rests the scout model until midnight with one notice', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  s.propose();
+  s.model().scripts.push(fail(new ProviderError('rate_limit', 'busy', { retryable: false })));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.notifications.list().filter(n => n.dedup_key?.startsWith('scout-rest:near:')).length, 1, 'one rest notice');
+  s.clock.now += SHORT_WAIT;
+  s.propose({}, 'another bug');
+  assert.notEqual(await s.app.worker.tick(), 'ran', 'resting: no new fix');
+  assert.equal(s.fixRows().length, 1);
+});
+
+test('8-6b: Reject keeps a beat branch that carries the owner commits and says so', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const proposal = s.propose();
+  s.model().scripts.push(editFix(), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const branch = s.fixRows()[0]!.branch;
+  gitIn(s.product, 'checkout', '-q', branch);
+  writeFileSync(join(s.product, 'mine.txt'), 'mine\n');
+  gitIn(s.product, 'add', 'mine.txt');
+  gitIn(s.product, 'commit', '-q', '-m', 'owner on the beat branch');
+  gitIn(s.product, 'checkout', '-q', 'main');
+  const rejected = await s.json(`/api/tasks/${proposal.id}/cancel`, 'POST', {});
+  assert.equal(rejected.status, 200);
+  assert.ok(branchesOf(s.product).includes(`refs/heads/${branch}`), 'the owner commits are not thrown away');
+  assert.deepEqual(s.events(proposal.id, 'worktree'), [`Pre-fix rejected, but the branch ${branch} has commits that were not made by beat, so it was kept`]);
+});
+
+// review REVISE 6: 差分の見本の行は、200 文字で切る前に設定の鍵を伏せる
+test('8-6b: a provider key in the fix diff is masked before the sample line is cut', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const key = 'QZKEY' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD';
+  s.adapters.delete('far');
+  const put = await s.json('/api/providers/far/key', 'PUT', { key });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.ok(s.app.registry.secrets().includes(key), 'the key is one of the registry secrets');
+  const proposal = s.propose();
+  s.model().scripts.push(toolCall('file_edit', { path: 'a.txt', old: 'bug', new: `fixed${'x'.repeat(177)}${key}` }), reply('done'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const prefix = (await s.json(`/api/tasks/${proposal.id}`, 'GET')).body.task.prefix;
+  assert.ok(prefix, JSON.stringify(s.app.tasks.events(proposal.id)));
+  const added = prefix.diff.find((line: string) => line.startsWith('+'));
+  assert.ok(added, JSON.stringify(prefix.diff));
+  assert.equal(added.includes(key.slice(0, 10)), false, added);
+});
+
+// review REVISE 6: pre-fix のモードのあいだに確かめのコマンドを消す PATCH は断る（モードは黙って変えない）
+test('8-6b: clearing the check command while the mode is pre-fix is refused', { skip: !gitAvailable }, async t => {
+  const s = await setup(t);
+  const cleared = await s.json(`/api/projects/${s.project.id}`, 'PATCH', { checkCommand: '' });
+  assert.equal(cleared.status, 400, JSON.stringify(cleared.body));
+  assert.match(JSON.stringify(cleared.body), /scout_fix_needs_check/u);
+  assert.equal(s.app.projects.get(s.project.id)!.check_command, 'node check.js');
+  const both = await s.json(`/api/projects/${s.project.id}`, 'PATCH', { checkCommand: '', scoutMode: 'research' });
+  assert.equal(both.status, 200, 'leaving pre-fix in the same PATCH is fine');
+  assert.equal(s.app.projects.get(s.project.id)!.scout_mode, 'research');
+  const renamed = await s.json(`/api/projects/${s.project.id}`, 'PATCH', { name: 'Q' });
+  assert.equal(renamed.status, 200);
 });

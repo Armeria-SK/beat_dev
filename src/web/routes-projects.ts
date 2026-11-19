@@ -119,7 +119,9 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (body.docLanguage !== undefined && docLanguage === undefined) throw problem(400, 'invalid_field', 'bad_language', { field: 'docLanguage', params: { field: 'docLanguage' } });
     if (body.scoutMode !== undefined && !(SCOUT_MODES as readonly unknown[]).includes(body.scoutMode)) throw projectProblem(400, new ProjectError('bad_scout_mode'));
     // Research and pre-fix は確かめのコマンドのある製品だけ（Q-P8-10。同じ PATCH で書いた確かめのコマンドも数える）
-    if (body.scoutMode === 'fix' && !guarded(() => (rawCheck !== undefined ? checkCommandOf(rawCheck) : current.check_command))) throw projectProblem(400, new ProjectError('scout_fix_needs_check'));
+    // Research and pre-fix のあいだに確かめのコマンドを消す PATCH も断る（モードは黙って変えない）
+    const fixAfter = body.scoutMode === 'fix' || (body.scoutMode === undefined && current.scout_mode === 'fix' && rawCheck !== undefined);
+    if (fixAfter && !guarded(() => (rawCheck !== undefined ? checkCommandOf(rawCheck) : current.check_command))) throw projectProblem(400, new ProjectError('scout_fix_needs_check'));
     const changed = guarded(() => app.projects.update(current.id, {
       ...(rawName !== undefined ? { name: projectName(rawName) } : {}),
       ...(rawCheck !== undefined ? { checkCommand: checkCommandOf(rawCheck) } : {}),
