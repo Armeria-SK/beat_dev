@@ -88,12 +88,12 @@ test('ui/Kanban（DOM）: 確かめ待ちのタスクは Awaiting check の列�
   });
   const { container } = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map() }));
   await settle();
-  const column = container.querySelector('#ui-col-check')!;
+  const column = container.querySelector('[data-col="check"]')!;
   assert.equal(column.querySelector('.bt-col__head .bt-label')?.textContent, 'Awaiting check');
   assert.ok(column.querySelector('.bt-col__head .bt-count:not(.bt-count--quiet)'), 'Awaiting check の数は Proposed と同じく光る');
   const card = column.querySelector('.bt-card')!;
   assert.ok(card, '確かめ待ちのカードが Awaiting check にある');
-  assert.equal(container.querySelector('#ui-col-done .bt-card'), null, 'Done には出ない');
+  assert.equal(container.querySelector('[data-col="done"] .bt-card'), null, 'Done には出ない');
   assert.ok(byText(card, '.bt-label', 'Task · check it'));
   assert.ok(card.querySelector('.bt-dot'), '持ち主を待つカードは点が打つ');
   assert.deepEqual([...card.querySelectorAll('[data-item]')].map(li => li.getAttribute('data-item')), ['A-2', 'A-3'], '残った項目だけ（済の A-1 は出さない）');
@@ -104,8 +104,8 @@ test('ui/Kanban（DOM）: 確かめ待ちのタスクは Awaiting check の列�
   await click(byText(card, 'button', 'Mark checked'));
   await settle();
   assert.deepEqual(sent, [{ method: 'POST', path: '/api/tasks/t1/check', body: { version: 3 } }], '/check は版を持つ');
-  assert.equal(container.querySelector('#ui-col-check .bt-card'), null, '残りが無くなったカードは Awaiting check から消える');
-  assert.ok(container.querySelector('#ui-col-done .bt-card'), 'Done へ移る');
+  assert.equal(container.querySelector('[data-col="check"] .bt-card'), null, '残りが無くなったカードは Awaiting check から消える');
+  assert.ok(container.querySelector('[data-col="done"] .bt-card'), 'Done へ移る');
 });
 
 test('ui/Kanban（DOM）: 狭い幅の列のタブは Proposed・Awaiting check・In progress・Approved・Done の順（待つものが先）', async () => {
@@ -134,7 +134,7 @@ test('ui/Kanban（DOM）: 送っている最中の 2 回目は送らない。App
   globalThis.fetch = ((path: string | URL | Request, init?: RequestInit) => (init?.method === 'POST' ? (sent.push({ method: 'POST', path: String(path), body: null }), new Promise<never>(() => undefined)) : answer(path, init))) as typeof fetch;
   const { container } = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map() }));
   await settle();
-  const card = (title: string) => [...container.querySelectorAll('#ui-col-proposed .bt-card')].find(el => el.querySelector('.bt-card__title')?.textContent === title)!;
+  const card = (title: string) => [...container.querySelectorAll('[data-col="proposed"] .bt-card')].find(el => el.querySelector('.bt-card__title')?.textContent === title)!;
   const approve = byText(card('Ship the parser'), 'button', 'Approve');
   await click(approve);
   await click(approve);
@@ -304,7 +304,7 @@ test('ui/Kanban（DOM）: 終わったタスクの新しい 50 件にもめく�
   });
   const { container } = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project], pendingByTask: new Map(), questionsByTask: new Map() }));
   await settle();
-  const card = container.querySelector('#ui-col-check .bt-card');
+  const card = container.querySelector('[data-col="check"] .bt-card');
   assert.ok(card, '確かめ待ちのカードが出る');
   assert.ok(byText(card, 'button', 'Mark checked'));
 });

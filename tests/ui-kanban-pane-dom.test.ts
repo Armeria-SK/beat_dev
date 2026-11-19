@@ -1,7 +1,9 @@
 import { byText, cleanup, click, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
-import { createElement, type ComponentType } from 'react';
+import { createElement, Fragment, type ComponentType } from 'react';
 import type { Conversation, Project, Proposal, ScoutState, Task, WorkerRun, WorkerStatus } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 
@@ -56,7 +58,7 @@ const settle = async () => { for (let i = 0; i < 3; i++) await update(() => new 
 const pane = (projects = [project()]) => render(createElement(KanbanPane, {
   productId: PRODUCT, conversations: [], drafts: [], checklists: new Map(), revision: 0, projects, pendingByTask: new Map(), questionsByTask: new Map(),
 }));
-const column = (container: HTMLElement, id: string) => container.querySelector<HTMLElement>(`#ui-col-${id}`)!;
+const column = (container: HTMLElement, id: string) => container.querySelector<HTMLElement>(`[data-col="${id}"]`)!;
 
 afterEach(async () => {
   await cleanup();
@@ -197,7 +199,7 @@ test('ui/KanbanPane（DOM）: on a narrow screen the columns come in the order P
   serve({ active: [task('Queued', 'ready', { origin: 'user' })] }, null);
   const { container } = await pane();
   await settle();
-  assert.deepEqual([...container.querySelectorAll('.bt-board > .bt-col')].map(c => c.id), ['ui-col-proposed', 'ui-col-check', 'ui-col-progress', 'ui-col-approved', 'ui-col-done', 'ui-col-failed']);
+  assert.deepEqual([...container.querySelectorAll('.bt-board > .bt-col')].map(c => (c as HTMLElement).dataset.col), ['proposed', 'check', 'progress', 'approved', 'done', 'failed']);
   assert.equal(container.querySelectorAll('.ui-coltabs [role="tab"]').length, 6);
 });
 
@@ -206,13 +208,13 @@ test('ui/KanbanPane（DOM）: on a wide screen the side pane still shows one col
   const { container } = await pane();
   await settle();
   const tabs = [...container.querySelectorAll<HTMLButtonElement>('.ui-coltabs [role="tab"]')];
-  assert.deepEqual(tabs.map(t => t.id), ['ui-coltab-proposed', 'ui-coltab-check', 'ui-coltab-progress', 'ui-coltab-approved', 'ui-coltab-done', 'ui-coltab-failed'], 'what waits first, as on a narrow screen');
+  assert.deepEqual(tabs.map(t => t.dataset.coltab), ['proposed', 'check', 'progress', 'approved', 'done', 'failed'], 'what waits first, as on a narrow screen');
   assert.deepEqual(tabs.map(t => t.querySelector('.bt-count__n')?.textContent), ['1', '0', '0', '1', '0', '0']);
-  const shown = () => [...container.querySelectorAll('.bt-board > .bt-col:not(.ui-col--off)')].map(c => c.id);
-  assert.deepEqual(shown(), ['ui-col-proposed']);
+  const shown = () => [...container.querySelectorAll<HTMLElement>('.bt-board > .bt-col:not(.ui-col--off)')].map(c => c.dataset.col);
+  assert.deepEqual(shown(), ['proposed']);
   assert.equal(column(container, 'proposed').getAttribute('role'), 'tabpanel');
   await click(tabs[3]);
-  assert.deepEqual(shown(), ['ui-col-approved']);
+  assert.deepEqual(shown(), ['approved']);
   assert.ok(byText(column(container, 'approved'), '.bt-card__title', 'Queued'));
   await cleanup();
 
@@ -221,8 +223,34 @@ test('ui/KanbanPane（DOM）: on a wide screen the side pane still shows one col
   const screen = await render(createElement(Kanban, { conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project()], pendingByTask: new Map(), questionsByTask: new Map() }));
   await settle();
   assert.equal(screen.container.querySelector('[data-kanban]')?.getAttribute('data-kanban'), 'screen');
-  assert.deepEqual([...screen.container.querySelectorAll('.bt-board > .bt-col')].map(c => c.id), ['ui-col-proposed', 'ui-col-approved', 'ui-col-progress', 'ui-col-check', 'ui-col-done', 'ui-col-failed'], 'the full screen keeps the board order');
+  assert.deepEqual([...screen.container.querySelectorAll('.bt-board > .bt-col')].map(c => (c as HTMLElement).dataset.col), ['proposed', 'approved', 'progress', 'check', 'done', 'failed'], 'the full screen keeps the board order');
   assert.equal(screen.container.querySelector('[role="tabpanel"]'), null, 'no tab panels on the wide full screen');
+});
+
+test('ui/KanbanPane（DOM）: with two Kanban panes open, ArrowRight in the second pane moves focus within that pane, and every tab and column id is unique (review of 37173516)', async () => {
+  serve({ active: [task('Idea', 'inbox')] }, null);
+  const props = { productId: PRODUCT, conversations: [], drafts: [], checklists: new Map(), revision: 0, projects: [project()], pendingByTask: new Map(), questionsByTask: new Map() };
+  const { container } = await render(createElement(Fragment, null, createElement(KanbanPane, props), createElement(KanbanPane, props)));
+  await settle();
+  const strips = [...container.querySelectorAll<HTMLElement>('.ui-coltabs')];
+  assert.equal(strips.length, 2);
+  const ids = [...container.querySelectorAll('[id]')].map(el => el.id);
+  assert.equal(new Set(ids).size, ids.length, 'no duplicate ids');
+  for (const tab of container.querySelectorAll('[role="tab"]')) assert.ok(document.getElementById(tab.getAttribute('aria-controls')!)?.closest('.ui-kanban') === tab.closest('.ui-kanban'), 'aria-controls points into its own pane');
+  const second = strips[1]!.querySelector<HTMLElement>('[data-coltab="proposed"]')!;
+  second.focus();
+  await update(() => { second.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })); });
+  const focused = document.activeElement as HTMLElement | null;
+  assert.equal(focused?.dataset.coltab, 'check');
+  assert.ok(strips[1]!.contains(focused), 'focus stays in the second pane');
+  assert.equal(strips[0]!.querySelector('[aria-selected="true"]')?.getAttribute('data-coltab'), 'proposed', 'the first pane keeps its tab');
+});
+
+test('ui/KanbanPane（CSS）: in the side pane only the picked column shows, the column tabs are shown, and the strip scrolls sideways instead of wrapping (PaneTabs: "it never wraps")', () => {
+  const css = readFileSync(join(import.meta.dirname, '..', 'web', 'src', 'ui', 'styles', 'panes.css'), 'utf8');
+  assert.match(css, /^\.ui-kanban--pane \.ui-col--off \{ display: none; \}$/mu);
+  assert.match(css, /^\.ui-kanban--pane > \.ui-coltabs \{ display: flex;[^}]*\}$/mu);
+  assert.doesNotMatch(css.match(/^\.ui-kanban--pane > \.ui-coltabs \{[^}]*\}$/mu)?.[0] ?? '', /wrap: wrap/u);
 });
 
 test.after(() => { g.matchMedia = realMatch; });
