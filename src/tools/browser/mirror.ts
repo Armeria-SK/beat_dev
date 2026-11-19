@@ -11,6 +11,9 @@ export const WATCH_MS = 5_000;
 // 撮影 1 回を待つ上限（越えたら、その 1 枚は捨てる）
 export const SHOT_TIMEOUT_MS = 5_000;
 const NAME_MAX = 60;
+// 欄に出す題と URL の上限（ページが何 MB の題を付けても、読みのたびに送り直さない）
+export const TITLE_MAX = 200;
+export const URL_MAX = 2048;
 
 export type MirrorActionKind = 'open' | 'click' | 'type' | 'read' | 'screenshot';
 // いまの操作。target は押す・入れる要素の名前（無ければ役割）、開く URL のホスト。画面の言葉にするのは欄（9-2b）
@@ -18,11 +21,11 @@ export interface MirrorAction { kind: MirrorActionKind; target: string }
 
 export interface MirrorFrame { seq: number; at: number; mediaType: 'image/png'; data: Buffer }
 
-// 画面に出す短い文字: 制御文字・書式の文字（向きの上書きなど）を落とし、空白を 1 つにまとめ、60 文字まで
-export function shortLabel(text: string): string {
+// 画面に出す短い文字: 制御文字・書式の文字（向きの上書きなど）を落とし、空白を 1 つにまとめ、max 文字まで（既定 60）
+export function shortLabel(text: string, max = NAME_MAX): string {
   const clean = text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/gu, ' ').trim();
   const chars = [...clean];
-  return chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('')}…` : clean;
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : clean;
 }
 
 const elementLabel = (target: ElementTarget): string => shortLabel(target.name) || shortLabel(target.role);
@@ -34,8 +37,8 @@ export function strongerAction(before: MirrorAction | undefined, next: MirrorAct
   return before !== undefined && RANK[before.kind] > RANK[next.kind] ? before : next;
 }
 
-// ページの操作を見張る写し。道具が呼ぶ操作の前に note、撮った画像（道具の browser_screenshot）は shot へ渡す。ほかは元のページそのまま
-export function observePage(page: PageHandle, note: (action: MirrorAction) => void, shot: (png: Buffer) => void): PageHandle {
+// ページの操作を見張る写し。道具が呼ぶ操作の前に note。ほかは元のページそのまま（欄の画像は、呼び出しの終わりに session.ts が撮る）
+export function observePage(page: PageHandle, note: (action: MirrorAction) => void): PageHandle {
   return new Proxy(page, {
     get(target, prop) {
       const value: unknown = Reflect.get(target, prop, target);
@@ -46,7 +49,7 @@ export function observePage(page: PageHandle, note: (action: MirrorAction) => vo
         case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { note({ kind: 'type', target: elementLabel(element) }); return target.fill(element, text, submit, timeoutMs); };
         case 'text': return (maxChars: number) => { note({ kind: 'read', target: '' }); return target.text(maxChars); };
         case 'snapshot': return () => { note({ kind: 'read', target: '' }); return target.snapshot(); };
-        case 'screenshot': return async () => { note({ kind: 'screenshot', target: '' }); const png = await target.screenshot(); shot(png); return png; };
+        case 'screenshot': return () => { note({ kind: 'screenshot', target: '' }); return target.screenshot(); };
         default: return (value as (...args: unknown[]) => unknown).bind(target);
       }
     },

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
 import type { BrowserGrant } from '../src/tools/browser/loopback.ts';
-import { DRIVING_MS, SHOT_INTERVAL_MS, shortLabel } from '../src/tools/browser/mirror.ts';
+import { DRIVING_MS, SHOT_INTERVAL_MS, shortLabel, TITLE_MAX, URL_MAX, WATCH_MS } from '../src/tools/browser/mirror.ts';
 import { BrowserSession, type BrowserTab, type MirrorConversation } from '../src/tools/browser/session.ts';
 import { FakeBrowserDriver, type FakePage } from './helpers/fake-browser.ts';
 import { testConfig } from './helpers.ts';
@@ -249,7 +249,7 @@ test('遅れて終わった古い撮影は、あとの操作の画像を上書�
   assert.deepEqual(r.session.frame(tab.id, 'p-a', lookup)?.data, PNG_B);
 });
 
-test('道具の browser_screenshot の画像も写しになる。タブを閉じたら画像も view も消える', async t => {
+test('道具の browser_screenshot も操作に数え、呼び出しの終わりの 1 枚が写しになる。タブを閉じたら画像も view も消える', async t => {
   const r = rig(t);
   const lookup = db({ c1: { product: 'p-a' } })('p-a');
   const tab = await open(r, grant('c1'));
@@ -261,6 +261,104 @@ test('道具の browser_screenshot の画像も写しになる。タブを閉じ
   await r.session.run(call(grant('c1')), async api => { await api.closeTab(tab.id); });
   assert.equal(r.session.frame(tab.id, 'p-a', lookup), undefined);
   assert.equal(r.session.view('p-a', lookup), null);
+});
+
+// 撮影の数を数える（元のページの screenshot を差し替える）
+function countShots(page: FakePage, png: Buffer = PNG_A): { count: () => number; gate: (wait: Promise<void> | undefined) => void } {
+  let shots = 0;
+  let wait: Promise<void> | undefined;
+  page.screenshot = async () => { shots += 1; if (wait) await wait; return png; };
+  return { count: () => shots, gate: next => { wait = next; } };
+}
+
+test('中止された呼び出しは、終わりに撮らない', async t => {
+  const r = rig(t);
+  const lookup = db({ c1: { product: 'p-a' } })('p-a');
+  const tab = await open(r, grant('c1'));
+  const shots = countShots(r.driver.current!.pageList.at(-1)!);
+  const controller = new AbortController();
+  await r.session.run(call(grant('c1'), controller.signal), async api => { await api.tab(tab.id).page.goto(PAGE_B, 1000); controller.abort(); });
+  assert.equal(shots.count(), 0);
+  assert.equal(r.session.view('p-a', lookup)!.title, 'Page A', '画像も題も前のまま');
+});
+
+test('終わりの撮影の最中に中止されたら、撮影を待たずにロックを返す', async t => {
+  const r = rig(t);
+  const tab = await open(r, grant('c1'));
+  const shots = countShots(r.driver.current!.pageList.at(-1)!);
+  shots.gate(new Promise<void>(() => undefined));
+  const controller = new AbortController();
+  const running = r.session.run(call(grant('c1'), controller.signal), async api => { await api.tab(tab.id).page.goto(PAGE_B, 1000); });
+  await r.advance(0);
+  assert.equal(shots.count(), 1, '終わりの撮影が始まって止まっている');
+  controller.abort();
+  const done = await Promise.race([running.then(() => 'released'), new Promise(resolve => setTimeout(() => resolve('held'), 1000))]);
+  assert.equal(done, 'released');
+  assert.equal(await r.session.run(call(grant('c2')), async () => 'next'), 'next');
+});
+
+test('一定間隔の撮影は、最後に読まれてから WATCH_MS で止まる', async t => {
+  const r = rig(t);
+  const lookup = db({ c1: { product: 'p-a' } })('p-a');
+  await open(r, grant('c1'));
+  const shots = countShots(r.driver.current!.pageList.at(-1)!);
+  r.session.view('p-a', lookup);
+  for (let i = 0; i < 2; i++) await r.advance(SHOT_INTERVAL_MS);
+  assert.equal(shots.count(), 2);
+  await r.advance(WATCH_MS);
+  const stopped = shots.count();
+  for (let i = 0; i < 4; i++) await r.advance(SHOT_INTERVAL_MS);
+  assert.equal(shots.count(), stopped, '読まれなくなったら撮らない');
+  assert.ok(stopped <= 3);
+});
+
+test('一定間隔の撮影は、読まれている製品のタブだけ（ほかの製品のタブは撮らない）', async t => {
+  const r = rig(t);
+  const lookup = db({ a1: { product: 'p-a' }, b1: { product: 'p-b' } })('p-a');
+  await open(r, grant('a1'));
+  const a = countShots(r.driver.current!.pageList.at(-1)!);
+  await open(r, grant('b1', { productId: 'p-b' }));
+  const b = countShots(r.driver.current!.pageList.at(-1)!);
+  r.session.view('p-a', lookup);
+  for (let i = 0; i < 2; i++) await r.advance(SHOT_INTERVAL_MS);
+  assert.equal(a.count(), 2);
+  assert.equal(b.count(), 0);
+});
+
+test('一定間隔の撮影の途中で呼び出しが始まったら、残りのタブは撮らない', async t => {
+  const r = rig(t);
+  const lookup = db({ a1: { product: 'p-a' }, a2: { product: 'p-a' } })('p-a');
+  await open(r, grant('a1'));
+  const first = countShots(r.driver.current!.pageList.at(-1)!);
+  await open(r, grant('a2'));
+  const second = countShots(r.driver.current!.pageList.at(-1)!);
+  let release!: () => void;
+  first.gate(new Promise<void>(resolve => { release = resolve; }));
+  r.session.view('p-a', lookup);
+  await r.advance(SHOT_INTERVAL_MS);
+  assert.equal(first.count(), 1, '1 つ目の撮影が止まっている');
+  let hold!: () => void;
+  const running = r.session.run(call(grant('a1')), async () => { await new Promise<void>(resolve => { hold = resolve; }); });
+  await r.advance(0);
+  release();
+  await r.advance(0);
+  assert.equal(second.count(), 0, 'ロック中は 2 つ目を撮らない');
+  hold();
+  await running;
+});
+
+test('題と URL は、制御文字を落として切ってから覚える', async t => {
+  const r = rig(t);
+  const lookup = db({ c1: { product: 'p-a' } })('p-a');
+  r.driver.site(PAGE_A, { title: `Evil‮\u0000${'x'.repeat(5000)}`, png: PNG_A });
+  const long = `https://a.example.com/?q=${'y'.repeat(5000)}`;
+  r.driver.site(long, { title: 'ok', png: PNG_A });
+  await open(r, grant('c1'));
+  const view = r.session.view('p-a', lookup)!;
+  assert.equal([...view.title].length, TITLE_MAX);
+  assert.doesNotMatch(view.title, /\p{Cc}|\p{Cf}/u);
+  await r.session.run(call(grant('c1')), async api => { await api.tab().page.goto(long, 1000); });
+  assert.equal([...r.session.view('p-a', lookup)!.url].length, URL_MAX);
 });
 
 test('見張りを付けたページも、元のページの持ち物はそのまま見える', async t => {

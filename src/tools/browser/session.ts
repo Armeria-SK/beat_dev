@@ -13,7 +13,7 @@ import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, typ
 import type { ElementTable } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 import { allowedLoopbackUrl, deniedLoopbackPorts, type BrowserGrant } from './loopback.ts';
-import { DRIVING_MS, MirrorFrames, observePage, SHOT_INTERVAL_MS, SHOT_TIMEOUT_MS, strongerAction, WATCH_MS, type MirrorAction, type MirrorFrame } from './mirror.ts';
+import { DRIVING_MS, MirrorFrames, observePage, shortLabel, SHOT_INTERVAL_MS, SHOT_TIMEOUT_MS, strongerAction, TITLE_MAX, URL_MAX, WATCH_MS, type MirrorAction, type MirrorFrame } from './mirror.ts';
 
 type BrowserConfig = AppConfig['tools']['browser'];
 
@@ -225,9 +225,10 @@ export class BrowserSession {
       }
       return await fn(this.#api(call));
     } finally {
-      // この呼び出しで操作したタブを 1 枚ずつ撮る（ロックの中。中止されたら待たせない）
-      if (!call.signal.aborted) {
-        for (const tab of [...this.#tabs.values()]) if (tab.productId !== undefined && this.#mirror.get(tab.id)?.call === no) await this.#shoot(tab);
+      // この呼び出しで操作したタブを 1 枚ずつ撮る（ロックの中。中止されたら、その時点でやめて待たせない）
+      for (const tab of [...this.#tabs.values()]) {
+        if (call.signal.aborted) break;
+        if (tab.productId !== undefined && this.#mirror.get(tab.id)?.call === no) await this.#shoot(tab, call.signal);
       }
       this.#current = undefined;
       if (this.#owner && call.grant.attended) this.#armIdle(this.#ownerIdle, () => this.#shutdownOwner());
@@ -305,20 +306,25 @@ export class BrowserSession {
   }
 
   // 1 枚撮る。撮り始めた順を覚え、遅れて終わった古い撮影で新しい画像を上書きしない。閉じたタブ・失敗・時間切れは捨てる
-  async #shoot(tab: BrowserTab): Promise<void> {
+  async #shoot(tab: BrowserTab, signal?: AbortSignal): Promise<void> {
     const mirror = this.#mirror.get(tab.id);
     if (!mirror) return;
     const token = this.#frames.begin();
     let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), SHOT_TIMEOUT_MS); timer.unref(); });
+    let onAbort: (() => void) | undefined;
+    const late = new Promise<undefined>(resolve => {
+      timer = setTimeout(() => resolve(undefined), SHOT_TIMEOUT_MS); timer.unref();
+      onAbort = () => resolve(undefined);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
     try {
       const shot = (async () => ({ png: await mirror.raw.screenshot(), title: await mirror.raw.title(), url: mirror.raw.url() }))();
       shot.catch(() => undefined);
       const got = await Promise.race([shot, late]);
       if (!got || this.#tabs.get(tab.id) !== tab) return;
-      mirror.url = got.url; mirror.title = got.title;
+      mirror.url = shortLabel(got.url, URL_MAX); mirror.title = shortLabel(got.title, TITLE_MAX);
       this.#frames.store(tab.conversationId, tab.id, token, got.png, this.#now());
-    } catch { /* 撮れなかった 1 枚は捨てる（道具の呼び出しの結果は変えない） */ } finally { clearTimeout(timer); }
+    } catch { /* 撮れなかった 1 枚は捨てる（道具の呼び出しの結果は変えない） */ } finally { clearTimeout(timer); if (onAbort) signal?.removeEventListener('abort', onAbort); }
   }
 
   // 一定間隔の撮影（D-9）。欄が読んでいる製品の、動いているタブだけ。ロックが空いているときだけ始め、ロックは握らない（呼び出しを撮影で待たせない）
@@ -342,7 +348,8 @@ export class BrowserSession {
           const before = latest.get(tab.conversationId);
           if (!before || mirror.actedAt > this.#mirror.get(before.id)!.actedAt) latest.set(tab.conversationId, tab);
         }
-        for (const tab of latest.values()) await this.#shoot(tab);
+        // 撮っているあいだに呼び出しが始まったら、残りは撮らない
+        for (const tab of latest.values()) { if (this.#locked) break; await this.#shoot(tab); }
       } finally { this.#shooting = false; }
     }
     this.#armShots();
@@ -670,9 +677,9 @@ export class BrowserSession {
       const current = this.#current;
       if (current) { mirror.action = mirror.call === current.no ? strongerAction(mirror.action, action) : action; mirror.call = current.no; mirror.runId = current.call.grant.runId; } else mirror.action = action;
       mirror.actedAt = this.#now();
-      mirror.url = raw.url();
+      mirror.url = shortLabel(raw.url(), URL_MAX);
     };
-    const page = observePage(raw, note, png => { if (tab.productId !== undefined && this.#tabs.get(id) === tab) this.#frames.store(tab.conversationId, id, this.#frames.begin(), png, this.#now()); });
+    const page = observePage(raw, note);
     const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, table: undefined, used: ++this.#clock };
     this.#tabs.set(tab.id, tab);
     this.#tabHandles.set(tab, handle);
