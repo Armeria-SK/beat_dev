@@ -10,6 +10,7 @@ const en = {
   'run.preempted': 'Paused to give priority to the conversation with the user',
   'run.restart_interrupted': 'Interrupted by an app restart',
   'run.internal': 'Internal error: {detail}',
+  'run.place_changed': "Not started: the task's working copy changed between choosing where it runs and starting the run",
   'run.no_model': 'There was no model that could run',
   'run.no_provider': 'There is no provider "{id}"',
   'problem.not_in_config': 'Not found in the settings',

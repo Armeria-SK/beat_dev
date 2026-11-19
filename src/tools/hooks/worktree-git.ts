@@ -1,47 +1,134 @@
 // beat 8-2 D-12: 作業コピー（linked worktree）のタスクで通す git。作業コピーは本体とブランチ・stash・設定・worktree の登録を分け合うので、
-// それを変えない形だけを数え上げて通し、ほかは断る（判定役にも Pending にも回さない）。純粋な関数
+// それを変えない形だけを数え上げて通し、ほかは断る（判定役にも Pending にも回さない）。オプションも数え上げた表にあるものだけ通す。純粋な関数
 import { isAbsolute, resolve } from 'node:path';
+import { PUSH_FLAGS, READ as READ_SPECS, WRITE_FLAGS } from './allowlist-git.ts';
 import type { StatementFacts } from './shell-facts.ts';
-import { isInside } from './scope.ts';
+import { isInside, realish } from './scope.ts';
 
 export const WT_GIT_SHARED = 'wt.git_shared';
 export const WT_WRITE_MAIN = 'wt.write_main';
 export const WT_PUSH_BEAT = 'wt.push_beat';
 
-const READ = new Set([
-  'status', 'log', 'show', 'diff', 'blame', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'describe', 'shortlog', 'merge-base', 'name-rev',
-  'show-ref', 'for-each-ref', 'count-objects', 'cherry', 'cat-file', 'grep', 'version', 'help', 'whatchanged', 'show-branch', 'check-ignore', 'check-attr', 'var',
+type Kind = 'b' | 's' | 'opt';
+type Flags = ReadonlyMap<string, Kind>;
+
+// 'name' / 'name:s' / 'name:n' / 'name:opt' / 'name:pat' の並び（allowlist-git.ts と同じ書き方）
+function flagTable(spec: string, drop: readonly string[] = [], add = ''): Flags {
+  const map = new Map<string, Kind>();
+  const tokens = [...spec.split(/\s+/u).filter(t => t && !drop.includes(t.split(':')[0]!)), ...add.split(/\s+/u).filter(Boolean)];
+  for (const token of tokens) {
+    const [name, kind] = token.split(':') as [string, string | undefined];
+    map.set(name, kind === undefined ? 'b' : kind === 'opt' ? 'opt' : 's');
+  }
+  return map;
+}
+
+// 表に無い読むだけのサブコマンドは、オプションなしでだけ通す
+const READ_EXTRA = ['version', 'help', 'whatchanged', 'show-branch', 'check-ignore', 'check-attr', 'var'];
+const READ_FLAGS = new Map<string, { flags: Flags; numeric: boolean }>([
+  ...Object.entries(READ_SPECS).map(([sub, spec]) => [sub, { flags: flagTable(spec.flags), numeric: spec.numeric === true }] as const),
+  ...READ_EXTRA.map(sub => [sub, { flags: flagTable(''), numeric: false }] as const),
 ]);
-// 今のブランチの上で動く書く形（別のブランチへ移る形は下で断る）
-const ON_BRANCH = new Set(['add', 'commit', 'rm', 'mv', 'restore', 'apply', 'am', 'reset', 'merge', 'rebase', 'cherry-pick', 'revert']);
-const GLOBAL_OK = new Set(['--no-pager', '-P', '--no-optional-locks']);
+// 今のブランチの上で動く書く形。ブランチを作る・移る・消すオプションは外す。merge / rebase の -s は戦略（任意のプログラム名）なので外す
+const ON_BRANCH_DROP = ['-b', '-B', '--detach', '-d', '-D', '--rebase', '--no-rebase', '--list', '-l', '--include-untracked', '-k', '--keep-index'];
+const ON_BRANCH = new Map<string, Flags>(['add', 'commit', 'rm', 'mv', 'restore', 'apply', 'am', 'reset', 'merge', 'rebase', 'cherry-pick', 'revert']
+  .map(sub => [sub, flagTable(WRITE_FLAGS, sub === 'merge' || sub === 'rebase' ? [...ON_BRANCH_DROP, '-s'] : ON_BRANCH_DROP)]));
+// 共有の設定で自動の stash・ほかのブランチの書き換えをするもの（持ち主の設定で、ふつうの rebase / merge / pull が本体の stash やブランチを変える）
+const AUTO_SHARED = /^(?:rebase\.updaterefs|rebase\.autostash|merge\.autostash|pull\.rebase)=(.*)$/u;
+const CHECKOUT_FLAGS = flagTable('--ours --theirs -f --force -q --quiet');
+const FETCH_FLAGS = flagTable('-q --quiet -v --verbose --dry-run --no-tags --depth:n');
+const PULL_FLAGS = flagTable('-q --quiet -v --verbose --ff-only --ff --no-ff --no-edit --no-rebase');
+// -u は共有の設定（branch.<名前>.merge）を書く。--all は beat のブランチも送る
+const PUSH_TABLE = flagTable(PUSH_FLAGS, ['-u', '--set-upstream', '--all', '--force-with-lease'], '--force-with-lease:opt');
+const STASH_READ = flagTable('-p --patch --stat --name-only --name-status --oneline');
+const REFLOG_FLAGS = flagTable('-n:n --date:s --oneline');
 const CONFIG_READ = /^(?:--get|--get-all|--get-regexp|--list|-l|--show-origin|--show-scope|--name-only|--null|-z|--local|--worktree|--type=\S+|--bool|--int|--path)$/u;
 const BRANCH_LIST = /^(?:-a|--all|-r|--remotes|-v|-vv|--verbose|--list|-l|--show-current|--merged(?:=\S+)?|--no-merged(?:=\S+)?|--contains(?:=\S+)?|--no-contains(?:=\S+)?|--sort=\S+|--format=\S+|--color=never|--no-color|--column=never|--points-at=\S+|-n\d*)$/u;
+const REMOTE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/u;
+// 変数名 GIT_… をどこかで書く・渡す形（export・set・$env:・[Environment]・env など、どれでも）
+const GIT_VARIABLE = /(?<![A-Za-z0-9_])GIT_[A-Za-z0-9_]+/iu;
 
-export interface WorktreeGitPlace { worktree: string; productRoot: string; cwd: string }
+export interface WorktreeGitPlace {
+  worktree: string;
+  productRoot: string;
+  cwd: string;
+  // コマンド全体の文（GIT_… の変数の設定を探す）
+  command?: string;
+  // 共有の設定に書いた宛先の名前（読めなければ undefined）
+  remotes?: () => readonly string[] | undefined;
+  // `git config --list` の出力（rebase / merge / pull の自動の設定を探す。読めなければ undefined）
+  sharedConfig?: () => string | undefined;
+}
+
+interface Parsed { ok: boolean; pos: string[]; afterDd: string[]; seen: Set<string> }
+
+// オプションを表で読む。表に無いオプション・値の要らないオプションに値を付けた形は ok: false
+function parseArgs(texts: readonly string[], flags: Flags, numeric = false): Parsed {
+  const out: Parsed = { ok: true, pos: [], afterDd: [], seen: new Set() };
+  for (let i = 0; i < texts.length; i++) {
+    const t = texts[i]!;
+    if (t === '--') { out.afterDd.push(...texts.slice(i + 1)); break; }
+    if (t === '-' || !t.startsWith('-')) { out.pos.push(t); continue; }
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      const kind = flags.get(name);
+      if (!kind || (kind === 'b' && eq !== -1)) return { ...out, ok: false };
+      if (kind === 's' && eq === -1) { if (i + 1 >= texts.length) return { ...out, ok: false }; i++; }
+      out.seen.add(name);
+      continue;
+    }
+    if (numeric && /^-\d+$/u.test(t)) continue;
+    const exact = flags.get(t);
+    if (exact) {
+      if (exact === 's') { if (i + 1 >= texts.length) return { ...out, ok: false }; i++; }
+      out.seen.add(t);
+      continue;
+    }
+    // まとめた短いオプション（-am "msg"・-n5）
+    for (let j = 1; j < t.length; j++) {
+      const name = `-${t[j]}`;
+      const kind = flags.get(name);
+      if (!kind) return { ...out, ok: false };
+      out.seen.add(name);
+      if (kind === 'b') continue;
+      if (j === t.length - 1 && kind === 's') { if (i + 1 >= texts.length) return { ...out, ok: false }; i++; }
+      break;
+    }
+  }
+  return out;
+}
+
+const truthy = (value: string): boolean => /^(?:true|yes|on|1|merges|interactive|i)$/iu.test(value.trim());
+
+// 書いたパスと実体のパスのどちらでも、作業コピーの中か
+const insideCopy = (worktree: string, path: string): boolean => isInside(worktree, path) && isInside(realish(worktree), realish(path));
 
 const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
 
 // 断る git の文（作業コピーのタスク）。通すなら undefined
 export function worktreeGitRefusal(statements: readonly StatementFacts[], place: WorktreeGitPlace): string | undefined {
-  for (const st of flatten(statements)) {
-    if (st.program !== 'git') continue;
+  const all = flatten(statements);
+  const gits = all.filter(st => st.program === 'git');
+  if (gits.length === 0) return undefined;
+  const assigns = all.find(st => st.env.some(name => /^git_/iu.test(name)) || st.words.some(w => GIT_VARIABLE.test(w.text)));
+  if (assigns || (place.command !== undefined && GIT_VARIABLE.test(place.command))) return (assigns ?? gits[0]!).words.map(w => w.text).join(' ').slice(0, 200);
+  for (const st of gits) {
     const shown = st.words.map(w => w.text).join(' ').slice(0, 200);
-    if (st.env.some(name => /^git_/iu.test(name))) return shown;
-    const cwds = [...new Set([...(st.cwds ?? []), ...(st.cwd ? [st.cwd] : [])])];
-    if (cwds.length === 0 || cwds.some(dir => !isInside(place.worktree, dir))) return shown;
+    if (st.cwd === null) return shown;
+    const cwds = [...new Set([...(st.cwds ?? []), st.cwd])];
+    if (cwds.some(dir => !insideCopy(place.worktree, dir))) return shown;
     const at = st.gitGlobal.length + 1;
     const globals = st.words.slice(1, at);
     for (let i = 0; i < globals.length; i++) {
       const w = globals[i]!;
       if (w.dynamic) return shown;
-      if (GLOBAL_OK.has(w.text)) continue;
-      if (w.text === '-c' && /^user\.(?:name|email)=/iu.test(globals[i + 1]?.text ?? '')) { i++; continue; }
+      if (w.text === '--no-pager' || w.text === '-P' || w.text === '--no-optional-locks') continue;
+      if (w.text === '-c' && !globals[i + 1]?.dynamic && /^user\.(?:name|email)=[^\r\n]*$/iu.test(globals[i + 1]?.text ?? '')) { i++; continue; }
       if (w.text === '-C') {
         const dir = globals[i + 1];
         if (!dir || dir.dynamic) return shown;
-        const base = cwds[0] ?? place.cwd;
-        if (!isInside(place.worktree, isAbsolute(dir.text) ? resolve(dir.text) : resolve(base, dir.text))) return shown;
+        if (!insideCopy(place.worktree, isAbsolute(dir.text) ? resolve(dir.text) : resolve(st.cwd, dir.text))) return shown;
         i++;
         continue;
       }
@@ -49,72 +136,125 @@ export function worktreeGitRefusal(statements: readonly StatementFacts[], place:
     }
     const subWord = st.words[at];
     if (!subWord || subWord.dynamic) return shown;
-    const sub = subWord.text.toLowerCase();
     const args = st.words.slice(at + 1);
-    if (args.some(w => w.dynamic)) {
-      if (!READ.has(sub) && !ON_BRANCH.has(sub)) return shown;
-    }
+    // 変数の引数は、何になるか（オプションか、ブランチか）決められない
+    if (args.some(w => w.dynamic)) return shown;
+    const sub = subWord.text.toLowerCase();
     const texts = args.map(w => w.text);
-    const flags = texts.filter(t => t.startsWith('-'));
-    const positional = (() => {
-      const dd = texts.indexOf('--');
-      return (dd === -1 ? texts : texts.slice(0, dd)).filter(t => !t.startsWith('-'));
-    })();
-    if (READ.has(sub)) continue;
-    if (ON_BRANCH.has(sub)) {
-      // git rebase <upstream> <branch> は先に <branch> へ移る
-      if (sub === 'rebase' && positional.length >= 2) return shown;
+    const read = READ_FLAGS.get(sub);
+    if (read) {
+      if (!parseArgs(texts, read.flags, read.numeric).ok) return shown;
       continue;
     }
-    switch (sub) {
-      case 'checkout':
-        // ファイルを戻す形（-- のあとにパス）だけ。ブランチを移る・作る形は断る
-        if (texts.includes('--') && !flags.some(f => /^(?:-b|-B|--orphan|--detach)$/u.test(f))) continue;
-        return shown;
-      case 'branch':
-        if (flags.every(f => BRANCH_LIST.test(f)) && (positional.length === 0 || flags.some(f => f === '--list' || f === '-l'))) continue;
-        return shown;
-      case 'tag':
-        if (positional.length === 0 && flags.length === 0) continue;
-        if (flags.some(f => f === '-l' || f === '--list') && flags.every(f => /^(?:-l|--list|-n\d*|--sort=\S+|--contains|--merged|--no-merged|--points-at|--format=\S+)$/u.test(f))) continue;
-        return shown;
-      case 'stash':
-        if (positional[0] === 'list' || positional[0] === 'show') continue;
-        return shown;
-      case 'worktree':
-        if (positional[0] === 'list') continue;
-        return shown;
-      case 'config':
-        if (flags.every(f => CONFIG_READ.test(f)) && (flags.some(f => /^(?:--get|--get-all|--get-regexp|--list|-l)$/u.test(f)) || positional.length === 1)) continue;
-        return shown;
-      case 'reflog':
-        if (positional.length === 0 || positional[0] === 'show') continue;
-        return shown;
-      case 'remote':
-        if (positional.length === 0 || positional[0] === 'get-url' || positional[0] === 'show') continue;
-        return shown;
-      case 'notes':
-        if (positional[0] === 'list' || positional[0] === 'show') continue;
-        return shown;
-      case 'fetch': case 'pull':
-        if (positional[0] === '.' || positional.slice(1).some(t => t.includes(':'))) return shown;
-        continue;
-      case 'push':
-        if (positional[0] === '.') return shown;
-        continue;
-      default:
-        return shown;
+    const onBranch = ON_BRANCH.get(sub);
+    if (onBranch) {
+      const p = parseArgs(texts, onBranch, true);
+      if (!p.ok) return shown;
+      // git rebase <upstream> <branch> は先に <branch> へ移る（-- のあとも数える）
+      if (sub === 'rebase' && p.pos.length + p.afterDd.length >= 2) return shown;
+      if ((sub === 'rebase' || sub === 'merge') && autoShared(place)) return shown;
+      continue;
+    }
+    if (refusedOther(sub, texts, place)) return shown;
+  }
+  return undefined;
+}
+
+function autoShared(place: WorktreeGitPlace): boolean {
+  const config = place.sharedConfig?.();
+  if (config === undefined) return true;
+  return config.split(/\r?\n/u).some(line => { const m = AUTO_SHARED.exec(line.trim().toLowerCase()); return m !== null && truthy(m[1]!); });
+}
+
+function remoteOk(place: WorktreeGitPlace, remote: string | undefined): boolean {
+  if (remote === undefined) return true;
+  if (!REMOTE_NAME.test(remote)) return false;
+  const names = place.remotes?.();
+  return names !== undefined && names.includes(remote);
+}
+
+function refusedOther(sub: string, texts: readonly string[], place: WorktreeGitPlace): boolean {
+  const flags = texts.filter(t => t.startsWith('-'));
+  const positional = texts.filter(t => t !== '--' && !t.startsWith('-'));
+  switch (sub) {
+    case 'checkout': {
+      // ファイルを戻す形（-- のあとにパスが 1 つ以上）だけ。ブランチを移る・作る形は断る
+      const p = parseArgs(texts, CHECKOUT_FLAGS);
+      return !p.ok || p.afterDd.length === 0 || p.pos.length > 1;
+    }
+    case 'branch':
+      return !(flags.every(f => BRANCH_LIST.test(f)) && (positional.length === 0 || flags.some(f => f === '--list' || f === '-l')));
+    case 'tag':
+      if (positional.length === 0 && flags.length === 0) return false;
+      return !(flags.some(f => f === '-l' || f === '--list') && flags.every(f => /^(?:-l|--list|-n\d*|--sort=\S+|--contains|--merged|--no-merged|--points-at|--format=\S+)$/u.test(f)));
+    case 'stash': {
+      const [what, ...rest] = texts;
+      return !((what === 'list' || what === 'show') && parseArgs(rest, STASH_READ).ok);
+    }
+    case 'worktree':
+      return !(texts[0] === 'list' && texts.slice(1).every(t => t === '--porcelain' || t === '-v' || t === '--verbose'));
+    case 'config':
+      return !(flags.every(f => CONFIG_READ.test(f)) && (flags.some(f => /^(?:--get|--get-all|--get-regexp|--list|-l)$/u.test(f)) || positional.length === 1));
+    case 'reflog': {
+      const rest = texts[0] === 'show' ? texts.slice(1) : texts;
+      const p = parseArgs(rest, REFLOG_FLAGS, true);
+      return !p.ok || p.pos.some(t => !/^[A-Za-z0-9_./~^@{}-]+$/u.test(t)) || (texts[0] !== 'show' && p.pos.length > 0 && !/^(?:HEAD|@)/u.test(p.pos[0]!));
+    }
+    case 'remote':
+      return !(texts.length === 0 || (texts.length === 1 && (texts[0] === '-v' || texts[0] === '--verbose'))
+        || (texts[0] === 'get-url' && texts.slice(1).every(t => t === '--push' || t === '--all' || REMOTE_NAME.test(t)))
+        || (texts[0] === 'show' && texts.slice(1).every(t => t === '-n' || REMOTE_NAME.test(t))));
+    case 'notes':
+      return !((texts[0] === 'list' || texts[0] === 'show') && texts.slice(1).every(t => !t.startsWith('-')));
+    case 'fetch': case 'pull': {
+      const p = parseArgs(texts, sub === 'fetch' ? FETCH_FLAGS : PULL_FLAGS);
+      const [remote, ...refs] = [...p.pos, ...p.afterDd];
+      if (!p.ok || !remoteOk(place, remote)) return true;
+      // 参照の書き先（: の入った refspec・+ で始まる強制）は断る
+      if (refs.some(r => r.includes(':') || r.startsWith('+'))) return true;
+      return sub === 'pull' && autoShared(place);
+    }
+    case 'push': {
+      const p = parseArgs(texts, PUSH_TABLE);
+      const [remote] = [...p.pos, ...p.afterDd];
+      return !p.ok || !remoteOk(place, remote);
+    }
+    default:
+      return true;
+  }
+}
+
+// 本体（productRoot）の中へ書く・消すパス。書いたパスと実体のパスの両方で見る（作業コピーの中のジャンクション・8.3 の短い名前）
+export function mainWrites(paths: readonly string[], place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree'>): string[] {
+  const realMain = realish(place.productRoot);
+  return paths.filter(p => {
+    const real = realish(p);
+    const inMain = isInside(place.productRoot, p) || isInside(realMain, real);
+    return inMain && !(isInside(place.worktree, p) && isInside(realish(place.worktree), real) && !isInside(realMain, real));
+  });
+}
+
+// コマンドの文に本体のフォルダのパスが書いてあるか（見張りが中を読めない書き手〔tar -C・node -e など〕も、本体を名指せば断る）
+export function namesMain(command: string, place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree'>): string | undefined {
+  const norm = (s: string): string => s.replaceAll('\\', '/').toLowerCase();
+  const text = norm(command);
+  for (const root of new Set([place.productRoot, realish(place.productRoot)])) {
+    const r = norm(root).replace(/\/+$/u, '');
+    if (!r) continue;
+    let from = 0;
+    for (;;) {
+      const at = text.indexOf(r, from);
+      if (at === -1) break;
+      const next = text[at + r.length];
+      if (next === undefined || /[\s/"'`;|&)<>,]/u.test(next)) return root;
+      from = at + 1;
     }
   }
   return undefined;
 }
 
-// 本体（productRoot）の中へ書く・消すパス
-export function mainWrites(paths: readonly string[], place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree'>): string[] {
-  return paths.filter(p => isInside(place.productRoot, p) && !isInside(place.worktree, p));
-}
-
-// beat の作業ブランチ（refs/heads/beat/*）をまとめて送る・消しうる push（--all・--branches・--mirror・--prune・ワイルドカードの refspec・設定の matching / mirror）。名指しの push は今の決まりのまま
+// beat の作業ブランチ（refs/heads/beat/*）をまとめて送る・消しうる push（--all・--branches・--mirror・--prune とその短い書き方・ワイルドカードの refspec・設定の matching / mirror）。名指しの push は今の決まりのまま
+const BROAD = ['all', 'branches', 'mirror', 'prune'];
 export function broadPush(statements: readonly StatementFacts[], config: { matching: boolean; mirror: boolean }): string | undefined {
   for (const st of flatten(statements)) {
     if (st.program !== 'git') continue;
@@ -124,8 +264,9 @@ export function broadPush(statements: readonly StatementFacts[], config: { match
     const args = st.words.slice(at + 1);
     if (args.some(w => w.dynamic)) return shown;
     const texts = args.map(w => w.text);
-    if (texts.some(t => /^--(?:all|branches|mirror|prune)$/u.test(t))) return shown;
-    const refs = texts.filter(t => !t.startsWith('-')).slice(1);
+    // git は長いオプションの一意な頭だけでも受け付ける（--mirr・--al）
+    if (texts.some(t => { const m = /^--([a-z-]+)(?:=|$)/u.exec(t); return m !== null && BROAD.some(b => b.startsWith(m[1]!)); })) return shown;
+    const refs = texts.filter(t => t !== '--' && !t.startsWith('-')).slice(1);
     if (refs.some(r => r.includes('*'))) return shown;
     if (refs.length === 0 && (config.matching || config.mirror)) return shown;
     if (config.mirror) return shown;

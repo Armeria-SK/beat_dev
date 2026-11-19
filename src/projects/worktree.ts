@@ -7,13 +7,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from '../config/schema.ts';
 import { GIT_TIMEOUT_MS, withGit } from '../mesh/folders.ts';
 import type { AppPaths } from '../paths.ts';
+import { COMMIT_SECRET } from '../tools/hooks/product-run.ts';
 import { isInside, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
 import { folderMissing, type ProjectStore } from './store.ts';
 
 export type WorktreeKind = 'task' | 'fix';
 export type WorktreeState = 'creating' | 'active' | 'branch' | 'merged' | 'discarded' | 'removing' | 'gone';
 export type WorktreeEnding = 'branch' | 'merged' | 'discarded' | 'gone';
-export type WorktreeNote = 'not_on_branch' | 'in_progress';
+export type WorktreeNote = 'not_on_branch' | 'in_progress' | 'missing';
 
 export interface WorktreeRow {
   id: string;
@@ -37,7 +38,7 @@ export interface WorktreeRow {
 
 export type PlaceResult = { ok: true; root: string } | { ok: false; reason: 'unsafe_place' };
 export type CreateResult = { ok: true; row: WorktreeRow } | { ok: false; reason: 'not_git' | 'unsafe' | 'unsafe_place' | 'dirty_git_dir' | 'timeout' | 'failed' };
-export type FinishResult = { ok: true; tip: string; committed: boolean; changed: boolean; held?: string[] } | { ok: false; reason: 'unknown' | 'not_active' | 'foreign' | 'unsafe' | 'not_on_branch' | 'in_progress' | 'timeout' | 'failed' };
+export type FinishResult = { ok: true; tip: string; committed: boolean; changed: boolean; held?: string[] } | { ok: false; reason: 'unknown' | 'not_active' | 'foreign' | 'unsafe' | 'not_on_branch' | 'in_progress' | 'missing' | 'timeout' | 'failed' };
 export type ReactivateResult = { ok: true; row: WorktreeRow } | { ok: false; reason: 'unknown' | 'not_branch' | 'foreign' | 'moved' | 'unsafe' };
 export type RemoveResult = { ok: true; branchKept: boolean; note?: 'branch_moved' | 'not_merged' } | { ok: false; reason: 'unknown' | 'foreign' | 'repo_moved' | 'unsafe' | 'locked' | 'dirty' | 'busy' | 'failed' };
 
@@ -268,6 +269,31 @@ export class Worktrees {
     return this.#d.db.prepare('SELECT * FROM worktrees WHERE id = ?').get(id) as WorktreeRow | undefined;
   }
 
+  // タスクの作業コピーの行（いちばん新しいもの）
+  forTask(taskId: string): WorktreeRow | undefined {
+    return this.#d.db.prepare("SELECT * FROM worktrees WHERE task_id = ? AND kind = 'task' ORDER BY created_at DESC, id DESC LIMIT 1").get(taskId) as WorktreeRow | undefined;
+  }
+
+  // 取り込み待ちのブランチの変わった量（base..tip）。先端ごとに 1 回だけ裏で数え、数え終わるまでは null
+  readonly #stats = new Map<string, { files: number; added: number; removed: number } | 'pending' | 'failed'>();
+  statsOf(row: WorktreeRow): { files: number; added: number; removed: number } | null {
+    if (!row.tip || row.state === 'active' || row.state === 'creating') return null;
+    const key = `${row.id}:${row.tip}`;
+    const known = this.#stats.get(key);
+    if (known === 'pending' || known === 'failed') return null;
+    if (known) return known;
+    const repo = this.#repoHere(row);
+    if (!repo) return null;
+    this.#stats.set(key, 'pending');
+    void withGit(repo, this.#d.paths.data, async git => git(['diff', '--numstat', '--no-renames', row.base, row.tip!])).then(out => {
+      if (out === null || out === undefined) { this.#stats.set(key, 'failed'); return; }
+      const lines = out.toString('utf8').split('\n').filter(Boolean);
+      const num = (s: string | undefined): number => (s && /^\d+$/u.test(s) ? Number(s) : 0);
+      this.#stats.set(key, { files: lines.length, added: lines.reduce((n, l) => n + num(l.split('\t')[0]), 0), removed: lines.reduce((n, l) => n + num(l.split('\t')[1]), 0) });
+    }, () => { this.#stats.set(key, 'failed'); });
+    return null;
+  }
+
   list(projectId?: string): WorktreeRow[] {
     return (projectId === undefined
       ? this.#d.db.prepare('SELECT * FROM worktrees ORDER BY created_at, id').all()
@@ -357,6 +383,11 @@ export class Worktrees {
     const row = this.get(id);
     if (!row) return { ok: false, reason: 'unknown' };
     if (row.kind !== 'task' || row.state !== 'active' || !row.path) return { ok: false, reason: 'not_active' };
+    // 作業コピー（か中の .git のファイル）が外で消された: コミットできないので、ブランチだけを取り込み待ちに残す
+    if (!lstatOf(row.path)?.isDirectory() || !lstatOf(join(row.path, '.git'))?.isFile()) {
+      this.#set(id, { state: 'branch', note: 'missing' }, 'active');
+      return { ok: false, reason: 'missing' };
+    }
     const repo = this.#repoHere(row);
     const mainGit = repo && realOrNull(join(repo, '.git'));
     const admin = mainGit ? linkedAdmin(mainGit, row.path) : null;
@@ -381,9 +412,9 @@ export class Worktrees {
         if (await git(['add', '-A']) === null) return failed();
         const added = await git(['diff', '--cached', '--name-only', '--diff-filter=A', '-z']);
         if (added === null) return failed();
-        held = added.split('\0').filter(name => name !== '' && isSecretPath(name));
+        held = added.split('\0').filter(name => name !== '' && (isSecretPath(name) || COMMIT_SECRET.test(name)));
         for (let i = 0; i < held.length; i += 100) {
-          if (await git(['rm', '--cached', '-q', '--', ...held.slice(i, i + 100)]) === null) return failed();
+          if (await git(['--literal-pathspecs', 'rm', '--cached', '-q', '--', ...held.slice(i, i + 100)]) === null) return failed();
         }
         const staged = await git(['diff', '--cached', '--name-only', '-z']);
         if (staged === null) return failed();

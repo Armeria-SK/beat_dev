@@ -54,7 +54,19 @@ export class TaskPlaces {
 
   #onMain(task: Task): boolean {
     const row = this.rowOf(task.id);
-    return !row || row.state === 'branch';
+    if (row) return row.state === 'branch' && row.task_id === task.id;
+    return this.#ancestorRow(task) === undefined;
+  }
+
+  // 生んだタスク（spawned_by をたどる。自分は含めない）の作業コピーの行。状態は問わない（片づいた行も、子が本体へ移らない印になる）
+  #ancestorRow(task: Task): WorktreeRow | undefined {
+    let id: string | null = task.spawned_by;
+    for (let i = 0; id && i < CHAIN_MAX; i++) {
+      const row = this.#d.db.prepare("SELECT * FROM worktrees WHERE task_id = ? AND kind = 'task' ORDER BY created_at DESC, id DESC LIMIT 1").get(id) as WorktreeRow | undefined;
+      if (row) return row;
+      id = this.#d.tasks.get(id)?.spawned_by ?? null;
+    }
+    return undefined;
   }
 
   // 作業コピーの置き場（Pending の再実行が、積んだ場所が作業コピーかを見分けるのに使う）
@@ -107,6 +119,9 @@ export class TaskPlaces {
     const row = this.rowOf(task.id);
     if (row?.state === 'active') return row.path && exists(row.path) ? { kind: 'worktree', row } : { kind: 'gone', row };
     if (row?.state === 'creating') return { kind: 'wait' };
+    // 生んだタスクの作業コピーを引き継ぐ子は、その作業コピーが閉じた（branch・片づいた）なら本体へ移らない
+    const inherited = row && row.task_id !== task.id ? row : this.#ancestorRow(task);
+    if (inherited) return { kind: 'gone', row: inherited };
     if (row?.state === 'branch' && row.task_id === task.id) {
       const back = await this.#d.worktrees.reactivate(row.id);
       if (back.ok) return { kind: 'worktree', row: back.row };

@@ -6,7 +6,7 @@ import type { Word } from './shell-lex.ts';
 const REV = /^[A-Za-z0-9_./~^@{}:-]+$/u;
 
 interface ReadSub { flags: string; numeric?: boolean; pos: 'rev' | 'path' | 's' | 'none'; patFlags?: readonly string[]; first?: string }
-const READ: Record<string, ReadSub> = {
+export const READ: Record<string, ReadSub> = {
   status: { flags: '-s --short -b --branch --porcelain --porcelain=v1 --porcelain=v2 -u -uno -unormal -uall --untracked-files:opt --ignored -z', pos: 'path' },
   log: { numeric: true, pos: 'rev', flags: '--oneline -n:n --max-count:n --skip:n --since:s --until:s --after:s --before:s --author:s --committer:s --grep:s -i -p -u --patch --stat --shortstat --numstat --name-only --name-status --graph --decorate:opt --all --branches --tags --format:s --pretty:s --abbrev-commit --reverse --first-parent --follow --no-merges --merges -S:s -G:s --date:s --color=never --no-color -s --no-patch --no-ext-diff --no-textconv' },
   show: { numeric: true, pos: 'rev', flags: '--oneline -n:n --max-count:n --skip:n --since:s --until:s --after:s --before:s --author:s --committer:s --grep:s -i -p -u --patch --stat --shortstat --numstat --name-only --name-status --graph --decorate:opt --all --branches --tags --format:s --pretty:s --abbrev-commit --reverse --first-parent --follow --no-merges --merges -S:s -G:s --date:s --color=never --no-color -s --no-patch --no-ext-diff --no-textconv' },
@@ -29,7 +29,7 @@ const READ: Record<string, ReadSub> = {
 };
 
 // 書くサブコマンド（ふつうの設定で、フックが動かないリポジトリならふつうの確かめ）。positional: 位置の引数の扱い
-const WRITE_FLAGS = '-A --all -u --update -n --dry-run -v --verbose -f --force -q --quiet -m:s --message:s -a --amend --no-edit --no-verify -s --signoff --author:s --date:s --allow-empty -b:s -B:s -c:s -C:s --detach --ours --theirs --staged -W --worktree --source:s --soft --mixed --hard --keep --include-untracked -k --keep-index --no-ff --ff-only --squash --abort --continue --skip --no-commit --onto:s -d -D -r --cached --ignore-unmatch --check --stat --index -3 -R -p:n --whitespace:s --no-gpg-sign --rebase --no-rebase --list -l';
+export const WRITE_FLAGS = '-A --all -u --update -n --dry-run -v --verbose -f --force -q --quiet -m:s --message:s -a --amend --no-edit --no-verify -s --signoff --author:s --date:s --allow-empty -b:s -B:s -c:s -C:s --detach --ours --theirs --staged -W --worktree --source:s --soft --mixed --hard --keep --include-untracked -k --keep-index --no-ff --ff-only --squash --abort --continue --skip --no-commit --onto:s -d -D -r --cached --ignore-unmatch --check --stat --index -3 -R -p:n --whitespace:s --no-gpg-sign --rebase --no-rebase --list -l';
 const WRITE: Record<string, 'read' | 'write' | 'none'> = {
   add: 'read', commit: 'read', rm: 'write', mv: 'write', checkout: 'write', switch: 'none', restore: 'write', reset: 'write', stash: 'none', merge: 'none',
   rebase: 'none', 'cherry-pick': 'none', revert: 'none', tag: 'none', branch: 'none', apply: 'read', am: 'read', notes: 'none',
@@ -201,7 +201,7 @@ function writeSub(sub: string, rest: Word[], acc: Acc, ctx: MatchCtx, repo: Retu
   else acc.add('ask', 'list.git_write', { cmd: sub }, false);
 }
 
-const PUSH_FLAGS = '-u --set-upstream --force-with-lease -f --force --tags --all -n --dry-run -v --verbose -q --quiet --delete --follow-tags --no-verify';
+export const PUSH_FLAGS = '-u --set-upstream --force-with-lease -f --force --tags --all -n --dry-run -v --verbose -q --quiet --delete --follow-tags --no-verify';
 const REMOTE_NAME = /^[A-Za-z0-9_.-]+$/u;
 function push(rest: Word[], acc: Acc, ctx: MatchCtx, repo: ReturnType<MatchCtx['repo']>): void {
   const p = parseGnu(spec('push', PUSH_FLAGS), rest, acc, ctx);

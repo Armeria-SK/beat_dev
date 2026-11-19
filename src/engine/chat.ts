@@ -522,7 +522,8 @@ export class ChatEngine {
     return { ok: true, runId };
   }
 
-  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  // options.place: ワーカーが決めた置き場（作業コピーの行の id、本体なら null）。渡されたら、始める時点でもそのままかを確かめ、違えば動かさない
+  runTask(task: Task, conversationId: string, prompt: string, options: { place?: string | null } = {}): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
     const chain = this.#chain('background');
     if (!chain.usable.length) {
@@ -541,7 +542,7 @@ export class ChatEngine {
       ...(this.#noteSinceReply(conversationId) ? [pendingText(language, 'taint_note')] : []),
     ];
     if (sources.length) this.#initialTaint.set(runId, sources);
-    this.#start(runId, conversationId, chain.usable, 'task', { task, control });
+    this.#start(runId, conversationId, chain.usable, 'task', { task, control, ...(options.place !== undefined ? { place: options.place } : {}) });
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
@@ -738,7 +739,7 @@ export class ChatEngine {
     };
   }
 
-  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): void {
+  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): void {
     const controller = new AbortController();
     this.#hardStops.set(runId, new AbortController());
     this.#byConversation.set(conversationId, runId);
@@ -813,12 +814,13 @@ export class ChatEngine {
     return this.#d.tools.registry.forRun(kind, { exclude });
   }
 
-  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): Promise<EngineResult> {
+  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): Promise<EngineResult> {
     const d = this.#d;
     // 子の担当は、親が始めたときの設定で動く（親と同じ決まり。途中で緩めても広がらない）
     const config = agent?.parent.config ?? d.config();
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
     const worktree = !agent && task && kind === 'task' ? d.places?.runPlace(task.task.id) : undefined;
+    if (!agent && task && task.place !== undefined && (worktree?.id ?? null) !== task.place) throw new Error(engineText(languageOf(config), 'run.place_changed'));
     const own = agent ? undefined : runProject(d.projects, d.conversations.projectOf(conversationId), worktree);
     const resolved = agent ? agent.parent.project : own;
     const place: RunPlace | undefined = agent ? agent.parent.place

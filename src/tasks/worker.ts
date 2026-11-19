@@ -170,6 +170,8 @@ export class Worker {
   #nextWakeAt: number | undefined;
   // 動いている裏の実行（キーは runId）。入れた順 = 始めた順。worker.maxParallel 本まで
   readonly #running = new Map<string, WorkerRunning>();
+  // 閉じようとして閉じられなかった作業コピーの行（このプロセスでは毎回は試し直さない）
+  readonly #closeTried = new Set<string>();
   #forced = new Set<string>();
   readonly #scoutStops = new Map<string, ScoutMessageKey>();
   // Think now で頼まれた製品（押した回数ではなく「1 回動かす」の印。動き出したら外す）と、その頼みで動いている実行
@@ -366,6 +368,8 @@ export class Worker {
 
       // 予定から実行用のタスクを作る（モデルは呼ばない）
       tasks.spawnDueSchedules();
+      const stranded = this.#stranded();
+      if (stranded.length) await this.#closeStranded(stranded);
       this.#d.pendingWake?.();
       if (own) this.#detectReviewTriggers(c, now);
       const skillOn = this.skillReviewsOn(c);
@@ -910,6 +914,7 @@ export class Worker {
     const placed = this.#d.places && task.project_id ? await this.#d.places.decide(tasks.get(task.id) ?? task) : undefined;
     if (placed?.kind === 'gone') {
       tasks.finish(task.id, 'failed', taskText(language, 'reason.worktree_gone'), 'beat');
+      if (placed.row.task_id === task.id && placed.row.state === 'active') await this.#closeWorktree(task, placed.row.id);
       return 'idle';
     }
     if (placed?.kind === 'wait') {
@@ -923,7 +928,7 @@ export class Worker {
       if (tasks.get(task.id)?.status !== 'running') return 'idle';
     }
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
-    const started = engine.runTask(task, conversationId, prompt);
+    const started = engine.runTask(task, conversationId, prompt, placed ? { place: placed.kind === 'worktree' ? placed.row.id : null } : {});
     if (!started.ok) {
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.no_model', { detail: started.errorMessage.split('\n')[0]! }) });
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-tasks' });
@@ -938,6 +943,23 @@ export class Worker {
       if (placed?.kind === 'worktree') await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
     return 'ran';
+  }
+
+  // 動いていないあいだに終わった（取り消し・失敗）作業コピーのタスクの行を閉じる（active のまま残さない。開いた数にも数えない）
+  #stranded(): Array<{ id: string; task_id: string }> {
+    if (!this.#d.worktrees) return [];
+    const runningTasks = new Set([...this.#running.values()].flatMap(r => (r.kind === 'task' ? [r.taskId] : [])));
+    return (this.#d.db.prepare(`SELECT w.id AS id, w.task_id AS task_id FROM worktrees w JOIN tasks t ON t.id = w.task_id
+      WHERE w.kind = 'task' AND w.state = 'active' AND t.status IN ('done', 'failed', 'cancelled')`).all() as Array<{ id: string; task_id: string }>).filter(row => !runningTasks.has(row.task_id) && !this.#closeTried.has(row.id));
+  }
+
+  async #closeStranded(rows: ReadonlyArray<{ id: string; task_id: string }>): Promise<void> {
+    for (const row of rows) {
+      const task = this.#d.tasks.get(row.task_id);
+      if (!task) continue;
+      this.#closeTried.add(row.id);
+      await this.#closeWorktree(task, row.id);
+    }
   }
 
   // 作業コピーのタスクが終わった（完了・失敗・取り消し）: 書きかけを 1 つのコミットにしてブランチに残す。変わったものが無ければ片づける。
