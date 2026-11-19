@@ -207,6 +207,25 @@ test('ui/thread: 現れる動きは、初めて見えてから 600ms のあい�
   assert.equal(isRising(Number.NEGATIVE_INFINITY, 0), false);
 });
 
+test('ui/thread: お知らせは起きた位置（after の発言のすぐ後）に入り、そのあとの発言や流れている返事はお知らせの下に続く。位置の無いものだけ最後に出す', () => {
+  const owner = msg('user', 'go');
+  const first = msg('assistant', 'A', { toolCalls: [call('x', 'file_read', { path: 'a' })] });
+  const tool = msg('tool', 'ok', { toolName: 'file_read', toolCallId: 'x' });
+  const reply = msg('assistant', 'B');
+  const notices: RunNotice[] = [
+    { runId: 'r1', kind: 'compaction', summarized: 3, after: owner.id },
+    { runId: 'r1', kind: 'warning', code: 'context_trimmed', message: 'x', after: tool.id },
+    { runId: 'r1', kind: 'warning', code: 'retrying', message: 'y', after: reply.id },
+    { runId: 'u', kind: 'stopped' },
+  ];
+  const draft = { runId: 'r2', conversationId: 'c', modelId: 'm', text: 'streaming' };
+  const items = threadItems({ messages: [owner, first, tool, reply], notices, draft });
+  assert.deepEqual(items.map(i => (i.kind === 'notice' ? `notice:${i.notices.map(n => n.kind).join('+')}` : i.kind)), ['owner', 'notice:compaction', 'reply', 'tools', 'notice:warning', 'reply', 'notice:warning', 'live', 'notice:stopped']);
+  assert.equal(new Set(items.map(i => i.key)).size, items.length, 'key は重ならない');
+  const glued = threadItems({ messages: [msg('user', 'long'), msg('assistant', 'A'), msg('user', 'go on', { note: 'continue' }), msg('assistant', 'B')], notices: [{ runId: 'r1', kind: 'warning', code: 'output_continue_limit', message: 'z', after: next - 3 }] });
+  assert.deepEqual(glued.map(i => i.kind), ['owner', 'reply', 'notice'], '続きでつないだ返事の間には入れず、つないだ返事の後に出す');
+});
+
 test('ui/thread: お知らせ: 静かなものは続けて並べず 1 行にまとめ、warn はそれぞれ 1 行、失敗（fail）は最後に 1 つだけ', () => {
   const n = (x: Partial<RunNotice> & Pick<RunNotice, 'kind'>): RunNotice => ({ runId: 'r', ...x }) as RunNotice;
   const rows = noticeRows([

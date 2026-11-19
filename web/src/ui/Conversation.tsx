@@ -39,7 +39,7 @@ export interface ConversationProps {
   revision: number;
   disconnected: boolean;
   onReconnect: () => void;
-  onClearNotices: (id: string) => void;
+  onClearNotices: (id: string, runId?: string) => void;
   onInterrupt: (id: string, on: boolean) => void;
   panes?: PanesToggle | undefined;
   waits?: Record<string, WaitReason> | undefined;
@@ -63,7 +63,6 @@ export function noticeText(t: T, n: RunNotice): string {
     case 'switch': return t('ui.notice.switched', n.to);
     case 'warning': return warningText({ code: n.code, message: n.message, ...(n.params ? { params: n.params as Record<string, string | number> } : {}) }, getExplainLanguage());
     case 'compaction': return t('ui.notice.compacted', n.summarized);
-    case 'denied': return n.detail ? `${t('ui.notice.denied', n.tool)} · ${n.detail}` : t('ui.notice.denied', n.tool);
     case 'memory': return t(MEMORY_KEY[n.action], short(n.content));
     case 'stopped': return t('ui.notice.stopped');
     case 'interrupted': return t('ui.notice.interrupted');
@@ -420,7 +419,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         rename: api.renameConversation, cancelPending: api.cancelPending,
         send: (to, body, files, interrupt) => api.send(to, body, files, sendChoiceOf(id, choice, undefined, product !== undefined), sendOptions(id, product?.id, interrupt)),
         isGone: error => error instanceof ApiError && error.status === 404,
-        clearNotices: onClearNotices, interrupt: onInterrupt,
+        interrupt: onInterrupt,
       });
       switch (out.kind) {
         case 'ignored':
@@ -495,9 +494,12 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     }
   };
 
+  const lastError = notices.filter((n): n is Extract<RunNotice, { kind: 'error' }> => n.kind === 'error').at(-1);
+  const newestError = lastError && !draft && messages.every(m => lastError.after === undefined || m.id <= lastError.after || m.role === 'user') ? lastError : undefined;
+
   const retry = async () => {
     if (!id) return;
-    onClearNotices(id);
+    if (newestError) onClearNotices(id, newestError.runId);
     setFailure(null);
     try { await api.retry(id); } catch (error) { await fail(error, { label: t('ui.fail.retry'), run: () => void retry() }); }
   };
@@ -512,10 +514,11 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
 
   function runFailure(n: Extract<RunNotice, { kind: 'error' }>): ReactNode {
     const text = noticeText(t, n);
-    const retryAction = canRetry ? { label: t('ui.fail.retry'), run: () => void retry() } : null;
+    const live = n === newestError;
+    const retryAction = live && canRetry ? { label: t('ui.fail.retry'), run: () => void retry() } : null;
     switch (n.errorKind) {
-      case 'context_overflow': return failNotice(t('ui.fail.context'), text, useAlternative(() => void retry()) ?? openSettings);
-      case 'auth': return failNotice(t('ui.fail.unreachable'), text, openSettings);
+      case 'context_overflow': return failNotice(t('ui.fail.context'), text, live ? useAlternative(() => void retry()) ?? openSettings : null);
+      case 'auth': return failNotice(t('ui.fail.unreachable'), text, live ? openSettings : null);
       case 'timeout': case 'rate_limit': case 'provider_error': return failNotice(t('ui.fail.unreachable'), text, retryAction);
       default: return failNotice(t('ui.fail.reply'), text, retryAction);
     }
