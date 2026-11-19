@@ -15,7 +15,7 @@ import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts'
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
-import { broadPush, mainWrites, namesMain, worktreeGitRefusal, WT_MAIN_PATH, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
+import { broadPush, gitWithOutsidePath, linkOutOfCopy, mainWrites, namesMain, worktreeGitRefusal, WT_GIT_SHARED, WT_MAIN_PATH, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
 import { installTouchOf, protectedTouchOf } from '../hooks/protected-touch.ts';
 import { selfTarget } from '../hooks/self-port.ts';
@@ -160,6 +160,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const self = verdict.decision === 'deny' ? undefined : selfTarget(input.command, ctx.config.server);
   if (self !== undefined) return { decision: 'deny', reasons: [guardText(language, 'guard.self_port', { target: self })], reasonKeys: ['guard.self_port'] };
   const place = ctx.place && ctx.project?.root ? { worktree: ctx.project.root, productRoot: ctx.place.productRoot, cwd: cwd.cwd } : undefined;
+  // 作業コピーのタスクは、本体のフォルダ（作業コピーの外）を作業フォルダにして動かさない（files.ts の checkFilePath のシェル版）
+  if (place && mainWrites([cwd.cwd], place).length) return { decision: 'deny', reasons: [guardText(language, WT_MAIN_PATH, { path: cwd.cwd })], reasonKeys: [WT_MAIN_PATH] };
   if (place && verdict.decision !== 'deny') {
     const wtGit = gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: place.worktree }) : undefined;
     const once = <T>(fn: () => T): (() => T) => { let done = false; let value: T; return () => { if (!done) { value = fn(); done = true; } return value; }; };
@@ -169,6 +171,12 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
       sharedConfig: once(() => wtGit?.(place.worktree, ['config', '--list'])),
     });
     if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.cmd })], reasonKeys: [refused.key] };
+    // git の文があるコマンドで、見張りが作業コピーの外（または決められない場所）を指すパスを見つけたら、git ごと断る（字句の読み違いの受け止め）
+    const outside = gitWithOutsidePath(verdict.statements, verdict.paths, place);
+    if (outside !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_GIT_SHARED, { cmd: outside })], reasonKeys: [WT_GIT_SHARED] };
+    // 書く場所が決められない（変数で組んだパス）・先の決まらないリンクは、本体かもしれないので断る
+    const unknownWrite = verdict.paths.find(p => p.write && !p.path)?.input ?? (verdict.reasonKeys.includes('list.write_dynamic') ? input.command.slice(0, 200) : linkOutOfCopy(verdict.statements, place));
+    if (unknownWrite !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: unknownWrite })], reasonKeys: [WT_WRITE_MAIN] };
     const main = mainWrites([...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], place);
     if (main.length) return { decision: 'deny', reasons: [guardText(language, WT_WRITE_MAIN, { path: main[0]! })], reasonKeys: [WT_WRITE_MAIN] };
     const named = namesMain(input.command, verdict.statements, place);

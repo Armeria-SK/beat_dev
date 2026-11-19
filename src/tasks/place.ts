@@ -54,8 +54,14 @@ export class TaskPlaces {
 
   #onMain(task: Task): boolean {
     const row = this.rowOf(task.id);
-    if (row) return row.state === 'branch' && row.task_id === task.id;
-    return this.#ancestorRow(task) === undefined;
+    if (row && !this.#closedBefore(row, task)) return row.state === 'branch' && row.task_id === task.id;
+    const inherited = this.#ancestorRow(task);
+    return inherited === undefined || this.#closedBefore(inherited, task);
+  }
+
+  // 生んだタスクの行が、このタスクができる前にもう閉じて（branch）いた。生んだタスクはそのとき本体で動いていた（開き直せなかった）ので、子も引き継がない
+  #closedBefore(row: WorktreeRow, task: Task): boolean {
+    return row.task_id !== task.id && row.state === 'branch' && row.updated_at < task.created_at;
   }
 
   // 生んだタスク（spawned_by をたどる。自分は含めない）の作業コピーのうち、このタスクができたときに開いていた行。
@@ -123,7 +129,7 @@ export class TaskPlaces {
     if (row?.state === 'creating') return { kind: 'wait' };
     // 生んだタスクの作業コピーを引き継ぐ子は、その作業コピーが閉じた（branch・片づいた）なら本体へ移らない
     const inherited = row && row.task_id !== task.id ? row : this.#ancestorRow(task);
-    if (inherited) return { kind: 'gone', row: inherited };
+    if (inherited && !this.#closedBefore(inherited, task)) return { kind: 'gone', row: inherited };
     if (row?.state === 'branch' && row.task_id === task.id) {
       const back = await this.#d.worktrees.reactivate(row.id);
       if (back.ok) return { kind: 'worktree', row: back.row };

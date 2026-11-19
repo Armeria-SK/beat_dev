@@ -37,7 +37,8 @@ import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
 import { decidedDuring, openPendingIds } from './pending-wake.ts';
 import type { TaskPlaces } from './place.ts';
-import type { Worktrees } from '../projects/worktree.ts';
+import { mainGitChanges, mainGitPrint, type MainGitPrint, type Worktrees } from '../projects/worktree.ts';
+import type { BackgroundJobs } from '../tools/shell/background.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
 const mayBranch = (c: AppConfig): boolean => c.worker.worktrees !== false && c.worker.maxParallel >= 2;
@@ -78,6 +79,7 @@ export interface WorkerDeps {
   onScoutChange?: ((projectId: string) => void) | undefined;
   places?: TaskPlaces | undefined;
   worktrees?: Pick<Worktrees, 'finishWorktree' | 'removeWorktree'> | undefined;
+  background?: Pick<BackgroundJobs, 'stopWhere'> | undefined;
 }
 
 export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
@@ -927,6 +929,8 @@ export class Worker {
       tasks.event(task.id, SNAPSHOT_EVENT, 'beat', snapshotLine(await snapshotBeforeBuild(project.root, task.id, dataDir, c.tools.deny.map(p => resolveConfigPath(p, dataDir)))));
       if (tasks.get(task.id)?.status !== 'running') return 'idle';
     }
+    const mainRoot = placed?.kind === 'worktree' ? this.#d.projects?.get(task.project_id!)?.root : undefined;
+    const mainBefore = mainRoot ? await mainGitPrint(mainRoot, dirname(this.#d.projects!.dir)) : undefined;
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language, workAgreement(this.#d.db, task, language));
     const started = engine.runTask(task, conversationId, prompt, placed ? { place: placed.kind === 'worktree' ? placed.row.id : null } : {});
     if (!started.ok) {
@@ -940,10 +944,22 @@ export class Worker {
     try {
       const result = await started.done;
       this.#finalize(task, result, started.control.value, started.runId);
+      if (mainRoot && mainBefore) await this.#mainChanged(task, mainRoot, mainBefore);
       // 生んだタスクから引き継いだ作業コピーは閉じない（ほかの子と生んだタスクがまだ使う）
       if (placed?.kind === 'worktree' && placed.row.task_id === task.id) await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
     return 'ran';
+  }
+
+  // 作業コピーで動いた実行の前後で、本体の git（HEAD・ブランチ・参照・stash・共有の設定）が変わっていたら、タスクの経過と知らせで持ち主に伝える（止めも戻しもしない）
+  async #mainChanged(task: Task, root: string, before: MainGitPrint): Promise<void> {
+    const after = await mainGitPrint(root, dirname(this.#d.projects!.dir));
+    const changed = after ? mainGitChanges(before, after) : ['unreadable'];
+    if (changed.length === 0) return;
+    const language = this.#language();
+    const parts = changed.join(', ');
+    this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.main_changed', { parts }));
+    this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.main_changed', { title: task.title, parts }), link: `#/p/${task.project_id}`, dedupKey: `main-changed:${task.id}`, projectId: task.project_id });
   }
 
   // 動いていないあいだに終わった（取り消し・失敗）作業コピーのタスクの行を閉じる（active のまま残さない。開いた数にも数えない）
@@ -976,6 +992,8 @@ export class Worker {
     if (!wt || (status !== 'done' && status !== 'failed' && status !== 'cancelled')) return;
     const language = this.#language();
     try {
+      // 裏で動いているコマンドを先に止める（止める前にコミットすると、そのあとの書き込みが作業コピーに残る）
+      await this.#d.background?.stopWhere({ taskId: task.id });
       const done = await wt.finishWorktree(rowId, { commitLeftovers: true, message: `beat: ${task.title.replace(/[\r\n]+/gu, ' ').slice(0, 200)}` });
       if (done.ok && done.held?.length) this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.worktree_held', { names: done.held.slice(0, 10).join(', ') }));
       if (done.ok && !done.changed) {

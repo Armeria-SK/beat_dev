@@ -22,7 +22,7 @@ export type ProductRunResult = { run: ProductRun } | { secret: string } | { secr
 
 const RUN_KINDS = new Set(['code', 'git_write']);
 const AWS_KEY = /(?:^|[^A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/u;
-export const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
+const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
 const MESSAGE_FLAGS = new Set(['-m', '--message']);
 
 const inside = (root: string, path: string): boolean => isInside(root, path) && isInside(realish(root), realish(path));

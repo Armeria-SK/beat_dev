@@ -7,7 +7,6 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from '../config/schema.ts';
 import { GIT_TIMEOUT_MS, withGit } from '../mesh/folders.ts';
 import type { AppPaths } from '../paths.ts';
-import { COMMIT_SECRET } from '../tools/hooks/product-run.ts';
 import { isInside, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
 import { folderMissing, type ProjectStore } from './store.ts';
 
@@ -15,6 +14,25 @@ export type WorktreeKind = 'task' | 'fix';
 export type WorktreeState = 'creating' | 'active' | 'branch' | 'merged' | 'discarded' | 'removing' | 'gone';
 export type WorktreeEnding = 'branch' | 'merged' | 'discarded' | 'gone';
 export type WorktreeNote = 'not_on_branch' | 'in_progress' | 'missing';
+
+// 本体の git の状態（作業コピーのタスクの実行の前後で比べる。変われば持ち主に知らせるだけで、止めも戻しもしない）。
+// beat の作業ブランチ（refs/heads/beat/）・beat の控え（refs/beat/）・取ってきた宛先の参照（refs/remotes/）は、並べたタスクと fetch で正しく変わるので入れない
+export interface MainGitPrint { head: string; branch: string; refs: string; stash: string; config: string }
+export async function mainGitPrint(root: string, dataDir: string): Promise<MainGitPrint | undefined> {
+  const print = await withGit(root, dataDir, async git => {
+    const text = async (args: string[]): Promise<string> => (await git(args))?.toString('utf8').trim() ?? '';
+    const refs = (await text(['for-each-ref', '--format=%(refname) %(objectname)'])).split('\n')
+      .filter(line => line && !/^refs\/(?:heads\/beat\/|beat\/|remotes\/)/u.test(line)).join('\n');
+    return { head: await text(['rev-parse', '-q', '--verify', 'HEAD']), branch: await text(['symbolic-ref', '-q', 'HEAD']), refs, stash: await text(['reflog', 'show', '--format=%H', 'refs/stash', '--']) };
+  });
+  if (!print) return undefined;
+  let config = '';
+  try { config = createHash('sha256').update(readFileSync(join(root, '.git', 'config'))).digest('hex'); } catch { config = 'unreadable'; }
+  return { ...print, config };
+}
+
+export const mainGitChanges = (before: MainGitPrint, after: MainGitPrint): Array<keyof MainGitPrint> =>
+  (['branch', 'head', 'refs', 'stash', 'config'] as const).filter(key => before[key] !== after[key]);
 
 export interface WorktreeRow {
   id: string;
@@ -48,6 +66,8 @@ const WORKTREE_ID = /^[0-9a-f]{8}$/u;
 const STALE_CREATING_MS = 10 * 60 * 1000;
 const MAX_ADMIN_FILE = 4096;
 const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'BISECT_LOG'];
+// 仕上げのコミットに入れない新しいファイルの名前（.env* と *.env・鍵・credentials.json・secrets.*。名前に secret を含むだけのソースは入れる）
+const HELD_NAME = /(?:^|\/)(?:\.env[^/]*|[^/]+\.env|[^/]+\.(?:pem|key)|credentials\.json|secrets\.[^/]+)$/iu;
 const NO_MAINTENANCE = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
 const WINDOWS = process.platform === 'win32';
 const fold = (p: string): string => (WINDOWS ? p.toLowerCase() : p);
@@ -412,7 +432,7 @@ export class Worktrees {
         if (await git(['add', '-A']) === null) return failed();
         const added = await git(['diff', '--cached', '--name-only', '--diff-filter=A', '-z']);
         if (added === null) return failed();
-        held = added.split('\0').filter(name => name !== '' && (isSecretPath(name) || COMMIT_SECRET.test(name)));
+        held = added.split('\0').filter(name => name !== '' && (isSecretPath(name) || HELD_NAME.test(name)));
         for (let i = 0; i < held.length; i += 100) {
           if (await git(['--literal-pathspecs', 'rm', '--cached', '-q', '--', ...held.slice(i, i + 100)]) === null) return failed();
         }
@@ -521,6 +541,24 @@ export class Worktrees {
     });
   }
 
+  // 作りかけの行の作業コピーが、checkout の途中で止まった形か: 行のブランチの上で先端が作ったときのまま、途中の操作が無く、違いは追うファイルが欠けていることだけ
+  async #halfCheckedOut(row: WorktreeRow): Promise<boolean> {
+    if (!row.path || lstatOf(row.path) === undefined) return false;
+    const repo = this.#repoHere(row);
+    const mainGit = repo ? realOrNull(join(repo, '.git')) : null;
+    const admin = mainGit ? adminFor(mainGit, row.path) : null;
+    if (!admin || IN_PROGRESS.some(name => lstatOf(join(admin, name)) !== undefined)) return false;
+    return (await withGit(row.path, this.#d.paths.data, async raw => {
+      const git = timed(raw, { timedOut: false });
+      if ((await git(['symbolic-ref', '-q', 'HEAD']))?.trim() !== `refs/heads/${row.branch}`) return false;
+      if ((await git(['rev-parse', '-q', '--verify', 'HEAD']))?.trim() !== (row.own_tip ?? row.base)) return false;
+      const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+      if (status === null) return false;
+      const entries = status.split('\0').filter(Boolean);
+      return entries.length > 0 && entries.every(entry => /^(?: D|D |DD) /u.test(entry));
+    })) === true;
+  }
+
   // 消すブランチの名前が、大文字小文字まで同じ 1 つの ref だけに当たり、その先端が tip か（Windows では大文字小文字だけ違う持ち主のブランチまで消えるので）
   async #onlyBranch(repo: string, branch: string, tip: string): Promise<boolean> {
     return (await withGit(repo, this.#d.paths.data, async git => {
@@ -612,7 +650,8 @@ export class Worktrees {
     let left = 0;
     for (const row of rows) {
       const result = row.state === 'creating'
-        ? await this.removeWorktree(row.id, { keepBranch: false, state: 'gone' })
+        // checkout の途中で止まった作業コピー（追うファイルが欠けているだけ）は、書きかけとして残さず消す。持ち主の書きかけは残す
+        ? await this.removeWorktree(row.id, { keepBranch: false, state: 'gone', discardLocal: await this.#halfCheckedOut(row) })
         : await this.removeWorktree(row.id, { keepBranch: row.keep_branch === 1 });
       if (result.ok) removed++;
       else left++;

@@ -3,7 +3,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { PUSH_FLAGS, READ as READ_SPECS, WRITE_FLAGS } from './allowlist-git.ts';
 import type { StatementFacts } from './shell-facts.ts';
-import { isInside, realish } from './scope.ts';
+import { expandPath, isInside, realish } from './scope.ts';
 
 export const WT_GIT_SHARED = 'wt.git_shared';
 export const WT_WRITE_MAIN = 'wt.write_main';
@@ -122,13 +122,56 @@ const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flat
 
 const shownOf = (st: StatementFacts): string => st.words.map(w => w.text).join(' ').slice(0, 200);
 
+// PowerShell のプロバイダの頭（FileSystem::・Microsoft.PowerShell.Core\FileSystem::）を外す
+export const stripProvider = (p: string): string => p.replace(/^.*?FileSystem::/iu, '');
+
+// シェルと同じに ~・$HOME・$PWD などを広げて解く。広げられなければ undefined
+const expandedPath = (text: string, base: string): string | undefined => {
+  const e = expandPath(stripProvider(text), base);
+  return 'path' in e ? e.path : undefined;
+};
+
+// git を別の名前で呼ぶもの（git-lfs・git-receive-pack・libexec の git-*・scalar）。名前は小文字・.exe なし
+const GIT_LIKE = /^(?:git-.+|scalar)$/u;
+export const isGitProgram = (program: string): boolean => program === 'git' || GIT_LIKE.test(program);
+// 中の命令を shell-facts が読めない起動役（code-guard の LAUNCHERS も）
+const LAUNCHERS = new Set(['conhost', 'wt', 'wmic', 'invoke-cimmethod', 'icim', 'invoke-wmimethod', 'iwmi', 'script', 'flock', 'forfiles',
+  'rundll32', 'regsvr32', 'installutil', 'regasm', 'regsvcs', 'cmstp', 'msiexec', 'bitsadmin', 'schtasks', 'runas']);
+// 中の命令を別の作業フォルダで動かすオプション（値が作業コピーの中と決まらなければ断る）。find の -execdir は見つけたファイルごとのフォルダ
+const PARAM_PREFIX = (name: string, full: string): boolean => name.length >= 3 && full.startsWith(name);
+function launchDirs(st: StatementFacts): { words: Array<{ text: string; dynamic: boolean } | undefined>; always?: boolean } {
+  const p = st.program.toLowerCase();
+  const ws = st.words;
+  const valueOf = (match: (t: string) => boolean): Array<{ text: string; dynamic: boolean } | undefined> => {
+    const out: Array<{ text: string; dynamic: boolean } | undefined> = [];
+    ws.forEach((w, i) => {
+      if (i === 0 || w.dynamic) return;
+      const eq = /^(-{1,2}[A-Za-z-]+)[=:](.+)$/u.exec(w.text);
+      if (eq && match(eq[1]!)) out.push({ text: eq[2]!, dynamic: w.dynamic });
+      else if (match(w.text)) out.push(ws[i + 1]);
+    });
+    return out;
+  };
+  if (p === 'find') return { words: [], always: ws.some(w => /^-(?:execdir|okdir)$/u.test(w.text)) };
+  if (p === 'env') return { words: valueOf(t => t === '-C' || t === '--chdir') };
+  if (p === 'wsl') return { words: [], always: ws.some(w => w.text === '--cd' || w.text.startsWith('--cd=')) };
+  if (p === 'start-process' || p === 'saps' || p === 'start') return { words: valueOf(t => /^-[A-Za-z]+$/u.test(t) && PARAM_PREFIX(t.slice(1).toLowerCase(), 'workingdirectory')) };
+  if (p === 'powershell' || p === 'pwsh') return { words: valueOf(t => /^[-/][A-Za-z]+$/u.test(t) && (t.slice(1).toLowerCase() === 'wd' || PARAM_PREFIX(t.slice(1).toLowerCase(), 'workingdirectory'))) };
+  if (p === 'npm' || p === 'pnpm' || p === 'yarn' || p === 'npx' || p === 'make') return { words: valueOf(t => ['--prefix', '-C', '--dir', '--cwd', '--directory'].includes(t)) };
+  return { words: [] };
+}
+
 // 断る文（作業コピーのタスク）と、その理由の鍵。通すなら undefined
 export function worktreeGitRefusal(statements: readonly StatementFacts[], place: WorktreeGitPlace): WorktreeRefusal | undefined {
   const all = flatten(statements);
-  // 動かすプログラムが変数・式から決まる文と、ほかの文を読み込む・評価する文は、git かもしれないので断る（中を読めない）
-  const opaque = all.find(st => st.programDynamic || st.programOdd || EVALUATES.has(st.program.toLowerCase()));
+  // 動かすプログラムが変数・式から決まる文、ほかの文を読み込む・評価する文、中の命令を読めない起動役（コードが変数の -c・-Command・--eval も）、
+  // 中の命令を作業コピーの外かもしれないフォルダで動かす文は、git かもしれないので断る（中を読めない）
+  const opaque = all.find(st => st.programDynamic || st.programOdd || EVALUATES.has(st.program.toLowerCase())
+    || LAUNCHERS.has(st.program.toLowerCase()) || st.reasonKeys.includes('code.launcher')
+    || (st.inner === null && st.unknownInner === undefined) || st.codeDynamic
+    || (() => { const d = launchDirs(st); return d.always === true || d.words.some(w => !w || w.dynamic || !insideDir(place, w.text, st)); })());
   if (opaque) return { key: WT_OPAQUE, cmd: shownOf(opaque) || opaque.program };
-  const gits = all.filter(st => st.program === 'git');
+  const gits = all.filter(st => isGitProgram(st.program));
   if (gits.length === 0) return undefined;
   const command = place.command ?? '';
   const envSetter = all.find(st => (ENV_SETTERS.has(st.program.toLowerCase()) && st.words.slice(1).some(w => w.dynamic || /(?:^|[^A-Za-z0-9_])env:/iu.test(w.text)))
@@ -146,8 +189,16 @@ export function worktreeGitRefusal(statements: readonly StatementFacts[], place:
   return undefined;
 }
 
+// 文のフォルダから広げて解いたパスが作業コピーの中か
+const insideDir = (place: Pick<WorktreeGitPlace, 'worktree' | 'cwd'>, text: string, st: StatementFacts): boolean => {
+  const path = expandedPath(text, st.cwd ?? place.cwd);
+  return st.cwd !== null && path !== undefined && insideCopy(place.worktree, path);
+};
+
 function gitRefusal(st: StatementFacts, place: WorktreeGitPlace): string | undefined {
   const shown = shownOf(st);
+  // git-lfs・scalar などは、何を書くか数え上げていない
+  if (st.program !== 'git') return shown;
   if (st.cwd === null) return shown;
   const cwds = [...new Set([...(st.cwds ?? []), st.cwd])];
   if (cwds.some(dir => !insideCopy(place.worktree, dir))) return shown;
@@ -161,7 +212,7 @@ function gitRefusal(st: StatementFacts, place: WorktreeGitPlace): string | undef
     if (w.text === '-C') {
       const dir = globals[i + 1];
       if (!dir || dir.dynamic) return shown;
-      if (!insideCopy(place.worktree, isAbsolute(dir.text) ? resolve(dir.text) : resolve(st.cwd, dir.text))) return shown;
+      if (!insideDir(place, dir.text, st)) return shown;
       i++;
       continue;
     }
@@ -255,11 +306,38 @@ function refusedOther(sub: string, texts: readonly string[], place: WorktreeGitP
 // 本体（productRoot）の中へ書く・消すパス。書いたパスと実体のパスの両方で見る（作業コピーの中のジャンクション・8.3 の短い名前）
 export function mainWrites(paths: readonly string[], place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree'>): string[] {
   const realMain = realish(place.productRoot);
-  return paths.filter(p => {
+  return paths.map(stripProvider).filter(p => {
     const real = realish(p);
     const inMain = isInside(place.productRoot, p) || isInside(realMain, real);
     return inMain && !(isInside(place.worktree, p) && isInside(realish(place.worktree), real) && !isInside(realMain, real));
   });
+}
+
+// git（git-lfs なども）の文があるコマンドで、見張りが見つけたパスのうち作業コピーの外か、決められないもの
+export function gitWithOutsidePath(statements: readonly StatementFacts[], paths: ReadonlyArray<{ input: string; path?: string | undefined }>, place: Pick<WorktreeGitPlace, 'worktree'>): string | undefined {
+  if (!flatten(statements).some(st => isGitProgram(st.program))) return undefined;
+  return paths.find(p => !p.path || !insideCopy(place.worktree, stripProvider(p.path)))?.input;
+}
+
+// リンク・ジャンクションを作る文のうち、先が作業コピーの中と決まらないもの（先が変数・本体・外）。作ったリンクを通して本体へ書けるので断る
+export function linkOutOfCopy(statements: readonly StatementFacts[], place: Pick<WorktreeGitPlace, 'worktree' | 'cwd'>): string | undefined {
+  for (const st of flatten(statements)) {
+    const p = st.program.toLowerCase();
+    const ws = st.words.slice(1);
+    let targets: Array<{ text: string; dynamic: boolean } | undefined> = [];
+    if (p === 'new-item' || p === 'ni') {
+      if (!ws.some(w => w.dynamic || /symbolic|junction|hardlink/iu.test(w.text))) continue;
+      ws.forEach((w, i) => { if (/^-(?:t|ta|tar|targ|targe|target|value|va|val|valu)$/iu.test(w.text)) targets.push(ws[i + 1]); else { const m = /^-(?:target|value):(.+)$/iu.exec(w.text); if (m) targets.push({ text: m[1]!, dynamic: w.dynamic }); } });
+      if (targets.length === 0) targets = [undefined];
+    } else if (p === 'mklink') {
+      targets = [ws.filter(w => !/^\/[a-z]$/iu.test(w.text)).at(-1)];
+    } else if (p === 'ln') {
+      // ハードリンクも中身を分け合うので、-s の有無によらず見る
+      targets = [ws.find(w => w.dynamic || !w.text.startsWith('-'))];
+    } else continue;
+    if (targets.some(w => !w || w.dynamic || !insideDir(place, w.text, st))) return shownOf(st);
+  }
+  return undefined;
 }
 
 // コマンドに書かれたパスらしい字句（相対・引用の中・key=value の右も）を文のフォルダから解き、本体の中を指すものがあれば返す。
@@ -273,15 +351,18 @@ export function namesMain(command: string, statements: readonly StatementFacts[]
     for (const raw of text.split(/[\s"'`;|&()<>,={}[\]]+/u)) {
       if (!raw || /^[a-z][a-z0-9+.-]*:\/\//iu.test(raw) || /^[^/\\:]+@[^/\\:]+:/u.test(raw)) continue;
       for (const t of [raw, raw.replace(/^-[A-Za-z]/u, '')]) {
-        if (/[/\\]/u.test(t) || /^\.\.?$/u.test(t) || /^[A-Za-z]:/u.test(t)) tokens.add(t);
+        if (/[/\\]/u.test(t) || /^\.\.?$/u.test(t) || /^[A-Za-z]:/u.test(t) || /^~$|^\$(?:HOME|PWD|env:USERPROFILE)$/iu.test(t)) tokens.add(t);
       }
     }
   }
-  for (const t of tokens) {
+  for (const raw of tokens) {
+    const t = stripProvider(raw);
     // Git Bash の /d/... は D:/... のこと
     const msys = process.platform === 'win32' ? /^\/([A-Za-z])(\/.*)?$/u.exec(t) : null;
     const absolute = isAbsolute(t) || /^[A-Za-z]:/u.test(t);
-    const candidates = [...(absolute ? [resolve(t)] : bases.map(base => resolve(base, t))), ...(msys ? [resolve(`${msys[1]}:${msys[2] ?? '/'}`)] : [])];
+    // ~・$HOME・$PWD はシェルと同じに広げる（広げられない字句は書いたまま解く）
+    const candidates = [...(absolute ? [resolve(t)] : bases.flatMap(base => [resolve(base, t), ...(/[~$%]/u.test(t) ? [expandedPath(t, base)].filter((p): p is string => p !== undefined) : [])])),
+      ...(msys ? [resolve(`${msys[1]}:${msys[2] ?? '/'}`)] : [])];
     for (const p of candidates) {
       if (mainWrites([p], place).length) return p;
     }

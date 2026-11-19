@@ -288,7 +288,7 @@ export class App {
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, memoryFiles: this.memoryFiles, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
-      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees,
+      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
     this.tasks.onChange = task => {

@@ -22,7 +22,7 @@ import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { fileWrite } from '../src/tools/builtin/files.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
 import type { StatementFacts } from '../src/tools/hooks/shell-facts.ts';
-import { mainWrites, worktreeGitRefusal } from '../src/tools/hooks/worktree-git.ts';
+import { linkOutOfCopy, mainWrites, worktreeGitRefusal } from '../src/tools/hooks/worktree-git.ts';
 import { maskedTaskView } from '../src/web/task-view.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
@@ -587,15 +587,15 @@ test('8-2 見直し MEDIUM: 生んだタスクの作業コピーが閉じた（b
   assert.equal((await r.places.decide(child!)).kind, 'gone', '片づいたあとも本体へ移らない');
 });
 
-test('8-2 見直し LOW: 仕上げのコミットに credentials.json・prod.env・名前に secret を含むファイルも入れない', { skip: !gitAvailable }, async t => {
+test('8-2 見直し LOW: 仕上げのコミットに credentials.json・*.env・.env.*・鍵・secrets.* は入れない。名前に secret を含むだけのソースは入れる', { skip: !gitAvailable }, async t => {
   const r = await wtRig(t);
-  for (const name of ['credentials.json', 'prod.env', 'my-secret.txt', '[x].env']) writeFileSync(join(r.wtPath, name), 'k\n');
+  for (const name of ['credentials.json', 'prod.env', '.env.local', 'server.key', 'secrets.yaml', '[x].env', 'my-secret.txt', 'secretary.ts']) writeFileSync(join(r.wtPath, name), 'k\n');
   writeFileSync(join(r.wtPath, 'work.txt'), 'done\n');
   const done = await r.worktrees.finishWorktree(r.wt.id, { commitLeftovers: true, message: 'x' });
   assert.ok(done.ok, JSON.stringify(done));
-  assert.deepEqual(done.ok && done.held?.sort(), ['[x].env', 'credentials.json', 'my-secret.txt', 'prod.env']);
+  assert.deepEqual(done.ok && done.held?.sort(), ['.env.local', '[x].env', 'credentials.json', 'prod.env', 'secrets.yaml', 'server.key']);
   const files = gitIn(r.product, 'ls-tree', '-r', '--name-only', r.wt.branch).split('\n');
-  assert.deepEqual(files.filter(f => !['a.txt', 'tracked.txt'].includes(f)), ['work.txt']);
+  assert.deepEqual(files.filter(f => !['a.txt', 'tracked.txt'].includes(f)).sort(), ['my-secret.txt', 'secretary.ts', 'work.txt']);
 });
 
 test('8-2 見直し LOW: 作業コピーの実行の git は自動の片づけをしない（gc.auto=0・maintenance.auto=false）', { skip: !gitAvailable }, async t => {
@@ -653,10 +653,30 @@ test('8-2 見直し MEDIUM: タスクの形に worktree（id・branch・base・s
 
 test('8-2 見直し HIGH 2: 作業フォルダを決められない（cd の先が変数など）git の文は断る', () => {
   const word = (text: string) => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' });
-  const st = (cwd: string | null) => ({ program: 'git', words: [word('git'), word('status')], env: [], gitGlobal: [], cwd, cwds: ['/w/copy'], inner: null }) as unknown as StatementFacts;
+  const st = (cwd: string | null) => ({ program: 'git', words: [word('git'), word('status')], env: [], gitGlobal: [], cwd, cwds: ['/w/copy'], reasonKeys: [], codeDynamic: false }) as unknown as StatementFacts;
   const place = { worktree: '/w/copy', productRoot: '/w/main', cwd: '/w/copy' };
   assert.equal(worktreeGitRefusal([st('/w/copy')], place), undefined);
   assert.deepEqual(worktreeGitRefusal([st(null)], place), { key: 'wt.git_shared', cmd: 'git status' });
+});
+
+test('8-2 深い見直し HIGH 1: git -C の ~ は家のフォルダとして解く（作業コピーの中の ~ という名前にしない）', () => {
+  const word = (text: string) => ({ text, dynamic: false, glob: false });
+  const copy = join(tempDir({ after: () => undefined }), 'copy');
+  const st = { program: 'git', programDynamic: false, programOdd: false, words: ['git', '-C', '~', 'status'].map(word), env: [], gitGlobal: ['-C', '~'], cwd: copy, cwds: [copy], reasonKeys: [], codeDynamic: false } as unknown as StatementFacts;
+  assert.deepEqual(worktreeGitRefusal([st], { worktree: copy, productRoot: join(copy, '..', 'main'), cwd: copy }), { key: 'wt.git_shared', cmd: 'git -C ~ status' });
+  const here = { ...st, words: ['git', '-C', '.', 'status'].map(word), gitGlobal: ['-C', '.'] } as unknown as StatementFacts;
+  assert.equal(worktreeGitRefusal([here], { worktree: copy, productRoot: join(copy, '..', 'main'), cwd: copy }), undefined);
+});
+
+test('8-2 深い見直し MEDIUM 3: リンクの先が作業コピーの外（本体でなくても）なら linkOutOfCopy が見つける', () => {
+  const word = (text: string, dynamic = false) => ({ text, dynamic, glob: false });
+  const copy = join(tempDir({ after: () => undefined }), 'copy');
+  const fact = (program: string, words: Array<{ text: string; dynamic: boolean; glob: boolean }>) => ({ program, words, cwd: copy, cwds: [copy] }) as unknown as StatementFacts;
+  const place = { worktree: copy, cwd: copy };
+  assert.equal(linkOutOfCopy([fact('ln', [word('ln'), word('-s'), word('../..'), word('up')])], place), 'ln -s ../.. up');
+  assert.equal(linkOutOfCopy([fact('new-item', [word('New-Item'), word('-ItemType'), word('Junction'), word('-Path'), word('j'), word('-Target'), word('$d', true)])], place), 'New-Item -ItemType Junction -Path j -Target $d');
+  assert.equal(linkOutOfCopy([fact('mklink', [word('mklink'), word('/J'), word('j'), word('..')])], place), 'mklink /J j ..');
+  assert.equal(linkOutOfCopy([fact('ln', [word('ln'), word('-s'), word('sub/a'), word('b')])], place), undefined);
 });
 
 // 2026-11-19 の再見直しの試験
@@ -772,4 +792,184 @@ test('8-2 再見直し LOW: 仕上げのコミットで [a].env を外しても�
   assert.ok(files.includes('a.env'), files.join(','));
   assert.ok(files.includes('work.txt'));
   assert.ok(!files.includes('[a].env'));
+});
+
+// 2026-11-19 の深い見直し（reviewer-deep）の試験
+
+const bashCtx = (c: ToolContext): ToolContext => ({ ...c, config: { ...c.config, tools: { ...c.config.tools, shell: { ...c.config.tools.shell, shell: 'bash' } } } }) as ToolContext;
+const bashAvailable = spawnSync('bash', ['--version']).status === 0;
+
+async function refusedAs(r: Awaited<ReturnType<typeof wtRig>>, command: string, key: string, c: ToolContext = r.ctx): Promise<void> {
+  const check = await shellPreCheck({ command }, c);
+  assert.equal(check.decision, 'deny', `${command}: ${check.reasons.join(' / ')}`);
+  assert.deepEqual(check.reasonKeys, [key], `${command}: ${check.reasons.join(' / ')}`);
+}
+
+test('8-2 深い見直し HIGH 1: -C の ~ をシェルと同じに広げ、別のフォルダで動かす起動（-WorkingDirectory・-execdir・env -C）と、外のパスを持つ git は断る', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  await refusedAs(r, 'git -C ~ status', 'wt.git_shared');
+  if (WINDOWS) {
+    await refusedAs(r, "$d = Split-Path (Split-Path $PWD); Start-Process git -ArgumentList 'commit','-qam','x' -WorkingDirectory (Join-Path $d 'product') -Wait -NoNewWindow", 'wt.opaque');
+    await refusedAs(r, `Start-Process git -ArgumentList 'status' -WorkingDirectory '${r.product}' -Wait -NoNewWindow`, 'wt.opaque');
+  }
+  if (bashAvailable) {
+    const b = bashCtx(r.ctx);
+    await refusedAs(r, 'git -C ~ commit -qam fix', 'wt.git_shared', b);
+    for (const command of ['find . -name a.txt -execdir git reset --hard \\;', 'env -C .. git status']) {
+      const check = await shellPreCheck({ command }, b);
+      assert.equal(check.decision, 'deny', command);
+      if ((await shellPreCheck({ command }, bashCtx(r.mainCtx))).decision !== 'deny') assert.deepEqual(check.reasonKeys, ['wt.opaque'], `${command}: ${check.reasons.join(' / ')}`);
+    }
+  }
+  const out = await shellPreCheck({ command: `git log -1; ${WINDOWS ? 'Get-Content' : 'cat'} ../outside.txt` }, r.ctx);
+  assert.deepEqual(out.reasonKeys, ['wt.git_shared'], out.reasons.join(' / '));
+  assert.ok(!((await shellPreCheck({ command: 'git -C . status' }, r.ctx)).reasonKeys ?? []).some(k => k.startsWith('wt.')));
+});
+
+test('8-2 深い見直し HIGH 2: 別の名前の git（git-lfs・scalar・git-*）は断り、中を読めない起動役は wt.opaque', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  for (const command of ['git-lfs migrate import --everything --include="*.txt" --yes', 'scalar register', 'git-receive-pack .', '/mingw64/libexec/git-core/git-update-ref refs/heads/feature HEAD']) {
+    const check = await shellPreCheck({ command }, r.ctx);
+    assert.equal(check.decision, 'deny', command);
+    // PowerShell では、パスで呼ぶプログラムはその前に wt.opaque で断る
+    const keys = WINDOWS && command.startsWith('/') ? ['wt.git_shared', 'wt.opaque'] : ['wt.git_shared'];
+    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.ok(check.reasonKeys?.length === 1 && keys.includes(check.reasonKeys[0]!), `${command}: ${check.reasons.join(' / ')}`);
+  }
+  for (const command of ['conhost.exe git status', 'wmic process call create "git status"', 'script -qc "git status" /dev/null', 'flock x git status', 'forfiles /c "cmd /c git status"',
+    ...(WINDOWS ? ["Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='git status'}", "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'git status'"] : [])]) {
+    const check = await shellPreCheck({ command }, r.ctx);
+    assert.equal(check.decision, 'deny', command);
+    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.deepEqual(check.reasonKeys, ['wt.opaque'], `${command}: ${check.reasons.join(' / ')}`);
+  }
+});
+
+test('8-2 深い見直し MEDIUM 3: 書く場所が決まらない書き込み・FileSystem:: の本体・先の決まらないリンクは wt.write_main', { skip: !gitAvailable || !WINDOWS }, async t => {
+  const r = await wtRig(t);
+  await refusedAs(r, '$d = Split-Path (Split-Path $PWD); Set-Content "$d\\product\\tracked.txt" x', 'wt.write_main');
+  for (const prefix of ['FileSystem::', 'Microsoft.PowerShell.Core\\FileSystem::']) {
+    const command = `Set-Content -Path '${prefix}${join(r.product, 'a.txt')}' -Value x`;
+    const check = await shellPreCheck({ command }, r.ctx);
+    assert.equal(check.decision, 'deny', prefix);
+    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.ok(['wt.write_main', 'wt.main_path'].includes(check.reasonKeys?.[0] ?? ''), check.reasons.join(' / '));
+  }
+  await refusedAs(r, '$d = Split-Path $PWD; New-Item -ItemType Junction -Path j -Target $d', 'wt.write_main');
+  await refusedAs(r, `New-Item -ItemType Junction -Path j -Target '${r.product}'`, 'wt.write_main');
+  for (const command of ['cmd /c mklink /J up ..', 'New-Item -ItemType SymbolicLink -Path up -Target ..']) {
+    const check = await shellPreCheck({ command }, r.ctx);
+    assert.equal(check.decision, 'deny', command);
+    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.deepEqual(check.reasonKeys, ['wt.write_main'], `${command}: ${check.reasons.join(' / ')}`);
+  }
+  assert.ok(!((await shellPreCheck({ command: "New-Item -ItemType Junction -Path j -Target 'sub'" }, r.ctx)).reasonKeys ?? []).some(k => k.startsWith('wt.')));
+  assert.equal(readFileSync(join(r.product, 'a.txt'), 'utf8'), 'one\n');
+});
+
+test('8-2 深い見直し MEDIUM 4: シェルの作業フォルダに本体を指定すると、許可フォルダに入っていても wt.main_path', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t, { roots: 'base' });
+  for (const command of ['npm run fmt', WINDOWS ? 'Get-ChildItem' : 'ls']) {
+    const check = await shellPreCheck({ command, cwd: r.product }, r.ctx);
+    assert.equal(check.decision, 'deny', check.reasons.join(' / '));
+    assert.deepEqual(check.reasonKeys, ['wt.main_path'], check.reasons.join(' / '));
+  }
+  mkdirSync(join(r.wtPath, 'sub'));
+  assert.ok(!((await shellPreCheck({ command: 'git status', cwd: join(r.wtPath, 'sub') }, r.ctx)).reasonKeys ?? []).some(k => k.startsWith('wt.')));
+});
+
+test('8-2 深い見直し LOW 5・6: 中の命令が変数の起動役は wt.opaque、パスで呼ぶプログラムには「別々に呼ぶ」と言う', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  if (WINDOWS) {
+    const check = await shellPreCheck({ command: '.\\node_modules\\.bin\\tsc --noEmit; git status' }, r.ctx);
+    assert.deepEqual(check.reasonKeys, ['wt.opaque']);
+    assert.match(check.reasons.join(' '), /separate calls/u);
+    for (const command of ['powershell -Command $c', 'node --eval $c']) {
+      const c = await shellPreCheck({ command }, r.ctx);
+      assert.equal(c.decision, 'deny', command);
+      if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.deepEqual(c.reasonKeys, ['wt.opaque'], `${command}: ${c.reasons.join(' / ')}`);
+    }
+  }
+  if (bashAvailable) {
+    for (const command of ['bash -c "$c"', 'node --eval "$c"']) {
+      const c = await shellPreCheck({ command }, bashCtx(r.ctx));
+      assert.equal(c.decision, 'deny', command);
+      if ((await shellPreCheck({ command }, bashCtx(r.mainCtx))).decision !== 'deny') assert.deepEqual(c.reasonKeys, ['wt.opaque'], `${command}: ${c.reasons.join(' / ')}`);
+    }
+  }
+});
+
+test('8-2 深い見直し LOW 7: checkout の途中で止まった作りかけの行は、見回りが消す（持ち主の書きかけがあれば残す）', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  r.db.prepare("UPDATE worktrees SET state = 'creating', updated_at = 1 WHERE id = ?").run(r.wt.id);
+  rmSync(join(r.wtPath, 'tracked.txt'));
+  assert.deepEqual(await r.worktrees.sweepWorktrees(), { removed: 1, left: 0 });
+  assert.equal(existsSync(r.wtPath), false);
+  assert.equal(r.worktrees.get(r.wt.id)!.state, 'gone');
+});
+
+test('8-2 深い見直し LOW 8: 作業コピーを閉じる前に、そのタスクの裏のコマンドを止める', { skip: !gitAvailable }, async t => {
+  const s = await appRig(t);
+  const order: string[] = [];
+  const stopWhere = s.app.background.stopWhere.bind(s.app.background);
+  let stopping = 0;
+  s.app.background.stopWhere = async filter => {
+    stopping++;
+    try {
+      const n = await stopWhere(filter);
+      // 止めるのに時間がかかるコマンド
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      order.push(`stop:${'taskId' in filter ? filter.taskId : ''}`);
+      return n;
+    } finally { stopping--; }
+  };
+  const finish = s.app.worktrees.finishWorktree.bind(s.app.worktrees);
+  s.app.worktrees.finishWorktree = async (id, options) => { order.push(stopping ? 'finish-while-stopping' : 'finish'); return finish(id, options); };
+  const busy = await mainBusy(s);
+  const b = s.task('B');
+  s.adapter().scripts.push(toolCall('file_write', { path: 'b.txt', content: 'b\n' }), toolCall('task_complete', { summary: 'b', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const i = order.indexOf(`stop:${b.id}`);
+  assert.ok(i >= 0 && i < order.indexOf('finish'), order.join(','));
+  busy.gate.release();
+  await busy.first;
+});
+
+test('8-2 深い見直し LOW 10: 開き直せずに本体で動いた生んだタスクの子は、閉じた古い行を引き継がず本体で動く', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  writeFileSync(join(r.wtPath, 'work.txt'), 'done\n');
+  assert.ok((await r.worktrees.finishWorktree(r.wt.id, { commitLeftovers: true, message: 'x' })).ok);
+  writeFileSync(join(r.wtPath, 'owner.txt'), 'owner\n');
+  gitIn(r.wtPath, 'add', 'owner.txt');
+  gitIn(r.wtPath, 'commit', '-q', '-m', 'owner commit');
+  assert.equal((await r.places.decide(r.task)).kind, 'main', '開き直せないので本体');
+  await new Promise(resolve => setTimeout(resolve, 15));
+  const child = new TaskStore(r.db, Date.now).create({ title: 'child', origin: 'self', actor: 'beat', projectId: r.row.id, spawnedBy: r.task.id });
+  assert.equal((await r.places.decide(child)).kind, 'main');
+});
+
+test('8-2 深い見直し LOW 11: 宛先の名前があっても : の refspec の fetch は断り、.git の無い作業コピーの git は上の階のリポジトリを使わない', { skip: !gitAvailable }, async t => {
+  const r = await wtRig(t);
+  for (const command of ['git fetch origin main:feature', 'git fetch origin +main', 'git pull origin main:feature']) {
+    const check = await shellPreCheck({ command }, r.ctx);
+    assert.equal(check.decision, 'deny', command);
+    if ((await shellPreCheck({ command }, r.mainCtx)).decision !== 'deny') assert.deepEqual(check.reasonKeys, ['wt.git_shared'], `${command}: ${check.reasons.join(' / ')}`);
+  }
+  assert.ok(!((await shellPreCheck({ command: 'git fetch origin main' }, r.ctx)).reasonKeys ?? []).some(k => k.startsWith('wt.')));
+  gitIn(r.base, 'init', '-q');
+  rmSync(join(r.wtPath, '.git'));
+  const out = await r.call('shell_run', { command: 'git rev-parse --show-toplevel' });
+  assert.match(out.output.content, /not a git repository/iu, out.output.content);
+});
+
+test('8-2 持ち主の判断: 作業コピーの実行のあいだに本体の git（参照）が変わったら、タスクの経過と知らせで伝える。変わらなければ何も言わない', { skip: !gitAvailable }, async t => {
+  const s = await appRig(t);
+  const busy = await mainBusy(s);
+  const b = s.task('Sneaky');
+  s.adapter().scripts.push(toolCall('file_write', { path: 'b.txt', content: 'b\n' }, () => gitIn(s.root, 'branch', 'sneaky')), toolCall('task_complete', { summary: 'b', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const said = s.app.tasks.events(b.id).filter(e => e.kind === 'worktree' && /product folder's git state changed \(refs\)/u.test(e.content ?? ''));
+  assert.equal(said.length, 1, JSON.stringify(s.app.tasks.events(b.id).map(e => e.content)));
+  const c = s.task('Quiet');
+  s.adapter().scripts.push(toolCall('file_write', { path: 'c.txt', content: 'c\n' }), toolCall('task_complete', { summary: 'c', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.tasks.events(c.id).filter(e => /git state changed/u.test(e.content ?? '')).length, 0);
+  busy.gate.release();
+  await busy.first;
 });
