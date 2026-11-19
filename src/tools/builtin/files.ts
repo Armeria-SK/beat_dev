@@ -1,6 +1,7 @@
 import { lstatSync, mkdirSync, readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
+import { recordToolWrite } from '../../changes/record.ts';
 import { atomicWriteFile } from '../../config/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { appendDelta, lineDelta } from '../../shared/line-delta.ts';
@@ -113,7 +114,9 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const current = appending ? readFileSync(abs, 'utf8') : '';
     const next = appending ? current + input.content : input.content;
     const before = appending ? null : exists ? previousForDelta(abs) : '';
+    const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
+    recorded();
     if (!exists) ctx.noteCreated?.(abs);
     const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
     const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
@@ -138,7 +141,10 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
     const count = text.split(input.old).length - 1;
     if (count === 0) return { content: toolText(language, 'file.no_match'), isError: true };
     if (count > 1 && !input.all) return { content: toolText(language, 'file.many_matches', { count }), isError: true };
-    atomicWriteFile(abs, input.all ? text.split(input.old).join(input.new) : text.replace(input.old, () => input.new));
+    const next = input.all ? text.split(input.old).join(input.new) : text.replace(input.old, () => input.new);
+    const recorded = recordToolWrite(ctx, abs, next);
+    atomicWriteFile(abs, next);
+    recorded();
     return { content: toolText(language, 'file.replaced', { count, path: shown(abs, ctx) }) };
   },
 };

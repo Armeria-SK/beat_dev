@@ -648,4 +648,24 @@ export const MIGRATIONS: readonly Migration[] = [
   ) STRICT;
   CREATE INDEX ix_approval_rules_lookup ON approval_rules (project_id, kind, base_key);
   `,
+  `
+  CREATE TABLE file_changes (
+    id INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    place TEXT,
+    run_id TEXT,
+    conversation_id TEXT,
+    task_id TEXT,
+    batch TEXT,
+    path TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('create', 'modify', 'undo', 'redo')),
+    before_hash TEXT,
+    after_hash TEXT,
+    size INTEGER NOT NULL,
+    kept INTEGER NOT NULL CHECK (kept IN (0, 1)),
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX ix_file_changes_project ON file_changes (project_id, id);
+  CREATE INDEX ix_file_changes_run ON file_changes (run_id) WHERE run_id IS NOT NULL;
+  `,
 ];

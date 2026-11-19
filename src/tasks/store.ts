@@ -118,6 +118,7 @@ export const TASK_SOFT_REFERENCES = [
   { table: 'questions', column: 'fix_task_id' },
   { table: 'worktrees', column: 'task_id', cutWhen: "state IN ('gone', 'discarded', 'merged')" },
   { table: 'worktrees', column: 'proposal_id', cutWhen: "state IN ('gone', 'discarded', 'merged')" },
+  { table: 'file_changes', column: 'task_id', cutWhen: 'TRUE' },
 ] as const;
 export const OWNER_RUN_KV = 'task-owner-run:';
 const OWNER_PICKABLE = `(origin IN ('user', 'schedule') OR EXISTS (SELECT 1 FROM kv WHERE kv.key = '${OWNER_RUN_KV}' || tasks.id))`;
