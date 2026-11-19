@@ -9,7 +9,7 @@ import type { AppConfig } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { selfPortsOf } from '../hooks/self-port.ts';
-import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type LaunchOptions, type PageHandle, type WorkBrowserHandle } from './driver.ts';
+import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle } from './driver.ts';
 import type { ElementTable } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 import { allowedLoopbackUrl, deniedLoopbackPorts, type BrowserGrant } from './loopback.ts';
@@ -105,17 +105,48 @@ export interface BrowserView {
   seq: number;
   viewport: { width: number; height: number };
   profile: { kind: 'work' } | { kind: 'owner'; path: string };
+  // AI が最後に押した・入れた要素の中心（画面の大きさの中の CSS ピクセル）。開き直した・見える範囲の外なら null（9-2b）
+  pointer: { x: number; y: number } | null;
 }
 
 // 欄に出してよい会話か（DB で、その製品の会話・タスク・子の担当か）。attended は持ち主が見ている会話（持ち主のプロファイルのタブを出してよい）
 export type MirrorConversation = (conversationId: string) => { attended: boolean } | undefined;
 
 // タブごとの写しの記録。raw は見張りを付ける前のページ（撮影が自分の見張りに数えられないため）
-interface TabMirror { raw: PageHandle; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string }
+interface TabMirror { raw: PageHandle; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string; located: { target: ElementTarget; box: ElementBox } | undefined; pointer: { x: number; y: number } | undefined }
 
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
 const VIEWPORT = { width: 1280, height: 800 };
+
+const sameTarget = (a: ElementTarget, b: ElementTarget): boolean => a.role === b.role && a.name === b.name && a.nth === b.nth && a.count === b.count;
+
+// 押す・入れる要素の中心。事前の判定（locate）で読んだ位置が同じ要素のもので、見えている範囲の中にあるときだけ
+export function pointerOf(located: { target: ElementTarget; box: ElementBox } | undefined, target: ElementTarget): { x: number; y: number } | undefined {
+  if (!located || !sameTarget(located.target, target)) return undefined;
+  const x = Math.round(located.box.x + located.box.width / 2);
+  const y = Math.round(located.box.y + located.box.height / 2);
+  return x >= 0 && y >= 0 && x <= VIEWPORT.width && y <= VIEWPORT.height ? { x, y } : undefined;
+}
+
+// 欄の AI の指: locate で要素の位置を覚え、押す・入れるでその中心を指に、開き直しで指を消す
+function trackPointer(page: PageHandle, mirror: TabMirror): PageHandle {
+  return new Proxy(page, {
+    get(target, prop) {
+      switch (prop) {
+        case 'locate': return async (element: ElementTarget) => {
+          const detail = await target.locate(element);
+          mirror.located = detail?.box ? { target: element, box: detail.box } : undefined;
+          return detail;
+        };
+        case 'click': return (element: ElementTarget, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.click(element, timeoutMs); };
+        case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.fill(element, text, submit, timeoutMs); };
+        case 'goto': return (url: string, timeoutMs: number) => { mirror.pointer = undefined; mirror.located = undefined; return target.goto(url, timeoutMs); };
+        default: return Reflect.get(target, prop, target);
+      }
+    },
+  });
+}
 // 全体のタブの上限（メモリの歯止め）。会話ごとの上限は設定の maxTabs
 export const MAX_TABS_TOTAL = 16;
 
@@ -298,6 +329,7 @@ export class BrowserSession {
       driving: this.#driving(tab, mirror, now), action: mirror.action!, at: frame?.at ?? null, seq: frame?.seq ?? 0,
       viewport: { ...VIEWPORT },
       profile: tab.kind === 'owner' ? { kind: 'owner', path: this.#d.paths.browserProfile } : { kind: 'work' },
+      pointer: mirror.pointer ? { ...mirror.pointer } : null,
     };
   }
 
@@ -682,14 +714,14 @@ export class BrowserSession {
   // タブを作る。ページの操作に見張りを付け、操作した実行・いまの操作を覚える（撮るのは呼び出しの終わり）
   #addTab(grant: BrowserGrant, kind: BrowserTabKind, raw: PageHandle, handle: BrowserHandle): BrowserTab {
     const id = `t${this.#nextTab++}`;
-    const mirror: TabMirror = { raw, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '' };
+    const mirror: TabMirror = { raw, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '', located: undefined, pointer: undefined };
     const note = (action: MirrorAction): void => {
       const current = this.#current;
       if (current) { mirror.action = mirror.call === current.no ? strongerAction(mirror.action, action) : action; mirror.call = current.no; mirror.runId = current.call.grant.runId; } else mirror.action = action;
       mirror.actedAt = this.#now();
       mirror.url = shortLabel(raw.url(), URL_MAX);
     };
-    const page = observePage(raw, note);
+    const page = trackPointer(observePage(raw, note), mirror);
     const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, table: undefined, used: ++this.#clock };
     this.#tabs.set(tab.id, tab);
     this.#tabHandles.set(tab, handle);

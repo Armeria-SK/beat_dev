@@ -10,16 +10,16 @@ import {
 const product = { productId: 'p1' };
 const loose = { productId: null };
 
-test('ui/panes: 欄の表は、あとの段が 1 行ずつ足せる形（名前・数を持つか・開ける条件）。Plan・Questions（5-2-u）・Kanban（7-1）・Pending（4-U1）・Changes（8-5b）・Files（8-5a）・Terminal（6-4）で、製品の会話でだけ開ける', () => {
-  assert.deepEqual(PANES.map(p => p.view), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal']);
+test('ui/panes: 欄の表は、あとの段が 1 行ずつ足せる形（名前・数を持つか・開ける条件）。Plan・Questions（5-2-u）・Kanban（7-1）・Pending（4-U1）・Changes（8-5b）・Files（8-5a）・Terminal（6-4）・Browser（9-2b）で、製品の会話でだけ開ける', () => {
+  assert.deepEqual(PANES.map(p => p.view), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal', 'browser']);
   assert.equal(PANES[4]!.counted, false, 'Changes は数を持たない');
   assert.equal(PANES[5]!.counted, false, 'Files は数を持たない');
-  assert.deepEqual(tabOrder(openable(product), false), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal'], 'Design の 8 つの並び（Browser はまだ無い）');
+  assert.deepEqual(tabOrder(openable(product), false), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal', 'browser'], 'Design の 8 つの並び');
   assert.equal(PANES[0]!.counted, false, 'Plan は数を持たない（数は Questions・Kanban・Pending だけ）');
   assert.equal(PANES[1]!.counted, true, 'Questions は数を持つ');
   assert.equal(PANES[2]!.counted, true, 'Kanban は数を持つ（Proposed + Awaiting check）');
   assert.equal(PANES[3]!.counted, true, 'Pending は数を持つ');
-  assert.deepEqual(openable(product), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal'],'Panes のボタンで最初に開くのは Plan のまま');
+  assert.deepEqual(openable(product), ['plan', 'questions', 'kanban', 'pending', 'changes', 'files', 'terminal', 'browser'],'Panes のボタンで最初に開くのは Plan のまま');
   assert.deepEqual(openable(loose), [], '製品に属さない会話には開ける欄が無い（Panes のボタンを出さない）');
 });
 

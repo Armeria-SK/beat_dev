@@ -35,6 +35,15 @@ export interface BackgroundItem {
   startedBy: { kind: 'task' | 'conversation'; id: string; title: string | null };
 }
 export interface BackgroundOutput extends BackgroundItem { text: string; next: number; skipped: number }
+// beat 9-2b: Browser の欄が映すタブ（`/api/browser/view`）。url・title・action.target はページから来た文字
+export interface BrowserView {
+  tab: string; conversationId: string; runId: string; url: string; title: string; driving: boolean;
+  action: { kind: 'open' | 'click' | 'type' | 'read' | 'screenshot'; target: string };
+  at: number | null; seq: number; viewport: { width: number; height: number };
+  profile: { kind: 'work' } | { kind: 'owner'; path: string };
+  pointer: { x: number; y: number } | null;
+  by: { kind: 'conversation' | 'task' | 'agent'; id: string; title: string | null };
+}
 export interface ProjectRemote { name: string; url: string; push_url: string | null }
 export interface ProjectWaiting { proposals: number; questions: number; pending: number }
 export interface Project {
@@ -417,7 +426,13 @@ export const api = {
   backgroundOutput: (id: string, projectId: string, from?: number) =>
     call<BackgroundOutput>(`/api/background/${encodeURIComponent(id)}/output?projectId=${encodeURIComponent(projectId)}${from === undefined ? '' : `&from=${from}`}`),
   stopBackground: (id: string, projectId: string) => call<{ item: BackgroundItem }>(`/api/background/${encodeURIComponent(id)}/stop`, { method: 'POST', body: JSON.stringify({ projectId }) }),
-  stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
+  stop: (runId: string) => call<{ stopped: boolean }>(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
+  browserView: (productId: string) => call<{ view: BrowserView | null }>(`/api/browser/view?product=${encodeURIComponent(productId)}`),
+  browserFrame: async (productId: string, tab: string): Promise<{ blob: Blob; seq: number }> => {
+    const res = await fetch(`/api/browser/frame?product=${encodeURIComponent(productId)}&tab=${encodeURIComponent(tab)}`);
+    if (!res.ok) throw new ApiError(res.status, {});
+    return { blob: await res.blob(), seq: Number(res.headers.get('X-Frame-Seq') ?? 0) };
+  },
   runs: (limit = 200, project?: string) => call<{ runs: RunRow[]; total: number; judged: JudgedCounts; judgeOff?: boolean }>(`/api/runs?limit=${limit}${inProject(project, '&')}`),
   toolCalls: (project?: string) => call<{ toolCalls: ToolCallRow[]; total: number }>(`/api/tool-calls?limit=200${inProject(project, '&')}`),
   settings: (signal?: AbortSignal) => call<SettingsView>('/api/settings', { signal: signal ?? null }),
