@@ -34,6 +34,7 @@ import { acceptanceChange, acceptanceWrite } from './tools/builtin/acceptance.ts
 import { meshRead, meshSearch, meshStateSet } from './tools/builtin/mesh.ts';
 import { meshDecisionAdd } from './tools/builtin/mesh-write.ts';
 import { questionAdd, questionList } from './tools/builtin/questions.ts';
+import { askOwner } from './tools/builtin/ask.ts';
 import { deviationAdd } from './tools/builtin/deviations.ts';
 import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
 import { sdkConnect } from './mcp/connect.ts';
@@ -96,7 +97,7 @@ import { MemoryStore, renderBooks } from './memory/store.ts';
 
 export function builtinTools(): ToolDef[] {
   return [
-    taskComplete, taskCheckpoint, questionAdd, toolSearch,
+    taskComplete, taskCheckpoint, questionAdd, askOwner, toolSearch,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun, shellOutput, shellStop,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
     taskCreate, taskList, taskUpdate,

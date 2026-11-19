@@ -186,6 +186,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   date_calc: [{ op: 'diff', date: '2026-11-15', to: '2026-12-25' }, 'Work out date', '2026-11-15 → 2026-12-25'],
   checklist_write: [{ items: [{ text: 'Find code', status: 'done' }, { text: 'Make the change', status: 'in_progress' }, { text: 'Run tests', status: 'pending' }] }, 'Update checklist', 'Make the change'],
   notify_owner: [{ title: 'Build finished' }, 'Notify owner', 'Build finished'],
+  ask_owner: [{ questions: [{ question: 'Which storage?', header: 'Storage', options: [{ label: 'SQLite' }, { label: 'JSON' }] }, { question: 'Which screens?', header: 'Screens', multiSelect: true, options: [{ label: 'List' }, { label: 'Detail' }] }] }, 'Ask you', 'Storage, Screens'],
   doc_read: [{ path: 'report.pdf' }, 'Search', 'report.pdf'],
   table_write: [{ path: 'out.csv', rows: [['a']] }, 'Edit', 'out.csv'],
   image_view: [{ path: 'shot.png' }, 'Search', 'shot.png'],

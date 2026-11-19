@@ -265,7 +265,7 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'user' && m.message.attachments?.length ? { attachments: m.message.attachments } : {}),
         ...(m.message.role === 'user' && m.message.note ? { note: m.message.note } : {}),
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
-          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: previewJson(redactJsonValue(c.arguments ?? c.raw ?? null), 2000) })) } : {}),
+          ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: previewJson(redactJsonValue(c.arguments ?? c.raw ?? null), c.name === 'ask_owner' ? 16_000 : 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError), ...(m.message.gate ? { gate: m.message.gate } : {}) } : {}),
       })),
       pending: app.engine.pending(id),

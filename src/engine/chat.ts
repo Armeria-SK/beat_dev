@@ -450,7 +450,7 @@ export class ChatEngine {
     const last = this.#d.runs.latestChat(conversationId);
     if (!last || last.tainted !== 1) return false;
     let wrappedUp = true;
-    try { const found = JSON.parse(last.flags) as string[]; wrappedUp = found.includes('max_iterations') || found.includes('output_truncated'); } catch { }
+    try { const found = JSON.parse(last.flags) as string[]; wrappedUp = found.includes('max_iterations') || found.includes('output_truncated') || found.includes('asked_owner'); } catch { }
     return !(last.ok === 1 && !wrappedUp);
   }
 
@@ -1020,6 +1020,7 @@ export class ChatEngine {
       if (!d.tools) return finishOk(call.text, call.stop);
 
       let invalidThisRound = 0;
+      let askedOwner = false;
       for (const toolCall of call.toolCalls) {
         if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
         counters.toolCalls++;
@@ -1032,6 +1033,7 @@ export class ChatEngine {
         const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
         recordTaint();
         if (outcome.invalidArguments) invalidThisRound++;
+        if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
         const toolSaved = d.conversations.append(conversationId, {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
           ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
@@ -1041,6 +1043,10 @@ export class ChatEngine {
       if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
       // タスクの終え方（完了・途中経過・質問）が決まったら、モデルを呼び直さずに終える
       if (task && task.control.value.outcome !== 'none') return finishOk(call.text, 'end_turn');
+      if (kind === 'chat' && askedOwner) {
+        flags.push('asked_owner');
+        return finishOk(call.text, 'end_turn');
+      }
       invalidStreak = invalidThisRound === call.toolCalls.length ? invalidStreak + 1 : 0;
       if (invalidStreak >= MAX_INVALID_STREAK) {
         const language = languageOf(config);

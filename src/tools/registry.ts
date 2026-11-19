@@ -4,7 +4,7 @@ import type { RunKind, ToolDef } from './types.ts';
 
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'file_read', 'file_list', 'file_search', 'file_write', 'file_edit', 'shell_run', 'shell_output', 'shell_stop', 'web_search', 'web_fetch', 'skill_view', 'history_search',
-  'task_complete', 'task_checkpoint', 'question_add', 'plan_write', 'acceptance_write', 'acceptance_change', 'mesh_search', 'mesh_read', 'tool_search',
+  'task_complete', 'task_checkpoint', 'question_add', 'ask_owner', 'plan_write', 'acceptance_write', 'acceptance_change', 'mesh_search', 'mesh_read', 'tool_search',
 ]);
 
 // 製品が要る道具（projectOnly）を、この実行に出してよいか。振り返りは作業フォルダを持たないので、製品の記憶の道具（productReview）だけを、振り返りの会話の製品（memoryProject）があるときに出す

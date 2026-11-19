@@ -6,6 +6,8 @@ import { endsWithUserTurn, isNearBottom, newConversationId, sendChoiceOf, sendFa
 import { copyText } from '../clipboard.ts';
 import { toast } from '../feedback.ts';
 import { Composer } from './Composer.tsx';
+import { openAsk } from './ask.ts';
+import { AskCard } from './AskCard.tsx';
 import { cancelClearsInterrupt, firstMode, NEW_DRAFT, queuedLine, submitMessage, type SubmitKind, type UiSlash } from './composer-state.ts';
 import { getExplainLanguage, useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
@@ -579,6 +581,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const running = Boolean(draft);
   const empty = !draft && (id === null || (loaded !== null && messages.length === 0));
   const helper = conversation?.parent_run_id ? conversation : null;
+  const ask = openAsk(messages);
 
   return (
     <>
@@ -607,6 +610,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       </div>
       {running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live className="ui-pinned bt-rise" />}
       {!(running && checklist.length > 0) && runningBuild && <Checklist items={runningBuild.checklist.items} tainted={runningBuild.checklist.tainted} live className="ui-pinned bt-rise" />}
+      {!running && !gone && !helper && ask && <AskCard key={ask.key} ask={ask} busy={sending} onAnswer={text => void submit('send', text)} />}
       {!gone && !helper && (
         <Composer
           draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}

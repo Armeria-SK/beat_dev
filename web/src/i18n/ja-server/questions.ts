@@ -43,4 +43,10 @@ export const questionJa = {
   'legacy_stop': "Stop here",
   'legacy_none': "タスクはあなたの返事を待っています。",
   'legacy_stopped': "持ち主はここで止めることを選びました。",
+  'ask_shown': "持ち主には {count} 件の質問がカードで見えています。ここで止めてください。答えは持ち主の次の発言で届きます（選ばずに別のことを書くこともあります）。",
+  'ask_once': "聞けるのは 1 回の返事に 1 回だけです。持ち主にはもう質問が見えています。ここで止めてください。答えは持ち主の次の発言で届きます。",
+  'ask_not_in_chat': "ask_owner は持ち主との会話の中でだけ使えます",
+  'ask_duplicate_question': "同じ文の質問が 2 つあります: {question}",
+  'ask_duplicate_label': "質問「{header}」に同じ選択肢が 2 つあります: {label}",
+  'ask_other_label': "選択肢「{label}」を外してください。カードには自由に書ける「その他」がいつも付きます",
 } satisfies JaTable<typeof questionText>;
