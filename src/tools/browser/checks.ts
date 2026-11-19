@@ -10,6 +10,7 @@ import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { BrowserFailure, type ElementDetail, type ElementTarget } from './driver.ts';
 import type { ListedElement } from './elements.ts';
+import { grantOf } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
 import { siteAllows } from './sites.ts';
 import type { Language } from '../../config/schema.ts';
@@ -93,13 +94,15 @@ export async function browserActCheck(kind: 'click' | 'type', input: ActInput, c
   const language = languageOf(ctx.config);
   const browser: BrowserSession | undefined = ctx.services?.browser;
   if (!ctx.config.tools.browser.enabled || browser === undefined) return { decision: 'deny', reasons: [guardText(language, 'browser.off')] };
+  const grant = grantOf(ctx);
+  if (grant === undefined) return { decision: 'deny', reasons: [guardText(language, 'browser.no_grant')] };
   if (kind === 'type' && (input.text ?? '').length > TYPE_TEXT_MAX) return { decision: 'deny', reasons: [guardText(language, 'browser.act.too_long', { max: TYPE_TEXT_MAX })] };
   if (browser.tabCount(ctx.conversationId) === 0) {
     const failure = input.tab === undefined ? new BrowserFailure('no_tab', 'browser.no_tabs') : new BrowserFailure('no_tab', 'browser.no_tab', { tab: input.tab });
     return { decision: 'deny', reasons: [failure.text(language)] };
   }
   try {
-    return await browser.run({ conversationId: ctx.conversationId, signal: ctx.signal }, async api => {
+    return await browser.run({ grant, signal: ctx.signal }, async api => {
       const found = await inspectAct(api, kind, input, language);
       if (!found.ok) return { decision: 'deny', reasons: [found.reason] } satisfies PreCheck;
       const { preview, bind } = actPreview(kind, input, found, language);

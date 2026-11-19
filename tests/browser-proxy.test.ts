@@ -330,7 +330,7 @@ test('close() で待ち受けも通っているつなぎも閉じる', async t =
 test('中継のソースは node:* と public-page.ts の規則だけを import し、外へ出る別の道（fetch・https の直接のつなぎ）を持たない', () => {
   const source = readFileSync(new URL('../src/tools/browser/egress-proxy.ts', import.meta.url), 'utf8');
   const imports = [...source.matchAll(/^import .* from '([^']+)'/gmu)].map(m => m[1]);
-  for (const from of imports) assert.ok(from?.startsWith('node:') || from === '../web/public-page.ts', `import ${from}`);
+  for (const from of imports) assert.ok(from?.startsWith('node:') || from === '../web/public-page.ts' || from === './loopback.ts', `import ${from}`);
   assert.doesNotMatch(source, /\bfetch\(|playwright|'0\.0\.0\.0'|listen\([^)]*,\s*'(?!127\.0\.0\.1)/u);
   assert.match(source, /listen\(0, '127\.0\.0\.1'/u);
   assert.match(source, /timingSafeEqual/u);

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { test } from 'node:test';
-import { childEnv, launchArgs, playwrightOptions, type LaunchOptions } from '../src/tools/browser/driver.ts';
+import { browserLaunchOptions, childEnv, launchArgs, playwrightOptions, workContextOptions, type LaunchOptions } from '../src/tools/browser/driver.ts';
 
 // T-03: ブラウザの driver の「固定の守り」を、ソースと純粋な関数で確かめる（本物のブラウザは起動しない）
 
@@ -28,10 +28,25 @@ test('playwright-core を import するのは driver.ts だけ', () => {
   assert.match(driver, /import\('playwright-core'\)/u);
 });
 
-test('永続のプロファイルで起動する（launchPersistentContext）。launch / launchServer は使わない', () => {
+test('持ち主のブラウザは永続のプロファイル（launchPersistentContext）。chromium.launch は作業用の 1 か所だけで、固定の起動の選択を通す。launchServer は使わない', () => {
   const driver = sources.find(s => s.rel === 'tools/browser/driver.ts')!.text;
   assert.match(driver, /launchPersistentContext\(/u);
-  assert.ok(!/\.launch\(/u.test(driver) && !/launchServer/u.test(driver));
+  assert.deepEqual([...driver.matchAll(/\.launch\(([^\n]*)/gu)].map(m => m[1]!.trim()), ['browserLaunchOptions({ ...options, channel })));']);
+  assert.ok(!/launchServer/u.test(driver));
+});
+
+test('作業用の文脈の選択: 持ち主と同じ固定の守り（ダウンロード・service worker・権限・証明書）に、文脈だけの中継と <-loopback> を足す', () => {
+  const work = workContextOptions({ proxy: { server: 'http://127.0.0.1:7', username: 'w', password: 'q' }, viewport: { width: 1280, height: 800 }, locale: 'ja-JP', actionTimeoutMs: 10_000 });
+  assert.deepEqual(work.proxy, { server: 'http://127.0.0.1:7', username: 'w', password: 'q', bypass: '<-loopback>' });
+  assert.equal(work.acceptDownloads, false);
+  assert.equal(work.serviceWorkers, 'block');
+  assert.equal(work.ignoreHTTPSErrors, false);
+  assert.equal(work.bypassCSP, false);
+  assert.deepEqual(work.permissions, []);
+  const launch = browserLaunchOptions({ channel: 'chrome', executablePath: undefined, headless: true, proxy: { server: 'http://127.0.0.1:9', username: 'u', password: 'p' } }, { PATH: 'C:\\bin' });
+  assert.deepEqual(launch.args, launchArgs());
+  assert.deepEqual(launch.env, { PATH: 'C:\\bin' });
+  assert.equal('profileDir' in launch, false);
 });
 
 const options: LaunchOptions = {

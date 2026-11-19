@@ -39,13 +39,13 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, change: (co
   return { session, driver, config, notes, clock, advance };
 }
 
-const call = (_r: Rig, conversationId = 'c1', signal: AbortSignal = new AbortController().signal) => ({ conversationId, signal });
+const call = (_r: Rig, conversationId = 'c1', signal: AbortSignal = new AbortController().signal) => ({ grant: { conversationId, runId: 'r1', attended: true, loopback: false }, signal });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test('1 回目の呼び出しで起動する（それまでは起動しない）。起動の選択は固定の形で渡る', async t => {
   const r = rig(t);
   assert.equal(r.driver.launches, 0);
-  await r.session.run(call(r), async api => { await api.openTab(); });
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   assert.equal(r.driver.launches, 1);
   const options = r.driver.current!.options;
   assert.equal(options.profileDir, 'C:\\data\\browser-profile');
@@ -56,59 +56,59 @@ test('1 回目の呼び出しで起動する（それまでは起動しない）
   assert.equal(options.channel, undefined);
   assert.equal(options.executablePath, undefined);
   assert.equal(options.locale, Intl.DateTimeFormat().resolvedOptions().locale);
-  await r.session.run(call(r), async () => undefined);
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   assert.equal(r.driver.launches, 1, '2 回目は起動し直さない');
 });
 
 test('設定の channel / executablePath / headless と PC の locale を起動の選択へ渡す', async t => {
   const r = rig(t, c => { c.tools.browser.channel = 'path'; c.tools.browser.executablePath = 'C:\\Browser\\b.exe'; c.tools.browser.headless = false; });
-  await r.session.run(call(r), async () => undefined);
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   const o = r.driver.current!.options;
   assert.equal(o.executablePath, 'C:\\Browser\\b.exe');
   assert.equal(o.headless, false);
   assert.equal(o.locale, Intl.DateTimeFormat().resolvedOptions().locale);
   const r2 = rig(t, c => { c.tools.browser.channel = 'chrome'; });
-  await r2.session.run(call(r2), async () => undefined);
+  await r2.session.run(call(r2), async api => { await api.openTab('owner'); });
   assert.equal(r2.driver.current!.options.channel, 'chrome');
 });
 
 test('無効なら起動しない（disabled）', async t => {
   const r = rig(t, c => { c.tools.browser.enabled = false; });
-  await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'disabled');
+  await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'disabled');
   assert.equal(r.driver.launches, 0);
 });
 
 test('アイドルの時間（idleCloseMinutes）で閉じる。使うたびに数え直す', async t => {
   const r = rig(t, c => { c.tools.browser.limits.idleCloseMinutes = 10; });
-  await r.session.run(call(r), async api => { await api.openTab(); });
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   r.advance(9 * 60_000);
   assert.equal(r.driver.current!.closed, false);
-  await r.session.run(call(r), async () => undefined);
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   r.advance(9 * 60_000);
   assert.equal(r.driver.current!.closed, false, '使ったので数え直し');
   r.advance(61_000);
   await tick();
   assert.equal(r.driver.current!.closed, true);
-  await r.session.run(call(r), async () => undefined);
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   assert.equal(r.driver.launches, 2, '次の呼び出しで起動し直す');
 });
 
-test('タブの上限は全会話の合計。超えたら tab_limit', async t => {
+test('タブの上限は会話ごと（D-13）。超えたら tab_limit。別の会話は別に数える', async t => {
   const r = rig(t, c => { c.tools.browser.limits.maxTabs = 2; });
-  await r.session.run(call(r, 'c1'), async api => { await api.openTab(); });
-  await r.session.run(call(r, 'c2'), async api => { await api.openTab(); });
-  await assert.rejects(r.session.run(call(r, 'c3'), async api => { await api.openTab(); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'tab_limit');
-  assert.equal(r.driver.current!.pageList.length, 2);
+  await r.session.run(call(r, 'c1'), async api => { await api.openTab('owner'); await api.openTab('owner'); });
+  await assert.rejects(r.session.run(call(r, 'c1'), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'tab_limit');
+  await r.session.run(call(r, 'c2'), async api => { await api.openTab('owner'); });
+  assert.equal(r.driver.current!.pageList.length, 3);
   // 閉じれば開ける
   await r.session.run(call(r, 'c1'), async api => { await api.closeTab(api.tabs()[0]!.id); });
-  await r.session.run(call(r, 'c3'), async api => { await api.openTab(); });
-  assert.equal(r.driver.current!.pageList.length, 2);
+  await r.session.run(call(r, 'c1'), async api => { await api.openTab('owner'); });
+  assert.equal(r.driver.current!.pageList.length, 3);
 });
 
 test('別の会話のタブは見えない・使えない・閉じられない', async t => {
   const r = rig(t);
   let mine = '';
-  await r.session.run(call(r, 'c1'), async api => { mine = (await api.openTab()).id; });
+  await r.session.run(call(r, 'c1'), async api => { mine = (await api.openTab('owner')).id; });
   await r.session.run(call(r, 'c2'), async api => {
     assert.deepEqual(api.tabs(), []);
     assert.throws(() => api.tab(mine), (e: unknown) => e instanceof BrowserFailure && e.code === 'no_tab');
@@ -126,7 +126,7 @@ test('別の会話のタブは見えない・使えない・閉じられない',
 test('tab を省くと、その会話でいちばん最近使ったタブ', async t => {
   const r = rig(t);
   await r.session.run(call(r), async api => {
-    const first = await api.openTab(); const second = await api.openTab();
+    const first = await api.openTab('owner'); const second = await api.openTab('owner');
     assert.equal(api.tab().id, second.id);
     api.touch(first);
     assert.equal(api.tab().id, first.id);
@@ -178,9 +178,9 @@ test('すでに中止された signal の呼び出しは始めない', async t =
 
 test('ブラウザが落ちたら、タブを捨て、次の呼び出しで起動し直す', async t => {
   const r = rig(t);
-  await r.session.run(call(r), async api => { await api.openTab(); });
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   r.driver.current!.crash();
-  await r.session.run(call(r), async api => { assert.deepEqual(api.tabs(), []); await api.openTab(); });
+  await r.session.run(call(r), async api => { assert.deepEqual(api.tabs(), []); await api.openTab('owner'); });
   assert.equal(r.driver.launches, 2);
   assert.equal(r.driver.browsers.length, 2);
 });
@@ -190,18 +190,18 @@ test('起動に失敗したらそのまま返し、続けて 3 回失敗した�
   const boom = () => new BrowserFailure('launch_failed', 'browser.launch_failed');
   r.driver.failures = [boom(), boom(), boom()];
   for (let i = 0; i < 3; i += 1) {
-    await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'launch_failed');
+    await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'launch_failed');
   }
   assert.equal(r.driver.launches, 3);
   assert.equal(r.notes.length, 1);
   assert.equal(r.notes[0]!.dedupKey, 'browser-launch');
   // 止まっているあいだは、起動を試さない
-  await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'paused');
+  await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'paused');
   assert.equal(r.driver.launches, 3);
   r.advance(9 * 60_000);
-  await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'paused');
+  await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'paused');
   r.advance(61_000);
-  await r.session.run(call(r), async () => undefined);
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   assert.equal(r.driver.launches, 4);
 });
 
@@ -209,25 +209,25 @@ test('失敗が続かなければ数えは戻る（2 回失敗 → 成功 → 2 
   const r = rig(t);
   const boom = () => new BrowserFailure('launch_failed', 'browser.launch_failed');
   r.driver.failures = [boom(), boom()];
-  for (let i = 0; i < 2; i += 1) await assert.rejects(r.session.run(call(r), async () => undefined));
-  await r.session.run(call(r), async () => undefined);
+  for (let i = 0; i < 2; i += 1) await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }));
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   r.driver.current!.crash();
   r.driver.failures = [boom(), boom()];
-  for (let i = 0; i < 2; i += 1) await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'launch_failed');
+  for (let i = 0; i < 2; i += 1) await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'launch_failed');
   assert.equal(r.notes.length, 0);
 });
 
 test('ブラウザの場所が無い・プロファイルを使用中、の失敗はその種類のまま返る', async t => {
   const r = rig(t);
   r.driver.failures = [new BrowserFailure('no_browser', 'browser.no_browser'), new BrowserFailure('profile_busy', 'browser.profile_busy')];
-  await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'no_browser');
-  await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'profile_busy');
+  await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'no_browser');
+  await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'profile_busy');
 });
 
 test('会話の削除で、その会話のタブだけ閉じる', async t => {
   const r = rig(t);
-  await r.session.run(call(r, 'c1'), async api => { await api.openTab(); await api.openTab(); });
-  await r.session.run(call(r, 'c2'), async api => { await api.openTab(); });
+  await r.session.run(call(r, 'c1'), async api => { await api.openTab('owner'); await api.openTab('owner'); });
+  await r.session.run(call(r, 'c2'), async api => { await api.openTab('owner'); });
   await r.session.closeConversation(['c1', 'c9']);
   assert.equal(r.driver.current!.pageList.length, 1);
   await r.session.run(call(r, 'c1'), async api => assert.deepEqual(api.tabs(), []));
@@ -237,19 +237,19 @@ test('会話の削除で、その会話のタブだけ閉じる', async t => {
 test('enabled を false にしたら閉じる（applyConfig）。起動していなければ何もしない', async t => {
   const r = rig(t);
   await r.session.applyConfig(r.config);
-  await r.session.run(call(r), async api => { await api.openTab(); });
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   const browser = r.driver.current!;
   const next = structuredClone(r.config);
   next.tools.browser.enabled = false;
   r.config.tools.browser.enabled = false;
   await r.session.applyConfig(next);
   assert.equal(browser.closed, true);
-  await assert.rejects(r.session.run(call(r), async () => undefined), (e: unknown) => e instanceof BrowserFailure && e.code === 'disabled');
+  await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'disabled');
 });
 
 test('close() でブラウザと中継を閉じる。もう一度呼んでも安全', async t => {
   const r = rig(t);
-  await r.session.run(call(r), async api => { await api.openTab(); });
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   const browser = r.driver.current!;
   const server = new URL(browser.options.proxy.server);
   await r.session.close();
@@ -263,7 +263,7 @@ test('close() でブラウザと中継を閉じる。もう一度呼んでも安
 
 test('ページ側が開いた窓（ポップアップ）は、すぐ閉じる', async t => {
   const r = rig(t);
-  await r.session.run(call(r), async api => { await api.openTab(); });
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   const popup = r.driver.current!.popup();
   await tick();
   assert.equal(popup.closed, true);
@@ -285,7 +285,7 @@ test('会話の削除の連携は、起動していなくても失敗しない',
 
 test('R6 追補 3: 起動の選択に sites（毎回 config を読む関数）が入る。ログイン用の窓は空で、守りを付けない', async t => {
   const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
-  await r.session.run(call(r), async () => undefined);
+  await r.session.run(call(r), async api => { await api.openTab('owner'); });
   const sites = r.driver.current!.options.sites;
   assert.ok(sites, 'sites が渡る');
   assert.deepEqual(sites(), ['example.com']);

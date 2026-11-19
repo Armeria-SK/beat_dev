@@ -65,11 +65,11 @@ test('無効なら 4 つの道具とも、事前の判定で拒否し、実行�
 test('道具の型: effect・allowedIn', () => {
   for (const tool of [browserOpen, browserRead, browserScreenshot]) {
     assert.equal(tool.effect, 'network', tool.name);
-    assert.deepEqual([...tool.allowedIn], ['chat'], tool.name);
+    assert.deepEqual([...tool.allowedIn], ['chat', 'task', 'agent'], tool.name);
     assert.equal(tool.submits, undefined, tool.name);
   }
   assert.equal(browserClose.effect, 'meta');
-  assert.deepEqual([...browserClose.allowedIn], ['chat']);
+  assert.deepEqual([...browserClose.allowedIn], ['chat', 'task', 'agent']);
 });
 
 // T-10
@@ -205,7 +205,7 @@ test('アプリの決まった文だけの失敗は noRemoteContent。ページ�
   const r = rig(t, c => { c.tools.browser.limits.maxTabs = 1; });
   r.driver.site('https://example.com/a', { title: 'A', text: 'a' });
   await run(browserOpen, { url: 'https://example.com/a' }, r.ctx());
-  const limit = await run(browserOpen, { url: 'https://example.com/a' }, r.ctx({ conversationId: 'c2' }));
+  const limit = await run(browserOpen, { url: 'https://example.com/a' }, r.ctx());
   assert.equal(limit.isError, true);
   assert.equal(limit.noRemoteContent, true);
   assert.equal(limit.content, r.text('browser.tab_limit', { max: '1' }));

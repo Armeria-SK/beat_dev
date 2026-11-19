@@ -1,4 +1,4 @@
-import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type LaunchOptions, type PageHandle } from '../../src/tools/browser/driver.ts';
+import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle, type WorkContextOptions, type WorkLaunchOptions } from '../../src/tools/browser/driver.ts';
 import type { RouteRefusal } from '../../src/tools/browser/route.ts';
 
 // 試験用の偽のブラウザ。ページの URL・題・本文・ariaSnapshot の文・要素の状態を持ち、開いた記録を残す
@@ -120,6 +120,8 @@ export class FakePage implements PageHandle {
 export class FakeBrowser implements BrowserHandle {
   readonly driver: FakeBrowserDriver;
   readonly options: LaunchOptions;
+  // 作業用の文脈のときだけ: newContext に渡された選択（loopback の許しなど）
+  contextOptions: WorkContextOptions | undefined;
   pageList: FakePage[] = [];
   closed = false;
   closeCalls = 0;
@@ -150,16 +152,46 @@ export class FakeBrowser implements BrowserHandle {
   crash(): void { this.closed = true; this.pageList = []; this.#onDisconnected?.(); }
 }
 
+// 作業用のブラウザ（会話ごとの文脈を作る）。文脈は FakeBrowser（options は起動の形に寄せた写し、contextOptions が渡された文脈の選択）
+export class FakeWorkBrowser implements WorkBrowserHandle {
+  readonly driver: FakeBrowserDriver;
+  readonly options: WorkLaunchOptions;
+  readonly contexts: FakeBrowser[] = [];
+  closed = false;
+  #onDisconnected: (() => void) | undefined;
+  constructor(driver: FakeBrowserDriver, options: WorkLaunchOptions) { this.driver = driver; this.options = options; }
+
+  async newContext(options: WorkContextOptions): Promise<BrowserHandle> {
+    const failure = this.driver.contextFailures.shift();
+    if (failure) throw failure;
+    const context = new FakeBrowser(this.driver, { ...this.options, profileDir: '', viewport: options.viewport, locale: options.locale, actionTimeoutMs: options.actionTimeoutMs, proxy: options.proxy, sites: options.sites });
+    context.contextOptions = options;
+    this.contexts.push(context);
+    return context;
+  }
+
+  onDisconnected(cb: () => void): void { this.#onDisconnected = cb; }
+  async close(): Promise<void> { this.closed = true; for (const context of this.contexts) await context.close(); }
+  crash(): void { this.closed = true; for (const context of this.contexts) context.crash(); this.#onDisconnected?.(); }
+}
+
 export class FakeBrowserDriver implements BrowserDriver {
   readonly sites = new Map<string, FakeSite>();
   readonly browsers: FakeBrowser[] = [];
-  // 起動を失敗させる回数（先頭から）。BrowserFailure を渡せばその失敗になる
+  readonly workBrowsers: FakeWorkBrowser[] = [];
+  // 起動を失敗させる回数（先頭から）。BrowserFailure を渡せばその失敗になる。持ち主のブラウザと作業用のブラウザで共有
   failures: Array<Error | undefined> = [];
+  // 作業用の文脈づくり（newContext）を失敗させる回数（先頭から）
+  contextFailures: Array<Error | undefined> = [];
   launchGate: Promise<void> | undefined;
   launches = 0;
+  workLaunches = 0;
 
   site(url: string, site: FakeSite = {}): this { this.sites.set(url, site); return this; }
   get current(): FakeBrowser | undefined { return this.browsers.at(-1); }
+  get work(): FakeWorkBrowser | undefined { return this.workBrowsers.at(-1); }
+  // いちばん新しい作業用の文脈
+  get context(): FakeBrowser | undefined { return this.work?.contexts.at(-1); }
 
   async launch(options: LaunchOptions): Promise<BrowserHandle> {
     this.launches += 1;
@@ -168,6 +200,16 @@ export class FakeBrowserDriver implements BrowserDriver {
     if (failure) throw failure;
     const browser = new FakeBrowser(this, options);
     this.browsers.push(browser);
+    return browser;
+  }
+
+  async launchWork(options: WorkLaunchOptions): Promise<WorkBrowserHandle> {
+    this.workLaunches += 1;
+    if (this.launchGate) await this.launchGate;
+    const failure = this.failures.shift();
+    if (failure) throw failure;
+    const browser = new FakeWorkBrowser(this, options);
+    this.workBrowsers.push(browser);
     return browser;
   }
 }
