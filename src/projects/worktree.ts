@@ -159,7 +159,7 @@ function depsAbove(abs: string): boolean {
   }
 }
 
-function placeUnsafe(abs: string, productRoots: readonly string[]): boolean {
+export function placeUnsafe(abs: string, productRoots: readonly string[]): boolean {
   if (!isAbsolute(abs) || windowsHazard(abs) || linkOnChain(abs) || depsAbove(abs)) return true;
   return productRoots.some(root => isInside(realOrNull(root) ?? resolve(root), abs));
 }
@@ -719,7 +719,7 @@ export class Worktrees {
 
   // 起動のときの見回り: 作りかけで止まった行と、消しかけの行を片づける。表に無いものと、本体の場所が変わった行には触らない
   async sweepWorktrees(): Promise<{ removed: number; left: number }> {
-    const rows = this.#d.db.prepare("SELECT * FROM worktrees WHERE state = 'removing' OR (state = 'creating' AND updated_at < ?)").all(this.#now() - STALE_CREATING_MS) as unknown as WorktreeRow[];
+    const rows = this.#d.db.prepare("SELECT * FROM worktrees WHERE kind = 'task' AND (state = 'removing' OR (state = 'creating' AND updated_at < ?))").all(this.#now() - STALE_CREATING_MS) as unknown as WorktreeRow[];
     let removed = 0;
     let left = 0;
     for (const row of rows) {

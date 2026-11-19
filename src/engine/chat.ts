@@ -136,6 +136,11 @@ function unlisted(): never { throw new Error('An allow-list of tools cannot be l
 class ScoutAllow extends AllBut {}
 
 export const SCOUT_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list', 'file_search', 'mesh_read', 'mesh_search', 'web_search', 'web_fetch', 'agent_run', 'ledger_record', 'proposal_add', 'calculate', 'date_calc']);
+// beat 8-6a: 直す実行に渡す道具（許す一覧）。読む・書く・表・シェル（裏のコマンドは shell.ts が断る）・mesh を読む・計算。Web・ブラウザ・MCP・agent_run・task_*・question_add・proposal_add・ledger_record は渡さない
+export const FIX_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list', 'file_search', 'file_write', 'file_edit', 'table_write', 'shell_run', 'mesh_read', 'mesh_search', 'calculate', 'date_calc']);
+class FixAllow extends AllBut {}
+// 直す実行の置き場（写しの行）。root は写し、productRoot は本体
+export interface FixPlace { id: string; path: string; productRoot: string; branch: string; base: string; ceiling: string }
 export const SCOUT_AGENT_TIMEOUT_MS = 1_800_000;
 export type ScoutEnd = 'agents_busy' | 'agents_used';
 export interface ScoutRoute { modelId: string; providerId: string; local: boolean; room: boolean; available: number | undefined }
@@ -632,6 +637,22 @@ export class ChatEngine {
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
 
+  // beat 8-6a: 直す実行。考える実行と同じ 1 本（routing.scout）で、写しの中だけを書く。始めから外を読んだ扱い（提案の文は Web から来た）
+  runFix(task: Task, conversationId: string, prompt: string, modelId: string, place: FixPlace, materials: string): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
+    const route = this.#chain('scout').usable.find(r => r.model.id === modelId);
+    if (!route) {
+      const outcome = this.#noUsableModel(this.#chain('scout').problems);
+      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
+    }
+    const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
+    const runId = randomUUID();
+    this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    this.#initialTaint.set(runId, [materials]);
+    this.#start(runId, conversationId, [{ model: route.model, provider: route.provider }], 'task', { task, control: { value: { outcome: 'none' } }, fix: place }, new FixAllow(FIX_TOOLS, []), this.#d.config().scout?.effort ?? null);
+    return { ok: true, runId, done: this.#active.get(runId)!.done };
+  }
+
   scoutEnd(runId: string): ScoutEnd | undefined { return this.#scoutEnds.get(runId); }
 
   scoutArea(runId: string): string | null { return this.#scoutChildren.get(runId)?.area ?? null; }
@@ -766,7 +787,7 @@ export class ChatEngine {
     };
   }
 
-  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): void {
+  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null; fix?: FixPlace }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): void {
     const controller = new AbortController();
     this.#hardStops.set(runId, new AbortController());
     this.#byConversation.set(conversationId, runId);
@@ -843,19 +864,25 @@ export class ChatEngine {
     return this.#d.tools.registry.forRun(kind, { exclude });
   }
 
-  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): Promise<EngineResult> {
+  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null; fix?: FixPlace }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): Promise<EngineResult> {
     const d = this.#d;
     // 子の担当は、親が始めたときの設定で動く（親と同じ決まり。途中で緩めても広がらない）
     const config = agent?.parent.config ?? d.config();
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
-    const worktree = !agent && task && kind === 'task' ? d.places?.runPlace(task.task.id) : undefined;
+    // 直す実行（beat 8-6a）は、ワーカーの置き場の表ではなく、渡された写しで動く
+    const fixPlace = !agent && kind === 'task' ? task?.fix : undefined;
+    const worktree = fixPlace ? { id: fixPlace.id, path: fixPlace.path, branch: fixPlace.branch, base: fixPlace.base, ceiling: fixPlace.ceiling }
+      : !agent && task && kind === 'task' ? d.places?.runPlace(task.task.id) : undefined;
     if (!agent && task && task.place !== undefined && (worktree?.id ?? null) !== task.place) throw new Error(engineText(languageOf(config), 'run.place_changed'));
     const own = agent ? undefined : runProject(d.projects, d.conversations.projectOf(conversationId), worktree);
     const resolved = agent ? agent.parent.project : own;
     const place: RunPlace | undefined = agent ? agent.parent.place
-      : own?.worktree && own.productRoot ? { kind: 'worktree', id: own.worktree.id, productRoot: own.productRoot, branch: own.worktree.branch, base: own.worktree.base, ceiling: own.worktree.ceiling } : undefined;
+      : own?.worktree && own.productRoot ? { kind: fixPlace ? 'fix' : 'worktree', id: own.worktree.id, productRoot: own.productRoot, branch: own.worktree.branch, base: own.worktree.base, ceiling: own.worktree.ceiling } : undefined;
     const scout = agent ? agent.parent.scout === true : forbid instanceof ScoutAllow;
-    const snapshot = this.#snapshot(conversationId, resolved, scout);
+    // 直す実行は写しが本体のものか確かめられたときだけ（productRoot が本体）。持ち主の記憶は渡さない（考える実行と同じ）
+    const fix = fixPlace !== undefined && place?.kind === 'fix' && own?.productRoot !== undefined;
+    if (fixPlace && !fix) throw new Error('The fix copy does not belong to this product');
+    const snapshot = this.#snapshot(conversationId, resolved, scout || fix);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
@@ -877,7 +904,9 @@ export class ChatEngine {
     const allRoots = rootsLister(d.projects);
     allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
-    const reach: AppConfig = scout ? { ...config, tools: { ...config.tools, roots: project?.root ? [{ path: project.root, mode: 'read' }] : [] } } : config;
+    // 考える実行は製品を読むだけ。直す実行は写しだけ（持ち主の足した許可フォルダは渡さない。写しは buildPolicy が書ける場所に足す）
+    const reach: AppConfig = scout ? { ...config, tools: { ...config.tools, roots: project?.root ? [{ path: project.root, mode: 'read' }] : [] } }
+      : fix ? { ...config, tools: { ...config.tools, roots: [] } } : config;
     const base = agent ? undefined : buildPolicy(reach, d.paths, undefined, productRoots);
     const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(reach, d.paths, { root: project.root }, productRoots) : base!);
     const home = agent ? agent.parent.home ?? agent.parent.workspace : defaultWorkspace(base!, d.paths);
@@ -903,6 +932,7 @@ export class ChatEngine {
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'auto' } : kind === 'task' ? { permissionMode: 'auto' as const } : agent ? { permissionMode: agent.mode } : {}),
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
       ...(scout ? { scout: true as const, scoutFetches: agent?.parent.scoutFetches ?? { n: 0 } } : {}),
+      ...(fix ? { fix: true as const } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
@@ -921,7 +951,7 @@ export class ChatEngine {
     }
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
     // 子の担当を任せる道具の入口（設定で有効のときだけ。子は孫を作れない。タスクは tools.agent.inTasks で許したときだけ）
-    if (kind !== 'agent' && (scout || (config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))))) {
+    if (kind !== 'agent' && !fix && (scout || (config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))))) {
       ctx.agent = (input, callId) => this.#runAgent({ ctx, routes: chain.slice(index), forbid }, input, callId);
     }
     // 外から読んだ印は、実行の記録に読んだ時点で書く（途中で止まる・落ちる実行でも、やり直し・続きが引き継げるように）
@@ -982,7 +1012,7 @@ export class ChatEngine {
     const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
     // 長さの区切りは、この実行の中でやり取りが育ったときだけ。始めから超えていた実行は区切らず、縮める・あふれるの今の道に任せる（区切っても同じ始まりを繰り返すだけ）。
     // 見るのは 3 往復目の頭から（モデルは、最初の道具の結果を見たあと必ず 1 回は動ける）
-    const splits = Boolean(task) && kind === 'task' && !scout;
+    const splits = Boolean(task) && kind === 'task' && !scout && !fix;
     let startedOver = false;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {

@@ -168,9 +168,11 @@ export interface ToolContext {
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
   scout?: true | undefined;
   scoutFetches?: { n: number } | undefined;
+  // beat 8-6a: 人のいない直す実行（その回だけの製品の写しで動く。place.kind は 'fix'）。Pending に積めないが、判定役は呼べる（D-11）
+  fix?: true | undefined;
 }
 
-export interface RunPlace { kind: 'worktree'; id: string; productRoot: string; branch: string; base: string; ceiling: string }
+export interface RunPlace { kind: 'worktree' | 'fix'; id: string; productRoot: string; branch: string; base: string; ceiling: string }
 
 export interface ToolRunResult { output: ToolOutput; decision: Decision; decidedBy: string; gate?: ToolGate }
 

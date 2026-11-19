@@ -56,7 +56,7 @@ const CONFIG_READ = /^(?:--get|--get-all|--get-regexp|--list|-l|--show-origin|--
 const BRANCH_LIST = /^(?:-a|--all|-r|--remotes|-v|-vv|--verbose|--list|-l|--show-current|--merged(?:=\S+)?|--no-merged(?:=\S+)?|--contains(?:=\S+)?|--no-contains(?:=\S+)?|--sort=\S+|--format=\S+|--color=never|--no-color|--column=never|--points-at=\S+|-n\d*)$/u;
 const REMOTE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/u;
 // 変数名 GIT_… をどこかで書く・渡す形（export・set・$env:・[Environment]・env など、どれでも）
-const GIT_VARIABLE = /(?<![A-Za-z0-9_])GIT_[A-Za-z0-9_]+/iu;
+export const GIT_VARIABLE = /(?<![A-Za-z0-9_])GIT_[A-Za-z0-9_]+/iu;
 // ほかの文を読み込む・評価する（中で git も環境も変えうる）。作業コピーの実行ではいつも断る
 const EVALUATES = new Set(['.', 'source', 'eval', 'iex', 'invoke-expression', 'invoke-command', 'icm']);
 // 環境を変えるもの。名前が変数・env: の場所を書く形は、何を変えるか読めない
@@ -119,9 +119,9 @@ function parseArgs(texts: readonly string[], flags: Flags, numeric = false): Par
 const truthy = (value: string): boolean => /^(?:true|yes|on|1|merges|interactive|i)$/iu.test(value.trim());
 
 // 書いたパスと実体のパスのどちらでも、作業コピーの中か
-const insideCopy = (worktree: string, path: string): boolean => isInside(worktree, path) && isInside(realish(worktree), realish(path));
+export const insideCopy = (worktree: string, path: string): boolean => isInside(worktree, path) && isInside(realish(worktree), realish(path));
 
-const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
+export const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
 
 const shownOf = (st: StatementFacts): string => st.words.map(w => w.text).join(' ').slice(0, 200);
 
@@ -358,8 +358,13 @@ export function linkOutOfCopy(statements: readonly StatementFacts[], place: Pick
 // コマンドに書かれたパスらしい字句（相対・引用の中・key=value の右も）を文のフォルダから解き、本体の中を指すものがあれば返す。
 // 見張りが中を読めない書き手（tar -C・unzip -d・node -e など）も、本体を名指せば断る。読むだけの形も含む
 export function namesMain(command: string, statements: readonly StatementFacts[], place: Pick<WorktreeGitPlace, 'productRoot' | 'worktree' | 'cwd'>): string | undefined {
+  return pathCandidates(command, statements, place.cwd).find(p => mainWrites([p], place).length > 0);
+}
+
+// コマンドに書かれたパスらしい字句を、文のフォルダから解いた絶対パスの候補（namesMain と、直す実行の囲い fix-guard.ts が使う）
+export function pathCandidates(command: string, statements: readonly StatementFacts[], cwd: string): string[] {
   const all = flatten(statements);
-  const bases = [...new Set([place.cwd, ...all.flatMap(st => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])])])];
+  const bases = [...new Set([cwd, ...all.flatMap(st => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])])])];
   const texts = [command, ...all.flatMap(st => st.words.map(w => w.text))];
   const tokens = new Set<string>();
   for (const text of texts) {
@@ -370,19 +375,17 @@ export function namesMain(command: string, statements: readonly StatementFacts[]
       }
     }
   }
+  const out: string[] = [];
   for (const raw of tokens) {
     const t = stripProvider(raw);
     // Git Bash の /d/... は D:/... のこと
     const msys = process.platform === 'win32' ? /^\/([A-Za-z])(\/.*)?$/u.exec(t) : null;
     const absolute = isAbsolute(t) || /^[A-Za-z]:/u.test(t);
     // ~・$HOME・$PWD はシェルと同じに広げる（広げられない字句は書いたまま解く）
-    const candidates = [...(absolute ? [resolve(t)] : bases.flatMap(base => [resolve(base, t), ...(/[~$%]/u.test(t) ? [expandedPath(t, base)].filter((p): p is string => p !== undefined) : [])])),
-      ...(msys ? [resolve(`${msys[1]}:${msys[2] ?? '/'}`)] : [])];
-    for (const p of candidates) {
-      if (mainWrites([p], place).length) return p;
-    }
+    out.push(...(absolute ? [resolve(t)] : bases.flatMap(base => [resolve(base, t), ...(/[~$%]/u.test(t) ? [expandedPath(t, base)].filter((p): p is string => p !== undefined) : [])])),
+      ...(msys ? [resolve(`${msys[1]}:${msys[2] ?? '/'}`)] : []));
   }
-  return undefined;
+  return out;
 }
 
 // beat の作業ブランチ（refs/heads/beat/*）をまとめて送る・消しうる push（--all・--branches・--mirror・--prune とその短い書き方・ワイルドカードの refspec・設定の matching / mirror）。名指しの push は今の決まりのまま

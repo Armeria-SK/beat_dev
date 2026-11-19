@@ -73,6 +73,7 @@ import { isScoutRun, TaskStore } from './tasks/store.ts';
 import { maskedTaskView } from './web/task-view.ts';
 import { ProjectStore } from './projects/store.ts';
 import { Worktrees } from './projects/worktree.ts';
+import { FixCopies } from './scout/fix-copy.ts';
 import { MERGE_WATCH_MS, MergeWatch } from './projects/merge-watch.ts';
 import { TaskPlaces } from './tasks/place.ts';
 import { PlanStore } from './projects/plan.ts';
@@ -166,6 +167,8 @@ export class App {
   readonly projects: ProjectStore;
   readonly worktrees: Worktrees;
   readonly places: TaskPlaces;
+  // beat 8-6a: 直す実行の写し（まだどこからも選ばない。8-6b が使う）
+  readonly fixes: FixCopies;
   readonly mergeWatch: MergeWatch;
   readonly #mergeTimer: ReturnType<typeof setInterval> | undefined;
   readonly plans: PlanStore;
@@ -235,6 +238,8 @@ export class App {
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
     this.worktrees = new Worktrees({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, now, log: this.log });
     void this.worktrees.sweepWorktrees().catch(error => this.log(`[WARN] Could not check beat working copies: ${(error as Error).message}`));
+    this.fixes = new FixCopies({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, worktrees: this.worktrees, now, log: this.log });
+    void this.fixes.sweepFixCopies().catch(error => this.log(`[WARN] Could not check beat fix copies: ${(error as Error).message}`));
     this.places = new TaskPlaces({ db: this.db, tasks: this.tasks, projects: this.projects, worktrees: this.worktrees, config: () => this.config() });
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
