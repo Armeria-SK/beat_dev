@@ -1,0 +1,17 @@
+/* beat 8-5a: Files の欄。欄の幅が 760px より狭いと木が全幅になり、ファイルは木の上に開く（Design FilesPane） */
+.ui-files { container-type: inline-size; height: 100%; min-height: 0; }
+.ui-files__grid { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--space-4); height: 100%; min-height: 0; }
+.ui-files__side { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; min-height: 0; overflow-y: auto; }
+.ui-files__trees { align-self: flex-start; }
+.ui-files__view { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; min-height: 0; }
+.ui-files__view > .bt-pane__bar { margin-bottom: 0; }
+.ui-files__view > .bt-empty { max-width: none; }
+.ui-files__text { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.ui-files__note { margin: 0; }
+.ui-files .ui-files__back { display: none; }
+@container (max-width: 759px) {
+  .ui-files__grid { grid-template-columns: minmax(0, 1fr); }
+  .ui-files.is-open .ui-files__side { display: none; }
+  .ui-files:not(.is-open) .ui-files__view { display: none; }
+  .ui-files .ui-files__back { display: inline-flex; align-self: flex-start; }
+}

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import type { WaitReason } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { useMedia } from './hooks.ts';
+import { FilesPane } from './panes/FilesPane.tsx';
 import { KanbanPane, type KanbanPaneProps } from './panes/KanbanPane.tsx';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
 import { PlanPane } from './panes/PlanPane.tsx';
@@ -170,6 +171,7 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
         const { count: _count, ...board } = kanban;
         return <KanbanPane key={productId} productId={productId} {...board} />;
       }
+      case 'files': return <FilesPane key={productId} productId={productId} revision={revision} />;
       case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
     }
