@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { api, type Acceptance, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WaitReason } from '../../api.ts';
 import { waitText } from '../wait.ts';
 import { toast } from '../../feedback.ts';
@@ -249,7 +249,9 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const [moreBusy, setMoreBusy] = useState(false);
   const [tab, setTab] = useState<ColumnId>('proposed');
-  const tabbed = useMedia(COLUMN_TABS_MEDIA);
+  const uid = useId();
+  const narrow = useMedia(COLUMN_TABS_MEDIA);
+  const tabbed = pane || narrow;
   const order = (columns: Column[]): Column[] => (tabbed ? NARROW_COLUMNS.flatMap(id => columns.filter(c => c.id === id)) : columns);
   const loads = useRef(latestOnly());
   const wanted = useRef(KANBAN_PAGE);
@@ -352,7 +354,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
         <>
           <div className="bt-tabs ui-coltabs" role="tablist" aria-label={t('ui.kanban.columns')}>
             {order(board.columns).map(column => (
-              <button key={column.id} type="button" role="tab" className="bt-tab" id={`ui-coltab-${column.id}`} aria-controls={`ui-col-${column.id}`}
+              <button key={column.id} type="button" role="tab" className="bt-tab" id={`${uid}coltab-${column.id}`} aria-controls={`${uid}col-${column.id}`} data-coltab={column.id}
                 aria-selected={tab === column.id} tabIndex={tab === column.id ? 0 : -1} onClick={() => setTab(column.id)}
                 onKeyDown={e => {
                   const to = tabStep(order(board.columns).findIndex(c => c.id === tab), board.columns.length, e.key);
@@ -360,7 +362,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
                   if (!target) return;
                   e.preventDefault();
                   setTab(target.id);
-                  document.getElementById(`ui-coltab-${target.id}`)?.focus();
+                  document.getElementById(`${uid}coltab-${target.id}`)?.focus();
                 }}>
                 {columnName(t, column.id)}<span className={`bt-count${column.accent ? '' : ' bt-count--quiet'}`}><span className="bt-count__n">{countText(column.cards.length)}</span></span>
               </button>
@@ -370,7 +372,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
             {order(board.columns).map(column => {
               const firstTask = column.cards.findIndex(card => card.kind === 'task' && !(card.task.run_at !== null && card.task.run_at > now) && waits?.[card.task.id]?.kind !== 'off' && waits?.[card.task.id]?.kind !== 'owner');
               return (
-                <section key={column.id} id={`ui-col-${column.id}`} className={`bt-col${tab === column.id ? '' : ' ui-col--off'}`} aria-label={columnName(t, column.id)} {...(tabbed ? { role: 'tabpanel' } : {})}>
+                <section key={column.id} id={`${uid}col-${column.id}`} data-col={column.id} className={`bt-col${tab === column.id ? '' : ' ui-col--off'}`} aria-label={columnName(t, column.id)} {...(tabbed ? { role: 'tabpanel' } : {})}>
                   <div className="bt-col__head">
                     <span className="bt-label">{columnName(t, column.id)}</span>
                     <span className={`bt-count${column.accent ? '' : ' bt-count--quiet'}`} aria-label={t('ui.kanban.count', column.cards.length)}><span className="bt-count__n">{countText(column.cards.length)}</span></span>
