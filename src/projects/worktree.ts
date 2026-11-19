@@ -1,18 +1,19 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, unlinkSync, type Stats } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { chmod, lstat, readdir, rmdir, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from '../config/schema.ts';
 import { GIT_TIMEOUT_MS, withGit } from '../mesh/folders.ts';
 import type { AppPaths } from '../paths.ts';
-import { isInside, windowsHazard } from '../tools/hooks/scope.ts';
+import { isInside, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
 import { folderMissing, type ProjectStore } from './store.ts';
 
 export type WorktreeKind = 'task' | 'fix';
 export type WorktreeState = 'creating' | 'active' | 'branch' | 'merged' | 'discarded' | 'removing' | 'gone';
 export type WorktreeEnding = 'branch' | 'merged' | 'discarded' | 'gone';
-export type WorktreeNote = 'not_on_branch';
+export type WorktreeNote = 'not_on_branch' | 'in_progress';
 
 export interface WorktreeRow {
   id: string;
@@ -36,7 +37,8 @@ export interface WorktreeRow {
 
 export type PlaceResult = { ok: true; root: string } | { ok: false; reason: 'unsafe_place' };
 export type CreateResult = { ok: true; row: WorktreeRow } | { ok: false; reason: 'not_git' | 'unsafe' | 'unsafe_place' | 'dirty_git_dir' | 'timeout' | 'failed' };
-export type FinishResult = { ok: true; tip: string; committed: boolean; changed: boolean } | { ok: false; reason: 'unknown' | 'not_active' | 'foreign' | 'unsafe' | 'not_on_branch' | 'timeout' | 'failed' };
+export type FinishResult = { ok: true; tip: string; committed: boolean; changed: boolean; held?: string[] } | { ok: false; reason: 'unknown' | 'not_active' | 'foreign' | 'unsafe' | 'not_on_branch' | 'in_progress' | 'timeout' | 'failed' };
+export type ReactivateResult = { ok: true; row: WorktreeRow } | { ok: false; reason: 'unknown' | 'not_branch' | 'foreign' | 'moved' | 'unsafe' };
 export type RemoveResult = { ok: true; branchKept: boolean; note?: 'branch_moved' | 'not_merged' } | { ok: false; reason: 'unknown' | 'foreign' | 'repo_moved' | 'unsafe' | 'locked' | 'dirty' | 'busy' | 'failed' };
 
 export const BEAT_BRANCHES = 'refs/heads/beat/';
@@ -114,7 +116,7 @@ export function branchSlug(title: string, kind: WorktreeKind): string {
 }
 
 // リンク・ジャンクションをたどらずに消す（リンクはリンクだけを外す）。under の外（under 自身も）は断る
-export function removeTree(path: string, options: { under: string }): { ok: true } | { ok: false; reason: 'outside' | 'busy' } {
+export async function removeTree(path: string, options: { under: string }): Promise<{ ok: true } | { ok: false; reason: 'outside' | 'busy' }> {
   const under = realOrNull(options.under);
   const abs = resolve(path);
   if (!under || windowsHazard(abs)) return { ok: false, reason: 'outside' };
@@ -127,25 +129,26 @@ export function removeTree(path: string, options: { under: string }): { ok: true
   const st = lstatOf(target);
   if (st === undefined) return { ok: true };
   if (st === null) return { ok: false, reason: 'busy' };
-  try { drop(target, st); } catch { return { ok: false, reason: 'busy' }; }
+  try { await drop(target, st); } catch { return { ok: false, reason: 'busy' }; }
   return lstatOf(target) === undefined ? { ok: true } : { ok: false, reason: 'busy' };
 }
 
-function drop(path: string, st: Stats): void {
+// node_modules のような大きなフォルダでもサーバーを止めないよう、ファイルの操作はどれも待つ形で行う
+async function drop(path: string, st: Stats): Promise<void> {
   if (st.isSymbolicLink()) {
-    try { unlinkSync(path); } catch { rmdirSync(path); }
+    try { await unlink(path); } catch { await rmdir(path); }
     return;
   }
   if (st.isDirectory()) {
-    for (const name of readdirSync(path)) drop(join(path, name), lstatSync(join(path, name)));
-    rmdirSync(path);
+    for (const name of await readdir(path)) await drop(join(path, name), await lstat(join(path, name)));
+    await rmdir(path);
     return;
   }
-  try { unlinkSync(path); } catch (error) {
+  try { await unlink(path); } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== 'EPERM' && code !== 'EACCES') throw error;
-    chmodSync(path, 0o666);
-    unlinkSync(path);
+    await chmod(path, 0o666);
+    await unlink(path);
   }
 }
 
@@ -356,9 +359,15 @@ export class Worktrees {
     if (row.kind !== 'task' || row.state !== 'active' || !row.path) return { ok: false, reason: 'not_active' };
     const repo = this.#repoHere(row);
     const mainGit = repo && realOrNull(join(repo, '.git'));
-    if (!BEAT_BRANCH.test(row.branch) || !mainGit || !linkedAdmin(mainGit, row.path)) return { ok: false, reason: 'foreign' };
+    const admin = mainGit ? linkedAdmin(mainGit, row.path) : null;
+    if (!BEAT_BRANCH.test(row.branch) || !mainGit || !admin) return { ok: false, reason: 'foreign' };
+    if (IN_PROGRESS.some(name => lstatOf(join(admin, name)) !== undefined)) {
+      this.#set(id, { state: 'branch', note: 'in_progress' }, 'active');
+      return { ok: false, reason: 'in_progress' };
+    }
     const flag = { timedOut: false };
     let branchTip: string | undefined;
+    let held: string[] = [];
     const result = await withGit<FinishResult>(row.path, this.#d.paths.data, async raw => {
       const git = timed(raw, flag);
       const failed = (): FinishResult => ({ ok: false, reason: flag.timedOut ? 'timeout' : 'failed' });
@@ -370,6 +379,12 @@ export class Worktrees {
       let committed = false;
       if (options.commitLeftovers) {
         if (await git(['add', '-A']) === null) return failed();
+        const added = await git(['diff', '--cached', '--name-only', '--diff-filter=A', '-z']);
+        if (added === null) return failed();
+        held = added.split('\0').filter(name => name !== '' && isSecretPath(name));
+        for (let i = 0; i < held.length; i += 100) {
+          if (await git(['rm', '--cached', '-q', '--', ...held.slice(i, i + 100)]) === null) return failed();
+        }
         const staged = await git(['diff', '--cached', '--name-only', '-z']);
         if (staged === null) return failed();
         if (staged !== '') {
@@ -382,12 +397,38 @@ export class Worktrees {
         }
       }
       const tip = (await git(['rev-parse', '--verify', '-q', 'HEAD^{commit}']))?.trim();
-      return tip ? { ok: true, tip, committed, changed: tip !== row.base } : failed();
+      return tip ? { ok: true, tip, committed, changed: tip !== row.base, ...(held.length ? { held } : {}) } : failed();
     });
     if (!result) return { ok: false, reason: 'unsafe' };
     if (result.ok) this.#set(id, { tip: result.tip, own_tip: result.tip, state: 'branch', note: null }, 'active');
     else if (result.reason === 'not_on_branch') this.#set(id, { state: 'branch', note: 'not_on_branch', ...(branchTip ? { tip: branchTip } : {}) }, 'active');
     return result;
+  }
+
+  // 取り消したタスクを開き直したとき（D-13）: 取り込み待ちの作業コピーをもう一度使う。ブランチの先端が beat の書いた先端（own_tip）と違う・
+  // 作業コピーが自分のブランチの上にない・取り込みなどの途中・D-13 の印がある行は使い回さない（持ち主のコミットをタスクの仕事として受け取らないため）
+  async reactivate(id: string): Promise<ReactivateResult> {
+    const row = this.get(id);
+    if (!row) return { ok: false, reason: 'unknown' };
+    if (row.kind !== 'task' || row.state !== 'branch' || row.note !== null || !row.path || !row.own_tip) return { ok: false, reason: 'not_branch' };
+    const repo = this.#repoHere(row);
+    const mainGit = repo && realOrNull(join(repo, '.git'));
+    const place = this.place();
+    const admin = mainGit ? linkedAdmin(mainGit, row.path) : null;
+    if (!BEAT_BRANCH.test(row.branch) || !repo || !admin || !place.ok || !ownFolder(place.root, row)) return { ok: false, reason: 'foreign' };
+    if (IN_PROGRESS.some(name => lstatOf(join(admin, name)) !== undefined)) return { ok: false, reason: 'moved' };
+    const tip = await this.#branchTip(repo, row.branch);
+    if (tip === undefined) return { ok: false, reason: 'unsafe' };
+    if (tip !== row.own_tip) return { ok: false, reason: 'moved' };
+    const head = await withGit(row.path, this.#d.paths.data, async git => ({
+      ref: (await git(['symbolic-ref', '-q', 'HEAD']))?.toString('utf8').trim(),
+      commit: (await git(['rev-parse', '--verify', '-q', 'HEAD^{commit}']))?.toString('utf8').trim(),
+    }));
+    if (!head) return { ok: false, reason: 'unsafe' };
+    if (head.ref !== `refs/heads/${row.branch}` || head.commit !== row.own_tip) return { ok: false, reason: 'moved' };
+    this.#set(id, { state: 'active', tip }, 'branch');
+    const now = this.get(id)!;
+    return now.state === 'active' ? { ok: true, row: now } : { ok: false, reason: 'not_branch' };
   }
 
   async #branchTip(repo: string, branch: string): Promise<string | null | undefined> {
@@ -428,7 +469,7 @@ export class Worktrees {
     if (!row || !repo) return undefined;
     const tip = await this.#branchTip(repo, row.branch);
     if (!tip) return undefined;
-    if (row.note === 'not_on_branch' || tip === row.base) return false;
+    if (row.note !== null || tip === row.base) return false;
     const merged = await this.#mergedIntoBranch(repo, tip);
     if (merged && row.state === 'branch') this.#set(id, { state: 'merged', tip }, 'branch');
     return merged;
@@ -501,10 +542,10 @@ export class Worktrees {
     this.#set(id, { state: 'removing', keep_branch: options.keepBranch ? 1 : 0, ending });
     if (row.path && lstatOf(row.path) !== undefined) {
       if (!place.ok || !ownFolder(place.root, row)) return { ok: false, reason: 'foreign' };
-      if (here && removeLinksInside(row.path)) await withGit(repo, this.#d.paths.data, async git => git([...NO_MAINTENANCE, 'worktree', 'remove', '--force', '--', row.path!]));
-      if (lstatOf(row.path) !== undefined && !removeTree(row.path, { under: place.root }).ok) return { ok: false, reason: 'busy' };
+      if (here && await removeLinksInside(row.path)) await withGit(repo, this.#d.paths.data, async git => git([...NO_MAINTENANCE, 'worktree', 'remove', '--force', '--', row.path!]));
+      if (lstatOf(row.path) !== undefined && !(await removeTree(row.path, { under: place.root })).ok) return { ok: false, reason: 'busy' };
     }
-    if (admin && lstatOf(admin) !== undefined && !removeTree(admin, { under: join(mainGit, 'worktrees') }).ok) return { ok: false, reason: 'busy' };
+    if (admin && lstatOf(admin) !== undefined && !(await removeTree(admin, { under: join(mainGit, 'worktrees') })).ok) return { ok: false, reason: 'busy' };
     this.#set(id, { path: null });
 
     let branchKept = true;
@@ -551,20 +592,20 @@ export class Worktrees {
 }
 
 // 作業コピーの中のリンク・ジャンクションを、git に消させる前に外す（git がたどって外のファイルを消さないように）。外せないものがあれば false
-export function removeLinksInside(root: string): boolean {
+export async function removeLinksInside(root: string): Promise<boolean> {
   const top = lstatOf(root);
   if (!top || top.isSymbolicLink() || !top.isDirectory()) return false;
-  const walk = (dir: string): boolean => {
+  const walk = async (dir: string): Promise<boolean> => {
     let names: string[];
-    try { names = readdirSync(dir); } catch { return false; }
+    try { names = await readdir(dir); } catch { return false; }
     for (const name of names) {
       if (dir === root && name === '.git') continue;
       const path = join(dir, name);
-      const st = lstatOf(path);
-      if (!st) return false;
+      let st: Stats;
+      try { st = await lstat(path); } catch { return false; }
       if (st.isSymbolicLink()) {
-        try { unlinkSync(path); } catch { try { rmdirSync(path); } catch { return false; } }
-      } else if (st.isDirectory() && !walk(path)) return false;
+        try { await unlink(path); } catch { try { await rmdir(path); } catch { return false; } }
+      } else if (st.isDirectory() && !(await walk(path))) return false;
     }
     return true;
   };

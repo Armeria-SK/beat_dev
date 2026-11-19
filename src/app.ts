@@ -71,6 +71,7 @@ import { isScoutRun, TaskStore } from './tasks/store.ts';
 import { maskedTaskView } from './web/task-view.ts';
 import { ProjectStore } from './projects/store.ts';
 import { Worktrees } from './projects/worktree.ts';
+import { TaskPlaces } from './tasks/place.ts';
 import { PlanStore } from './projects/plan.ts';
 import { adoptLegacyPlans } from './projects/plan-adopt.ts';
 import { setGitNotice } from './mesh/folders.ts';
@@ -161,6 +162,7 @@ export class App {
   readonly tasks: TaskStore;
   readonly projects: ProjectStore;
   readonly worktrees: Worktrees;
+  readonly places: TaskPlaces;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
   readonly questions: QuestionStore;
@@ -228,6 +230,7 @@ export class App {
     this.projects = new ProjectStore(this.db, this.paths.projects, now);
     this.worktrees = new Worktrees({ db: this.db, paths: this.paths, config: () => this.config(), projects: this.projects, now, log: this.log });
     void this.worktrees.sweepWorktrees().catch(error => this.log(`[WARN] Could not check beat working copies: ${(error as Error).message}`));
+    this.places = new TaskPlaces({ db: this.db, tasks: this.tasks, projects: this.projects, worktrees: this.worktrees, config: () => this.config() });
     this.plans = new PlanStore(this.kv, { projects: this.paths.projects, backups: this.paths.backups }, now, { archived: id => (this.projects.get(id)?.archived_at ?? null) !== null });
     this.acceptance = new AcceptanceStore(this.db, this.paths.projects, {
       archived: id => (this.projects.get(id)?.archived_at ?? null) !== null, log: this.log, now, languages: this.projects,
@@ -272,7 +275,7 @@ export class App {
       config: () => this.config(), conversations: this.conversations, runs: this.runs, kv: this.kv,
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, memoryFiles: this.memoryFiles, botMemory: this.botMemory, tasks: this.tasks,
-      curiosity: this.curiosity, skills: this.skills, projects: this.projects, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, questions: this.questions, log: this.log,
+      curiosity: this.curiosity, skills: this.skills, projects: this.projects, places: this.places, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, questions: this.questions, log: this.log,
       web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       browser: this.browser,
@@ -285,7 +288,7 @@ export class App {
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, memoryFiles: this.memoryFiles, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
-      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans,
+      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
     this.tasks.onChange = task => {
@@ -571,7 +574,7 @@ export class App {
     void replayAction(row, {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
       conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
-      services: () => this.engine.toolServices(),
+      services: () => this.engine.toolServices(), places: this.places,
     }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
   }
 

@@ -53,7 +53,10 @@ const en = {
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
   'reason.folder_missing': 'Waiting because the folder of the product "{name}" cannot be found (or it was replaced)',
-  'reason.preempted': 'Paused to give priority to the conversation with the user (it will resume from where it left off)',
+  'reason.worktree_unavailable': 'Waiting for the product folder: another task is using it, and beat could not make a separate working copy for this task',
+  'reason.worktree_gone': "The task's separate working copy is missing, so the task cannot continue",
+  'event.worktree_held': 'Not committed to the branch because the names look like secrets (they stay in the working copy only): {names}',
+  'reason.preempted':'Paused to give priority to the conversation with the user (it will resume from where it left off)',
   'reason.checkpoint': 'Will resume in {minutes} min',
   'reason.no_progress': 'No progress was made, so it will rest for a while and then resume',
   'reason.stopped': 'It was stopped, so it will rest for a short while and then resume',

@@ -36,8 +36,11 @@ import { needsSnapshot, SNAPSHOT_EVENT, snapshotBeforeBuild, snapshotLine } from
 import type { ProjectStore } from '../projects/store.ts';
 import type { QuestionStore } from '../questions/store.ts';
 import { decidedDuring, openPendingIds } from './pending-wake.ts';
+import type { TaskPlaces } from './place.ts';
+import type { Worktrees } from '../projects/worktree.ts';
 
 const IDLE_POLL_MS = 5 * 60_000;
+const mayBranch = (c: AppConfig): boolean => c.worker.worktrees !== false && c.worker.maxParallel >= 2;
 const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
@@ -73,6 +76,8 @@ export interface WorkerDeps {
   pendingWake?: (() => unknown) | undefined;
   plans?: PlanStore | undefined;
   onScoutChange?: ((projectId: string) => void) | undefined;
+  places?: TaskPlaces | undefined;
+  worktrees?: Pick<Worktrees, 'finishWorktree' | 'removeWorktree'> | undefined;
 }
 
 export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
@@ -303,9 +308,14 @@ export class Worker {
     if (this.#d.tasks.openChildren(task.id) > 0) return null;
     if (hold) return { kind: hold };
     if (budgetAt !== undefined && !this.#forced.has(task.id)) return { kind: 'budget', at: budgetAt };
-    if (this.#d.tasks.productBusy(task)) return { kind: 'product' };
+    if (this.#busy(task)) return { kind: 'product' };
     if (this.#running.size >= c.worker.maxParallel || !room) return { kind: 'slots' };
     return null;
+  }
+
+  // そのタスクの置き場（本体か作業コピー）が埋まっているか（beat 8-2。置き場を見ないときは今までどおり本体だけ）
+  #busy(task: Task): boolean {
+    return this.#d.places ? this.#d.places.busy(task) : this.#d.tasks.productBusy(task);
   }
 
   status() {
@@ -350,7 +360,7 @@ export class Worker {
       };
       const own = c.worker.enabled;
       const eligible = (t: Task): boolean => own || this.#ownerWork(t);
-      const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t) });
+      const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t), ...(this.#d.places ? { placeFree: (t: Task) => !this.#busy(t) } : {}) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
       if (!c.models.length) { reschedule(); return 'no_model'; }
 
@@ -373,7 +383,7 @@ export class Worker {
         const forced = tasks.get(id);
         if (forced?.status !== 'ready' || forced.attempts >= forced.max_attempts) { this.#forced.delete(id); continue; }
         // 提供元が満杯のあいだは覚えておく（空けば、終わった実行の onRunEnd で拾う）
-        if (!roomFor() || tasks.productBusy(forced)) continue;
+        if (!roomFor() || this.#busy(forced)) continue;
         this.#forced.delete(id);
         task = forced;
         break;
@@ -425,7 +435,7 @@ export class Worker {
           reschedule(outcome === 'idle' ? now + SCOUT_SHORT_WAIT_MS : now);
           return outcome;
         }
-        reschedule(Math.min(tasks.nextWakeAt() ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
+        reschedule(Math.min(tasks.nextWakeAt({ mayBranch: mayBranch(c) }) ?? Infinity, scout.wakeAt ?? Infinity, reviewWait ?? Infinity));
         return reviewWait !== undefined ? 'no_model' : held ? 'budget' : 'idle';
       }
       const outcome = await this.#run(task, release);
@@ -600,7 +610,7 @@ export class Worker {
     if (c.models.length) this.#d.tasks.spawnDueSchedules();
     this.#guardScout(c);
     if (this.#stopped || this.#d.autoSchedule === false || !this.#scoutRunning()) return;
-    const at = Math.min(this.#d.tasks.nextWakeAt() ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
+    const at = Math.min(this.#d.tasks.nextWakeAt({ mayBranch: mayBranch(c) }) ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);
     this.#schedule(Math.max(1000, at - now));
   }
 
@@ -897,6 +907,15 @@ export class Worker {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}`, projectId: task.project_id });
       return 'folder_missing';
     }
+    const placed = this.#d.places && task.project_id ? await this.#d.places.decide(tasks.get(task.id) ?? task) : undefined;
+    if (placed?.kind === 'gone') {
+      tasks.finish(task.id, 'failed', taskText(language, 'reason.worktree_gone'), 'beat');
+      return 'idle';
+    }
+    if (placed?.kind === 'wait') {
+      tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.worktree_unavailable') });
+      return 'busy';
+    }
     const project = this.#d.projects && needsSnapshot(this.#d.db, task) ? this.#d.projects.get(task.project_id!) : undefined;
     if (project) {
       const dataDir = dirname(this.#d.projects!.dir);
@@ -916,8 +935,30 @@ export class Worker {
     try {
       const result = await started.done;
       this.#finalize(task, result, started.control.value, started.runId);
+      if (placed?.kind === 'worktree') await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
     return 'ran';
+  }
+
+  // 作業コピーのタスクが終わった（完了・失敗・取り消し）: 書きかけを 1 つのコミットにしてブランチに残す。変わったものが無ければ片づける。
+  // 区切り・yield・質問待ちなどで ready / waiting に戻ったときは、次の実行も同じ作業コピーで続けるので何もしない（D-13）
+  async #closeWorktree(task: Task, rowId: string): Promise<void> {
+    const status = this.#d.tasks.get(task.id)?.status;
+    const wt = this.#d.worktrees;
+    if (!wt || (status !== 'done' && status !== 'failed' && status !== 'cancelled')) return;
+    const language = this.#language();
+    try {
+      const done = await wt.finishWorktree(rowId, { commitLeftovers: true, message: `beat: ${task.title.replace(/[\r\n]+/gu, ' ').slice(0, 200)}` });
+      if (done.ok && done.held?.length) this.#d.tasks.event(task.id, 'worktree', 'beat', taskText(language, 'event.worktree_held', { names: done.held.slice(0, 10).join(', ') }));
+      if (done.ok && !done.changed) {
+        const removed = await wt.removeWorktree(rowId, { keepBranch: false, state: 'gone' });
+        if (!removed.ok) this.#d.log(`[WARN] Could not clean up the working copy of task ${task.id} (${removed.reason})`);
+      } else if (!done.ok) {
+        this.#d.log(`[WARN] Could not finish the working copy of task ${task.id} (${done.reason})`);
+      }
+    } catch (error) {
+      this.#d.log(`[WARN] Could not finish the working copy of task ${task.id}: ${(error as Error).message}`);
+    }
   }
 
   #followUpAnswers(taskId: string, runId: string): void {

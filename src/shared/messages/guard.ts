@@ -192,7 +192,10 @@ const en = {
 
   'shell.disabled': 'Running the shell is disabled in the settings',
   'shell.background_no_product': "Background commands can run only in a product's conversation or task. Run it without background (it then waits until the command ends, up to the timeout)",
-  'shell.background_push': 'git push cannot run in the background: beat checks a push by waiting for it to end. Run it without background',
+  'wt.git_shared': 'This task works in a separate working copy that shares its branches, stash, settings and working-copy list with the product folder, so this git command cannot be used here: {cmd}. Stay on this branch and use git status, diff, log, add, commit, restore, reset, merge, rebase or cherry-pick inside this working copy',
+  'wt.write_main': 'This task works in a separate working copy; the product folder {path} is not writable from here. Change the files in this working copy instead',
+  'wt.push_beat': "This push could also send or delete beat's working branches (beat/…): {cmd}. Push the branches by name instead",
+  'shell.background_push':'git push cannot run in the background: beat checks a push by waiting for it to end. Run it without background',
   'shell.cwd_unresolved': 'The cwd cannot be determined: {detail}',
   'shell.cwd_outside': 'The cwd must be inside the allowed folders ({path})',
   'shell.cwd_missing': 'The cwd folder does not exist ({path})',

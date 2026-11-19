@@ -24,7 +24,7 @@ import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
 import { newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
 import type { QuestionStore } from '../questions/store.ts';
-import { rootsLister, runProject } from '../projects/run.ts';
+import { rootsLister, runProject, type RunWorktree } from '../projects/run.ts';
 import { isCore, projectAllows, ToolRegistry } from '../tools/registry.ts';
 import { deferredSection } from '../tools/builtin/tool-search.ts';
 import { backgroundSection } from '../tools/builtin/shell-bg.ts';
@@ -34,7 +34,7 @@ import { stricterMode } from '../shared/permission-mode.ts';
 import { isLoopbackHost } from '../shared/url.ts';
 import type { BrowserSession } from '../tools/browser/session.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
-import type { AgentRunInput, RunKind, TaskControl, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
+import type { AgentRunInput, RunKind, RunPlace, TaskControl, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { growSkills, type SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
@@ -153,6 +153,8 @@ export interface ChatEngineDeps {
   curiosity?: CuriosityStore;
   skills?: SkillStore;
   projects?: ProjectStore | undefined;
+  // beat 8-2: タスクが動く作業コピー（無ければ本体）
+  places?: { runPlace: (taskId: string) => RunWorktree | undefined } | undefined;
   plans?: PlanStore | undefined;
   mesh?: Mesh | undefined;
   memoryFiles?: ProductMemory | undefined;
@@ -816,7 +818,11 @@ export class ChatEngine {
     // 子の担当は、親が始めたときの設定で動く（親と同じ決まり。途中で緩めても広がらない）
     const config = agent?.parent.config ?? d.config();
     d.runs.start(runId, kind, conversationId, agent?.parent.runId);
-    const resolved = agent ? agent.parent.project : runProject(d.projects, d.conversations.projectOf(conversationId));
+    const worktree = !agent && task && kind === 'task' ? d.places?.runPlace(task.task.id) : undefined;
+    const own = agent ? undefined : runProject(d.projects, d.conversations.projectOf(conversationId), worktree);
+    const resolved = agent ? agent.parent.project : own;
+    const place: RunPlace | undefined = agent ? agent.parent.place
+      : own?.worktree && own.productRoot ? { kind: 'worktree', id: own.worktree.id, productRoot: own.productRoot, branch: own.worktree.branch, base: own.worktree.base, ceiling: own.worktree.ceiling } : undefined;
     const scout = agent ? agent.parent.scout === true : forbid instanceof ScoutAllow;
     const snapshot = this.#snapshot(conversationId, resolved, scout);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
@@ -848,7 +854,7 @@ export class ChatEngine {
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
     const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
-      runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}), ...(kind === 'review' && resolved ? { memoryProject: resolved.id } : {}),
+      runId, conversationId, kind, signal, stopSignal: this.#hardStops.get(runId)?.signal, config, paths: d.paths, policy, workspace: agent?.parent.workspace ?? (project ? project.root ?? d.projects?.get(project.id)?.root ?? d.paths.projects : home), home, ...(project ? { project } : {}), ...(project && place ? { place } : {}), ...(kind === 'review' && resolved ? { memoryProject: resolved.id } : {}),
       ...(() => { const evidence = this.#reviewEvidence.get(runId); this.#reviewEvidence.delete(runId); return kind === 'review' && evidence ? { reviewEvidence: evidence } : {}; })(),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       conversationTainted: () => d.conversations.everTainted(conversationId),
@@ -1269,7 +1275,8 @@ export class ChatEngine {
     const background = backgroundSection(d.background?.list({ conversationId: p.conversationId }) ?? [], language);
     const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
     const planMemory = p.kind === 'chat' && mode === 'plan' && row?.archived_at === null && !d.botMemory && d.memoryFiles ? (config.memory.review ? 'review' as const : 'off' as const) : undefined;
-    const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language, memory: planMemory } : undefined;
+    const worktree = p.project?.worktree && p.project.productRoot ? { branch: p.project.worktree.branch, productRoot: p.project.productRoot } : undefined;
+    const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language, memory: planMemory, worktree } : undefined;
     const mesh = this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode, product, requirements), deferred, mesh, summary, checklist, background].filter(Boolean).join('\n\n');
@@ -1492,8 +1499,8 @@ export class ChatEngine {
   #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void, scout = false) {
     const d = this.#d;
     const product = d.conversations.projectOf(conversationId) !== null;
-    const root = project?.root;
-    const rootKey = root ? d.projects?.get(project.id)?.root_key : undefined;
+    const root = project?.root ? project.productRoot ?? project.root : undefined;
+    const rootKey = root && project ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
       ...(d.botMemory && d.memory && !scout ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
