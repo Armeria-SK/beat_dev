@@ -279,6 +279,19 @@ test('5-3a: 子を待っている Build で持ち主が Run now を何度押し�
   assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 0);
 });
 
+test('5-3a: 子を待っている Build で持ち主が Run now を何度押しても、task_checkpoint で終わる待つだけの回は進展なしに数えず、親は止まらない', async t => {
+  const s = await setup(t);
+  const { row } = s.product('shop');
+  const parent = s.app.tasks.create({ title: 'Build: shop', origin: 'user', projectId: row.id, actor: 'user', acceptanceItems: ['A-1'] });
+  s.app.tasks.create({ title: 'kid', origin: 'user', actor: 'beat', spawnedBy: parent.id, projectId: row.id, runAt: s.clock.now + 60 * 60_000 });
+  for (let i = 0; i < 3; i++) {
+    await runTask(s, parent.id, [toolCall('task_checkpoint', { tried: `press ${i}`, result: 'waiting for kid', next_action: 'wait' })]);
+    assert.equal(s.app.tasks.get(parent.id)!.status, 'ready', `${i + 1} 回目: 止まらない`);
+  }
+  assert.equal(s.app.kv.get(`task-idle:${parent.id}`), undefined);
+  assert.equal(s.app.questions.list({ status: 'open', taskId: parent.id }).filter(q => q.kind === 'stuck').length, 0);
+});
+
 test('5-3a: 1 つの製品で同時に動くタスクは 1 つ（ほかの製品・製品の無いタスクは動く）。今すぐ実行も同じ枠', async t => {
   const s = await setup(t, c => { c.worker.maxParallel = 2; });
   const { row: shop } = s.product('shop', null);

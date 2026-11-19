@@ -1128,6 +1128,9 @@ export class Worker {
     }
     if (!(result.ok && result.split) && control.outcome !== 'checkpoint' && control.outcome !== 'yield') this.#d.kv.delete(splitKey(task.id));
     const answered = (this.#d.questions?.answeredDuringRun(task.id, runId).length ?? 0) > 0;
+    // もうある子を待つだけの回（この回は子のタスクを作っていない。持ち主の Run now など）は、進展なしに数えない（yield と task_checkpoint で同じ）
+    const createdChild = (): boolean => this.#d.db.prepare("SELECT 1 FROM tasks t JOIN task_events e ON e.task_id = t.id AND e.kind = 'context' AND e.run_id = ? WHERE t.spawned_by = ? LIMIT 1").get(runId, task.id) !== undefined;
+    const onlyWaits = (): boolean => tasks.openChildren(task.id) > 0 && !createdChild();
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
       if (answered) {
@@ -1141,11 +1144,9 @@ export class Worker {
       return;
     }
     if (control.outcome === 'yield') {
-      // 子を待って区切る回も、途中経過と同じに数える。ただし進展なしに数えるのは、この回が子のタスクを作ったときだけ
-      // （もうある子を待つだけの回〔持ち主の Run now など〕は数えない。子が仕事をすれば、子の回が親の数を消す）
-      const created = this.#d.db.prepare("SELECT 1 FROM tasks t JOIN task_events e ON e.task_id = t.id AND e.kind = 'context' AND e.run_id = ? WHERE t.spawned_by = ? LIMIT 1").get(runId, task.id) !== undefined;
+      // 子を待って区切る回も、途中経過と同じに数える（子が仕事をすれば、子の回が親の数を消す）
       if ((result.ok && result.workDone > 0) || answered || decidedDuring(this.#d.db, task.id, runId)) this.#d.kv.delete(idleKey);
-      else if (created && this.#noProgress(task, runId)) return;
+      else if (!onlyWaits() && this.#noProgress(task, runId)) return;
       this.#continued(task);
       tasks.setReady(task.id, { reason: control.reason });
       return;
@@ -1189,7 +1190,7 @@ export class Worker {
       tasks.update(task.id, { appendNote: control.note, nextAction: control.nextAction }, 'beat', runId);
       // 道具を使わない区切りは進展なしに数える（休まずに続けるので、空回りは STAGNATION_LIMIT 回で止める）
       if (!idle) this.#d.kv.delete(idleKey);
-      else if (this.#noProgress(task, runId)) return;
+      else if (!onlyWaits() && this.#noProgress(task, runId)) return;
       this.#continued(task);
       tasks.setReady(task.id, { runAt: now, reason: idle ? taskText(language, 'reason.no_progress', { limit: STAGNATION_LIMIT }) : taskText(language, 'reason.checkpoint') });
       return;
