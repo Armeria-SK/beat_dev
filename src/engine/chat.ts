@@ -1346,7 +1346,7 @@ export class ChatEngine {
     // dynamic は実行のあいだ変わらない部分だけ（日付まで）。時刻・Checklist・裏のコマンドは tail へ（S1。dynamic が変わると後ろの履歴が全部書き直しになる）
     const now = d.now?.() ?? new Date();
     const fence = this.#fence(p.runId);
-    const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), statusGuide(fence.nonce), deferred, mesh, summary].filter(Boolean).join('\n\n');
+    const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), statusGuide(fence.nonce), deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
     const sections = { checklist, background };
     const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
     const apiTools = specs;
