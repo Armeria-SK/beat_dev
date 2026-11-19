@@ -99,7 +99,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
 
   const titles = useMemo(() => new Map(conversations.map(c => [c.id, c.title])), [conversations]);
   const rows = useMemo(() => (data ? logRows({
-    runs: inFilter(data.runs, product), calls: inFilter(data.calls, product), jobs: inFilter(data.jobs, product), runLabel: runKindLabel, titleOf: id => titles.get(id) ?? null,
+    runs: inFilter(data.runs, product), calls: inFilter(data.calls, product), jobs: inFilter(data.jobs, product), runLabel: runKindLabel, titleOf: id => titles.get(id) ?? null, fixLabel: branch => t('ui.runs.fixRow', branch),
   }) : []), [data, product, titles]);
   const shown = useMemo(() => filterLog(rows, filter), [rows, filter]);
   const today = startOfDay(Date.now());

@@ -18,6 +18,7 @@ const EVENT_KEYS = {
   uncancelled: 'tasks.event.uncancelled', gate_passed: 'tasks.event.gate_passed', gate_refused: 'tasks.event.gate_refused', gate_closed: 'tasks.event.gate_closed',
   gate_list_changed: 'tasks.event.gate_list_changed', gate_list_notified: 'tasks.event.gate_list_notified', item_check_failed: 'tasks.event.item_check_failed',
   check_failed: 'tasks.event.check_failed', check_passed: 'tasks.event.check_passed', owner_check: 'tasks.event.owner_check', owner_fix: 'tasks.event.owner_fix',
+  worktree: 'tasks.event.worktree', prefix: 'tasks.event.prefix',
 } as const satisfies Record<string, PlainKey>;
 export function eventKey(kind: string, content?: string | null): PlainKey | null {
   if (kind === 'owner_fix' && content) {

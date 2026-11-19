@@ -290,6 +290,8 @@ export const en = {
   'tasks.event.owner_check': 'Your check',
   'tasks.event.owner_fix': 'Fix for your check',
   'tasks.event.owner_fix_answer': 'Fix for your answer',
+  'tasks.event.worktree': 'Branch',
+  'tasks.event.prefix': 'Pre-fix',
   // p0-5
   // p0-6
   'ui.wordmark': 'beat',
@@ -1085,6 +1087,7 @@ export const en = {
   'ui.tools.browserOff': 'The browser is off in Settings',
   'ui.tools.mcp': (server: string) => `MCP · ${server}`,
   'ui.runs.kind': 'Kind',
+  'ui.runs.fixRow': (branch: string) => `pre-fix · ${branch}`,
   'ui.runs.all': 'All',
   'ui.runs.run': 'Run',
   'ui.runs.tool': 'Tool',
