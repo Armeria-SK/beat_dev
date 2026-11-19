@@ -92,6 +92,8 @@ export const SCOUT_RUN = 'scout-run';
 export const isScoutRun = (task: Pick<Task, 'proposed_by'>): boolean => task.proposed_by === SCOUT_RUN;
 const NOT_SCOUT = `proposed_by IS NOT '${SCOUT_RUN}'`;
 const PRODUCT_FREE = `(project_id IS NULL OR NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.project_id = tasks.project_id AND busy.status = 'running' AND busy.${NOT_SCOUT}))`;
+// beat 8-2: 本体が埋まっていても作業コピーで動きうるタスク（自分の作業コピーがある・まだ動いていない根のタスク）。起こす時刻を決めるときだけ使う（多めに起きても選ぶ所で決め直す）
+const MAY_BRANCH = `(EXISTS (SELECT 1 FROM worktrees w WHERE w.task_id = tasks.id AND w.kind = 'task' AND w.state IN ('active', 'branch')) OR (spawned_by IS NULL AND acceptance_items IS NULL AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = tasks.id AND e.kind = 'run')))`;
 
 export const SCHEDULE_MAX_RANGE_MS = 8 * 86_400_000;
 export const SCHEDULE_PLANNED_LIMIT = 200;
@@ -742,19 +744,22 @@ export class TaskStore {
   }
 
   // accept: 並べた順に見て、これを通った最初のもの（提供元が満杯のタスクを飛ばして次を見るため）
-  pickNext(options: { accept?: (task: Task) => boolean } = {}): Task | undefined {
+  // placeFree（beat 8-2）: 本体が空いているかの代わりに、そのタスクの置き場（本体か作業コピー）が空いているかを呼び手が決める
+  pickNext(options: { accept?: (task: Task) => boolean; placeFree?: (task: Task) => boolean } = {}): Task | undefined {
     const now = this.#now();
+    const { placeFree } = options;
+    const accept = placeFree ? (task: Task) => placeFree(task) && (options.accept?.(task) ?? true) : options.accept;
     const sql = `SELECT * FROM tasks WHERE status = 'ready' AND (run_at IS NULL OR run_at <= ?) AND attempts < max_attempts AND ${OWNER_PICKABLE} AND ${NOT_SCOUT}
       AND (project_id IS NULL OR project_id NOT IN (SELECT id FROM projects WHERE archived_at IS NOT NULL))
-      AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}
+      AND ${NO_OPEN_CHILD} AND ${placeFree ? 'TRUE' : PRODUCT_FREE}
       ORDER BY ${ORIGIN_ORDER}, priority, COALESCE(run_at, created_at)`;
-    if (!options.accept) return this.#db.prepare(`${sql} LIMIT 1`).get(now) as Task | undefined;
-    return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(options.accept);
+    if (!accept) return this.#db.prepare(`${sql} LIMIT 1`).get(now) as Task | undefined;
+    return (this.#db.prepare(sql).all(now) as unknown as Task[]).find(accept);
   }
 
-  nextWakeAt(): number | undefined {
+  nextWakeAt(options: { mayBranch?: boolean } = {}): number | undefined {
     const now = this.#now();
-    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND ${NOT_SCOUT} AND (status = 'scheduled' OR (status = 'ready' AND ${OWNER_PICKABLE} AND ${NO_OPEN_CHILD} AND ${PRODUCT_FREE}))`).get(now) as { t: number | null };
+    const row = this.#db.prepare(`SELECT MIN(run_at) AS t FROM tasks WHERE run_at > ? AND ${NOT_SCOUT} AND (status = 'scheduled' OR (status = 'ready' AND ${OWNER_PICKABLE} AND ${NO_OPEN_CHILD} AND ${options.mayBranch ? `(${PRODUCT_FREE} OR ${MAY_BRANCH})` : PRODUCT_FREE}))`).get(now) as { t: number | null };
     return row.t ?? undefined;
   }
 

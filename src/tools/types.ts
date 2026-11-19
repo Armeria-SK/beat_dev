@@ -113,7 +113,9 @@ export interface ToolContext {
   policy: ScopePolicy;
   workspace: string;
   home?: string | undefined;
-  project?: { id: string; root?: string | undefined } | undefined;
+  project?: { id: string; root?: string | undefined; productRoot?: string | undefined; worktree?: { branch: string } | undefined } | undefined;
+  // beat 8-2: このタスクは beat の作業コピー（linked worktree）で動く。project.root はその作業コピー、productRoot は本体（この実行からは書けない）
+  place?: RunPlace | undefined;
   // 振り返りの実行だけ: 記憶の道具が書く製品の id（振り返りの会話の製品。作業フォルダは渡さない）
   memoryProject?: string | undefined;
   // 振り返りの実行だけ: 依頼文の記録の中身（見出し・札を外したもの）と、持ち主の発言（添付を外したもの、1 発言 1 要素）。記憶の道具が、記録に触れていない記憶を直さない・消さないために照らす
@@ -162,6 +164,8 @@ export interface ToolContext {
   scout?: true | undefined;
   scoutFetches?: { n: number } | undefined;
 }
+
+export interface RunPlace { kind: 'worktree'; id: string; productRoot: string; branch: string; base: string; ceiling: string }
 
 export interface ToolRunResult { output: ToolOutput; decision: Decision; decidedBy: string; gate?: ToolGate }
 

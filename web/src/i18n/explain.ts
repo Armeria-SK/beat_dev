@@ -179,7 +179,6 @@ export const EXPLAIN_KEYS = [
   'ui.notice.memoryForget',
   'ui.notice.undoFailed',
   'ui.notice.switched',
-  'ui.notice.denied',
   'ui.notice.contextHigh',
   'ui.notice.summary',
   'ui.notice.summaryFailed',

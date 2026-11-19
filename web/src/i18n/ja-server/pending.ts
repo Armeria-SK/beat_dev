@@ -3,6 +3,7 @@ import type { JaTable } from './table.ts';
 
 export const pendingJa = {
   'not_found': "Pending の項目 #{id} が見つかりません",
+  'worktree_gone': "動かしていません: タスクの別の作業コピーで頼まれたものですが、その作業コピーはもう使われていません",
   'not_waiting': "Pending の項目 #{id} はもう待っていません（今は {status}）",
   'invalid_id': "Pending の項目の id は正の整数にしてください",
   'invalid_status': "status は waiting か decided にしてください",

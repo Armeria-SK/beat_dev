@@ -94,12 +94,23 @@ test('3-2-s 要件の聞き取りの文: ふつうの形は 700 トークン以�
   assert.equal(section.trim().split('\n').length, 2, '一覧を書く節は見出しと 1 行だけ（決まりは道具の説明にある）');
 });
 
-test('要件の聞き取りの文: ファイルを書くのは Build で、計画を書いたあと持ち主が Plan の欄の本当のボタン（git でない製品は Start）で始める。コードを貼る・別の環境を勧めることはせず、始めてと言われたら、計画があればボタンを、無ければ先に計画を書く', t => {
+test('要件の聞き取りの文: ファイルを書くのは Build で、計画を書いたあと持ち主が Plan の欄の本当のボタン（その製品で画面に出る名前だけ。git でない製品は Start）で始める。コードを貼る・別の環境を勧めることはせず、始めてと言われたら、計画があればボタンを、無ければ先に計画を書く', t => {
   const paths = resolvePaths(tempDir(t));
+  const gitRoot = tempDir(t);
+  mkdirSync(join(gitRoot, '.git'));
+  const plainRoot = tempDir(t);
+  const at = new Date('2026-01-01T00:00:00Z');
+  for (const raw of [requirementsText(paths, 100_000), requirementsText(paths, 12_672)]) {
+    const git = buildDynamic('UTC', 'en', at, 'plan', { name: 'p', root: gitRoot }, raw);
+    const plain = buildDynamic('UTC', 'en', at, 'plan', { name: 'p', root: plainRoot }, raw);
+    assert.match(git, /"Build with this plan" button in the Plan pane/u);
+    assert.doesNotMatch(git, /Start with this plan|\{build_button\}/u, 'git の製品の指示には、画面に出ない名前を書かない');
+    assert.match(plain, /"Start with this plan" button in the Plan pane/u);
+    assert.doesNotMatch(plain, /Build with this plan|\{build_button\}/u, 'git でない製品の指示には、画面に出ない名前を書かない');
+    assert.match(git, /in English/u, '日本語で書くときも、ボタンの名前は画面と同じ英語のまま');
+  }
   for (const text of [requirementsText(paths, 100_000), requirementsText(paths, 12_672)]) {
     assert.match(text, /files are written by Build/iu);
-    assert.match(text, /"Build with this plan" in the Plan pane/u);
-    assert.match(text, /"Start with this plan"[^.]*not a git repo/u);
     assert.match(text, /never offer to paste code/iu);
     assert.match(text, /another (tool or )?environment/iu);
     assert.match(text, /ask(s|ed) (you )?to start[^.]*plan is written[^.]*press that button[^.]*no plan[^.]*write the plan first/iu);

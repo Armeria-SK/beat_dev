@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError, type Acceptance, type AcceptanceItem, type Coverage, type PlanDoc, type Task } from '../web/src/api.ts';
+import { PLAN_BUTTON } from '../src/engine/workspace.ts';
 import { BuildError } from '../src/projects/build.ts';
 import { buildText } from '../src/shared/messages/build.ts';
 import { domainProblem } from '../src/web/http.ts';
@@ -200,4 +201,8 @@ test('ui/build: Plan の欄の札は、待っている（ready）なら Queued�
   assert.deepEqual(buildPill('running'), { label: 'ui.plan.building', tone: 'running' });
   assert.deepEqual(buildPill('waiting'), { label: 'ui.plan.waiting', tone: 'waiting' });
   assert.deepEqual([t('ui.plan.queued'), t('ui.plan.building'), t('ui.plan.waiting')], ['Queued', 'Running', 'Waiting for you']);
+});
+
+test('ui/build: AI への指示に入れるボタンの名前は、Plan の欄のボタンの名前と同じ（git なら Build、git でなければ Start）', () => {
+  assert.deepEqual(PLAN_BUTTON, { git: en['ui.plan.build'], other: en['ui.plan.start'] });
 });

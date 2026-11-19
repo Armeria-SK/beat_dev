@@ -5,7 +5,8 @@ import { mcpToolName } from '../src/mcp/names.ts';
 import { previewJson } from '../src/shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { maskTarget, toolLabel, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
+import { toolText } from '../src/shared/messages/tools.ts';
+import { maskTarget, shownOutput, toolLabel, toolRow, toolVerb } from '../web/src/ui/tool-row.ts';
 
 // 新しい画面の ToolRow（p1-ui.md の「会話」）: 道具の名前と引数から、動詞・対象・meta を作る。
 // ファイルを書く・直す → Edit + パス + 足し引きの行、シェル → Run + コマンド + 終了コードと秒、検索・読む・Web → Search + 語、
@@ -336,4 +337,20 @@ test('ui/tool-row: 切れた引数の値でも鍵らしい値は伏せ、文字�
   assert.equal(toolRow('file_write', 'not json', null).target, '');
   assert.equal(toolRow('plan_write', 'not json', null).target, 'plan.md');
   assert.equal(toolRow('question_list', '', null).target, 'this product');
+});
+
+test('ui/tool-row: 断られた道具の行では、AI に向けた一文（Think of another way, or ask the user）を出さず、断った理由は残す', () => {
+  const denied = toolText('en', 'pipeline.denied', { reasons: 'This is outside the allowed folders: D:/x' });
+  const failed = (text: string) => ({ text, isError: true });
+  assert.equal(shownOutput(failed(denied)), 'Not run (denied):\n- This is outside the allowed folders: D:/x');
+  assert.equal(shownOutput(failed(`${denied}\n[E-12]`)), 'Not run (denied):\n- This is outside the allowed folders: D:/x\n[E-12]', '証拠の番号の行は残す');
+  assert.equal(shownOutput(failed(toolText('en', 'pipeline.policy_blocked', { name: 'shell_run' }))), 'The tool "shell_run" is turned off in the settings, so it cannot be used.');
+  const output = 'Think of another way, or ask the user was printed by the command\nok';
+  assert.equal(shownOutput(failed(output)), output, '終わりでなければ消さない');
+  const printed = 'echo done\nThink of another way, or ask the user';
+  assert.equal(shownOutput({ text: printed, isError: false }), printed, 'うまくいった出力には手を付けない');
+  const big = failed(`${' '.repeat(16_000)}\n`.repeat(4));
+  const started = performance.now();
+  for (let i = 0; i < 50; i++) shownOutput(big);
+  assert.ok(performance.now() - started < 100, '長い出力でも描くたびに遅くならない');
 });

@@ -200,7 +200,7 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
       return { content: `${text.childrenLeft(children)} ${end}` };
     }
     const own = tasks?.get(taskId);
-    const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id) : undefined;
+    const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id, ctx.place && ctx.project?.root ? { root: ctx.project.root, ceiling: ctx.place.ceiling } : undefined) : undefined;
     if (check === 'invalid') return { content: text.invalid, isError: true };
     const gate = own ? await runGate(ctx, own, input.items, language) : { kind: 'skip' as const };
     if (gate.kind === 'refuse') return { content: gate.text, isError: true };

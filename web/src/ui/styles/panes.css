@@ -73,6 +73,8 @@
   .ui-acc__buttons .bt-btn, .ui-acc__form .bt-seg__opt { height: 40px; }
 }
 .ui-kanban--pane { display: flex; flex-direction: column; gap: var(--space-3); min-height: 100%; }
-.ui-kanban--pane > .bt-board { padding-bottom: var(--space-2); }
+.ui-kanban--pane > .bt-board { grid-auto-flow: row; grid-auto-columns: auto; overflow-x: visible; padding-bottom: var(--space-2); }
+.ui-kanban--pane > .ui-coltabs { display: flex; padding: 0; }
+.ui-kanban--pane .ui-col--off { display: none; }
 .ui-kanban__empty > .bt-empty, .ui-col__cards > .ui-scout { max-width: none; padding: var(--space-4) 0; }
 .ui-scout__meta { margin: 0; overflow-wrap: anywhere; }

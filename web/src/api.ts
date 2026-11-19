@@ -199,6 +199,7 @@ export interface Task {
   created_at: number; updated_at: number; completed_at: number | null;
   cancelled_from?: TaskStatus | null;
   reject_reason?: string | null;
+  worktree?: { id: string; branch: string; base: string; state: string; files: number | null; added: number | null; removed: number | null; note: string | null } | null;
   timezone?: string | null;
   project_id?: string | null;
   acceptance_items?: string | null;

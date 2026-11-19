@@ -180,7 +180,6 @@ export const ja = {
   'ui.notice.memoryForget': (content: string) => `記憶を忘れました: ${content}`,
   'ui.notice.undoFailed': '取り消せませんでした',
   'ui.notice.switched': (to: string) => `予備のモデルに切り替えました: ${to}`,
-  'ui.notice.denied': (tool: string) => `実行しませんでした: ${tool}`,
   'ui.notice.contextHigh': (n: number) => `context が ${n}% 埋まっています · 古いメッセージを要約します`,
   'ui.notice.summary': '古いメッセージを要約しました',
   'ui.notice.summaryFailed': '要約を読めませんでした',

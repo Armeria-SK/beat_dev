@@ -16,21 +16,23 @@ const EVENT_TAIL_CHARS = 500;
 export const CHECK_OPTIONS = ['Retry', 'Leave it'] as const;
 export const CHECK_KEEP = 1;
 
-export interface ProductCheck { command: string; root: string }
+export interface ProductCheck { command: string; root: string; ceiling?: string }
 
 export type CheckResult =
   | { ok: true; durationMs: number }
   | { ok: false; reason: 'failed' | 'timeout' | 'spawn'; exitCode: number | null; tail: string; durationMs: number }
   | { ok: false; reason: 'aborted' };
 
-export function productCheck(projects: ProjectStore | undefined, projectId: string | null): ProductCheck | 'invalid' | undefined {
+// place: 作業コピーで動くタスク（beat 8-2）。確かめは作業コピーで動かす（命令は DB から）
+export function productCheck(projects: ProjectStore | undefined, projectId: string | null, place?: { root: string; ceiling: string }): ProductCheck | 'invalid' | undefined {
   if (!projectId) return undefined;
   const row = projects?.get(projectId);
   if (!row) return undefined;
   let command: string | null;
   try { command = checkCommandOf(row.check_command); } catch { return 'invalid'; }
   if (!command) return undefined;
-  return folderMissing(row) ? 'invalid' : { command, root: row.root };
+  if (folderMissing(row)) return 'invalid';
+  return place ? { command, root: place.root, ceiling: place.ceiling } : { command, root: row.root };
 }
 
 const tailOf = (text: string): string => {
@@ -58,7 +60,8 @@ export const climbsToParent = (command: string, root: string): boolean =>
 export async function runProductCheck(check: ProductCheck, options: { config: AppConfig; dataDir: string; signal: AbortSignal; timeoutMs?: number }): Promise<CheckResult> {
   if (climbsToParent(check.command, check.root)) return { ok: false, reason: 'spawn', exitCode: null, tail: NO_PACKAGE_JSON, durationMs: 0 };
   const shell = resolveShell(options.config.tools.shell.shell);
-  const { env, cleanup } = checkEnv(options.config, check.root, options.dataDir);
+  const { env: plain, cleanup } = checkEnv(options.config, check.root, options.dataDir);
+  const env = check.ceiling ? { ...plain, GIT_CEILING_DIRECTORIES: check.ceiling } : plain;
   let result;
   try {
     result = await runProcess(shell.file, shell.args(check.command), {

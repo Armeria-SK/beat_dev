@@ -47,7 +47,7 @@ export function buildStage(b: ChatBuild): BuildStage {
 export function noticeWeight(notice: RunNotice): NoticeWeight {
   switch (notice.kind) {
     case 'error': return 'fail';
-    case 'switch': case 'warning': case 'denied': return 'warn';
+    case 'switch': case 'warning': return 'warn';
     default: return 'quiet';
   }
 }
@@ -114,8 +114,25 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
     }
   };
 
+  const noticeKeys = new Map<string, number>();
+  const pushNotices = (list: readonly RunNotice[]): void => {
+    for (const row of noticeRows(list)) {
+      const runId = row.notices[0]!.runId;
+      const n = noticeKeys.get(runId) ?? 0;
+      noticeKeys.set(runId, n + 1);
+      items.push({ kind: 'notice', key: `n-${runId}-${n}`, ...row });
+    }
+  };
+  const anchored = notices.filter(n => n.after !== undefined).sort((a, b) => a.after! - b.after!);
+  const placeNotices = (before: number): void => {
+    const due: RunNotice[] = [];
+    while (anchored.length && anchored[0]!.after! < before) due.push(anchored.shift()!);
+    if (due.length) pushNotices(due);
+  };
+
   let glueRun: string | null = null;
   for (const m of messages) {
+    if (!(glueRun !== null && m.runId === glueRun) && m.note !== 'continue') placeNotices(m.id);
     if (m.role !== 'tool' && !hiddenReply(m)) placeBuilds(m.createdAt);
     if (m.toolCalls?.length) {
       const calls = new Map<string, string[]>();
@@ -141,6 +158,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
     if (m.runId && lastOfRun.get(m.runId) === m.id) items.push({ kind: 'plan', key: `plan-${m.runId}` });
   }
 
+  placeNotices(Number.POSITIVE_INFINITY);
   const settled = draft?.settled ?? [];
   const savedRun = draft ? messages.filter(m => m.role === 'tool' && m.runId === draft.runId) : [];
   const savedIdsInRun = new Set(savedRun.map(m => m.toolCallId));
@@ -157,7 +175,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
   placeBuilds(Number.POSITIVE_INFINITY);
   if (draft?.text) items.push({ kind: 'live', key: `live-${draft.runId}`, text: draft.text, since: null });
   else if (draft && !draft.activeTool) items.push({ kind: 'live', key: `live-${draft.runId}`, text: '', since: draft.waitingSince ?? null });
-  noticeRows(notices).forEach((row, i) => items.push({ kind: 'notice', key: `n-${row.notices[0]!.runId}-${i}`, ...row }));
+  pushNotices(notices.filter(n => n.after === undefined));
   return items;
 }
 
