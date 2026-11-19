@@ -43,7 +43,7 @@ import type { PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
-import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, raisedOutputFor, toolResultTokens } from './context-budget.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, contextAvailable, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
@@ -912,11 +912,11 @@ export class ChatEngine {
     // 会話にも「外から読んだことがある」印を付ける（自動承認の判定役には、この会話は「よそから来た文を読んだ」と伝わる）
     const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); if (kind === 'chat' || kind === 'agent') d.conversations.markTainted(conversationId); };
     const addUsage = (u: Usage) => addUsageTo(usage, u);
-    const finishOk = (text: string, stop: StopReason, split?: { split: true }): EngineResult => {
+    const finishOk = (text: string, stop: StopReason, split?: 'max_iterations' | 'context'): EngineResult => {
       if (kind === 'chat') this.#handOver(runId, text, { workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted || d.conversations.everTainted(conversationId), projectId: ctx.project?.id ?? null });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
-      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workCalls: counters.workCalls, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split: true as const } : {}) };
+      return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop, workCalls: counters.workCalls, ...(stop === 'max_tokens' ? { truncated: true as const } : {}), ...(split ? { split } : {}) };
     };
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
@@ -958,6 +958,11 @@ export class ChatEngine {
       if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       this.#injectNotes(runId, conversationId, ctx);
       recordTaint();
+      if (task && kind === 'task' && !scout && counters.iterations >= 2
+        && this.#exchangeTooLong({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject })) {
+        flags.push('context_split');
+        return finishOk('', 'other', 'context');
+      }
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
@@ -1062,7 +1067,7 @@ export class ChatEngine {
     }
     flags.push('max_iterations');
     counters.iterations = ceiling;
-    return finishOk('', 'other', { split: true });
+    return finishOk('', 'other', 'max_iterations');
   }
 
   // 自動承認の判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）。無ければ空（判定役には回らず、確かめる）
@@ -1355,6 +1360,16 @@ export class ChatEngine {
     if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
     const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
     return { tokens: toolResultTokens(built.available, tokens, built.factor), available: built.available };
+  }
+
+  // タスクの実行を区切るか: いまのやり取り（固定の分を除く）が、使える量から固定の分を引いた余裕の SPLIT_EXCHANGE_RATIO を超えた。容量が分からなければ区切らない
+  #exchangeTooLong(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): boolean {
+    const built = this.#assemble(p);
+    if (!(built.capacity > 0)) return false;
+    const system = `${built.system.frozen}\n${built.system.dynamic}`;
+    const fixed = estimateRequest(system, [], built.apiTools, built.factor).tokens;
+    const exchange = irreducibleEstimate({ system, messages: built.history, tools: built.apiTools, factor: built.factor }).tokens - fixed;
+    return exchange > SPLIT_EXCHANGE_RATIO * (built.available - fixed);
   }
 
   #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }, pending: ChatMessage[]): boolean {

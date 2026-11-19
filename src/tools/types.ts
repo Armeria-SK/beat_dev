@@ -174,7 +174,7 @@ export interface AgentRunInput { task: string; tools?: string[] | undefined; tit
 export type TaskControl =
   | { outcome: 'none' }
   | { outcome: 'complete'; summary: string; notify: boolean }
-  | { outcome: 'checkpoint'; note: string; nextAction: string; resumeAfterMinutes: number }
+  | { outcome: 'checkpoint'; note: string; nextAction: string }
   | { outcome: 'question'; question: string }
   | { outcome: 'yield'; reason: string }
   | { outcome: 'failed'; reason: string };

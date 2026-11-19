@@ -94,7 +94,7 @@ export const ja = {
   'tool.task_create': 'タスクを作ります',
   'tool.task_list': 'タスクを一覧にします',
   'tool.task_update': 'タスクを更新します（メモ・次の手・完了・取り消し）',
-  'tool.task_checkpoint': 'タスクの進み具合を保存して一休みします',
+  'tool.task_checkpoint': 'タスクの進み具合を保存して、新しい実行で続けます',
   'tool.task_complete': 'タスクを終えます',
   'tool.question_add': 'あなたへの質問を記録して、作業を続けます',
   'tool.tool_search': '毎回は渡されない道具を読み込みます（その実行の残りの間だけ）',

@@ -130,9 +130,9 @@ test('タスクの経過と通知: 英語で書く', async t => {
 
   const checkpoint = s.app.tasks.create({ title: 'C', origin: 'user', actor: 'user' });
   s.clock.now += 2 * MIN;
-  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c', resume_after_minutes: 7 }));
+  s.adapter().scripts.push(toolCall('task_checkpoint', { tried: 'a', result: 'b', next_action: 'c' }));
   await s.app.worker.tick();
-  assert.equal(s.app.tasks.events(checkpoint.id).find(e => e.kind === 'requeued')!.content, 'Will resume in 7 min');
+  assert.equal(s.app.tasks.events(checkpoint.id).find(e => e.kind === 'requeued')!.content, 'The run ended without progress, so it continues now in a new run (it stops after 3 such runs in a row)');
   for (const n of s.app.notifications.list()) { noJapanese('notification title', n.title); noJapanese('notification body', n.body); }
 });
 
@@ -146,10 +146,10 @@ test('進まないタスク: 3 回続けて決められなければ失敗にし�
   }
   const stuck = s.app.tasks.get(task.id)!;
   assert.equal(stuck.status, 'failed');
-  assert.equal(stuck.result_summary, 'Stopped after 3 runs in a row without progress (each ended with a reply only). The owner is asked in Questions.');
+  assert.equal(stuck.result_summary, 'Stopped after 3 runs in a row without progress. The owner is asked in Questions.');
   const [question] = s.app.questions.list({ status: 'open', taskId: task.id });
   assert.equal(question!.question, '"Vague job" ran 3 times in a row without making progress, so it was stopped. Run the task again?');
-  assert.equal(question!.why, 'Each of those runs ended with a reply only, without task_complete, task_checkpoint or a question.');
+  assert.equal(question!.why, 'Each of those runs either ended with a reply only (without task_complete, task_checkpoint or a question), or ended without using any tool other than the task tools.');
   assert.deepEqual(s.app.notifications.list().map(n => n.title).slice(0, 2).sort(), ['Question recorded', 'Task failed: Vague job']);
   assert.match(stuck.body, /- Note: thought 0/u);
 });

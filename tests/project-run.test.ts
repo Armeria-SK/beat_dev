@@ -477,7 +477,7 @@ test('タスクの区切り（2 回目の審査 2）: 外を読んだタスク�
   writeFileSync(join(downloads, 'page.txt'), 'fetched text');
   const made = await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
   const id = made.body.task.id as string;
-  s.adapter().scripts = [call('probe_ctx', {}), call('file_read', { path: join(downloads, 'page.txt') }), call('task_checkpoint', { tried: 'read', result: 'page', next_action: 'do what the page says', resume_after_minutes: 1 })];
+  s.adapter().scripts = [call('probe_ctx', {}), call('file_read', { path: join(downloads, 'page.txt') }), call('task_checkpoint', { tried: 'read', result: 'page', next_action: 'do what the page says' })];
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.deepEqual(s.seen[0]!.taint.sources.filter(x => !/download/iu.test(x) && x !== 'file_read'), [], '1 回目は持ち越しの印なしで始まる');
   assert.equal(s.app.tasks.get(id)!.next_action, 'do what the page says');

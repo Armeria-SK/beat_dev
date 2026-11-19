@@ -151,14 +151,13 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
 };
 
 
-export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_action: string; resume_after_minutes: number }> = {
+export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_action: string }> = {
   name: 'task_checkpoint',
-  description: 'Record the progress of the task you are working on now and pause. Write what you tried, the result, the next step and after how many minutes to resume. Even when there is no progress, write what is missing and pause.',
+  description: 'Record the progress of the task you are working on now and end this run. Write what you tried, the result and the next step. beat continues the task in a new run right away. To check something later, create a task for that time with task_create (when) instead.',
   input: Type.Object({
     tried: Type.String({ minLength: 1, maxLength: 1500 }),
     result: Type.String({ minLength: 1, maxLength: 1500 }),
     next_action: Type.String({ minLength: 1, maxLength: 500 }),
-    resume_after_minutes: Type.Integer({ minimum: 1, maximum: 10080 }),
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -166,8 +165,8 @@ export const taskCheckpoint: ToolDef<{ tried: string; result: string; next_actio
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (!ctx.task) return { content: toolText(language, 'task.not_running'), isError: true };
-    ctx.task.control = { outcome: 'checkpoint', note: toolText(language, 'task.checkpoint_note', { tried: input.tried, result: input.result }), nextAction: input.next_action, resumeAfterMinutes: input.resume_after_minutes };
-    return { content: toolText(language, 'task.checkpoint_saved', { minutes: input.resume_after_minutes, end: toolText(language, 'task.end') }) };
+    ctx.task.control = { outcome: 'checkpoint', note: toolText(language, 'task.checkpoint_note', { tried: input.tried, result: input.result }), nextAction: input.next_action };
+    return { content: toolText(language, 'task.checkpoint_saved', { end: toolText(language, 'task.end') }) };
   },
 };
 
