@@ -25,13 +25,21 @@ export function toolResultTokens(available: number, irreducible: number, factor 
   return Math.max(MIN_TOOL_RESULT_TOKENS, Math.floor((room * TOOL_RESULT_RATIO) / (factor * SAFETY_MARGIN)));
 }
 
-export const AUTO_MAX_OUTPUT = 32_000;
+export const AUTO_MAX_OUTPUT = 64_000;
 export const MIN_AUTO_OUTPUT = 1_024;
 
 export function maxOutputFor(model: Pick<ModelConfig, 'maxOutputTokens'>, capacity: number, providerMax?: number): number {
   const cap = providerMax ?? Infinity;
   if (model.maxOutputTokens !== undefined) return Math.min(model.maxOutputTokens, cap);
   return Math.min(cap, Math.max(MIN_AUTO_OUTPUT, Math.min(AUTO_MAX_OUTPUT, Math.floor(capacity / 4))));
+}
+
+// 考えるだけで返事の上限に達し、文も道具の呼び出しも無かった返事を呼び直すときの上限。
+// 書いた値（maxOutputTokens）は超えない。提供元の上限が分かればそこまで、分からなければ今の 2 倍。どちらもコンテキストの半分まで。
+// 今より大きくならなければ今の値を返す（呼び直さない）
+export function raisedOutputFor(model: Pick<ModelConfig, 'maxOutputTokens'>, capacity: number, current: number, providerMax?: number): number {
+  if (model.maxOutputTokens !== undefined) return current;
+  return Math.max(current, Math.min(providerMax ?? current * 2, Math.floor(capacity / 2)));
 }
 
 export const contextAvailable = (capacity: number, maxOutput: number): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - maxOutput;

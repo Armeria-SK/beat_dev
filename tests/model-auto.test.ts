@@ -17,10 +17,10 @@ const auto = (over: Partial<ModelConfig> = {}): ModelConfig => ({ id: 'm', provi
 const compat = (baseUrl: string, over: Partial<ProviderConfig> = {}): ProviderConfig => ({ id: 'p', kind: 'openai_compatible', baseUrl, maxParallel: 1, timeoutMs: 10_000, ...over });
 const anthropicProvider: ProviderConfig = { id: 'p', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 1, timeoutMs: 10_000 };
 
-test('model-auto: 返事の上限は、書いてあればその値（提供元の上限で抑える）、無ければ 32,000・長さの 1/4・下限 1,024 で決まり、提供元の上限が下限に勝つ', () => {
+test('model-auto: 返事の上限は、書いてあればその値（提供元の上限で抑える）、無ければ 64,000・長さの 1/4・下限 1,024 で決まり、提供元の上限が下限に勝つ', () => {
   assert.equal(maxOutputFor(auto({ maxOutputTokens: 3000 }), 500_000), 3000, '書いた値');
   assert.equal(maxOutputFor(auto({ maxOutputTokens: 200_000 }), 500_000, 128_000), 128_000, '書いた値も提供元の上限で抑える');
-  assert.equal(maxOutputFor(auto(), 500_000, 128_000), 32_000, '自動は 32,000 まで');
+  assert.equal(maxOutputFor(auto(), 500_000, 128_000), 64_000, '自動は 64,000 まで');
   assert.equal(maxOutputFor(auto(), 500_000), AUTO_MAX_OUTPUT);
   assert.equal(maxOutputFor(auto(), 32_768), 8192, '長さの 1/4');
   assert.equal(maxOutputFor(auto(), 500_000, 8192), 8192, '提供元の上限');
@@ -30,7 +30,7 @@ test('model-auto: 返事の上限は、書いてあればその値（提供元�
 
 // テストの中で、実装を使わずに「長さ c で足りる」を数え直す
 function needAt(model: ModelConfig, base: number, memory: number, c: number): number {
-  const out = model.maxOutputTokens ?? Math.min(32_000, Math.max(1024, Math.floor(c / 4)));
+  const out = model.maxOutputTokens ?? Math.min(64_000, Math.max(1024, Math.floor(c / 4)));
   const available = Math.floor(c * CONTEXT_FILL_RATIO) - out;
   return base + HISTORY_RESERVE + out + Math.min(memory, Math.floor(MEMORY_BUDGET_RATIO * Math.max(0, available)));
 }
@@ -65,7 +65,7 @@ test('model-auto: Anthropic の確認は max_tokens を返事の上限（maxOutp
   const ok = await anthropicProbe({ max_tokens: 64000 });
   assert.equal(ok.status, 'ok');
   assert.equal(ok.maxOutput, 64000);
-  assert.equal(maxOutputFor(auto(), ok.effective!, ok.maxOutput), 32_000);
+  assert.equal(maxOutputFor(auto(), ok.effective!, ok.maxOutput), 50_000);
   assert.equal(maxOutputFor(auto(), ok.effective!, (await anthropicProbe({ max_tokens: 8192 })).maxOutput), 8192);
   for (const bad of ['null', ...BAD_NUMBERS, '1', '255']) {
     const result = await anthropicRaw(`"max_tokens":${bad}`);
@@ -104,7 +104,7 @@ async function jsonServer(t: { after: (fn: () => Promise<unknown>) => void }, ro
   return server;
 }
 
-test('model-auto: OpenRouter の top_provider.max_completion_tokens を読む。10^9 は捨てられ、送る値は 32,000 を超えない', async t => {
+test('model-auto: OpenRouter の top_provider.max_completion_tokens を読む。10^9 は捨てられ、送る値は自動の上限（長さの 1/4）を超えない', async t => {
   const read = await jsonServer(t, { '/v1/models': JSON.stringify({ data: [{ id: 'test-model', context_length: 1_000_000, top_provider: { context_length: 200_000, max_completion_tokens: 16_000 } }] }) });
   const result = await new OpenAiCompatibleAdapter(compat(`${read.url}/v1`, { server: 'openrouter' }), {}).probe(auto(), 65536);
   assert.equal(result.status, 'ok');
@@ -114,7 +114,7 @@ test('model-auto: OpenRouter の top_provider.max_completion_tokens を読む。
   const huge = await jsonServer(t, { '/v1/models': JSON.stringify({ data: [{ id: 'test-model', top_provider: { context_length: 200_000, max_completion_tokens: 1_000_000_000 } }] }) });
   const big = await new OpenAiCompatibleAdapter(compat(`${huge.url}/v1`, { server: 'openrouter' }), {}).probe(auto(), 65536);
   assert.equal(big.maxOutput, undefined, '10,000,000 を超える数は知らせなかったとみなす');
-  assert.equal(maxOutputFor(auto(), big.effective!, big.maxOutput), 32_000);
+  assert.equal(maxOutputFor(auto(), big.effective!, big.maxOutput), 50_000);
 });
 
 test('model-auto: サーバーが知らせた長さは 1〜10,000,000 の整数だけ使う（1e999・0.5・-1・2e7 はどれも使わず unknown）', async t => {
@@ -200,7 +200,7 @@ test('model-auto: /api/models は minContext を出さず、limits（いま使�
 test('model-auto: 本番の呼び出しに渡る返事の上限は自動の値で、/api/models の limits.maxOutput と同じ', async t => {
   const s = await startApp(t, [{ id: 'local', provider: 'fake', model: 'qwen', contextLength: 131072, vision: false }]);
   const { models } = await (await s.api('/api/models')).json() as { models: Array<Record<string, any>> };
-  assert.equal(models[0]!.limits.maxOutput, 32_000);
+  assert.equal(models[0]!.limits.maxOutput, 32_768);
   s.app.conversations.create({ id: 'c1' });
   s.adapter('fake').scripts.push(reply('はい'));
   const sent = s.app.engine.send('c1', 'こんにちは');
@@ -208,7 +208,7 @@ test('model-auto: 本番の呼び出しに渡る返事の上限は自動の値�
   await s.app.engine.wait(sent.runId);
   const real = s.adapter('fake').calls.filter(call => !isJudgeRequest(call));
   assert.ok(real.length >= 1);
-  assert.equal(real.at(-1)!.maxOutputTokens, 32_000);
+  assert.equal(real.at(-1)!.maxOutputTokens, 32_768);
   assert.equal(real.at(-1)!.maxOutputTokens, models[0]!.limits.maxOutput);
 });
 

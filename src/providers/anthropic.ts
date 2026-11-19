@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
-import type { ChatMessage, ImageRef, StopReason } from '../engine/types.ts';
+import type { ChatMessage, ImageRef, StopReason, ThinkingBlock } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { contextHint, errorProbeText, evaluateContext, serverNumber } from './context.ts';
 import { checkBaseUrl, classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
@@ -21,7 +21,19 @@ function anthropicEfforts(capabilities: Anthropic.ModelCapabilities | null | und
 
 const imageBlock = (img: ImageRef): Anthropic.ImageBlockParam => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/png', data: img.data } });
 
-export function toAnthropicMessages(messages: readonly ChatMessage[], vision: boolean): Anthropic.MessageParam[] {
+const thinkingParam = ({ at: _at, lead: _lead, ...block }: ThinkingBlock): Block => block;
+
+// 返事の考える部分を、受け取った並びに戻して置く（lead は文より前、ほかは at 個目の道具の呼び出しのあと）
+function withThinking(text: Block[], calls: Block[], blocks: readonly ThinkingBlock[]): Block[] {
+  const at = (n: number, lead?: boolean) => blocks.filter(b => b.at === n && (lead === undefined || (b.lead === true) === lead)).map(thinkingParam);
+  const out = [...at(0, true), ...text, ...at(0, false)];
+  calls.forEach((call, i) => out.push(call, ...at(i + 1)));
+  out.push(...blocks.filter(b => b.at > calls.length).map(thinkingParam));
+  return out;
+}
+
+// replay: 送る先の提供元とモデル。考える部分は、それを書いた提供元とモデルが同じときだけ、受け取ったまま送り返す（ほかのモデル・提供元には送らない）
+export function toAnthropicMessages(messages: readonly ChatMessage[], vision: boolean, replay?: { provider: string; model: string }): Anthropic.MessageParam[] {
   const out: Array<{ role: 'user' | 'assistant'; content: Block[] }> = [];
   const push = (role: 'user' | 'assistant', blocks: Block[]) => {
     if (!blocks.length) return;
@@ -36,13 +48,14 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
       blocks.push({ type: 'text', text: m.content || '(empty message)' });
       push('user', blocks);
     } else if (m.role === 'assistant') {
-      const blocks: Block[] = [];
-      if (m.content) blocks.push({ type: 'text', text: m.content });
-      for (const call of m.toolCalls ?? []) {
+      const text: Block[] = m.content ? [{ type: 'text', text: m.content }] : [];
+      const calls: Block[] = (m.toolCalls ?? []).map(call => {
         const input = call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments) ? call.arguments as Record<string, unknown> : {};
-        blocks.push({ type: 'tool_use', id: call.id, name: call.name, input });
-      }
-      push('assistant', blocks.length ? blocks : [{ type: 'text', text: '(empty reply)' }]);
+        return { type: 'tool_use', id: call.id, name: call.name, input };
+      });
+      if (!text.length && !calls.length) text.push({ type: 'text', text: '(empty reply)' });
+      const thinking = replay && m.thinking?.provider === replay.provider && m.thinking.model === replay.model ? m.thinking.blocks : [];
+      push('assistant', thinking.length ? withThinking(text, calls, thinking) : [...text, ...calls]);
     } else {
       const images = vision ? m.images ?? [] : [];
       const content = images.length ? [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...images.map(imageBlock)] : m.content;
@@ -81,10 +94,19 @@ export function classifyAnthropicError(error: unknown, signal: AbortSignal, secr
   return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error), secrets).slice(0, UPSTREAM_KEEP) });
 }
 
+// 送り返した考える部分を API が断った 400 か（署名が合わない・前の発言が変わって別の会話のものになった）
+function thinkingRejected(error: unknown): boolean {
+  if (!(error instanceof Anthropic.APIError) || error.status !== 400) return false;
+  const body = error.error as { error?: { message?: string } } | undefined;
+  return /signature|thinking/i.test(body?.error?.message ?? error.message ?? '');
+}
+
 export class AnthropicAdapter implements ProviderAdapter {
   readonly provider: ProviderConfig;
   readonly #env: Env;
   readonly #fetch: FetchLike | undefined;
+  // 考える部分を送り返して断られたモデル（このプロセスのあいだ送り返さない。毎回 400 を挟まないため）
+  readonly #noReplay = new Set<string>();
   #client: Anthropic | undefined;
   #clientKey: string | undefined;
   constructor(provider: ProviderConfig, env: Env, fetchImpl?: FetchLike) {
@@ -125,18 +147,29 @@ export class AnthropicAdapter implements ProviderAdapter {
       ...(i === all.length - 1 ? { cache_control: EPHEMERAL } : {}),
     }));
     const tooling: Record<string, { id: string; name: string; json: string }> = {};
+    const thinking: Record<string, ThinkingBlock> = {};
+    let calls = 0;
+    let wrote = false;
     let stop: StopReason = 'other';
     try {
-      const stream = await client.messages.create({
+      const create = (replay: boolean) => client.messages.create({
         model: req.model.model,
         max_tokens: req.maxOutputTokens,
         system,
-        messages: toAnthropicMessages(req.messages, req.model.vision),
+        messages: toAnthropicMessages(req.messages, req.model.vision, replay ? { provider: this.provider.id, model: req.model.model } : undefined),
         ...(tools.length ? { tools } : {}),
         ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
         ...(req.effort ? { output_config: { effort: req.effort as NonNullable<Anthropic.OutputConfig['effort']> } } : {}),
         stream: true,
       }, { signal: req.signal });
+      const replay = !this.#noReplay.has(req.model.model) && req.messages.some(m => m.role === 'assistant' && m.thinking?.provider === this.provider.id && m.thinking.model === req.model.model && m.thinking.blocks.length > 0);
+      let stream;
+      try { stream = await create(replay); } catch (error) {
+        // 送り返した考える部分を断られたら（署名が合わない・前の発言が変わった）、このモデルには以後送り返さず、外して 1 回だけ送り直す
+        if (!replay || !thinkingRejected(error)) throw error;
+        this.#noReplay.add(req.model.model);
+        stream = await create(false);
+      }
       for await (const event of stream) {
         switch (event.type) {
           case 'message_start': {
@@ -148,15 +181,26 @@ export class AnthropicAdapter implements ProviderAdapter {
             } };
             break;
           }
-          case 'content_block_start':
-            if (event.content_block.type === 'tool_use') tooling[event.index] = { id: event.content_block.id, name: event.content_block.name, json: '' };
+          case 'content_block_start': {
+            const block = event.content_block;
+            const place = { at: calls, ...(wrote ? {} : { lead: true as const }) };
+            if (block.type === 'tool_use') { tooling[event.index] = { id: block.id, name: block.name, json: '' }; calls++; }
+            else if (block.type === 'text') wrote = true;
+            else if (block.type === 'thinking') thinking[event.index] = { type: 'thinking', thinking: block.thinking ?? '', signature: block.signature ?? '', ...place };
+            else if (block.type === 'redacted_thinking') thinking[event.index] = { type: 'redacted_thinking', data: block.data, ...place };
             break;
-          case 'content_block_delta':
+          }
+          case 'content_block_delta': {
+            const th = thinking[event.index];
             if (event.delta.type === 'text_delta') yield { type: 'text', delta: event.delta.text };
             else if (event.delta.type === 'input_json_delta') { const t = tooling[event.index]; if (t) t.json += event.delta.partial_json; }
-            else if (event.delta.type === 'thinking_delta') yield { type: 'reasoning', delta: event.delta.thinking };
+            else if (event.delta.type === 'thinking_delta') { if (th?.type === 'thinking') th.thinking += event.delta.thinking; yield { type: 'reasoning', delta: event.delta.thinking }; }
+            else if (event.delta.type === 'signature_delta') { if (th?.type === 'thinking') th.signature = event.delta.signature; }
             break;
+          }
           case 'content_block_stop': {
+            const th = thinking[event.index];
+            if (th) { delete thinking[event.index]; yield { type: 'thinking', block: th }; }
             const t = tooling[event.index];
             if (t) {
               let args: unknown;

@@ -1,5 +1,5 @@
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
-import type { ChatMessage, ContextDetail, EngineErrorKind, StopReason, ToolCall, ToolSpec, Usage } from '../engine/types.ts';
+import type { ChatMessage, ContextDetail, EngineErrorKind, StopReason, ThinkingBlock, ToolCall, ToolSpec, Usage } from '../engine/types.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { providerText, type ProviderMessageKey } from '../shared/messages/providers.ts';
 
@@ -17,6 +17,8 @@ export interface ModelRequest {
 export type StreamEvent =
   | { type: 'text'; delta: string }
   | { type: 'reasoning'; delta: string }
+  // 考える部分のブロックが閉じたとき（署名つき）。送り返すために持つだけで、画面には出さない
+  | { type: 'thinking'; block: ThinkingBlock }
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'usage'; usage: Usage }
   | { type: 'done'; stop: StopReason };
