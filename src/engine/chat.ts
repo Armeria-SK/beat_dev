@@ -99,7 +99,7 @@ function forModel(message: ChatMessage): ChatMessage {
   return copy;
 }
 const clean = (message: ChatMessage, fence: ReturnType<typeof makeFence> | undefined): ChatMessage =>
-  (fence && message.role !== 'assistant' && message.content.includes(fence.nonce) ? { ...message, content: fence.clean(message.content) } : message);
+  (fence && message.role !== 'assistant' && message.content.toLowerCase().includes(fence.nonce.toLowerCase()) ? { ...message, content: fence.clean(message.content) } : message);
 // 人のいない実行（タスク・振り返り・子の担当）を区切る回数
 export const UNATTENDED_ITERATION_CEILING = 100;
 // アプリ全体で同時に動かせる子の担当の数（これを越えたら待たずに busy を返す）
@@ -229,7 +229,8 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
 }
 
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
-interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background', number>> }
+// tainted: 外から読んだ一覧・裏のコマンドの節を載せた tail の発言の id（その tail は以後も送るので、要約で外れるまで次の実行を「外から読んだ」で始める）
+interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background', number>>; tainted?: Partial<Record<'checklist' | 'background', number[]>> }
 // 1 回の実行の要約の状態: 要約した回数・失敗したか（失敗したら外すだけ）・要約した発言の合計・「外しました」で最後に知らせた件数
 interface CompactionState { count: number; failed: boolean; summarized: number; trimmedShown: number }
 
@@ -457,12 +458,21 @@ export class ChatEngine {
   }
 
   #backgroundCarriesTaint(conversationId: string): boolean {
-    return this.#d.background?.list({ conversationId }).some(job => job.tainted === true) ?? false;
+    return (this.#d.background?.list({ conversationId }).some(job => job.tainted === true) ?? false) || this.#tailCarriesTaint(conversationId, 'background');
   }
 
   #checklistCarriesTaint(conversationId: string): boolean {
     const list = readChecklist(this.#d.kv, conversationId);
-    return list?.tainted === true && checklistInjects(list);
+    return (list?.tainted === true && checklistInjects(list)) || this.#tailCarriesTaint(conversationId, 'checklist');
+  }
+
+  // 外から読んだ節を載せて保存した tail が、まだ送る範囲（要約より後）にあるか（TE-1。一覧を済ませても消しても、その tail は送り続ける）
+  #tailCarriesTaint(conversationId: string, key: 'checklist' | 'background'): boolean {
+    const ids = this.#d.kv.getJson<TailState>(`tail-state:${conversationId}`)?.tainted?.[key] ?? [];
+    if (!ids.length) return false;
+    const upto = this.#d.conversations.get(conversationId)?.summary_upto ?? 0;
+    const find = this.#d.conversations.db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND id = ?');
+    return ids.some(id => id > upto && find.get(conversationId, id) !== undefined);
   }
 
   // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、前からある実行の記録の道具の上限の印でも、出力の上限で切れた返事でもない）の印は持ち越さない
@@ -1428,8 +1438,10 @@ export class ChatEngine {
     const upto = conversation?.summary_upto ?? 0;
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
-    const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
-    const background = backgroundSection(d.background?.list({ conversationId: p.conversationId }) ?? [], language);
+    const list = readChecklist(d.kv, p.conversationId);
+    const jobs = d.background?.list({ conversationId: p.conversationId }) ?? [];
+    const checklist = checklistSection(list, language);
+    const background = backgroundSection(jobs, language);
     const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
     const planMemory = p.kind === 'chat' && mode === 'plan' && row?.archived_at === null && !d.botMemory && d.memoryFiles ? (config.memory.review ? 'review' as const : 'off' as const) : undefined;
     const worktree = p.project?.worktree && p.project.productRoot ? { branch: p.project.worktree.branch, productRoot: p.project.productRoot } : undefined;
@@ -1468,21 +1480,30 @@ export class ChatEngine {
       // 最後の発言が実行の前から tail を持つ（やり直し・失敗のあと）なら、新しい tail が要るときだけ、その発言の tail を全部の tail に替える
       const carried = Object.values(state.carriers ?? {});
       const relabel = kept.has(last.id);
-      let lost = relabel;
-      if (carried.length && !lost) {
+      let outside = false;
+      if (carried.length) {
         let removed = 0;
         try { removed = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: system.tail }).removed; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
         const window = new Set(stored.slice(removed).map(m => m.id));
-        lost = carried.some(id => !window.has(id) || !kept.has(id));
+        outside = carried.some(id => !window.has(id) || !kept.has(id));
       }
-      const due = relabel && !nextTail(state.sent, config.timezone, language, now, sections) ? undefined : nextTail(lost ? undefined : state.sent, config.timezone, language, now, sections);
+      const lost = relabel || outside;
+      const due = relabel && !outside && !nextTail(state.sent, config.timezone, language, now, sections) ? undefined : nextTail(lost ? undefined : state.sent, config.timezone, language, now, sections);
       if (due) {
         const carriers: TailState['carriers'] = lost ? {} : { ...state.carriers };
         carriers.time = last.id;
         for (const key of ['checklist', 'background'] as const) {
           if (lost || (state.sent?.[key] ?? '') !== sections[key]) { if (sections[key]) carriers[key] = last.id; else delete carriers[key]; }
         }
-        next = { tail: fenceTail(due.text, fence.nonce), state: { sent: due.sent, carriers } };
+        const upto = conversation?.summary_upto ?? 0;
+        const tainted: NonNullable<TailState['tainted']> = {};
+        const carries = { checklist: list?.tainted === true, background: jobs.some(job => job.tainted === true) };
+        for (const key of ['checklist', 'background'] as const) {
+          const ids = (state.tainted?.[key] ?? []).filter(id => id > upto && id !== last.id);
+          if (carries[key] && sections[key] && due.text.includes(sections[key])) ids.push(last.id);
+          if (ids.length) tainted[key] = ids;
+        }
+        next = { tail: fenceTail(due.text, fence.nonce), state: { sent: due.sent, carriers, ...(Object.keys(tainted).length ? { tainted } : {}) } };
       }
     }
     if (next && last && p.runId && p.sendTail) {
