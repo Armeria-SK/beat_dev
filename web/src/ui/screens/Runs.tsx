@@ -158,7 +158,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
         </div>
       )}
       {footer && <p className="bt-meta bt-rise ui-lib__footer" style={{ '--bt-i': 2 } as CSSProperties}>{t('ui.runs.footer', formatNumber(footer.shown), formatNumber(footer.total))}</p>}
-      {judged && <p className="bt-meta ui-lib__footer">{t('ui.runs.judged', formatNumber(judged.allowed), formatNumber(judged.parked), formatNumber(judged.notRun))}{data?.judgeOff && <> <span className="bt-chip" data-judge-off>{t('ui.runs.judgeOff')}</span></>}</p>}
+      {judged && <p className="bt-meta ui-lib__footer">{t('ui.runs.judged', formatNumber(judged.allowed), formatNumber(judged.parked), formatNumber(judged.notRun))}{judged.ruled !== undefined && <> · {t('ui.runs.ruled', formatNumber(judged.ruled))}</>}{data?.judgeOff && <> <span className="bt-chip" data-judge-off>{t('ui.runs.judgeOff')}</span></>}</p>}
     </div>
   );
 }

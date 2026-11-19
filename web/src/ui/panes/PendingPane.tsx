@@ -82,13 +82,14 @@ function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
 
 interface ItemProps {
   row: PendingAction; index: number; now: number; withProduct: boolean; titles: ReadonlyMap<string, string | null>; busy: boolean; leaving: boolean;
-  onApprove: (row: PendingAction) => void; onReject: (row: PendingAction, reason: string) => void;
+  onApprove: (row: PendingAction, remember?: boolean) => void; onReject: (row: PendingAction, reason: string) => void;
 }
 
 function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onApprove, onReject }: ItemProps) {
   const t = useT();
   const id = useId();
   const [asking, setAsking] = useState(false);
+  const [remembering, setRemembering] = useState(false);
   const [reason, setReason] = useState('');
   const tile = kindTile(row.kind);
   const why = reasonLine(row);
@@ -102,10 +103,23 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
         <span className="bt-label">{t(kindLabel(row.kind))}</span>{view.title && <> {view.title}</>}
         {files !== null && <> {files.more ? t('ui.pending.effectMore', files.files) : t('ui.pending.effect', files.files)}</>}
       </p>
-      {!asking && (
+      {!asking && !remembering && (
         <div className="bt-pending__actions">
           <Button small disabled={locked} onClick={() => onApprove(row)}>{t('ui.pending.approve')}</Button>
+          {row.rule && <Button small variant="ghost" disabled={locked} data-remember onClick={() => setRemembering(true)}>{t('ui.pending.remember')}</Button>}
           <Button small variant="ghost" disabled={locked} onClick={() => setAsking(true)}>{t('ui.pending.reject')}</Button>
+        </div>
+      )}
+      {remembering && row.rule && (
+        <div className="ui-pending__reject" data-remember-confirm onKeyDown={e => { if (e.key === 'Escape' && !locked) { e.preventDefault(); e.stopPropagation(); setRemembering(false); } }}>
+          <span className="bt-label">{t('ui.pending.rememberTitle')}</span>
+          <code className="ui-pending__code">{row.rule.shown}</code>
+          {row.rule.push && <span className="bt-meta" data-remember-push>{t('ui.pending.rememberPush')}</span>}
+          <span className="bt-meta">{t('ui.pending.rememberNote')}</span>
+          <span className="bt-pending__actions">
+            <Button small disabled={locked} onClick={() => onApprove(row, true)}>{t('ui.pending.rememberConfirm')}</Button>
+            <Button small variant="ghost" autoFocus disabled={locked} onClick={() => setRemembering(false)}>{t('ui.pending.cancel')}</Button>
+          </span>
         </div>
       )}
       {asking && (
@@ -211,7 +225,7 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
       void load();
     }, ROW_LEAVE_MS);
   };
-  const approve = (row: PendingAction) => void decide(row, () => api.approvePending(row.id), { status: 'running' });
+  const approve = (row: PendingAction, remember = false) => void decide(row, () => api.approvePending(row.id, remember), { status: 'running' });
   const reject = (row: PendingAction, reason: string) => void decide(row, () => api.rejectPending(row.id, reason), { status: 'rejected', reject_reason: reason || null });
 
   const rows = waitingShown(waiting, held, gone, projectId);
