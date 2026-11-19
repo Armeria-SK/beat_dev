@@ -73,6 +73,7 @@ import { isScoutRun, TaskStore } from './tasks/store.ts';
 import { maskedTaskView } from './web/task-view.ts';
 import { ProjectStore } from './projects/store.ts';
 import { Worktrees } from './projects/worktree.ts';
+import { MERGE_WATCH_MS, MergeWatch } from './projects/merge-watch.ts';
 import { TaskPlaces } from './tasks/place.ts';
 import { PlanStore } from './projects/plan.ts';
 import { adoptLegacyPlans } from './projects/plan-adopt.ts';
@@ -165,6 +166,8 @@ export class App {
   readonly projects: ProjectStore;
   readonly worktrees: Worktrees;
   readonly places: TaskPlaces;
+  readonly mergeWatch: MergeWatch;
+  readonly #mergeTimer: ReturnType<typeof setInterval> | undefined;
   readonly plans: PlanStore;
   readonly acceptance: AcceptanceStore;
   readonly questions: QuestionStore;
@@ -263,6 +266,13 @@ export class App {
       ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
     });
     this.background = new BackgroundJobs({ logDir: join(this.paths.data, 'tool_outputs'), now, isOpen: owner => this.#backgroundOpen(owner) });
+    this.mergeWatch = new MergeWatch({
+      db: this.db, worktrees: this.worktrees, dataDir: this.paths.data, log: this.log, now,
+      stopBackground: taskId => this.background.stopWhere({ taskId }),
+      onChanged: (row, outcome, by) => this.#branchChanged(row.task_id, row.branch, outcome, by),
+    });
+    this.#mergeTimer = options.workerTimers === false ? undefined : setInterval(() => this.mergeWatch.due(), MERGE_WATCH_MS);
+    this.#mergeTimer?.unref();
     this.background.onChange(view => this.bus.publish({ type: 'background.changed', projectId: view.projectId, conversationId: view.conversationId, id: view.id, state: view.state }));
     this.bus.subscribe(({ event }) => {
       const stop = event.type === 'conversation.changed' && (event.change === 'archived' || event.change === 'deleted') ? { conversationId: event.conversationId }
@@ -290,7 +300,7 @@ export class App {
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
       reviews: this.reviews, memory: this.memory, botMemory: this.botMemory, memoryFiles: this.memoryFiles, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(), backgroundAvailable: () => this.engine.backgroundAvailable(), secrets: () => this.registry.secrets(), projects: this.projects,
-      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background,
+      questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background, mergeWatch: this.mergeWatch,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
     this.tasks.onChange = task => {
@@ -592,7 +602,16 @@ export class App {
     return conversation.parent_run_id === null || this.engine.activeRuns().some(run => run.conversationId === owner.conversationId);
   }
 
+  // beat 8-3: 取り込み待ちのブランチが片づいた・残った。タスクの経過に 1 行書き、画面の Kanban へ知らせる
+  #branchChanged(taskId: string | null, branch: string, outcome: 'merged' | 'kept' | 'discarded' | 'discard_kept', by: 'beat' | 'user'): void {
+    const task = taskId ? this.tasks.get(taskId) : undefined;
+    if (!task) return;
+    this.tasks.event(task.id, 'worktree', by, taskText(languageOf(this.config()), `event.branch_${outcome}`, { branch }));
+    this.bus.publish({ type: 'task.changed', task: maskedTaskView(this, task) });
+  }
+
   close(): void {
+    if (this.#mergeTimer) clearInterval(this.#mergeTimer);
     this.#gitNoticeOff();
     this.#replayStop.abort();
     this.background.closeAll();

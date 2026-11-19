@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { api, type Acceptance, type ChecklistItem, type Conversation, type FinishedCursor, type Project, type RunRow, type Task, type WaitReason } from '../../api.ts';
+import { api, type Acceptance, type BranchCommits, type ChecklistItem, type Conversation, type DeviationRow, type FinishedCursor, type Project, type RunRow, type Task, type WaitReason } from '../../api.ts';
 import { waitText } from '../wait.ts';
 import { toast } from '../../feedback.ts';
 import { formatDateTimeSmart, formatElapsed, formatRelative, timezoneLabel, useT } from '../../i18n/index.ts';
@@ -8,8 +8,8 @@ import { plainLine } from '../../task-meta.ts';
 import { evidenceLines, remainingItems } from '../acceptance.ts';
 import { useMedia, useNow } from '../hooks.ts';
 import {
-  awaitsCheck, buildBoard, cardProject, COLUMN_TABS_MEDIA, firstSentences, KANBAN_PAGE, NARROW_COLUMNS, mergeFinished, pagesToReload, pendingRoute, pendingWait, proposalOf, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
-  type Card, type Column, type ColumnId, type SessionCard, type Step, type TaskCard,
+  awaitsCheck, awaitsMerge, buildBoard, cardProject, mergedBranch, COLUMN_TABS_MEDIA, firstSentences, KANBAN_PAGE, NARROW_COLUMNS, mergeFinished, pagesToReload, pendingRoute, pendingWait, proposalOf, questionsRoute, RUNS_WINDOW, sessionCards, stepPercent, tabStep,
+  type Card, type ChangesTarget, type Column, type ColumnId, type SessionCard, type Step, type TaskCard,
 } from '../kanban.ts';
 import { latestOnly } from '../latest.ts';
 import type { LiveDraft } from '../live-state.ts';
@@ -33,9 +33,13 @@ export interface KanbanProps {
   waits?: Record<string, WaitReason> | undefined;
   productId?: string | undefined;
   emptyProposed?: ReactNode;
+  onOpenChanges?: ((target: ChangesTarget) => void) | undefined;
 }
 
-interface Loaded { active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; lists: ReadonlyMap<string, Acceptance> }
+interface Loaded {
+  active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; lists: ReadonlyMap<string, Acceptance>;
+  changed: ReadonlySet<string>; deviations: ReadonlyMap<string, readonly DeviationRow[]>;
+}
 
 const COLUMN_KEY = {
   proposed: 'ui.kanban.col.proposed', approved: 'ui.kanban.col.approved', progress: 'ui.kanban.col.progress', check: 'ui.kanban.col.check', done: 'ui.kanban.col.done', failed: 'ui.kanban.col.failed',
@@ -80,23 +84,87 @@ function Meta({ items }: { items: Array<string | false | null> }) {
   return <div className="bt-card__meta">{shown.map(item => <span key={item}>{item}</span>)}</div>;
 }
 
-function SessionCardView({ card, now, index, product }: { card: SessionCard; now: number; index: number; product: string | null }) {
+function SessionCardView({ card, now, index, product, busy, onChecked, onOpenChanges }: { card: SessionCard; now: number; index: number; product: string | null; busy: boolean; onChecked: () => void; onOpenChanges?: (() => void) | undefined }) {
   const t = useT();
   const running = card.outcome === 'running';
+  const check = card.column === 'check';
   const right = running ? <Pill tone="running">{t('ui.kanban.running')}</Pill>
     : card.outcome === 'failed' ? <Pill tone="danger">{t('ui.kanban.failed')}</Pill>
     : card.outcome === 'stopped' ? <span className="bt-tag">{t('ui.kanban.stopped')}</span> : undefined;
   return (
-    <article className={`bt-card ${running ? 'bt-sheen' : 'bt-rise'}`} style={{ '--bt-i': index } as CSSProperties}>
-      <Head label={t('ui.kanban.session')} dot={false} right={right} product={running ? null : product} />
+    <article className={`bt-card ${running ? 'bt-sheen' : 'bt-rise'}`} style={{ '--bt-i': index } as CSSProperties} data-session={card.conversationId}>
+      <Head label={t(check ? 'ui.kanban.sessionCheckIt' : 'ui.kanban.session')} dot={check} right={right} product={running ? null : product} />
       <h3 className="bt-card__title"><a className="ui-card__link" href={routeHash({ view: 'chat', id: card.conversationId })}>{card.title || t('ui.session.untitled')}</a></h3>
       {running && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
+      {check && <p className="bt-meta ui-card__reasons" data-reasons>{t('ui.kanban.reason.sessionChanged')}</p>}
       <Meta items={running
         ? [product, card.step && t('ui.kanban.step', card.step.step, card.step.total), card.startedAt !== null && formatElapsed(now - card.startedAt)]
         : [formatRelative(card.at, now)]} />
+      {check && (
+        <div className="bt-card__actions">
+          <Button variant="primary" small disabled={busy} onClick={onChecked}>{t('ui.check.markChecked')}</Button>
+          {onOpenChanges && <Button small onClick={onOpenChanges}>{t('ui.kanban.openChanges')}</Button>}
+        </div>
+      )}
     </article>
   );
 }
+
+// beat 8-3: 取り込み待ちのブランチの 1 行（名前・+n −n・元のコミット）
+function BranchLine({ worktree }: { worktree: NonNullable<Task['worktree']> }) {
+  const t = useT();
+  return (
+    <div className="bt-card__meta ui-card__branch" data-branch={worktree.branch}>
+      <span className="bt-tag">{worktree.branch}</span>
+      {worktree.added !== null && <span className="bt-add">+{worktree.added}</span>}
+      {worktree.removed !== null && <span className="bt-del">−{worktree.removed}</span>}
+      <span>{t('ui.kanban.fromBase', worktree.base.slice(0, 7))}</span>
+    </div>
+  );
+}
+
+function Deviations({ rows }: { rows: readonly DeviationRow[] }) {
+  const t = useT();
+  if (rows.length === 0) return null;
+  return (
+    <ul className="ui-check__items" data-deviations>
+      {rows.map(row => (
+        <li key={`${row.item ?? ''}|${row.what}`} className="ui-check__item">
+          <span className="bt-tag">{t('ui.dev.chip')}</span>
+          <span className="ui-check__text">{row.what}<span className="bt-meta">{t('ui.dev.why', row.why)}</span></span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type Discarding = { state: 'loading' } | { state: 'ready'; data: BranchCommits };
+
+function DiscardPanel({ task, discarding, busy, onConfirm, onCancel }: { task: Task; discarding: Discarding; busy: boolean; onConfirm: (tip: string) => void; onCancel: () => void }) {
+  const t = useT();
+  const data = discarding.state === 'ready' ? discarding.data : null;
+  return (
+    <div className="bt-card__reason" data-discard={task.id} onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); } }}>
+      {!data ? <p className="bt-meta" role="status">{t('ui.set.loading')}</p> : (
+        <>
+          <p className="bt-meta">{t('ui.kanban.discardAsk', data.branch, data.commits.length + data.more)}</p>
+          {data.commits.length > 0 && (
+            <ul className="ui-card__commits">
+              {data.commits.map(c => <li key={c.sha} className="bt-meta"><code>{c.sha.slice(0, 7)}</code> {c.subject}</li>)}
+              {data.more > 0 && <li className="bt-meta">{t('ui.kanban.commitsMore', data.more)}</li>}
+            </ul>
+          )}
+        </>
+      )}
+      <div className="ui-card__reasonrow">
+        <Button variant="danger" small autoFocus disabled={busy || !data} onClick={() => { if (data) onConfirm(data.tip); }}>{t('ui.kanban.discardBranch')}</Button>
+        <Button variant="ghost" small onClick={onCancel}>{t('ui.cancel')}</Button>
+      </div>
+    </div>
+  );
+}
+
+const NOTE_KEY = { not_on_branch: 'ui.kanban.branchNote.not_on_branch', in_progress: 'ui.kanban.branchNote.in_progress', missing: 'ui.kanban.branchNote.missing' } as const;
 
 function CheckItems({ task, list }: { task: Task; list: Acceptance | null }) {
   const rows = remainingItems(task, list);
@@ -116,16 +184,33 @@ function CheckItems({ task, list }: { task: Task; list: Acceptance | null }) {
   );
 }
 
-function TaskCardView({ card, now, index, first, busy, rejecting, product, pending, questions, list, wait, onApprove, onReject, onRejecting, onChecked }: {
+function TaskCardView({ card, now, index, first, busy, rejecting, product, pending, questions, list, wait, deviations, onApprove, onReject, onRejecting, onChecked, onMerged, onDiscard, onOpenChanges }: {
   card: TaskCard; now: number; index: number; first: boolean; busy: boolean; rejecting: boolean; product: string | null; pending: number; questions: number; list: Acceptance | null; wait: WaitReason | undefined;
+  deviations: readonly DeviationRow[];
   onApprove: () => void; onReject: (reason: string) => void; onRejecting: (on: boolean) => void; onChecked: () => void;
+  onMerged: () => void; onDiscard: (tip: string) => Promise<boolean>; onOpenChanges?: (() => void) | undefined;
 }) {
   const t = useT();
   const { task, column } = card;
   const [reason, setReason] = useState('');
+  const [discarding, setDiscarding] = useState<Discarding | null>(null);
+  const discardButton = useRef<HTMLButtonElement>(null);
   const running = task.status === 'running';
   const proposal = proposalOf(task);
-  const label = proposal && column === 'proposed' ? t(proposal.kind === 'bug' ? 'ui.kanban.proposal.bug' : 'ui.kanban.proposal.feature') : column === 'approved' ? t('ui.kanban.queued') : column === 'check' ? t('ui.kanban.checkIt') : t('ui.kanban.task');
+  const merge = column === 'check' && awaitsMerge(task);
+  const checking = column === 'check' && awaitsCheck(task);
+  const label = proposal && column === 'proposed' ? t(proposal.kind === 'bug' ? 'ui.kanban.proposal.bug' : 'ui.kanban.proposal.feature') : column === 'approved' ? t('ui.kanban.queued')
+    : merge ? t('ui.kanban.mergeIt') : column === 'check' ? t('ui.kanban.checkIt') : column === 'done' && mergedBranch(task) ? t('ui.kanban.merged') : t('ui.kanban.task');
+  const reasons = [checking && t('ui.kanban.reason.check'), merge && t('ui.kanban.reason.merge')].filter((r): r is string => Boolean(r));
+  const note = merge && task.worktree?.note && task.worktree.note in NOTE_KEY ? t(NOTE_KEY[task.worktree.note as keyof typeof NOTE_KEY]) : null;
+  const startDiscard = async () => {
+    setDiscarding({ state: 'loading' });
+    try {
+      const data = await api.branchCommits(task.id);
+      setDiscarding(current => (current ? { state: 'ready', data } : current));
+    } catch (failure) { setDiscarding(null); reportOpError(failure); }
+  };
+  const stopDiscard = () => { setDiscarding(null); requestAnimationFrame(() => discardButton.current?.focus()); };
   const right = column === 'proposed' ? <span className="bt-meta">{formatRelative(task.created_at, now)}</span>
     : running ? <Pill tone="running">{t('ui.kanban.running')}</Pill>
     : task.status === 'waiting' ? <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>
@@ -141,23 +226,32 @@ function TaskCardView({ card, now, index, first, busy, rejecting, product, pendi
     : column === 'proposed' ? [task.origin !== 'user' && t('ui.kanban.byBeat'), card.repeating && t('ui.kanban.repeating')]
     : [formatRelative(card.at, now), column === 'check' && task.items !== undefined && t('ui.check.met', task.items.met, task.items.owned), card.repeating && t('ui.kanban.repeating')];
   return (
-    <article className={`bt-card ${running ? 'bt-sheen' : 'bt-rise'}${rejecting ? ' is-rejecting' : ''}`} style={{ '--bt-i': index } as CSSProperties}>
+    <article className={`bt-card ${running ? 'bt-sheen' : 'bt-rise'}${rejecting || discarding ? ' is-rejecting' : ''}`} style={{ '--bt-i': index } as CSSProperties} data-task={task.id}>
       <Head label={label} dot={card.waiting} right={right} product={running ? null : product} />
       <h3 className="bt-card__title"><a className="ui-card__link" href={routeHash({ view: 'task', id: task.id })}>{task.title}</a></h3>
       {body && <p className="bt-card__body">{body}</p>}
       {onPending && <p className="bt-card__body"><a className="bt-tool__link" href={routeHash(onPending.route)} data-pending-wait={task.id}>{t('ui.kanban.waitingPending', onPending.refs)}</a></p>}
       {column === 'progress' && <StepBar step={card.step} label={t('ui.kanban.progress')} />}
+      {column === 'check' && reasons.length > 0 && <p className="bt-meta ui-card__reasons" data-reasons>{reasons.join(' · ')}</p>}
+      {merge && task.worktree && <BranchLine worktree={task.worktree} />}
+      {note && <p className="bt-meta ui-danger" data-branch-note>{note}</p>}
       {column === 'check' && <CheckItems task={task} list={list} />}
+      {column === 'check' && <Deviations rows={deviations} />}
       <Meta items={meta} />
       {column === 'proposed' && proposal && proposal.goal === null && <div className="bt-card__meta"><span className="bt-tag" data-off-plan>{t('ui.kanban.proposal.offPlan')}</span></div>}
       {pending > 0 && !onPending && <a className="bt-tool__link bt-meta" href={routeHash(pendingRoute(task))}>{t('ui.task.pending', pending)}</a>}
       {questions > 0 && <a className="bt-tool__link bt-meta" href={routeHash(questionsRoute(task))} data-questions={questions}>{t('ui.task.questions', questions)}</a>}
       {column === 'check' && (
         <div className="bt-card__actions">
-          <Button variant="primary" small disabled={busy || !list} onClick={onChecked}>{t('ui.check.markChecked')}</Button>
-          <a className="bt-btn bt-btn--sm" href={routeHash({ view: 'task', id: task.id })}>{t('ui.kanban.open')}</a>
+          {merge && <Button variant="primary" small disabled={busy} onClick={onMerged}>{t('ui.kanban.markMerged')}</Button>}
+          {checking && <Button variant={merge ? undefined : 'primary'} small disabled={busy || !list} onClick={onChecked}>{t('ui.check.markChecked')}</Button>}
+          {onOpenChanges && <Button small onClick={onOpenChanges}>{t('ui.kanban.openChanges')}</Button>}
+          {merge ? <Button ref={discardButton} variant="ghost" small disabled={busy} data-discard-open={task.id} onClick={() => void startDiscard()}>{t('ui.kanban.discard')}</Button>
+            : <a className="bt-btn bt-btn--sm" href={routeHash({ view: 'task', id: task.id })}>{t('ui.kanban.open')}</a>}
         </div>
       )}
+      {merge && discarding && <DiscardPanel task={task} discarding={discarding} busy={busy} onCancel={stopDiscard}
+        onConfirm={tip => void onDiscard(tip).then(ok => { if (ok) setDiscarding(null); })} />}
       {column === 'proposed' && (
         <div className="bt-card__actions">
           <Button variant="primary" small disabled={busy} onClick={onApprove}>{t('ui.kanban.approve')}</Button>
@@ -237,7 +331,7 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
 
 function columnName(t: T, id: ColumnId): string { return t(COLUMN_KEY[id]); }
 
-export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask, waits, productId, emptyProposed }: KanbanProps) {
+export function Kanban({ conversations, drafts, checklists, revision, projects, pendingByTask, questionsByTask, waits, productId, emptyProposed, onOpenChanges }: KanbanProps) {
   const t = useT();
   const [picked, setPicked] = useState<ProductFilter>(ALL_PRODUCTS);
   const pane = productId !== undefined;
@@ -263,12 +357,18 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     const ticket = loads.current.begin();
     const project = filterQuery(filter);
     try {
-      const [tasks, finished, runs] = await Promise.all([api.tasks(project), readFinished(wanted.current, project), api.runs(RUNS_WINDOW, project)]);
+      const [tasks, finished, runs, checks] = await Promise.all([
+        api.tasks(project), readFinished(wanted.current, project), api.runs(RUNS_WINDOW, project), api.sessionChecks(project).then(r => r.sessions, () => []),
+      ]);
       const active = [...tasks.active, ...(tasks.awaiting ?? [])];
-      const products = [...new Set([...active, ...finished.tasks].filter(awaitsCheck).flatMap(task => (task.project_id ? [task.project_id] : [])))];
-      const lists = new Map((await Promise.all(products.map(id => api.acceptance(id).then(r => [id, r.acceptance] as const, () => null)))).filter(entry => entry !== null));
+      const productsOf = (keep: (task: Task) => boolean) => [...new Set([...active, ...finished.tasks].filter(keep).flatMap(task => (task.project_id ? [task.project_id] : [])))];
+      const products = productsOf(awaitsCheck);
+      const [lists, deviations] = await Promise.all([
+        Promise.all(products.map(id => api.acceptance(id).then(r => [id, r.acceptance] as const, () => null))).then(entries => new Map(entries.filter(entry => entry !== null))),
+        Promise.all(productsOf(task => awaitsCheck(task) || awaitsMerge(task)).map(id => api.deviations(id).then(r => [id, r.deviations.rows] as const, () => null))).then(entries => new Map(entries.filter(entry => entry !== null))),
+      ]);
       if (!loads.current.isCurrent(ticket)) return;
-      setData({ active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, lists });
+      setData({ active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, lists, changed: new Set(checks.map(c => c.conversation_id)), deviations });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
@@ -291,7 +391,12 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     lastRejecting.current = rejecting;
   }, [rejecting]);
 
-  const sessions = useMemo(() => sessionCards({ conversations: inFilter(conversations, filter), drafts, runs: data?.runs ?? [], checklists }), [conversations, filter, drafts, data, checklists]);
+  const sessions = useMemo(() => sessionCards({ conversations: inFilter(conversations, filter), drafts, runs: data?.runs ?? [], checklists, changed: data?.changed }), [conversations, filter, drafts, data, checklists]);
+
+  // beat 8-3: 製品の Kanban を開いたら、持ち主が取り込んだブランチを見回りを待たずに見つける（片づいたら task.changed で読み直す）
+  useEffect(() => {
+    if (productId) void api.checkBranches(productId).catch(() => undefined);
+  }, [productId]);
   const board = useMemo(
     () => (data ? buildBoard({ active: inFilter(data.active, filter), finished: inFilter(data.finished, filter), hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }) : null),
     [data, filter, sessions, checklists],
@@ -317,14 +422,24 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
 
   const renderCard = (card: Card, index: number, firstTask: boolean) => {
     const product = pane ? null : productName(projects, cardProject(card));
-    if (card.kind === 'session') return <SessionCardView key={card.key} card={card} now={now} index={index} product={product} />;
+    const project = cardProject(card);
+    if (card.kind === 'session') {
+      return <SessionCardView key={card.key} card={card} now={now} index={index} product={product} busy={busy.has(card.key)}
+        onChecked={() => void act(card.key, async () => { await api.sessionChecked(card.conversationId).catch(reportOpError); return true; })}
+        onOpenChanges={onOpenChanges && project ? () => onOpenChanges({ productId: project, conversationId: card.conversationId }) : undefined} />;
+    }
     const { task } = card;
+    const worktree = awaitsMerge(task) ? task.worktree : null;
     return (
       <TaskCardView key={card.key} card={card} now={now} index={index} first={firstTask} busy={busy.has(task.id)} rejecting={rejecting === task.id} product={product} pending={pendingByTask.get(task.id) ?? 0} questions={questionsByTask.get(task.id) ?? 0} wait={waits?.[task.id]}
         onApprove={() => void act(task.id, () => runTaskOp('approve', task))}
         onReject={reason => void act(task.id, async () => { const ok = await runTaskOp('reject', task, { reason }); if (ok) setRejecting(null); return ok; })}
         onRejecting={on => setRejecting(on ? task.id : null)}
         list={(task.project_id && data?.lists.get(task.project_id)) || null}
+        deviations={(task.project_id && data?.deviations.get(task.project_id)?.filter(row => row.by === 'task' && row.task === task.id)) || []}
+        onMerged={() => void act(task.id, async () => { try { const done = await api.markMerged(task.id); toast({ kind: 'done', icon: 'check', title: t(done.outcome === 'kept' ? 'ui.kanban.toast.mergedKept' : 'ui.kanban.toast.merged'), body: task.title }); } catch (failure) { reportOpError(failure); } return true; })}
+        onDiscard={async tip => { let ok = false; await act(task.id, async () => { try { const done = await api.discardBranch(task.id, tip); ok = true; toast({ kind: 'done', icon: 'check', title: t(done.outcome === 'discard_kept' ? 'ui.kanban.toast.discardKept' : 'ui.kanban.toast.discarded'), body: task.title }); } catch (failure) { reportOpError(failure); } return true; }); return ok; }}
+        onOpenChanges={onOpenChanges && project ? () => onOpenChanges({ productId: project, ...(worktree ? { worktreeId: worktree.id, branch: worktree.branch } : {}) }) : undefined}
         onChecked={() => void act(task.id, async () => { const list = task.project_id ? data?.lists.get(task.project_id) : undefined; if (list) await checkOp(task, list.version); return true; })} />
     );
   };

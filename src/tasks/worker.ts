@@ -83,6 +83,7 @@ export interface WorkerDeps {
   places?: TaskPlaces | undefined;
   worktrees?: Pick<Worktrees, 'finishWorktree' | 'removeWorktree'> | undefined;
   background?: Pick<BackgroundJobs, 'stopWhere'> | undefined;
+  mergeWatch?: { due(): void } | undefined;
 }
 
 export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
@@ -387,6 +388,7 @@ export class Worker {
   async tick(): Promise<TickResult> {
     const c = this.#d.config();
     if (this.#scoutRunning()) this.#whileScout(c);
+    this.#d.mergeWatch?.due();
     // 選ぶ部分は 1 本ずつ（#ticking）。実行を始めたら（await の前に）外して、枠が残っていれば次を選べるようにする
     if (this.#ticking || this.#running.size >= c.worker.maxParallel) return 'busy';
     this.#ticking = true;

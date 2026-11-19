@@ -7,6 +7,7 @@ import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
 import { settleAwaiting } from '../projects/gate.ts';
 import { DeviationError, readDeviations } from '../projects/deviations.ts';
 import { diffFlags } from '../projects/diff-flags.ts';
+import { markSessionChecked, sessionChecks } from '../projects/session-check.ts';
 import { PlanError, type PlanView } from '../projects/plan.ts';
 import { languageOf } from '../shared/language.ts';
 import { readRemotes } from '../projects/remotes.ts';
@@ -261,6 +262,25 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const since = app.acceptance.versions(project.id)[0]?.created_at ?? null;
     const flags = folderMissing(project) ? { checked: false as const, reason: 'folder_missing' as const } : await diffFlags(project.root, project.check_command, app.paths.data, since);
     sendJson(res, 200, { deviations: log, flags });
+  });
+
+  // beat 8-3: 製品の画面を開いたとき、取り込み待ちのブランチが持ち主の手で取り込まれたかを見る（見回りの 5 分を待たない）
+  router.add('POST', '/api/projects/:id/branches/check', async ({ req, res, params }) => {
+    const project = projectOr404(params[0]!);
+    requireObject(await readJson(req));
+    sendJson(res, 200, { changed: await app.mergeWatch.check(project.id) });
+  });
+
+  // beat 8-3（Q-P8-12）: ファイルを変えた製品の会話（Session のカードを Awaiting check に置くもの）と、その Mark checked
+  router.add('GET', '/api/session-checks', async ({ res, url }) => {
+    sendJson(res, 200, { sessions: await sessionChecks({ db: app.db, kv: app.kv, dataDir: app.paths.data, projects: app.projects, now: app.now() }, projectFilterOf(url)) });
+  });
+  router.add('POST', '/api/conversations/:id/checked', async ({ req, res, params }) => {
+    requireObject(await readJson(req));
+    const id = params[0]!;
+    if (!app.conversations.get(id) || !app.conversations.projectOf(id)) throw problem(404, 'not_found', 'conversation_missing');
+    markSessionChecked(app.kv, id, app.now());
+    sendJson(res, 200, { conversation_id: id, checked_at: app.now() });
   });
 
   const decided = (projectId: string, before: string | null, version: number) => {

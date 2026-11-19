@@ -12,13 +12,18 @@ export const isTemplate = (task: Pick<Task, 'cron' | 'parent_id'>): boolean => t
 
 export const awaitsCheck = (task: Pick<Task, 'status' | 'check_state'>): boolean => task.status === 'done' && task.check_state === 'awaiting';
 
-export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state' | 'cancelled_from'>): ColumnId | null {
+// beat 8-3: 取り込み待ち（終わったタスクのブランチが、持ち主の merge を待っている）と、取り込まれたブランチ
+export const awaitsMerge = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'worktree'>>): boolean => task.status === 'done' && task.worktree?.state === 'branch';
+
+export const mergedBranch = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'worktree'>>): boolean => task.status === 'done' && task.worktree?.state === 'merged';
+
+export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state' | 'cancelled_from'> & Partial<Pick<Task, 'worktree'>>): ColumnId | null {
   if (isTemplate(task) || (task.status === 'cancelled' && task.cancelled_from === 'inbox')) return null;
   switch (task.status) {
     case 'inbox': return 'proposed';
     case 'ready': return 'approved';
     case 'running': case 'waiting': return 'progress';
-    case 'done': return awaitsCheck(task) ? 'check' : 'done';
+    case 'done': return awaitsCheck(task) || awaitsMerge(task) ? 'check' : 'done';
     case 'failed': case 'cancelled': return 'failed';
     default: return null;
   }
@@ -43,10 +48,13 @@ export interface Step { step: number; total: number }
 export interface TaskCard { kind: 'task'; key: string; column: ColumnId; task: Task; at: number; repeating: boolean; waiting: boolean; step: Step | null }
 export type SessionOutcome = 'running' | 'ok' | 'failed' | 'stopped';
 export interface SessionCard {
-  kind: 'session'; key: string; column: 'progress' | 'done' | 'failed'; conversationId: string; title: string | null; at: number;
+  kind: 'session'; key: string; column: 'progress' | 'check' | 'done' | 'failed'; conversationId: string; title: string | null; at: number;
   startedAt: number | null; step: Step | null; outcome: SessionOutcome; projectId?: string;
 }
 export type Card = TaskCard | SessionCard;
+
+// beat 8-3: カードの Open changes。worktreeId があればタスクのブランチの差分、無ければ製品の Changes（conversationId があればその会話で）
+export interface ChangesTarget { productId: string; worktreeId?: string; branch?: string; conversationId?: string }
 
 export const cardProject = (card: Card): string | null => (card.kind === 'task' ? card.task.project_id ?? null : card.projectId ?? null);
 
@@ -55,9 +63,11 @@ export interface SessionInput {
   drafts: ReadonlyArray<{ runId: string; conversationId: string; startedAt?: number | undefined }>;
   runs: ReadonlyArray<Pick<RunRow, 'id' | 'kind' | 'conversation_id' | 'started_at' | 'duration_ms' | 'ok' | 'error_kind'>>;
   checklists: ReadonlyMap<string, readonly ChecklistItem[]>;
+  // beat 8-3（Q-P8-12）: 製品のファイルを変えて、まだ確かめていない会話。終わったカードは Done でなく Awaiting check に置く
+  changed?: ReadonlySet<string> | undefined;
 }
 
-export function sessionCards({ conversations, drafts, runs, checklists }: SessionInput): SessionCard[] {
+export function sessionCards({ conversations, drafts, runs, checklists, changed }: SessionInput): SessionCard[] {
   const cards: SessionCard[] = [];
   const live = new Map(drafts.map(d => [d.conversationId, d]));
   for (const c of conversations) {
@@ -77,7 +87,7 @@ export function sessionCards({ conversations, drafts, runs, checklists }: Sessio
     }
     if (!last) continue;
     const outcome: SessionOutcome = last.ok === 1 ? 'ok' : last.error_kind === 'cancelled' ? 'stopped' : 'failed';
-    const column = outcome === 'ok' ? 'done' : 'failed';
+    const column = outcome !== 'ok' ? 'failed' : changed?.has(c.id) ? 'check' : 'done';
     cards.push({
       kind: 'session', key: `s:${c.id}:${column}`, column, conversationId: c.id, title: c.title, at: last.started_at + (last.duration_ms ?? 0),
       startedAt: last.started_at, step: null, outcome, ...(c.project_id ? { projectId: c.project_id } : {}),
@@ -130,7 +140,7 @@ export function buildBoard({ active, finished, hasMore, finishedTotal, sessions,
   const cutoff = hasMore && finished.length > 0 ? oldest : Number.NEGATIVE_INFINITY;
   let hidden = 0;
   for (const card of sessions) {
-    if (card.column !== 'progress' && card.at < cutoff) { hidden += 1; continue; }
+    if (card.column !== 'progress' && card.column !== 'check' && card.at < cutoff) { hidden += 1; continue; }
     byColumn.get(card.column)!.push(card);
   }
   const order: Record<ColumnId, (a: Card, b: Card) => number> = {
@@ -179,11 +189,11 @@ export function firstSentences(text: string, count = 2): string {
   return sentences.join('').trim();
 }
 
-export function kanbanPaneCount(marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state']; projectId?: string | null }>, productId: string): number {
+export function kanbanPaneCount(marks: Iterable<{ status: TaskStatus; checkState?: Task['check_state']; merge?: boolean; projectId?: string | null }>, productId: string): number {
   let n = 0;
   for (const mark of marks) {
     if (mark.projectId !== productId) continue;
-    if (mark.status === 'inbox' || (mark.status === 'done' && mark.checkState === 'awaiting')) n += 1;
+    if (mark.status === 'inbox' || (mark.status === 'done' && (mark.checkState === 'awaiting' || mark.merge === true))) n += 1;
   }
   return n;
 }

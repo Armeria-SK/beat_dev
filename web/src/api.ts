@@ -224,6 +224,8 @@ export interface CheckFileChange { path: string; change: 'added' | 'modified' | 
 export type DiffFlags =
   | { checked: false; reason: 'no_git' | 'git_unusable' | 'failed' | 'folder_missing' }
   | { checked: true; since: 'build' | 'head'; testsDeleted: string[]; testsDeletedMore: number; checkChanged: CheckFileChange[]; checkChangedMore: number };
+export interface BranchCommits { branch: string; base: string; tip: string; commits: Array<{ sha: string; subject: string }>; more: number }
+export interface SessionCheck { conversation_id: string; changed_at: number; checked_at: number | null }
 export interface Deviations { deviations: { rows: DeviationRow[]; unreadable: number; unusable: boolean }; flags: DiffFlags }
 export interface FinishedCursor { beforeT: number; beforeId: string }
 export interface TaskLastRun { id: string; status: TaskStatus; summary: string | null; at: number }
@@ -439,6 +441,12 @@ export const api = {
   answerTask: (id: string, text: string) => call<{ task: Task }>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
   checkItem: (id: string, item: string, body: { result: 'checked' | 'insufficient'; version: number; note?: string }) =>
     call<{ task: Task; fix?: Task }>(`/api/tasks/${encodeURIComponent(id)}/items/${encodeURIComponent(item)}/check`, { method: 'POST', body: JSON.stringify(body) }),
+  branchCommits: (id: string) => call<BranchCommits>(`/api/tasks/${encodeURIComponent(id)}/branch`),
+  markMerged: (id: string) => call<{ task: Task; outcome: string }>(`/api/tasks/${encodeURIComponent(id)}/merged`, { method: 'POST', body: '{}' }),
+  discardBranch: (id: string, tip: string) => call<{ task: Task; outcome: string }>(`/api/tasks/${encodeURIComponent(id)}/discard`, { method: 'POST', body: JSON.stringify({ tip }) }),
+  checkBranches: (projectId: string) => call<{ changed: number }>(`/api/projects/${encodeURIComponent(projectId)}/branches/check`, { method: 'POST', body: '{}' }),
+  sessionChecks: (project?: string) => call<{ sessions: SessionCheck[] }>(`/api/session-checks${inProject(project, '?')}`),
+  sessionChecked: (conversationId: string) => call<{ conversation_id: string; checked_at: number }>(`/api/conversations/${encodeURIComponent(conversationId)}/checked`, { method: 'POST', body: '{}' }),
   checkTask: (id: string, version: number) => call<{ task: Task }>(`/api/tasks/${encodeURIComponent(id)}/check`, { method: 'POST', body: JSON.stringify({ version }) }),
   taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
   worker: () => call<WorkerStatus>('/api/worker'),

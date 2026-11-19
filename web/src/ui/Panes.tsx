@@ -6,6 +6,7 @@ import { useMedia } from './hooks.ts';
 import { ChangesPane, type ChangesFocus, type UndoneNotice } from './panes/ChangesPane.tsx';
 import { FilesPane } from './panes/FilesPane.tsx';
 import { KanbanPane, type KanbanPaneProps } from './panes/KanbanPane.tsx';
+import type { ChangesTarget } from './kanban.ts';
 import { PendingList, type PendingListProps } from './panes/PendingPane.tsx';
 import { PlanPane } from './panes/PlanPane.tsx';
 import { QuestionsList, type QuestionsListProps } from './panes/QuestionsPane.tsx';
@@ -69,7 +70,13 @@ export interface PanesState {
   changesFocus: ChangesFocus | null;
   openChanges: (path: string) => void;
   changesUsed: () => void;
+  changesBranch: BranchView | null;
+  openBranch: (branch: BranchView) => void;
+  closeBranch: () => void;
 }
+
+// beat 8-3: Changes の欄に出しているタスクのブランチ（カードの Open changes から）
+export interface BranchView { productId: string; worktreeId: string; branch: string }
 
 export function usePanes(productId: string | null): PanesState {
   const narrow = useMedia(NARROW);
@@ -80,6 +87,7 @@ export function usePanes(productId: string | null): PanesState {
   const [terminalFocus, setTerminalFocus] = useState<TerminalFocus | null>(null);
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const changesUsed = useCallback(() => setChangesFocus(null), []);
+  const [changesBranch, setChangesBranch] = useState<BranchView | null>(null);
   const views = useMemo(() => openable({ productId }), [productId]);
   const single = singlePane(narrow, room);
   const visible = visiblePanes(layout, views);
@@ -129,11 +137,20 @@ export function usePanes(productId: string | null): PanesState {
     changesFocus,
     openChanges: path => {
       if (!views.includes('changes')) return;
+      setChangesBranch(null);
       setChangesFocus(prev => ({ path, n: (prev?.n ?? 0) + 1 }));
       if (single) setSingleView('changes');
       else if (!shown.some(p => p.view === 'changes')) keep(shown.length ? selectView(shown, shown.length - 1, 'changes') : openView(shown, views, 'changes'));
     },
     changesUsed,
+    changesBranch,
+    openBranch: branch => {
+      if (!views.includes('changes')) return;
+      setChangesBranch(branch);
+      if (single) setSingleView('changes');
+      else if (!shown.some(p => p.view === 'changes')) keep(shown.length ? selectView(shown, shown.length - 1, 'changes') : openView(shown, views, 'changes'));
+    },
+    closeBranch: () => setChangesBranch(null),
   };
 }
 
@@ -169,8 +186,9 @@ export type PaneQuestions = Omit<QuestionsListProps, 'projectId'> & { count: num
 
 export type PaneKanban = Omit<KanbanPaneProps, 'productId'> & { count: number };
 
-export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits, productRoot, editRevision, onUndone }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined; productRoot?: string | null | undefined; editRevision?: number | undefined; onUndone?: ((notice: UndoneNotice) => void) | undefined }) {
+export function Panes({ panes, productId, scope, revision, taskRevision, backgroundRevision, isGit, inert, pending, questions, kanban, waits, productRoot, editRevision, onUndone, onOpenChanges }: { panes: PanesState; productId: string; scope: string; revision: string; taskRevision: string; backgroundRevision: string; isGit: boolean; inert: boolean; pending: PanePending; questions: PaneQuestions; kanban: PaneKanban; waits?: Record<string, WaitReason> | undefined; productRoot?: string | null | undefined; editRevision?: number | undefined; onUndone?: ((notice: UndoneNotice) => void) | undefined; onOpenChanges?: ((target: ChangesTarget) => void) | undefined }) {
   const t = useT();
+  const branch = panes.changesBranch?.productId === productId ? panes.changesBranch : null;
   const body = (view: PaneView, index: number): ReactNode => {
     switch (view) {
       case 'pending': {
@@ -183,9 +201,17 @@ export function Panes({ panes, productId, scope, revision, taskRevision, backgro
       }
       case 'kanban': {
         const { count: _count, ...board } = kanban;
-        return <KanbanPane key={productId} productId={productId} {...board} />;
+        return <KanbanPane key={productId} productId={productId} {...board} onOpenChanges={onOpenChanges} />;
       }
-      case 'changes': return <ChangesPane key={`${productId}:${scope}`} source={{ kind: 'product', productId, conversationId: scope === 'new' ? undefined : scope, isGit, root: productRoot }} revision={`${revision}:${editRevision ?? 0}`} focus={panes.changesFocus} onFocusUsed={panes.changesUsed} onUndone={onUndone} />;
+      case 'changes': return branch ? (
+        <div className="ui-changes-branch" data-branch-changes={branch.branch}>
+          <div className="ui-changes-branch__bar">
+            <span className="bt-tag">{branch.branch}</span>
+            <Button variant="ghost" small onClick={panes.closeBranch}>{t('ui.changes.productChanges')}</Button>
+          </div>
+          <ChangesPane key={`branch:${branch.worktreeId}`} source={{ kind: 'branch', productId, worktreeId: branch.worktreeId }} revision={`${taskRevision}`} />
+        </div>
+      ) : <ChangesPane key={`${productId}:${scope}`} source={{ kind: 'product', productId, conversationId: scope === 'new' ? undefined : scope, isGit, root: productRoot }} revision={`${revision}:${editRevision ?? 0}`} focus={panes.changesFocus} onFocusUsed={panes.changesUsed} onUndone={onUndone} />;
       case 'files': return <FilesPane key={productId} productId={productId} revision={revision} onOpenChanges={panes.openChanges} />;
       case 'terminal': return <TerminalPane key={productId} productId={productId} revision={backgroundRevision} focus={panes.terminalFocus} />;
       case 'plan': return <PlanPane key={`${productId}:${scope}`} productId={productId} conversationId={scope === 'new' ? undefined : scope} revision={revision} taskRevision={taskRevision} isGit={isGit} reveal={panes.reveal} onRevealed={panes.revealed} waits={waits} />;
