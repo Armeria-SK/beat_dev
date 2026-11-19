@@ -224,6 +224,15 @@ test('ui/live-state: 割り込み（Interrupted）の知らせは、止まった
   assert.equal(s.cutAt.has('c'), false, '使った止まった位置は片づける');
 });
 
+test('ui/live-state: 止まった実行の最後の発言の番号を知らないまま割り込んだときは、最初に保存された発言（割り込んだ持ち主の発言）の直前に Interrupted を置く', () => {
+  const s = run(EMPTY, { type: 'interrupt', conversationId: 'c', on: true }, ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'cancelled' }),
+    ev({ type: 'message.saved', runId: 'r2', conversationId: 'c', messageId: 8, role: 'user' }), ev({ type: 'message.saved', runId: 'r2', conversationId: 'c', messageId: 9, role: 'user' }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.deepEqual(s.notices.get('c'), [{ runId: 'r2', kind: 'interrupted', after: 7.5 }]);
+  const partial = run(EMPTY, { type: 'interrupt', conversationId: 'c', on: true }, ev({ type: 'message.saved', runId: 'r1', conversationId: 'c', messageId: 5, role: 'assistant' }), ev({ type: 'run.end', runId: 'r1', conversationId: 'c', ok: false, errorKind: 'cancelled' }),
+    ev({ type: 'message.saved', runId: 'r2', conversationId: 'c', messageId: 6, role: 'user' }), ev({ type: 'run.start', runId: 'r2', conversationId: 'c', modelId: 'm' }));
+  assert.deepEqual(partial.notices.get('c'), [{ runId: 'r2', kind: 'interrupted', after: 5 }], '止まった実行が最後に保存した発言の後');
+});
+
 test('ui/live-state: 位置の分からないうちに出たお知らせ（読み込み直後・Changes の Undo）は、次に保存された発言の直前に位置を持つ', () => {
   const s = run(EMPTY, { type: 'notice', conversationId: 'c', notice: { runId: 'undo:1', kind: 'undo', projectId: 'p', batch: null, undone: 1, refused: 0, more: 0 } });
   assert.equal(s.notices.get('c')![0]!.after, undefined);

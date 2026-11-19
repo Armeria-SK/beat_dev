@@ -495,8 +495,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   };
 
   const lastError = notices.filter((n): n is Extract<RunNotice, { kind: 'error' }> => n.kind === 'error').at(-1);
-  const lastId = messages.at(-1)?.id;
-  const newestError = lastError && (lastError.after === undefined || lastId === undefined || lastError.after >= lastId) ? lastError : undefined;
+  const newestError = lastError && !draft && messages.every(m => lastError.after === undefined || m.id <= lastError.after || m.role === 'user') ? lastError : undefined;
 
   const retry = async () => {
     if (!id) return;

@@ -1,16 +1,16 @@
-import { cleanup, loadTsx, render, update } from './helpers/dom.ts';
+import { byText, cleanup, click, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import { toolText } from '../src/shared/messages/tools.ts';
 import type { ChecklistItem } from '../web/src/api.ts';
-import type { LiveDraft, RunNotice } from '../web/src/ui/live-state.ts';
+import { EMPTY, reduce, type LiveDraft, type RunNotice } from '../web/src/ui/live-state.ts';
 
 // 会話のお知らせは起きた位置に入って話とともに上へ流れ、最後の発言の下に貼り付かない。断られた道具は道具の行の中だけに理由を出し、AI に向けた一文は出さない。
 
 interface ConversationProps {
   id: string | null; listTitle: string | null; draft: LiveDraft | undefined; notices: RunNotice[]; liveChecklist: ChecklistItem[] | undefined; revision: number;
-  disconnected: boolean; onReconnect: () => void; onClearNotices: () => void; onInterrupt: () => void;
+  disconnected: boolean; onReconnect: () => void; onClearNotices: (id: string, runId?: string) => void; onInterrupt: () => void;
 }
 
 const { Conversation } = await loadTsx<{ Conversation: ComponentType<ConversationProps> }>('../web/src/ui/Conversation.tsx', import.meta.url);
@@ -39,7 +39,7 @@ const MESSAGES = [
   { id: 6, role: 'assistant', text: 'Second answer.', runId: 'r2', createdAt: 21 },
 ];
 
-async function renderChat(notices: RunNotice[], messages: unknown[] = MESSAGES) {
+async function renderChat(notices: RunNotice[], messages: unknown[] = MESSAGES, onClearNotices: ConversationProps['onClearNotices'] = () => {}) {
   globalThis.fetch = (async (path: string | URL | Request) => {
     const url = String(path);
     const out = url === `/api/conversations/${CHAT}/messages` ? {
@@ -52,7 +52,7 @@ async function renderChat(notices: RunNotice[], messages: unknown[] = MESSAGES) 
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
   g.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} };
   const { container } = await render(createElement(Conversation, {
-    id: CHAT, listTitle: null, draft: undefined, notices, liveChecklist: undefined, revision: 0, disconnected: false, onReconnect: () => {}, onClearNotices: () => {}, onInterrupt: () => {},
+    id: CHAT, listTitle: null, draft: undefined, notices, liveChecklist: undefined, revision: 0, disconnected: false, onReconnect: () => {}, onClearNotices, onInterrupt: () => {},
   }));
   await settle();
   await settle();
@@ -115,4 +115,36 @@ test('ui/Conversation（DOM）: 古い失敗が context の溢れ・認証でも
     { id: 2, role: 'user', text: 'second try', runId: 'r2', createdAt: 20 },
   ]);
   assert.equal(container.querySelectorAll('.bt-thread > .bt-notice button').length, 0, '最後の発言より前の失敗は、どれも文だけ');
+});
+
+test('ui/Conversation（DOM）: 失敗した実行のあとに待っていた持ち主の発言が保存されても（queued_saved）、その失敗に Retry を残す', async () => {
+  const container = await renderChat([
+    { runId: 'r1', kind: 'error', errorKind: 'timeout', errorMessage: 'failed', after: 1 },
+    { runId: 'r1', kind: 'warning', code: 'queued_saved', message: 'saved only', params: { count: 1 }, after: 2 },
+  ], [
+    { id: 1, role: 'user', text: 'first', runId: 'r1', createdAt: 10 },
+    { id: 2, role: 'user', text: 'queued', runId: 'r1', createdAt: 11 },
+  ]);
+  const retries = [...container.querySelectorAll('.bt-thread button')].filter(b => b.textContent === 'Retry');
+  assert.equal(retries.length, 1);
+});
+
+test('ui/Conversation（DOM）: Retry を押すと、失敗した実行のお知らせだけ片づけ、ほかの実行のお知らせは残す', async () => {
+  const notices: RunNotice[] = [
+    { runId: 'r1', kind: 'compaction', summarized: 3, after: 1 },
+    { runId: 'r2', kind: 'warning', code: 'context_trimmed', message: 'x', params: { count: 2 }, after: 3 },
+    { runId: 'r2', kind: 'error', errorKind: 'timeout', errorMessage: 'failed', after: 3 },
+  ];
+  const calls: Array<[string, string | undefined]> = [];
+  const container = await renderChat(notices, [
+    { id: 1, role: 'user', text: 'first', runId: 'r1', createdAt: 10 },
+    { id: 2, role: 'assistant', text: 'ok', runId: 'r1', createdAt: 11 },
+    { id: 3, role: 'user', text: 'second', runId: 'r2', createdAt: 20 },
+  ], (id, runId) => { calls.push([id, runId]); });
+  await click(byText(container, 'button', 'Retry'));
+  assert.equal(calls.length, 1);
+  const before = reduce(EMPTY, { type: 'notice', conversationId: CHAT, notice: notices[0]! }).state;
+  const all = [notices[1]!, notices[2]!].reduce((acc, notice) => reduce(acc, { type: 'notice', conversationId: CHAT, notice }).state, before);
+  const after = reduce(all, { type: 'clearNotices', conversationId: calls[0]![0], runId: calls[0]![1] }).state;
+  assert.deepEqual(after.notices.get(CHAT)!.map(n => n.runId), ['r1'], 'ほかの実行（r1）のお知らせは残る');
 });

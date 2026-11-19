@@ -174,7 +174,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'compaction':
       return { state: addNotice(s, e.conversationId, { runId: e.runId, kind: 'compaction', key: 'compaction', summarized: e.summarized }), effects: [] };
     case 'message.saved': {
-      const state = { ...placeLoose(bump(s, e.conversationId), e.conversationId, e.messageId), lastMessage: new Map(s.lastMessage).set(e.conversationId, Math.max(e.messageId, s.lastMessage.get(e.conversationId) ?? 0)) };
+      const cut = s.interrupting.has(e.conversationId) && !s.cutAt.has(e.conversationId) ? { cutAt: new Map(s.cutAt).set(e.conversationId, e.messageId - 0.5) } : {};
+      const state = { ...placeLoose(bump(s, e.conversationId), e.conversationId, e.messageId), ...cut, lastMessage: new Map(s.lastMessage).set(e.conversationId, Math.max(e.messageId, s.lastMessage.get(e.conversationId) ?? 0)) };
       return {
         state: e.role === 'assistant' ? { ...state, drafts: draftsWith(state, e.runId, d => ({ ...d, text: '', waitingSince: now })) } : state,
         effects: e.role === 'user' ? refresh('conversations') : [],
@@ -289,7 +290,11 @@ export function reduce(s: LiveState, a: Action): { state: LiveState; effects: Ef
     case 'tasks': return { state: { ...s, tasks: mergeTasks(s.tasks, a.tasks) }, effects: [] };
     case 'checklist': return { state: { ...s, checklists: new Map(s.checklists).set(a.conversationId, a.items) }, effects: [] };
     case 'interrupt': {
-      if (a.on) return { state: { ...s, interrupting: new Set(s.interrupting).add(a.conversationId) }, effects: [] };
+      if (a.on) {
+        const cutAt = new Map(s.cutAt);
+        cutAt.delete(a.conversationId);
+        return { state: { ...s, cutAt, interrupting: new Set(s.interrupting).add(a.conversationId) }, effects: [] };
+      }
       const list = s.notices.get(a.conversationId) ?? [];
       const latest = s.interrupting.has(a.conversationId) ? -1 : list.findLastIndex(n => n.kind === 'interrupted');
       const kept = list.filter((_, i) => i !== latest);
