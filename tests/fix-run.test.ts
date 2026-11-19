@@ -675,7 +675,7 @@ test('8-6a D-11 (1): fixShellRefusal は写しの外・解けないパス・GIT_
   assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'init', '-y')] }), undefined, 'npm init -y は取ってこない');
   assert.equal(fixShellRefusal({ ...base, statements: [run('npm', 'test', '--', 'exec')] }), undefined, '-- のあとは見ない');
   for (const words of [['pnpm', 'exec', 'tsc'], ['yarn', 'exec', 'tsc'], ['pnpm', '--filter', 'a', 'exec', 'tsc'], ['bun', 'run', 'x'], ['npm', 'uninstall', 'x'], ['npm', 'init', '-w', 'packages/a'], ['npm', 'run', 'create'], ['uv', 'run', 'pytest'], ['pipx', 'list'],
-    ['npm', '--silent', 'run', 'install'], ['npm', '-f', 'test'], ['pnpm', '-C', 'sub', 'exec', 'tsc'], ['yarn', '-C', 'run', 'x'], ['npm', 'remove', 'add'], ['bun', 'run', 'install']]) {
+    ['npm', '--silent', 'run', 'install'], ['npm', '-f', 'test'], ['pnpm', '-C', 'sub', 'exec', 'tsc'], ['yarn', '-C', 'run', 'x'], ['npm', 'remove', 'add'], ['bun', 'run', 'install'], ['yarn', 'run', 'lint'], ['yarn', 'exec', 'tsc'], ['npm'], ['pnpm', '--silent']]) {
     assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] }), undefined, `通信に数えない: ${words.join(' ')}`);
   }
   for (const words of [['npm', '-w', 'test', 'exec', 'v'], ['corepack', 'pnpm', 'install'], ['corepack', 'npm', 'install', 'left-pad'], ['corepack', 'prepare', 'pnpm@9', '--activate'], ['corepack', 'use', 'pnpm@9'], ['corepack', 'install'], ['corepack', 'pnpm@9', 'dlx', 'v'],
@@ -683,7 +683,7 @@ test('8-6a D-11 (1): fixShellRefusal は写しの外・解けないパス・GIT_
     ['npm', '--silent', 'install', 'left-pad'], ['npm', '--no-fund', 'install', 'left-pad'], ['npm', '-D', 'install', 'left-pad'], ['npm', '-w', 'a', 'install', 'left-pad'],
     ['npm', '-C', 'sub', 'install', 'left-pad'], ['npm', '--prefix', 'sub', 'ci'], ['npm', 'i', 'left-pad'], ['npm', '--silent', 'update'], ['pnpm', '--silent', 'add', 'left-pad'],
     ['pnpm', '-C', 'sub', 'install'], ['yarn', '--silent', 'add', 'left-pad'], ['yarn', '--cwd', 'sub', 'install'], ['bun', '--silent', 'add', 'left-pad'], ['bun', '-F', 'a', 'install'],
-    ['yarn', '-C', 'add', 'left-pad'], ['npm', '-f', 'install', 'left-pad'],
+    ['yarn', '-C', 'add', 'left-pad'], ['npm', '-f', 'install', 'left-pad'], ['yarn'], ['yarn', '--silent'], ['yarn', '--cwd', 'sub'],
     ['uvx', 'ruff'], ['uv', 'tool', 'run', 'ruff'], ['uv', 'tool', 'install', 'ruff'], ['pipx', 'run', 'black'], ['pipx', 'install', 'black']]) {
     assert.equal(fixShellRefusal({ ...base, statements: [run(...words)] })?.key, 'fix.network', words.join(' '));
   }

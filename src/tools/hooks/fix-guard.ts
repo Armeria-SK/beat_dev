@@ -91,6 +91,8 @@ function reachesNetwork(st: StatementFacts): boolean {
   if (py) return py(words);
   const fetching = FETCH_AND_RUN[program];
   if (!fetching) return false;
+  // 中身のない yarn（オプションだけも）は yarn install と同じ
+  if (program === 'yarn' && words.length === 0) return true;
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
     if (fetching.has(w)) return true;
