@@ -194,6 +194,11 @@ function seedProducts(app: App): void {
   const shipped = tasks.create({ title: 'Compress the product photos', origin: 'user', runAt: now + 86_400_000, actor: 'preview', projectId: shop.id });
   tasks.finish(shipped.id, 'done', 'All photos are under 200 KB.', 'preview');
   tasks.create({ title: 'Collect the train times', origin: 'user', runAt: now + 5 * 3_600_000, actor: 'preview', projectId: notes.id });
+  const memo = app.memoryFiles;
+  const saved = memo.save(shop.id, { title: 'Test commands', content: 'Run `npm test` before every pull request.', summary: 'Created' }, { actor: 'beat', tainted: false });
+  memo.update(shop.id, saved.name, { content: 'Run `npm test` before every pull request.\nRun `npm run lint` too.', summary: 'Added the lint step' }, { actor: 'beat', tainted: false });
+  memo.save(shop.id, { title: 'Pull requests', content: 'The owner prefers small pull requests: one change per branch, under about 200 lines.' }, { actor: 'owner', tainted: false });
+  memo.save(shop.id, { title: 'Payment provider docs', content: 'Unverified: the provider docs say refunds take 5 to 10 days.', summary: 'Noted from the provider docs' }, { actor: 'beat', tainted: true });
 }
 
 function seedLibrary(app: App): void {

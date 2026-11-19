@@ -5,7 +5,7 @@ import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
 import { Avatar, CountBadge, Icon, JudgeOffChip } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
-import { productNav } from './product-nav.ts';
+import { memoryHash, productNav } from './product-nav.ts';
 import { routeHash, type Route } from './routes.ts';
 import { searchView, type SearchState } from './search-state.ts';
 
@@ -177,7 +177,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <SideLink href="#/" icon="plus" name={t('ui.session.new')} active={at('new')} />
 
         <span className="bt-label bt-sidebar__label">{t('ui.section.library')}</span>
-        <SideLink href="#/memory" icon="book" name={t('ui.nav.memory')} active={at('memory')} />
+        <SideLink href={memoryHash(route, conversations)} icon="book" name={t('ui.nav.memory')} active={at('memory')} />
         <SideLink href="#/skills" icon="layers" name={t('ui.nav.skills')} active={at('skills')} count={drafts} countLabel={t('ui.count.drafts', drafts)} />
         <SideLink href="#/runs" icon="menu" name={t('ui.nav.runs')} active={at('runs')} />
         <SideLink href="#/archived" icon="archive" name={t('ui.nav.archived')} active={at('archived')} />

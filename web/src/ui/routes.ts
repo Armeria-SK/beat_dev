@@ -5,7 +5,7 @@ export type Route =
   | { view: 'new' }
   | { view: 'chat'; id: string }
   | { view: 'overview' } | { view: 'kanban' } | { view: 'schedule' } | { view: 'notifications' }
-  | { view: 'memory' } | { view: 'archived' }
+  | { view: 'memory'; productId?: string } | { view: 'archived' }
   | { view: 'task'; id: string }
   | { view: 'product'; id: string } | { view: 'productNew'; id: string } | { view: 'productSettings'; id: string }
   | { view: 'newProduct' }
@@ -19,7 +19,7 @@ export type View = Route['view'];
 
 export const HOME: Route = { view: 'new' };
 
-const PLAIN = ['overview', 'kanban', 'schedule', 'notifications', 'memory', 'archived'] as const;
+const PLAIN = ['overview', 'kanban', 'schedule', 'notifications', 'archived'] as const;
 
 const LEGACY: Record<string, Route> = {
   tasks: { view: 'kanban' }, today: { view: 'overview' }, review: { view: 'skills' }, curiosity: { view: 'kanban' },
@@ -41,6 +41,7 @@ export function parseRoute(hash: string): Route {
     return { view: b === 'new' ? 'productNew' : b === 'settings' ? 'productSettings' : 'product', id: a };
   }
   if (head === 'pending') return a && PRODUCT_ID.test(a) ? { view: 'pending', productId: a } : { view: 'pending' };
+  if (head === 'memory') return a && PRODUCT_ID.test(a) ? { view: 'memory', productId: a } : { view: 'memory' };
   if (head === 'questions') return a && PRODUCT_ID.test(a) ? { view: 'questions', productId: a } : { view: 'questions' };
   if (head === 'products') return a === 'new' ? { view: 'newProduct' } : HOME;
   if ((PLAIN as readonly string[]).includes(head)) return { view: head as typeof PLAIN[number] };
@@ -64,6 +65,7 @@ export function routeHash(route: Route): string {
     case 'newProduct': return '#/products/new';
     case 'pending': return route.productId ? `#/pending/${route.productId}` : '#/pending';
     case 'questions': return route.productId ? `#/questions/${route.productId}` : '#/questions';
+    case 'memory': return route.productId ? `#/memory/${route.productId}` : '#/memory';
     case 'skills': return route.target ? `#/skills/${route.target.kind === 'draft' ? 'draft/' : ''}${encodeURIComponent(route.target.name)}` : '#/skills';
     case 'runs': return route.tab ? `#/runs/${route.tab}` : '#/runs';
     case 'settings': return route.section ? `#/settings/${encodeURIComponent(route.section)}` : '#/settings';

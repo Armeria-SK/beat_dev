@@ -1,6 +1,6 @@
 import type { Conversation, Project } from '../api.ts';
 import { groupConversations, latestConversation, mergeConversations, moreCount, noProductApi, sidebarOrder, waitingTotal } from './products.ts';
-import { HOME, routeHash, settleRoute, type Route } from './routes.ts';
+import { HOME, routeHash, routeProductId, settleRoute, type Route } from './routes.ts';
 
 export interface ProductNavRow {
   project: Project;
@@ -27,6 +27,12 @@ export function productNav(
     };
   });
   return { rows, none: groups.none };
+}
+
+// 左の Memory の行き先: 製品の画面・製品の会話・その製品の Memory から開けば、その製品の記憶（beat 10-4a）。ほかは製品を選ぶ一覧
+export function memoryHash(route: Route, conversations: readonly Conversation[]): string {
+  const id = routeProductId(route) ?? (route.view === 'chat' ? conversations.find(c => c.id === route.id)?.project_id ?? null : route.view === 'memory' ? route.productId ?? null : null);
+  return routeHash(id ? { view: 'memory', productId: id } : { view: 'memory' });
 }
 
 export const newSessionHash = (productId: string | undefined): string => routeHash(productId ? { view: 'productNew', id: productId } : HOME);
