@@ -20,7 +20,7 @@ const call = (name: string, args: unknown): Step => [{ type: 'tool_call', call: 
 const say = (text: string): Step => [{ type: 'text', delta: text }, { type: 'done', stop: 'end_turn' }];
 
 // good: 記憶の問いでは目次の名前から mesh_read で読み、読んだ本文で答える。対照では読まない。書く問いでは memory_save を読み込んで保存する
-// bad: 読まずに答え、対照では読み、書く問いでは保存しない
+// bad: 読まずに答え、対照では読むか探し（C1・C3 は mesh_search、C2・C4 は mesh_read）、書く問いでは保存しない
 function fakeAdapter(): ProviderAdapter {
   return {
     provider,
@@ -35,7 +35,7 @@ function fakeAdapter(): ProviderAdapter {
         if (good && turn === 0) step = call('mesh_read', { file: `memory/${question.note}.md` });
         else step = say(good ? `From memory: ${lastTool?.content ?? ''}` : 'I do not know.');
       } else if (question.kind === 'control') {
-        if (!good && turn === 0) step = call('mesh_read', { file: 'memory/staging-host.md' });
+        if (!good && turn === 0) step = call(Number(question.id.slice(1)) % 2 ? 'mesh_search' : 'mesh_read', question.id === 'C1' ? { query: 'staging' } : question.id === 'C3' ? { query: 'kitchen' } : { file: 'memory/staging-host.md' });
         else step = say('Answer.');
       } else if (good && turn === 0) step = call('tool_search', { query: 'memory_save' });
       else if (good && turn === 1) step = call('memory_save', { title: `Rule ${question.id}`, content: `The owner set rule ${question.id} for this product.`, why: 'The owner asked' });
@@ -72,7 +72,7 @@ test('memory-probe: 偽のモデルで、読む・使う・対照で読まない
   assert.ok(results[0]!.results.filter(r => r.kind === 'direct').every(r => r.readNote && !r.searched));
   const table = renderTable(results);
   assert.match(table, /\| direct: read and used the note \| 5\/5 \| 4\/5 \| pass \|/u);
-  assert.match(table, /\| control: read a note anyway \| 4\/4 \| at most half \| BELOW \|/u);
+  assert.match(table, /\| control: read or searched memory anyway \| 4\/4 \| at most half \| BELOW \|/u);
   for (const note of PROBE_NOTES) assert.ok(!table.includes(note.content.slice(0, 20)), note.name);
   for (const q of MEMORY_QUESTIONS) assert.ok(!table.includes(q.text), q.id);
 });

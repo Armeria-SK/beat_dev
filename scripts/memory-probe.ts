@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { App } from '../src/app.ts';
 import type { AppConfig, ProviderConfig } from '../src/config/schema.ts';
+import { defaultTools } from '../src/config/store.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { checkWorkFolder } from '../src/projects/work-folder.ts';
 import type { ProviderAdapter } from '../src/providers/types.ts';
@@ -14,7 +15,7 @@ import { readConfigFile } from './tool-tokens.ts';
 
 // beat 10-4b: 登録されているモデルが、製品の記憶を読みに行くか・使うか・書けるかを数える。
 // 写しの data/（使い捨ての一時フォルダ）に試しの製品と作り物の記憶を置き、問いごとに新しい会話で問う。出すのは数だけ（答え・記憶の中身は出さない）
-const USAGE = 'usage: node scripts/memory-probe.ts --config <path to config.json> [--models id,id] [--questions D1,C1] [--timeout 180000] [--work <dir>] [--out <file>] [--json]';
+const USAGE = 'usage: node scripts/memory-probe.ts --config <path to config.json> [--models id,id] [--questions D1,C1] [--timeout 180000] [--work <dir>] [--out <file>] [--json]\nThe models run real tools in a throwaway folder. Tool roots are reset to the default (the throwaway workspace) and hooks are removed, but other tool settings come from the config: if it turns on the shell, a model can still run commands on this PC. Use a config with the shell off unless you mean it.';
 
 export interface QuestionResult { id: string; kind: MemoryQuestionKind; read: boolean; readNote: boolean; searched: boolean; used: boolean; loaded: boolean; saved: boolean; english: boolean; failed: boolean; tools: number }
 export interface ModelResult { modelId: string; results: QuestionResult[] }
@@ -86,7 +87,7 @@ async function probeModel(source: AppConfig, modelId: string, questions: readonl
   try {
     const paths = { ...resolvePaths(join(dir, 'home')), env: join(dir, '.env') };
     mkdirSync(paths.data, { recursive: true });
-    const config: AppConfig = { ...source, tools: { ...source.tools, hooks: { preToolUse: [], postToolUse: [] } } };
+    const config: AppConfig = { ...source, tools: { ...source.tools, roots: defaultTools().roots, hooks: { preToolUse: [], postToolUse: [] } } };
     writeFileSync(paths.config, JSON.stringify(config));
     const products = join(dir, 'products');
     app = new App({
@@ -139,7 +140,7 @@ export function summarize(results: readonly QuestionResult[]): Summary {
   const of = (kind: MemoryQuestionKind) => results.filter(r => r.kind === kind);
   const direct = of('direct').filter(r => (r.read || r.searched) && r.used).length;
   const indirect = of('indirect').filter(r => (r.read || r.searched) && r.used).length;
-  const controlReads = of('control').filter(r => r.read).length;
+  const controlReads = of('control').filter(r => r.read || r.searched).length;
   const write = of('write').filter(r => r.saved).length;
   const s = { direct, directOf: of('direct').length, indirect, indirectOf: of('indirect').length, controlReads, controlOf: of('control').length, write, writeOf: of('write').length, failed: results.filter(r => r.failed).length };
   return {
@@ -164,7 +165,7 @@ export function renderTable(models: readonly ModelResult[]): string {
       '| line | count | needed | result |', '|---|---|---|---|',
       `| direct: read and used the note | ${s.direct}/${s.directOf} | ${PASS_LINES.direct}/5 | ${verdict(s.pass.direct)} |`,
       `| indirect: read and used the note | ${s.indirect}/${s.indirectOf} | ${PASS_LINES.indirect}/5 | ${verdict(s.pass.indirect)} |`,
-      `| control: read a note anyway | ${s.controlReads}/${s.controlOf} | at most half | ${verdict(s.pass.control)} |`,
+      `| control: read or searched memory anyway | ${s.controlReads}/${s.controlOf} | at most half | ${verdict(s.pass.control)} |`,
       `| write: saved a note | ${s.write}/${s.writeOf} | ${PASS_LINES.write}/3 | ${verdict(s.pass.write)} |`,
       `| runs that failed or timed out | ${s.failed} | | |`, '',
       '| question | kind | read memory | read the right note | mesh_search | used the note | loaded memory_save | saved | saved in English | tool calls | failed |',

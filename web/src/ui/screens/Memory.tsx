@@ -12,7 +12,7 @@ import { Button, EmptyState, Icon, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
 import type { UiIconName } from '../icons.ts';
-import { hasUnsavedEdits, SCREEN_EDITS } from '../unsaved.ts';
+import { hasUnsavedEdits, SCREEN_EDITS, setUnsaved } from '../unsaved.ts';
 import '../styles/memory.css';
 
 type T = ReturnType<typeof useT>;
@@ -86,6 +86,8 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
+  const [base, setBase] = useState<{ hash: string; title: string; body: string } | null>(null);
+  const rebaseFrom = useRef<object | null>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const confirmOpener = useRef<Element | null>(null);
   const loads = useRef(latestOnly());
@@ -101,27 +103,41 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
 
   const parts = useMemo(() => (file ? splitNote(file.text, note.name) : null), [file, note.name]);
   useEffect(() => { if (mode === 'read' && parts) { setTitle(parts.title); setBody(parts.body); } }, [parts, mode]);
-  const dirty = mode === 'edit' && parts !== null && (title !== parts.title || body !== parts.body);
-  useUnsaved(`${EDITS}:${projectId}:${note.name}`, dirty);
+  // 書きかけは Edit を始めたときの版（base）と比べ、その版のハッシュで送る。あいだに版が変われば 409 で止まり、書きかけは残る
+  useEffect(() => {
+    if (!file || !rebaseFrom.current || file === rebaseFrom.current) return;
+    rebaseFrom.current = null;
+    setBase(b => (b ? { ...b, hash: file.hash } : b));
+  }, [file]);
+  const dirty = mode === 'edit' && base !== null && (title !== base.title || body !== base.body);
+  const unsavedKey = `${EDITS}:${projectId}:${note.name}`;
+  useUnsaved(unsavedKey, dirty);
   const versions = useMemo(() => (events && file ? noteVersions(events, file.text) : null), [events, file]);
 
   const askDelete = () => { confirmOpener.current = document.activeElement; setConfirming(true); };
-  const toRead = () => leave(() => { setMode('read'); setError(''); });
+  const toRead = () => leave(() => { setMode('read'); setBase(null); setError(''); });
+  const startEdit = () => { if (file && parts) { setBase({ hash: file.hash, title: parts.title, body: parts.body }); setMode('edit'); } };
   const run = async (work: (hash: string) => Promise<void>) => {
-    if (busy || !file) return;
+    const hash = mode === 'edit' ? base?.hash : file?.hash;
+    if (busy || !hash) return;
     setBusy(true); setError('');
-    try { await work(file.hash); } catch (failure) { setError(failText(failure, t)); } finally { setBusy(false); }
+    try { await work(hash); } catch (failure) {
+      if (mode === 'edit' && failure instanceof ApiError && failure.status === 409) { rebaseFrom.current = file; onChanged(); }
+      setError(failText(failure, t));
+    } finally { setBusy(false); }
   };
   const save = () => void run(async hash => {
-    if (!parts || !title.trim() || !body.trim() || !dirty) { setMode('read'); return; }
+    if (!title.trim() || !body.trim() || !dirty) { setMode('read'); setBase(null); return; }
     await api.editMemoryNote(projectId, note.name, { title: title.trim(), content: body, baseHash: hash });
     setMode('read');
+    setBase(null);
     onChanged();
     toast({ kind: 'memory', icon: 'check', title: t('ui.memory.toast.saved'), body: path });
   });
   const remove = () => void run(async hash => {
     await api.forgetMemoryNote(projectId, note.name, hash);
     setConfirming(false);
+    setUnsaved(unsavedKey, false);
     onGone();
     toast({
       kind: 'memory', icon: 'x', title: t('ui.memory.toast.deleted'), body: path,
@@ -151,7 +167,7 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
           <code className="bt-meta ui-mem__path">{path}</code>
           <div className="bt-seg" role="group" aria-label={t('ui.lib.mode')}>
             <button type="button" className="bt-seg__opt" aria-pressed={mode === 'read'} onClick={toRead}>{t('ui.lib.read')}</button>
-            <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} disabled={archived || !file} onClick={() => setMode('edit')}>{t('ui.lib.edit')}</button>
+            <button type="button" className="bt-seg__opt" aria-pressed={mode === 'edit'} disabled={archived || !file} onClick={startEdit}>{t('ui.lib.edit')}</button>
           </div>
           {mode === 'edit' && <Button small disabled={busy || !title.trim() || !body.trim()} onClick={save}>{t('ui.lib.save')}</Button>}
           {!archived && !confirming && <Button ref={deleteButton} small variant="ghost" disabled={busy || !file} onClick={askDelete}>{t('ui.lib.delete')}</Button>}
@@ -271,6 +287,7 @@ export function Memory({ productId, projects, projectsLoaded, revision }: { prod
   const [creating, setCreating] = useState(false);
   const [tick, setTick] = useState(0);
   const loads = useRef(latestOnly());
+  const shown = useRef<MemoryNote | undefined>(undefined);
   const now = useNow(60_000);
   const product = projects.find(p => p.id === productId);
 
@@ -290,7 +307,11 @@ export function Memory({ productId, projects, projectsLoaded, revision }: { prod
 
   const notes = data?.notes ?? [];
   const archived = data?.archived ?? product?.archived_at != null;
-  const current = notes.find(note => note.name === selected) ?? (creating ? undefined : notes[0]);
+  let current = notes.find(note => note.name === selected) ?? (creating ? undefined : notes[0]);
+  // 書きかけのある記憶が一覧から消えても（外で消された・名前が変わった）、書きかけを捨てずに開いたままにする
+  const held = shown.current;
+  if (held && !creating && current?.name !== held.name && !notes.some(note => note.name === held.name) && hasUnsavedEdits(`${EDITS}:${productId}:${held.name}`)) current = held;
+  shown.current = current;
   const changed = (select?: string) => { if (select !== undefined) setSelected(select); setTick(n => n + 1); };
   const ask = useDiscardAsk(() => hasUnsavedEdits(EDITS));
   const startNew = () => { if (!creating) ask.attempt(() => { setCreating(true); setSelected(null); }); };

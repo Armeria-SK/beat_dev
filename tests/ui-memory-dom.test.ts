@@ -102,15 +102,23 @@ function fakeServer(seed: Record<string, { text: string; events: Array<Partial<M
     return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   const writes = () => calls.filter(c => c.method !== 'GET');
-  return { calls, writes, notes, hashOf: (name: string) => hashOf(notes.get(name)!.text!) };
+  // beat が書いた版（履歴の行つき）と、beat の外での書き換え（履歴の行なし）
+  const beatWrites = (name: string, text: string) => { const s = notes.get(name)!; s.events.unshift({ id: nextId++, action: 'update', actor: 'beat', summary: null, tainted: false, before: s.text, after: text, created_at: NOW }); s.text = text; };
+  const outside = (name: string, text: string | null) => { notes.get(name)!.text = text; };
+  return { calls, writes, notes, beatWrites, outside, hashOf: (name: string) => hashOf(notes.get(name)!.text!) };
 }
 
 const settle = (ms = 220) => update(() => new Promise(resolve => setTimeout(resolve, ms)));
 
 async function screen(productId: string | undefined, projects: Project[] = [project()]) {
-  const { container } = await render(createElement(Memory, { productId, projects, projectsLoaded: true, revision: 0 }));
+  return (await mounted(productId, projects)).container;
+}
+
+async function mounted(productId: string | undefined, projects: Project[] = [project()]) {
+  const { container, root } = await render(createElement(Memory, { productId, projects, projectsLoaded: true, revision: 0 }));
   await settle();
-  return container;
+  const rerender = async (revision: number) => { await update(() => root.render(createElement(Memory, { productId, projects, projectsLoaded: true, revision }))); await settle(); };
+  return { container, rerender };
 }
 
 const V1 = '# Test commands\n\nRun npm test.\n';
@@ -287,4 +295,69 @@ test('会話の Notice: 製品の記憶のファイルの変化は「Memory save
   assert.equal(noticeText(t, notice('create')), 'Memory saved: memory/test-order.md');
   assert.equal(noticeText(t, notice('update')), 'Memory rewritten: memory/test-order.md');
   assert.equal(noticeText(t, notice('forget')), 'Memory forgotten: memory/test-order.md');
+});
+
+test('Memory（DOM）: Edit のあいだに beat が書き直して画面が読み直しても、Save は Edit を始めた版の baseHash で送り、409 で止まって書きかけが残る。もう一度 Save すれば新しい版の上に書く', async () => {
+  const server = fakeServer(SEED);
+  const { container, rerender } = await mounted(PID);
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  await input(container.querySelector('.ui-mem__edit textarea'), 'My draft.');
+  const NEWER = '# Test commands\n\nRun npm run verify.\n';
+  server.beatWrites('test-commands', NEWER);
+  await rerender(1);
+  await click(byText(container, '.bt-pane__bar button', 'Save'));
+  await settle();
+  assert.deepEqual(server.writes().map(c => [c.method, c.body?.baseHash]), [['PUT', hashOf(V2)]]);
+  assert.equal(server.notes.get('test-commands')!.text, NEWER, '新しい版は上書きされない');
+  assert.equal(container.querySelector<HTMLTextAreaElement>('.ui-mem__edit textarea')?.value, 'My draft.', '書きかけが残る');
+  assert.ok(container.querySelector('[role="alert"]'));
+  await click(byText(container, '.bt-pane__bar button', 'Save'));
+  await settle();
+  assert.deepEqual(server.writes()[1]!.body, { title: 'Test commands', content: 'My draft.', baseHash: hashOf(NEWER) });
+});
+
+test('Memory（DOM）: Edit のあいだは Delete も Edit を始めた版の baseHash で送る（新しい版を見ずに消さない）', async () => {
+  const server = fakeServer(SEED);
+  const { container, rerender } = await mounted(PID);
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  server.beatWrites('test-commands', '# Test commands\n\nNewer.\n');
+  await rerender(1);
+  await click(byText(container, '.bt-pane__bar button', 'Delete'));
+  await click(byText(container, '.bt-pane button', 'Delete'));
+  await settle();
+  assert.deepEqual(server.writes().map(c => c.query.get('baseHash')), [hashOf(V2)]);
+  assert.equal(server.notes.get('test-commands')!.text, '# Test commands\n\nNewer.\n');
+});
+
+test('Memory（DOM）: 書きかけのある記憶が一覧から消えても（外で消された）、その記憶と書きかけを開いたままにする', async () => {
+  const server = fakeServer(SEED);
+  const { container, rerender } = await mounted(PID);
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  await input(container.querySelector('.ui-mem__edit textarea'), 'Keep me.');
+  server.outside('test-commands', null);
+  await rerender(1);
+  assert.deepEqual(rows(container).map(r => r.dataset.note), ['note-1']);
+  assert.equal(container.querySelector('.ui-mem__path')?.textContent, 'memory/test-commands.md');
+  assert.equal(container.querySelector<HTMLTextAreaElement>('.ui-mem__edit textarea')?.value, 'Keep me.');
+});
+
+test('Memory の Notice の Undo: beat の外で中身が変わっていれば（履歴の行が無くても）戻さず、何も書かない', async () => {
+  // 前の試験が戻した版の番号（このファイルの中で取り消し済みとして覚えられている）と重ならないよう、先に 2 つ置く
+  const server = fakeServer({ a: SEED['test-commands'], b: SEED['test-commands'], 'test-commands': SEED['test-commands'] });
+  const top = server.notes.get('test-commands')!.events[0]!.id;
+  assert.ok(top > 103);
+  server.outside('test-commands', '# Test commands\n\nEdited in Obsidian.\n');
+  assert.equal(await undoMemoryNoteEvent(PID, 'test-commands', top), false);
+  assert.equal(server.writes().length, 0);
+});
+
+test('Memory（DOM）: Edit の書きかけのまま自分で Delete したら、消した記憶を開いたままにせず次の記憶へ移る', async () => {
+  fakeServer(SEED);
+  const container = await screen(PID);
+  await click(byText(container, '.bt-seg__opt', 'Edit'));
+  await input(container.querySelector('.ui-mem__edit textarea'), 'draft');
+  await click(byText(container, '.bt-pane__bar button', 'Delete'));
+  await click(byText(container, '.bt-pane button', 'Delete'));
+  await settle();
+  assert.equal(container.querySelector('.ui-mem__path')?.textContent, 'memory/note-1.md');
 });

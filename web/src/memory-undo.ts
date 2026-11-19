@@ -27,7 +27,7 @@ export function useMemoryUndone(eventId: number): boolean {
   return useSyncExternalStore(subscribe, () => undone.has(eventId));
 }
 
-// 製品の記憶のファイル（beat 10-4a）の会話の Notice の Undo。その版のあとに誰かが変えていたら戻さない（false）
+// 製品の記憶のファイル（beat 10-4a）の会話の Notice の Undo。その版のあとに誰かが変えていたら（履歴の行の無い外の書き換えも）戻さない（false）
 const undoneNotes = new Set<string>();
 
 export async function undoMemoryNoteEvent(projectId: string, name: string, eventId: number): Promise<boolean> {
@@ -40,7 +40,8 @@ export async function undoMemoryNoteEvent(projectId: string, name: string, event
     else {
       const target = undoTargetOf(events, 0);
       if (!target) return false;
-      const { note } = await api.memoryNote(projectId, name);
+      const { note, text } = await api.memoryNote(projectId, name);
+      if (text !== events[0].after) return false;
       if (target.kind === 'delete') await api.forgetMemoryNote(projectId, name, note.hash);
       else await api.restoreMemoryNote(projectId, name, target.eventId, note.hash);
     }
