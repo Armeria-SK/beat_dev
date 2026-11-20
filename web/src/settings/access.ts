@@ -1,4 +1,5 @@
 import { allowEntryRunsCode } from '../../../src/tools/hooks/listed-commands.ts';
+import { DEFAULT_SEARCH_ENGINES } from '../../../src/shared/search-engines.ts';
 import { defaultPolicy, isLooser, isPolicyable, isToolPolicy, type ToolPolicy } from '../../../src/tools/tool-policy.ts';
 import { deepEqual } from './merge.ts';
 import type { Config } from './model.ts';
@@ -22,6 +23,8 @@ export type Access =
   | { kind: 'outside-loosened' }
   | { kind: 'web-fetch-on' }
   | { kind: 'web-search-on' }
+  // 検索の問いを送る先（tools.web.engines）を足す。外す・並べ替えるだけなら数えない
+  | { kind: 'web-search-engine-added'; engine: string }
   | { kind: 'judge-off' }
   | { kind: 'skills-auto-register' }
   | { kind: 'hook-added'; stage: HookStage; hook: HookSummary }
@@ -303,7 +306,9 @@ export function accessWidening(before: Config, after: Config): Access[] {
   for (const name of added(strings(bs.envAllow), strings(as.envAllow))) out.push({ kind: 'shell-env-added', name });
   if ((bt.outsideRoots ?? 'ask') === 'deny' && (at.outsideRoots ?? 'ask') === 'ask') out.push({ kind: 'outside-loosened' });
   if ((obj(bt.web).fetch ?? true) === false && (obj(at.web).fetch ?? true) === true) out.push({ kind: 'web-fetch-on' });
-  if ((obj(bt.web).search ?? 'duckduckgo') === 'off' && (obj(at.web).search ?? 'duckduckgo') !== 'off') out.push({ kind: 'web-search-on' });
+  if ((obj(bt.web).search ?? 'auto') === 'off' && (obj(at.web).search ?? 'auto') !== 'off') out.push({ kind: 'web-search-on' });
+  const engines = (web: unknown): string[] => (Array.isArray(obj(web).engines) ? strings(obj(web).engines) : [...DEFAULT_SEARCH_ENGINES]);
+  for (const engine of added(engines(bt.web), engines(at.web))) out.push({ kind: 'web-search-engine-added', engine });
   if (obj(before.skills).askBeforeRegister !== false && obj(after.skills).askBeforeRegister === false) out.push({ kind: 'skills-auto-register' });
   if (obj(before.routing).judgeMode !== 'off' && obj(after.routing).judgeMode === 'off') out.push({ kind: 'judge-off' });
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));

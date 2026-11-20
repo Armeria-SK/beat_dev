@@ -67,6 +67,7 @@ export const en = {
   'access.outside': 'Change shell commands that reach outside the allowed folders from "Block" to "Ask"',
   'access.webFetch': 'Turn on fetching web pages',
   'access.webSearch': 'Turn on web search',
+  'access.webSearchEngine': (engine: string) => `Also send web search queries to the search site "${engine}"`,
   'access.judgeOff': 'Run without a judge: actions that would go to the judge (for example installing a package outside a product, or a command beat cannot read as a fixed form) run at once, with no check and no judge cost. The AI can then act on its own',
   'access.judgeOffTaint': 'This includes downloads after beat has read outside content (web pages, files from elsewhere): with the judge off they run without a check too. Sending data out stays in Pending',
   'access.judgeOffForm': 'beat recognises sends, deletions and its own files (settings, data and its program folder) by how the command is written, including paths written in code and in scripts it runs. Code that builds them while it runs is not recognised and runs without a check. Such code can also call beat itself, change its settings and approve its own Pending actions, so the lists below hold only for what beat can read from the command',

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { test } from 'node:test';
+import { DEFAULT_SEARCH_ENGINES } from '../src/shared/search-engines.ts';
 import { defaultConfig } from '../src/config/store.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { placePath } from '../src/tools/hooks/scope.ts';
@@ -78,7 +79,8 @@ test('Reset の下見（GET）: 戻したあとの設定を返すだけで、何
   assert.equal(readFileSync(s.paths.config, 'utf8'), before);
   assert.deepEqual(s.backups(), []);
   const kinds = accessWidening(s.app.config(), preview.body.config).map(a => a.kind);
-  assert.deepEqual(kinds.sort(), ['hook-removed', 'provider-key', 'shell-deny-removed', 'tool-policy-loosened'], '試験の設定には Anthropic が無いので、既定のプロバイダが戻るのも並ぶ');
+  assert.deepEqual(kinds.filter(kind => kind !== 'web-search-engine-added').sort(), ['hook-removed', 'provider-key', 'shell-deny-removed', 'tool-policy-loosened'], '試験の設定には Anthropic が無いので、既定のプロバイダが戻るのも並ぶ');
+  assert.equal(kinds.filter(kind => kind === 'web-search-engine-added').length, DEFAULT_SEARCH_ENGINES.length - 1, '試験の設定の検索先は DuckDuckGo だけなので、既定に戻すと残りの先が足される');
   const done = await s.json('/api/settings/reset', 'POST', {});
   assert.deepEqual(done.body.config, preview.body.config, '下見と実際は同じ');
 });

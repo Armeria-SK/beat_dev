@@ -14,7 +14,7 @@ function base(): Config {
       outsideRoots: 'ask',
       shell: { enabled: true, allow: ['git status'], ask: ['npm *'], deny: ['rm *'], envAllow: ['PATH'], timeoutSec: 120 },
       hooks: { preToolUse: [{ matcher: 'shell_run', command: ['node', 'guard.js'], timeoutMs: 30000, onError: 'deny' }], postToolUse: [] },
-      web: { fetch: true, search: 'duckduckgo' },
+      web: { fetch: true, search: 'auto' },
     },
     worker: { enabled: true, maxRunsPerHour: 6 },
     memory: { userMaxChars: 1500 },
@@ -91,7 +91,7 @@ test('広がりの検出（承認まわり・Web）: outsideRoots を止める�
   const loose = structuredClone(strict);
   loose.tools.outsideRoots = 'ask';
   loose.tools.web.fetch = true;
-  loose.tools.web.search = 'duckduckgo';
+  loose.tools.web.search = 'auto';
   assert.deepEqual(kinds(strict, loose), ['outside-loosened', 'web-fetch-on', 'web-search-on']);
   const oldKey = structuredClone(base()) as Config & { tools: Record<string, unknown> };
   oldKey.tools.taintEscalation = false;
@@ -435,4 +435,23 @@ test('辞書（ブラウザ）: 広がりの文は en にあり、サイトの�
   }
   assert.match((en as any)['access.browserSiteAdded']('=mail.example.org'), /mail\.example\.org/u);
   assert.match((en as any)['access.browserSiteWidened']('example.com'), /example\.com/u);
+});
+test('広がりの検出（検索先）: tools.web.engines に前に無かった先を足すと 1 つずつ。外す・並べ替えるだけなら無し。書いていない側は既定の先として比べる', () => {
+  const before = base();
+  before.tools.web.engines = ['duckduckgo-html', 'wikipedia'];
+  const more = structuredClone(before);
+  more.tools.web.engines = ['duckduckgo-html', 'bing', 'wikipedia', 'mojeek'];
+  assert.deepEqual(accessWidening(before, more), [{ kind: 'web-search-engine-added', engine: 'bing' }, { kind: 'web-search-engine-added', engine: 'mojeek' }]);
+  const fewer = structuredClone(before);
+  fewer.tools.web.engines = ['wikipedia'];
+  assert.deepEqual(kinds(before, fewer), []);
+  const reordered = structuredClone(before);
+  reordered.tools.web.engines = ['wikipedia', 'duckduckgo-html'];
+  assert.deepEqual(kinds(before, reordered), []);
+  const unset = base();
+  const narrowed = structuredClone(unset);
+  narrowed.tools.web.engines = ['bing'];
+  assert.deepEqual(kinds(unset, narrowed), [], '既定の先から絞るのは広がりではない');
+  assert.deepEqual(kinds(before, unset).sort(), ['web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added'], '既定に戻すと、足される 6 つの先');
+  assert.match((en as any)['access.webSearchEngine']('bing'), /search site "bing"/u);
 });
