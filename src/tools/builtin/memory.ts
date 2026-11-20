@@ -1,9 +1,12 @@
 import { Type } from '@sinclair/typebox';
 import { conversationSawOutside } from '../../db/outside.ts';
-import { readHistory, searchHistory } from '../../memory/history.ts';
+import type { Language } from '../../config/schema.ts';
+import { estimateTextTokens, prefixLength } from '../../engine/tokens.ts';
+import { readHistory, readHistoryMessage, searchHistory } from '../../memory/history.ts';
 import { BOOK_LABELS, MemoryError, prefix, type Book } from '../../memory/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
+import { redactSecrets } from '../../shared/redaction.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 export const MEMORY_TOOL_NAMES: readonly string[] = ['memory_save', 'memory_update', 'memory_forget', 'memory_search'];
@@ -125,22 +128,51 @@ export const historySearch: ToolDef<{ query: string; days?: number; limit?: numb
   },
 };
 
-export const historyRead: ToolDef<{ conversation_id: string; around_message_id?: number; limit?: number }> = {
+// 発言 1 つを分けて読むときの 1 回の量（TE-4a）。その呼び出しに許された量（ctx.outputTokens）の方が小さければそちら
+export const HISTORY_PAGE_CHARS = 12_000;
+const PAGE_MARGIN_TOKENS = 16;
+
+// 伏せ字は全文に掛けてから、伏せたあとの文で位置を数えて切る（切ってから伏せると、境目をまたぐ秘密が半分ずつ出る）。
+// 位置の行は頭に置く（パイプラインが後ろを切っても行が残る。続きの offset は実際に返した終わり）
+function messagePage(row: { id: number; role: string; text: string; createdAt: number }, offset: number, language: Language, tokens: number | undefined): ToolOutput {
+  const text = redactSecrets(row.text);
+  const total = text.length;
+  if (offset > total || (offset === total && total > 0)) return { content: toolText(language, 'history.offset_out_of_range', { offset, total }), isError: true };
+  const line = (to: number, more: boolean) => toolText(language, more ? 'history.page' : 'history.page_end', { id: row.id, role: row.role, date: fmtDate(row.createdAt), from: offset, to, total });
+  const room = Math.max(estimateTextTokens(line(total, true)), estimateTextTokens(line(total, false))) + PAGE_MARGIN_TOKENS;
+  const fitted = prefixLength(text.slice(offset), HISTORY_PAGE_CHARS, (tokens ?? Infinity) - room);
+  const to = offset + (fitted || (offset < total ? String.fromCodePoint(text.codePointAt(offset)!).length : 0));
+  return { content: `${line(to, to < total)}\n\n${text.slice(offset, to)}` };
+}
+
+export const historyRead: ToolDef<{ conversation_id: string; around_message_id?: number; limit?: number; message_id?: number; offset?: number }> = {
   name: 'history_read',
-  description: 'Read part of a past conversation. Use it to read around a message_id found with history_search.',
+  description: [
+    'Read part of a past conversation. Use it to read around a message_id found with history_search; each message is cut at 1,500 characters there.',
+    'To read one whole message, pass message_id (around_message_id and limit are then ignored): it comes back in pages that start with a position line, and offset reads on from where the last page ended.',
+  ].join(' '),
   input: Type.Object({
     conversation_id: Type.String({ minLength: 1, maxLength: 100 }),
     around_message_id: Type.Optional(Type.Integer({ minimum: 1 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 60 })),
+    message_id: Type.Optional(Type.Integer({ minimum: 1, description: 'Read this one message of the conversation in full, page by page' })),
+    offset: Type.Optional(Type.Integer({ minimum: 0, description: 'With message_id: the character position to start from (0 = the start; take it from the position line of the last page)' })),
   }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task', 'review'],
   async execute(input, ctx) {
     try {
+      if (input.message_id !== undefined) {
+        const language = languageOf(ctx.config);
+        const row = readHistoryMessage(services(ctx).db, input.conversation_id, input.message_id);
+        if (!row) return { content: toolText(language, 'history.message_not_found'), isError: true };
+        const page = messagePage(row, input.offset ?? 0, language, ctx.outputTokens);
+        return page.isError || !conversationSawOutside(services(ctx).db, input.conversation_id) ? page : { ...page, fetched: true };
+      }
       const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20 });
       if (!rows.length) return { content: toolText(languageOf(ctx.config), 'history.not_found'), isError: true };
       return {
-        content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n'),
+        content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${redactSecrets(r.text).slice(0, 1500)}`).join('\n\n'),
         ...(conversationSawOutside(services(ctx).db, input.conversation_id) ? { fetched: true } : {}),
       };
     } catch (error) { return fail(error, ctx); }

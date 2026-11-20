@@ -159,6 +159,7 @@ const MAX_COMPACTIONS_PER_RUN = 5;
 const MAX_PENDING_MESSAGES = 10;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
 const COMPACT_NOTE_CHARS = 300;
+const HISTORY_READ = 'history_read';
 // 実行を始めるとき、添付の有無を見るために読み戻す発言の数（最後の返事がこの中に無ければ、確かめきれないので承認制の側に倒す）
 const TAINT_SCAN_LIMIT = 500;
 
@@ -1005,6 +1006,8 @@ export class ChatEngine {
     ctx.reachable = () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined || ctx.memoryProject !== undefined, this.#frozen(ctx.project?.id));
     if (this.#defers(kind, forbid, config)) {
       // 読み込んだ道具は会話ごとに持ち越す（TE-2。kv の loaded-tools:<会話>。並びが前の実行の終わりと同じになり、前半を読める）。使えない道具は #toolsFor が外す
+      // 要約のある会話には history_read を入れておく（TE-4a。手放した元の文を読み戻せるように。要約した時点で入るが、それより前に要約した会話はここで）
+      if (d.conversations.get(conversationId)?.summary) this.preload(conversationId, [HISTORY_READ]);
       const loaded = new Set<string>(this.#carriedTools(conversationId));
       const sent = new Set<string>();
       this.#loaded.set(runId, { loaded, sent });
@@ -1388,6 +1391,9 @@ export class ChatEngine {
           const removed = stored.slice(0, fitted.removed);
           const ok = await this.#compact({ route, adapter, runId: p.runId, conversationId: p.conversationId, removed, previous: conversation?.summary ?? null, capacity, signal: p.signal });
           if (ok) {
+            // 要約した会話は、元の文を history_read で読み戻せるよう道具の並びに入れる（TE-4a。並びが変わるのは要約で前半を書き直すこの呼び出しに重なる）
+            this.preload(p.conversationId, [HISTORY_READ]);
+            this.#loaded.get(p.runId)?.loaded.add(HISTORY_READ);
             // お知らせは 1 回の実行で 1 回ずつ。件数は、この実行で要約した発言の合計に更新する（画面は同じお知らせを置き換える）
             p.compaction.summarized += removed.length;
             d.bus.publish({ type: 'compaction', runId: p.runId, conversationId: p.conversationId, summarized: p.compaction.summarized });

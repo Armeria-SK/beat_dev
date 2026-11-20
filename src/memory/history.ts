@@ -44,9 +44,12 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
   }));
 }
 
+const hiddenConversation = (db: DatabaseSync, conversationId: string): boolean =>
+  db.prepare('SELECT 1 FROM conversations WHERE id = ? AND parent_run_id IS NOT NULL').get(conversationId) !== undefined
+  || db.prepare(`SELECT 1 WHERE ? IN (${RESEARCH_CONVERSATIONS})`).get(conversationId) !== undefined;
+
 export function readHistory(db: DatabaseSync, conversationId: string, options: { aroundMessageId?: number | undefined; limit?: number } = {}): Array<{ id: number; role: string; text: string; createdAt: number }> {
-  if (db.prepare('SELECT 1 FROM conversations WHERE id = ? AND parent_run_id IS NOT NULL').get(conversationId)) return [];
-  if (db.prepare(`SELECT 1 WHERE ? IN (${RESEARCH_CONVERSATIONS})`).get(conversationId)) return [];
+  if (hiddenConversation(db, conversationId)) return [];
   const limit = Math.min(options.limit ?? 20, 60);
   const rows = options.aroundMessageId === undefined
     ? db.prepare('SELECT id, role, text, created_at FROM (SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id').all(conversationId, limit)
@@ -54,4 +57,11 @@ export function readHistory(db: DatabaseSync, conversationId: string, options: {
         SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM messages WHERE conversation_id = ? AND id <= ? ORDER BY id DESC LIMIT ?)
       ) ORDER BY id LIMIT ?`).all(conversationId, conversationId, options.aroundMessageId, Math.ceil(limit / 2), limit);
   return (rows as Array<{ id: number; role: string; text: string; created_at: number }>).map(r => ({ id: r.id, role: r.role, text: r.text, createdAt: r.created_at }));
+}
+
+// 発言 1 つを全文で読む（TE-4a）。渡した会話の発言だけ。子の担当・調べる会話は readHistory と同じく読めない。読むのは text だけ（parts の tail は出ない）
+export function readHistoryMessage(db: DatabaseSync, conversationId: string, messageId: number): { id: number; role: string; text: string; createdAt: number } | undefined {
+  if (hiddenConversation(db, conversationId)) return undefined;
+  const row = db.prepare('SELECT id, role, text, created_at FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, conversationId) as { id: number; role: string; text: string; created_at: number } | undefined;
+  return row && { id: row.id, role: row.role, text: row.text, createdAt: row.created_at };
 }

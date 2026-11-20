@@ -160,6 +160,10 @@ const en = {
   'history.line': '- {date} conversation "{title}" (conversation_id={cid}, message_id={mid}, {role}): {snippet}',
   'history.untitled': 'untitled',
   'history.not_found': 'That conversation was not found',
+  'history.message_not_found': 'That message was not found in that conversation',
+  'history.offset_out_of_range': 'offset={offset} is past the end of the message ({total} characters)',
+  'history.page': '[Message {id} ({role}, {date}): characters {from} to {to} of {total}. Read on with message_id={id} offset={to}]',
+  'history.page_end': '[Message {id} ({role}, {date}): characters {from} to {to} of {total}. This is the end of the message]',
 
   'skill.unknown': 'There is no skill "{name}". {detail}',
   'skill.unregistered': 'The skill "{name}" is not registered with beat, so it cannot be used. It becomes usable once the owner registers it from the Skills screen',
