@@ -130,9 +130,9 @@ const en = {
   'web.no_link_text': '(no text)',
   'web.no_hits': 'There were no search results for "{query}". Try different words',
   'web.search_header': 'Search: {query} ({engine})',
-  'web.search_unavailable': 'Search is unavailable for the rest of this run (DuckDuckGo refused it twice in a row)',
+  'web.search_unavailable': 'Search is unavailable for the rest of this run (no search site could be used twice in a row)',
   'web.search_blocked_title': 'Search is being stopped by the automated-access check',
-  'web.search_blocked_body': 'DuckDuckGo refused searches several times in a row. Search works again after a while',
+  'web.search_blocked_body': 'The search sites refused searches several times in a row. Search works again after a while',
 
   'fetch.too_long': 'The URL is too long',
   'fetch.bad_url': 'Cannot read this as a URL: {url}',
@@ -149,7 +149,6 @@ const en = {
   'fetch.timeout': 'Timed out ({seconds} s)',
   'fetch.connect': 'Could not connect: {detail}',
 
-  'search.blocked': 'DuckDuckGo judged this to be automated access and returned no results. Wait a while and try again',
   'search.limit': 'Searches are limited to {max} per hour (tools.web.maxSearchesPerHour)',
   'search.all_unavailable': 'No search site could be used right now ({details}). Wait a while and try again',
   'search.reason.blocked': '{engine}: refused as automated access, resting {minutes} more min',

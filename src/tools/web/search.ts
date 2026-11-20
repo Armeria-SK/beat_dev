@@ -1,10 +1,9 @@
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
-import { decodeText, fetchPublic, RetrievalFailure, searchNetwork, type PageNetwork } from './public-page.ts';
-import { readSafely, type SearchHit } from './search/engine.ts';
-import { duckduckgoHtml } from './search/engines/duckduckgo-html.ts';
 
+// 検索の本体は search/metasearch.ts（複数の検索先を少しずつ同時に試し、止められた先は休ませて別の先へ移る。captcha は解かない）。
+// 転送をたどってよいホストは、有効な先のホストの和（search/metasearch.ts の searchHosts）
 export type { SearchHit } from './search/engine.ts';
 
 export class SearchFailure extends Error {
@@ -17,30 +16,6 @@ export class SearchFailure extends Error {
 
 export function searchFailure(key: ToolMessageKey, params: MessageParams = {}): SearchFailure {
   return new SearchFailure(toolText('en', key, params), key, params);
-}
-
-export type SearchProvider = 'duckduckgo' | 'off';
-
-export function parseDuckDuckGo(html: string, limit: number): SearchHit[] {
-  const result = readSafely(duckduckgoHtml, html, 'text/html', limit);
-  if (result.state === 'blocked') throw searchFailure('search.blocked');
-  return result.hits;
-}
-
-export const SEARCH_HOSTS: ReadonlySet<string> = new Set(duckduckgoHtml.hosts(''));
-
-export async function searchDuckDuckGo(query: string, options: { limit: number; region: string; signal?: AbortSignal | undefined; network?: PageNetwork | undefined; onlySearchHosts?: boolean | undefined }): Promise<SearchHit[]> {
-  const url = duckduckgoHtml.request(query, options.region);
-  try {
-    const page = await fetchPublic(url.href, options.signal, options.network ?? searchNetwork, 15_000, undefined, options.onlySearchHosts ? SEARCH_HOSTS : undefined);
-    return parseDuckDuckGo(decodeText(page.body, page.contentType), options.limit);
-  } catch (error) {
-    // 202 は DuckDuckGo の「自動アクセスの確認」。回避はせずに知らせる
-    if (error instanceof RetrievalFailure && (error.code === 'refused' || error.status === 202)) {
-      throw searchFailure('search.blocked');
-    }
-    throw error;
-  }
 }
 
 export class SearchThrottle {

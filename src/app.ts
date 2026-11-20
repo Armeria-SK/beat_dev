@@ -69,6 +69,7 @@ import { deferredSection, toolSearch } from './tools/builtin/tool-search.ts';
 import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
+import { EngineHealth } from './tools/web/search/health.ts';
 import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.ts';
 import { isScoutRun, TaskStore } from './tasks/store.ts';
 import { maskedTaskView } from './web/task-view.ts';
@@ -300,7 +301,7 @@ export class App {
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, memoryFiles: this.memoryFiles, botMemory: this.botMemory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, projects: this.projects, places: this.places, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, questions: this.questions, log: this.log,
-      web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now) },
+      web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now), health: new EngineHealth(now, this.log) },
       notify: input => this.notifications.notify(input),
       browser: this.browser,
       background: this.background,

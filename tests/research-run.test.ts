@@ -475,8 +475,9 @@ test('検索ができない（B3）: どの検索も断られた記録は「何�
   assert.equal(view.body.products.stopReason, 'search_blocked');
 });
 
+// 止められた先は休むので、「ほかが答えた」を見るには検索先を 2 つにする（1 つ目の頼みだけが止められる）
 test('検索ができない（B3）: 一部の検索だけ断られ、ほかが答えたなら search_blocked にしない（done）', async t => {
-  const s = await researchApp(t, { blockSearch: 1, configure: c => { c.research = { when: 'button' }; } });
+  const s = await researchApp(t, { blockSearch: 1, configure: c => { c.research = { when: 'button' }; c.tools.web.engines = ['duckduckgo-html', 'bing']; } });
   s.adapter().scripts.push(reply('ok'));
   await s.send(1, 'I want a notes app.');
   s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), toolCall('web_search', { query: 'markdown notes' }), reply('Nothing to record.'));
@@ -487,7 +488,7 @@ test('検索ができない（B3）: 一部の検索だけ断られ、ほかが�
 });
 
 test('検索ができない（B3）: 結果 0 件で答えた検索は「見つからなかった」のまま（done）。ほかの検索が断られても', async t => {
-  const s = await researchApp(t, { blockSearch: 1, emptySearch: true, configure: c => { c.research = { when: 'button' }; } });
+  const s = await researchApp(t, { blockSearch: 1, emptySearch: true, configure: c => { c.research = { when: 'button' }; c.tools.web.engines = ['duckduckgo-html', 'bing']; } });
   s.adapter().scripts.push(reply('ok'));
   await s.send(1, 'I want a notes app.');
   s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), toolCall('web_search', { query: 'markdown notes' }), reply('Nothing to record.'));

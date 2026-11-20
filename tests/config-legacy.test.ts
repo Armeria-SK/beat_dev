@@ -11,6 +11,7 @@ import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { CONVERSATION, settled, startApp } from './app-setup.ts';
 import { fakeServer, sse, tempDir, testConfig } from './helpers.ts';
+import { DEFAULT_SEARCH_ENGINES } from '../src/shared/search-engines.ts';
 
 function withToolMode(toolMode: string) {
   const config = testConfig() as unknown as { models: Array<Record<string, unknown>> };
@@ -333,21 +334,21 @@ function withSearxng(web: Record<string, unknown> = { search: 'searxng', searxng
   return config;
 }
 
-test('古い tools.web.search: "searxng" は duckduckgo に読み替え、searxngUrl は落とす。dropped と rewritten にそれぞれ 1 つ', () => {
+test('古い tools.web.search: "searxng" は auto に読み替え、searxngUrl は落とす。dropped と rewritten にそれぞれ 1 つ', () => {
   const raw = withSearxng();
   const result = dropLegacy(raw);
   const web = (result.config as { tools: { web: Record<string, unknown> } }).tools.web;
-  assert.equal(web.search, 'duckduckgo');
+  assert.equal(web.search, 'auto');
   assert.equal('searxngUrl' in web, false);
   assert.deepEqual(result.dropped, ['tools.web.searxngUrl']);
-  assert.deepEqual(result.rewritten, ['tools.web.search "searxng" → "duckduckgo"']);
+  assert.deepEqual(result.rewritten, ['tools.web.search "searxng" → "auto"']);
   const config = parseConfig(raw);
-  assert.equal(config.tools.web.search, 'duckduckgo');
+  assert.equal(config.tools.web.search, 'auto');
   assert.equal('searxngUrl' in config.tools.web, false);
 });
 
-test('searxngUrl だけ（search は duckduckgo / off）は落とすだけで、search は読み替えない', () => {
-  for (const search of ['duckduckgo', 'off']) {
+test('searxngUrl だけ（search は auto / off）は落とすだけで、search は読み替えない', () => {
+  for (const search of ['auto', 'off']) {
     const raw = withSearxng({ search, searxngUrl: 'http://127.0.0.1:8888' });
     const result = dropLegacy(raw);
     assert.deepEqual(result.dropped, ['tools.web.searxngUrl'], search);
@@ -376,15 +377,15 @@ test('ConfigStore: SearXNG の設定のファイルを読むとファイルの�
   const before = readFileSync(path);
   const store = new ConfigStore(path);
   const config = store.load();
-  assert.equal(config.tools.web.search, 'duckduckgo');
+  assert.equal(config.tools.web.search, 'auto');
   assert.deepEqual(store.dropped, ['tools.web.searxngUrl']);
-  assert.deepEqual(store.rewritten, ['tools.web.search "searxng" → "duckduckgo"']);
+  assert.deepEqual(store.rewritten, ['tools.web.search "searxng" → "auto"']);
   store.current();
   assert.deepEqual(readFileSync(path), before);
   store.save(config);
   assert.deepEqual([store.dropped, store.rewritten], [[], []]);
   const saved = JSON.parse(readFileSync(path, 'utf8')) as { tools: { web: Record<string, unknown> } };
-  assert.equal(saved.tools.web.search, 'duckduckgo');
+  assert.equal(saved.tools.web.search, 'auto');
   assert.equal('searxngUrl' in saved.tools.web, false);
 });
 
@@ -418,10 +419,10 @@ const BOOT_LOG_ROWS: Array<{ name: string; raw: () => Record<string, any>; check
   {
     name: '持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が読め、region は jp-jp のまま。起動のログは決まった 2 行で、ファイルは書き換えない',
     raw: () => { const raw = ownerShapedConfig(); raw.tools.maxIterations = 0; raw.tools.web = { ...OWNER_WEB }; return raw; },
-    check: raw => assert.deepEqual(parseConfig(raw).tools.web, { fetch: true, search: 'duckduckgo', region: 'jp-jp', maxSearchesPerHour: 30 }),
+    check: raw => assert.deepEqual(parseConfig(raw).tools.web, { fetch: true, search: 'auto', engines: [...DEFAULT_SEARCH_ENGINES], region: 'jp-jp', maxSearchesPerHour: 30 }),
     logs: [
       '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl, worker.autonomy',
-      '[INFO] Read old settings in their new form: tools.web.search "searxng" → "duckduckgo"',
+      '[INFO] Read old settings in their new form: tools.web.search "searxng" → "auto"',
     ],
   },
 ];
@@ -488,4 +489,24 @@ test('model-auto: 古い形で起動すると、起動のログに読み替え�
   assert.deepEqual(boot.logs.filter(line => /new form/u.test(line)), ['[INFO] Read old settings in their new form: models.claude-sonnet-5-5.maxOutputTokens 3000 → auto, models.claude-sonnet-5-5.minContext 120000 → removed']);
   assert.equal(boot.app.config().models[0]!.maxOutputTokens, undefined);
   boot.unchanged();
+});
+
+test('古い tools.web.search: "duckduckgo" も auto に読み替える（今まで選べたのは DuckDuckGo だけだった）。engines を書いていなければ既定の先', () => {
+  const raw = withSearxng({ search: 'duckduckgo' });
+  delete raw.tools.web.searxngUrl;
+  delete raw.tools.web.engines;
+  const result = dropLegacy(raw);
+  assert.deepEqual(result.rewritten, ['tools.web.search "duckduckgo" → "auto"']);
+  const config = parseConfig(raw);
+  assert.equal(config.tools.web.search, 'auto');
+  assert.deepEqual(config.tools.web.engines, [...DEFAULT_SEARCH_ENGINES]);
+});
+
+test('tools.web.engines: 知っている先の id だけ・重なりなし・1 個以上。DuckDuckGo だけにもできる', () => {
+  const withEngines = (engines: unknown) => { const raw = withSearxng({ search: 'auto' }); delete raw.tools.web.searxngUrl; raw.tools.web.engines = engines; return raw; };
+  assert.deepEqual(parseConfig(withEngines(['duckduckgo-html'])).tools.web.engines, ['duckduckgo-html']);
+  assert.deepEqual(parseConfig(withEngines(['wikipedia', 'bing'])).tools.web.engines, ['wikipedia', 'bing']);
+  for (const bad of [[], ['bing', 'bing'], ['google'], ['bing', 'nope'], 'bing']) {
+    assert.throws(() => parseConfig(withEngines(bad)), Error, JSON.stringify(bad));
+  }
 });

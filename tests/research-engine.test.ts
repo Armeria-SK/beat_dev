@@ -8,7 +8,7 @@ import type { ChatMessage } from '../src/engine/types.ts';
 import { ResearchSession, type PartKind } from '../src/research/evidence.ts';
 import { ResearchStore } from '../src/research/store.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
-import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, tempDir } from './helpers.ts';
 import { toolCall } from './helpers/task-app.ts';
 
@@ -169,7 +169,8 @@ test('調べる実行（R3.11 M1）: ! で始まる語の検索は deny。検索
   assert.ok(!s.asked.some(url => decodeURIComponent(url).includes('!g')));
   s.adapter().scripts.push(toolCall('web_search', { query: 'bounce me' }), reply('ok'));
   const sent = await s.json(`/api/conversations/${uuid(2)}/messages`, 'POST', { text: 'search', projectId: s.projectId });
-  await settled(s.app, sent.body.runId);
+  // 同じ検索先へは 4 秒空けて送るので、ふつうより長く待つ
+  await waitFor(() => s.app.runs.get(sent.body.runId)?.ended_at != null, 'chat search ended', 10_000);
   assert.ok(s.asked.some(url => url.includes('third.zqnotes.net')), 'a chat search still follows the redirect');
 });
 

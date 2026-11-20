@@ -1,5 +1,6 @@
 import { Type, type Static } from '@sinclair/typebox';
 import { RESEARCH_LANGUAGES, RESEARCH_LIMIT_RANGE, RESEARCH_MODES, RESEARCH_WHEN } from '../shared/research-languages.ts';
+import { DEFAULT_SEARCH_ENGINES, SEARCH_ENGINE_IDS } from '../shared/search-engines.ts';
 
 export const ProviderKind = Type.Union([
   Type.Literal('anthropic'),
@@ -118,7 +119,9 @@ export function ToolsConfig() {
     }, { additionalProperties: false, default: {} }),
     web: Type.Object({
       fetch: Type.Boolean({ default: true }),
-      search: Type.Union([Type.Literal('duckduckgo'), Type.Literal('off')], { default: 'duckduckgo' }),
+      // auto: engines の先を少しずつ同時に試す（src/tools/web/search/metasearch.ts）
+      search: Type.Union([Type.Literal('auto'), Type.Literal('off')], { default: 'auto' }),
+      engines: Type.Array(Type.Union(SEARCH_ENGINE_IDS.map(id => Type.Literal(id))), { minItems: 1, maxItems: SEARCH_ENGINE_IDS.length, uniqueItems: true, default: [...DEFAULT_SEARCH_ENGINES] }),
       region: Type.String({ default: 'jp-jp', maxLength: 10 }),
       maxSearchesPerHour: Type.Integer({ minimum: 1, maximum: 600, default: 30 }),
     }, { additionalProperties: false, default: {} }),
