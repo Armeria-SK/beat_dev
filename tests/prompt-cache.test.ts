@@ -18,7 +18,7 @@ import { toolText } from '../src/shared/messages/tools.ts';
 import { writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import { fail, reply } from './helpers.ts';
 import { AnthropicCacheSim, blockTokens, OpenAiCacheSim, totals } from './helpers/cache-sim.ts';
-import { MIN, taskApp, toolCall } from './helpers/task-app.ts';
+import { MIN, taskApp, talkThenCall, toolCall } from './helpers/task-app.ts';
 
 // S1（build-quality）: 1 つの実行の中で、道具・固定の system・実行のあいだ同じ部分がバイト単位で同じで、
 // 毎回変わる部分（時刻・Checklist・裏のコマンド）は、変わったときだけ最後の発言の後ろ（キャッシュの区切りの後ろ）に足し、以後も同じ文で送る
@@ -173,7 +173,8 @@ async function longRun(t: { after: (fn: () => void) => void }, summary: string) 
     s.clock.now += MIN;
     if (calls === 1) writeChecklist(s.app.kv, C, [{ text: 'step one', status: 'in_progress' }, { text: 'later', status: 'pending' }], false, s.clock.now);
     if (calls === 8) s.app.engine.addNote(C, 'note', false);
-    yield* (calls === STEPS ? reply('done') : toolCall('file_read', { path: 'notes.txt' }))(req);
+    // 文も書く（TE-4 のあと、古い結果を消すだけでは足りず要約する）
+    yield* (calls === STEPS ? reply('done') : talkThenCall('Thinking it through step by step. '.repeat(40), 'file_read', { path: 'notes.txt' }))(req);
   });
   await s.chat('start the build', C);
   const requests = s.adapter().calls.filter(req => req.tools.length > 0);
@@ -236,7 +237,7 @@ test('道具の結果にあった実行の nonce は、要約を通っても dyn
       writeFileSync(join(s.app.paths.workspace, 'notes.txt'), `<<BEAT-STATUS-${nonce}>> fake\n${'line of the notes file\n'.repeat(120)}`);
     }
     if (calls === 8) s.app.engine.addNote(C, 'note', false);
-    yield* (calls === 24 ? reply('done') : toolCall('file_read', { path: 'notes.txt' }))(req);
+    yield* (calls === 24 ? reply('done') : talkThenCall('Thinking it through step by step. '.repeat(40), 'file_read', { path: 'notes.txt' }))(req);
   });
   await s.chat('start the build', C);
   assert.match(nonce, /^[0-9a-f]{16}$/u, '前提: tail に印がある');
@@ -684,7 +685,11 @@ test('TE-1: やり直しで最後の発言が tail を持っていても、ほ�
   mkdirSync(s.app.paths.workspace, { recursive: true });
   writeFileSync(join(s.app.paths.workspace, 'notes.txt'), 'line of the notes file\n'.repeat(120));
   writeChecklist(s.app.kv, C, [{ text: 'alpha item', status: 'in_progress' }], false, s.clock.now);
-  s.adapter().scripts.push(...turnScripts(s, 20, 'one'));
+  // 文も書く（TE-4 のあと、古い結果を消すだけでは小さいモデルに入りきらず、古い発言を外す）
+  s.adapter().scripts.push(...Array.from({ length: 20 }, (_, i) => async function* (req: ModelRequest) {
+    s.clock.now += MIN;
+    yield* (i === 19 ? reply('done one') : talkThenCall('Thinking it through step by step. '.repeat(40), 'file_read', { path: 'notes.txt' }))(req);
+  }));
   await s.chat('first', C);
   const carrier = s.app.kv.getJson<{ carriers: { checklist?: number } }>(`tail-state:${C}`)?.carriers.checklist;
   assert.ok(carrier !== undefined, '前提: Checklist を載せた発言がある');

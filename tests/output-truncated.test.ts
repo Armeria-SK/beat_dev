@@ -30,6 +30,12 @@ const cutText = (text: string): Script => async function* () {
   yield { type: 'text', delta: text };
   yield { type: 'done', stop: 'max_tokens' as StopReason };
 };
+const isSummary = (req: ModelRequest) => req.system.frozen.includes('conversation summarizer');
+// 要約の頼み（TE-4: 古い発言を外したら要約する）には要約で答え、ほかの呼び出しには steps を順に使う台本
+const summarizing = (steps: Script[]): Script[] => Array.from({ length: steps.length + 3 }, () => async function* (req: ModelRequest) {
+  if (isSummary(req)) { yield* reply('SUMMARY')(req); return; }
+  yield* steps.shift()!(req);
+});
 
 async function setup(t: { after: (fn: () => void) => void }, model?: ModelConfig, probe: Partial<ProbeResult> = {}, backups: ModelConfig[] = []) {
   const paths = resolvePaths(tempDir(t));
@@ -300,7 +306,8 @@ test('B 量: 古いやり取りを外せば入るときは続きを頼み、送�
   const s = await setup(t);
   s.adapter().scripts.push(reply('う'.repeat(45_000)));
   await s.run('old');
-  s.adapter().scripts.push(cutText('お'.repeat(10_000)), reply('end'));
+  // 外した発言は要約する（TE-4）。要約の頼みには要約で答え、ほかは台本の順
+  s.adapter().scripts.push(...summarizing([cutText('お'.repeat(10_000)), reply('end')]));
   const { result } = await s.run('え'.repeat(5000));
   assert.ok(result.ok);
   assert.equal(result.ok && result.text, `${'お'.repeat(10_000)}end`);
@@ -426,9 +433,9 @@ test('F1: 上げた上限は、同じ実行の次の組み立ての「使える�
   const huge = 'abcdefg '.repeat(8_000);
   s.adapter().scripts.push(reply('ok'));
   await s.run(huge);
-  s.adapter().scripts.push(thinkingOnly, reply('おわり'));
+  s.adapter().scripts.push(...summarizing([thinkingOnly, reply('おわり')]));
   await s.run('続けて');
-  const calls = s.adapter().calls;
+  const calls = s.adapter().calls.filter(c => !isSummary(c));
   assert.deepEqual(calls.map(c => c.maxOutputTokens), [10_000, 10_000, 20_000]);
   assert.equal(calls[1]!.messages.some(m => m.content === huge), true, 'ふだんの上限なら古い発言は入る');
   assert.equal(calls[2]!.messages.some(m => m.content === huge), false, '上げた上限では古い発言を外す');

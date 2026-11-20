@@ -61,3 +61,11 @@ export async function taskApp(t: { after: (fn: () => void) => void }, edit: (con
   };
   return { app, adapter: () => adapter, clock, events, logs, api, origin, userTask, count, chat };
 }
+
+// 文を書いてから道具を呼ぶ返事（TE-4 のあと、古い道具の結果を消すだけでは足りず、古いやり取りを外して要約する場面を作る）
+export function talkThenCall(text: string, name: string, args: unknown): Script {
+  return async function* (req) {
+    yield { type: 'text', delta: text };
+    yield* toolCall(name, args)(req);
+  };
+}

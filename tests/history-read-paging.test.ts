@@ -9,7 +9,7 @@ import { HISTORY_PAGE_CHARS, historyRead } from '../src/tools/builtin/memory.ts'
 import { TOOL_OUTPUT_LIMIT } from '../src/tools/pipeline.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { reply, type Script } from './helpers.ts';
-import { MIN, taskApp, toolCall } from './helpers/task-app.ts';
+import { MIN, taskApp, talkThenCall, toolCall } from './helpers/task-app.ts';
 
 // TE-4a: history_read に message_id と offset を渡すと、その発言 1 つを分けて最後まで読める。
 // 伏せ字は全文に掛けてから切る・位置の行は頭・会話への結び付けと子の会話の決まりは今までどおり・tail と合言葉は出ない・fetched も今までどおり。
@@ -228,7 +228,8 @@ async function compactingRun(s: App) {
     calls++;
     s.clock.now += MIN;
     if (calls === 8) s.app.engine.addNote(C, 'note', false);
-    yield* (calls === STEPS ? reply('done') : toolCall('file_read', { path: 'notes.txt' }))(req);
+    // 文も書く（TE-4 のあと、古い結果を消すだけでは足りず要約する）
+    yield* (calls === STEPS ? reply('done') : talkThenCall('Thinking it through step by step. '.repeat(40), 'file_read', { path: 'notes.txt' }))(req);
   });
   await s.chat('start the build', C);
   return s.adapter().calls.filter(req => req.tools.length > 0);
