@@ -38,7 +38,7 @@ import type { BrowserSession } from '../tools/browser/session.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
 import type { AgentRunInput, RunKind, RunPlace, TaskControl, ToolContext, ToolDef, ToolOutput } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
-import { growSkills, type SkillStore } from '../tools/skills/store.ts';
+import { growSkills, skillsIndexBudget, type SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { ResearchSession } from '../research/evidence.ts';
 import { CreatedFiles } from '../projects/created.ts';
@@ -1865,7 +1865,7 @@ export class ChatEngine {
     const rootKey = root && project ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
       ...(d.botMemory && d.memory && !scout ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
-      ...(d.skills ? { skills: d.skills.index(language) } : {}),
+      ...(d.skills ? { skills: d.skills.index(language, skillsIndexBudget(this.#smallestAvailable())) } : {}),
       ...(product ? { persona: false, instructions: root && rootKey ? instructionsSection(readInstructions(root, instructionsBudget(this.#smallestAvailable()), log, rootKey)) : undefined } : {}),
     }, language);
   }

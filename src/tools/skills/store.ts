@@ -4,13 +4,22 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../../config/schema.ts';
 import { atomicWriteFile } from '../../config/store.ts';
 import { conversationSawOutside } from '../../db/outside.ts';
+import { estimateTextTokens } from '../../engine/tokens.ts';
 import { LocalizedError, type MessageParams } from '../../shared/messages/define.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
-const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
-  en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.' },
+const INDEX_TEXT: Record<Language, { heading: string; instruction: string; more: (n: number) => string }> = {
+  en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.', more: n => `- ${n} more not listed here (read with skill_view; a name it does not know returns the full list)` },
 };
+
+// token-efficiency TE-7: 一覧は使える量の 3% まで（いちばん小さい使えるモデル。分からなければ 64k のモデルの使える量 45,875 の 3%）。説明は 1 つ 160 字まで
+export const SKILLS_INDEX_RATIO = 0.03;
+export const SKILLS_INDEX_DEFAULT_TOKENS = 1_376;
+export const SKILLS_INDEX_DESCRIPTION_MAX = 160;
+export const skillsIndexBudget = (smallestAvailable: number | undefined): number =>
+  smallestAvailable === undefined ? SKILLS_INDEX_DEFAULT_TOKENS : Math.max(1, Math.floor(smallestAvailable * SKILLS_INDEX_RATIO));
+const clip = (text: string, max: number): string => { const chars = [...text]; return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`; };
 
 export interface Skill { name: string; description: string; body: string; uses: number; lastUsedAt: number | null; updatedAt: number; registered: boolean }
 export type SkillSource = 'approved' | 'owner' | 'upgrade';
@@ -190,15 +199,21 @@ export class SkillStore {
     this.#db.prepare('INSERT OR IGNORE INTO skill_registry (name, source, registered_at) VALUES (?, ?, ?)').run(name, source, this.#now());
   }
 
-  index(language: Language = DEFAULT_LANGUAGE): string {
-    const skills = this.listRegistered();
+  index(language: Language = DEFAULT_LANGUAGE, budget = SKILLS_INDEX_DEFAULT_TOKENS): string {
+    const skills = this.listRegistered().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     if (!skills.length) return '';
     const text = INDEX_TEXT[language];
-    return [
-      text.heading,
-      text.instruction,
-      ...skills.map(s => `- ${s.name}: ${s.description}`),
-    ].join('\n');
+    const cost = (line: string) => estimateTextTokens(`${line}\n`);
+    const lines = [text.heading, text.instruction];
+    let used = lines.reduce((sum, line) => sum + cost(line), 0);
+    const items = skills.map(s => `- ${s.name}: ${clip(s.description, SKILLS_INDEX_DESCRIPTION_MAX)}`);
+    for (const [i, item] of items.entries()) {
+      const rest = items.length - i - 1;
+      if (used + cost(item) + (rest ? cost(text.more(rest)) : 0) > budget) { lines.push(text.more(items.length - i)); break; }
+      lines.push(item);
+      used += cost(item);
+    }
+    return lines.join('\n');
   }
 
   recordUse(name: string): void {

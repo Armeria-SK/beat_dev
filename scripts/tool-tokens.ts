@@ -10,7 +10,10 @@ import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts'
 import { estimateRequest, estimateToolTokens } from '../src/engine/tokens.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { checkWorkFolder } from '../src/projects/work-folder.ts';
+import { ResearchSession } from '../src/research/evidence.ts';
+import { ResearchStore } from '../src/research/store.ts';
 import type { ModelRequest, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
+import { RESEARCH_LIMIT_RANGE, type ResearchLimits } from '../src/shared/research-languages.ts';
 
 const USAGE = 'usage: node scripts/tool-tokens.ts [--config <path to config.json>] [--json]';
 
@@ -18,7 +21,7 @@ const PROVIDER: ProviderConfig = { id: 'measure', kind: 'openai_compatible', bas
 // 推奨の下限の 64k のローカルのモデル（返事の上限は自動）。持ち主の決め 2026-11-19「推奨は 128k 以上～下限 64k」
 export const MEASURE_MODEL: ModelConfig = { id: 'measure', provider: 'measure', model: 'measure', contextLength: 65_536, vision: false };
 
-export const MODES = ['product plan', 'plan (no product)', 'chat (no product)', 'chat (product)', 'task', 'review', 'agent child'] as const;
+export const MODES = ['product plan', 'plan (no product)', 'chat (no product)', 'chat (product)', 'task', 'review', 'research', 'agent child'] as const;
 export type Mode = typeof MODES[number];
 
 export interface ModeRow { mode: Mode; tools: number; toolTokens: number; request: number; percent: number }
@@ -63,7 +66,7 @@ async function settle(app: App, runId: string): Promise<void> {
   for (let i = 0; i < 400 && app.runs.get(runId)?.ended_at == null; i++) await new Promise(r => setTimeout(r, 5));
 }
 
-export async function measure(source: AppConfig): Promise<Measured> {
+export async function measure(source: AppConfig, options: { prepare?: (app: App, product: { root: string; projectId: string }) => void } = {}): Promise<Measured> {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-tool-tokens-')));
   const adapter = recorder();
   let app: App | undefined;
@@ -81,6 +84,7 @@ export async function measure(source: AppConfig): Promise<Measured> {
     const checked = checkWorkFolder(root, { paths: live.paths, appRoot: APP_ROOT, config: live.config(), active: live.projects.list(), exempt: live.projectFolderExempt });
     if (!checked.ok) throw new Error(`could not register the measuring product (${checked.reason})`);
     const project = live.projects.create({ name: 'Demo', root: checked.root, rootKey: checked.rootKey, checkCommand: null });
+    options.prepare?.(live, { root: checked.root, projectId: project.id });
     const rows: ModeRow[] = [];
     const off: Mode[] = [];
     let n = 0;
@@ -112,6 +116,18 @@ export async function measure(source: AppConfig): Promise<Measured> {
     await first('review', () => {
       const started = live.engine.runReview(reviewed, 'x');
       if (!started.ok) throw new Error('could not start a review run');
+      return started.runId;
+    });
+    await first('research', () => {
+      const record = new ResearchStore(live.db).start({ projectId: project.id, phase: 'products', mode: 'batch' });
+      const limits = Object.fromEntries(Object.entries(RESEARCH_LIMIT_RANGE).map(([k, r]) => [k, r.default])) as unknown as ResearchLimits;
+      const session = new ResearchSession({ researchId: record.id, part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() }, limits });
+      const task = live.tasks.create({ title: 'Research', origin: 'self', projectId: project.id, scoutRun: true, actor: 'worker' });
+      const id = conversationId();
+      if (!live.tasks.claim(task.id, 60_000, id)) throw new Error('could not claim the research task');
+      live.conversations.create({ id, kind: 'task', title: 'Research', projectId: project.id });
+      const started = live.engine.runResearch(live.tasks.get(task.id)!, id, { prompt: 'x' }, { pinned: null, session });
+      if (!started.ok) throw new Error('could not start a research run');
       return started.runId;
     });
     if (live.config().tools.agent.enabled) {
