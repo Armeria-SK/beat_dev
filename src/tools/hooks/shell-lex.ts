@@ -864,7 +864,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
       if (next === '(') { push({ t: 'arr', v: '@(' }); i += 2; parens++; continue; }
       if (next === '{') { push({ t: 'hash', v: '@{' }); i += 2; continue; }
       if (next === '^' || next === '$') { push({ t: 'splat', v: next }); i += 2; continue; }
-      const m =/^@([\p{L}\p{Nd}_?]+)/u.exec(src.slice(i, i + 200));
+      const m = /^@([\p{L}\p{Nd}_?]+)/u.exec(src.slice(i, i + 200));
       if (m) {
         const after = src[i + m[0].length];
         const literal = after !== undefined && PS_AT_LITERAL_NEXT.has(after) && psInArguments(toks, src.slice(i, i + m[0].length + 1));

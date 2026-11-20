@@ -249,3 +249,18 @@ test('closing the job object on a stop does not mark the command as uncontained,
   assert.equal(fake.closed > 0, true);
   assert.equal(view!.containReason, undefined);
 });
+
+// beat が入れ物を閉じると、手伝いは「ok N」を読まれる前に終わることがあり、待っていた add は HELPER_GONE で onFail に返る。それは「入れ物に入っていない」ではない
+test('an add refused because beat itself closed the job object does not mark the command as uncontained', async t => {
+  let pending: ((reason: string) => void) | undefined;
+  const fake = fakeJob({ add: (_child, onFail) => { pending = onFail; } });
+  const close = fake.close;
+  fake.close = async () => { pending?.('the job helper stopped'); await close(); };
+  const { jobs } = setup(t, { openJob: async () => fake });
+  const id = node(jobs, "console.log('x')");
+  await until(() => jobs.get(id)!.state !== 'running');
+  await until(() => fake.closed > 0);
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(jobs.get(id)!.containReason, undefined);
+  assert.equal(jobs.get(id)!.contained, undefined);
+});

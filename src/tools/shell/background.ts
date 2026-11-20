@@ -638,7 +638,7 @@ export class BackgroundJobs {
   }
 
   #uncontained(job: Job, reason: string): void {
-    if (job.containReason !== undefined) return;
+    if (job.containReason !== undefined || job.jobClosing) return;
     job.containReason = redactSecrets(reason);
     if (job.state === 'running') this.#emit(job);
   }
