@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
@@ -8,7 +8,7 @@ import { fileReadLog } from '../tools/builtin/files.ts';
 import type { Runs } from '../db/runs.ts';
 import { conversationSawOutside } from '../db/outside.ts';
 import type { AppPaths } from '../paths.ts';
-import { redactExact, redactSecrets } from '../shared/redaction.ts';
+import { redactExact, redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
 import { UPSTREAM_KEEP, upstreamText } from '../providers/http.ts';
@@ -105,17 +105,26 @@ const clean = (message: ChatMessage, fence: ReturnType<typeof makeFence> | undef
   (fence && message.role !== 'assistant' && message.content.toLowerCase().includes(fence.nonce.toLowerCase()) ? { ...message, content: fence.clean(message.content) } : message);
 // 消した結果の印に書く入力の要点の長さ（TE-4）
 const CLEARED_INPUT_CHARS = 160;
+// 印の要点に要る分だけ残した入力（長い文字列・多い要素を先に切る。切った先は 1 行の要点に出ない）
+function boundedInput(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return value.slice(0, CLEARED_INPUT_CHARS * 4);
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= 8) return '…';
+  if (Array.isArray(value)) return value.slice(0, 40).map(item => boundedInput(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, boundedInput(item, depth + 1)]));
+}
 // 消した結果の印の入力の要点（保存してある呼び出しの入力から作る。伏せ字と印の nonce を消すのは呼ぶ側）
 function inputGist(args: unknown): string {
   if (args === undefined || args === null) return '';
   if (typeof args !== 'object' || Array.isArray(args)) return JSON.stringify(args);
   return Object.entries(args).map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`).join(', ');
 }
-// 道具の結果が書いている全文のファイルの場所（tool_outputs の下だけ）
+// 道具の結果が書いている全文のファイルの場所。道具・パイプラインの注記は結果の最後に付くので最後の 1 つを見て、tool_outputs の中に留まるときだけ（replay.ts と同じ確かめ）
 function fullRefIn(content: string, dir: string): string | undefined {
-  const at = content.indexOf(dir);
+  const at = content.lastIndexOf(dir);
   if (at < 0) return undefined;
-  return /^[^\s\]]+/u.exec(content.slice(at))![0].replace(/[.,;:]+$/u, '');
+  const ref = /^[^\s\]]+/u.exec(content.slice(at))![0].replace(/[.,;:]+$/u, '');
+  return resolve(ref).startsWith(resolve(dir) + sep) ? ref : undefined;
 }
 // 人のいない実行（タスク・振り返り・子の担当）を区切る回数
 export const UNATTENDED_ITERATION_CEILING = 100;
@@ -1387,7 +1396,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, listed, system, pending, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor, trimmed } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject, sendTail: true });
+        const { toolDefs, listed, system, pending, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor, trimmed, readable, clearedCalls } = this.#assemble({ runId: p.runId, conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode, project: p.project, memoryProject: p.memoryProject, sendTail: true });
         // 送る量が available を超えたら、まとめて削って位置を覚え（TE-4）、組み立て直す。位置は前へしか動かないので、動かなくなれば先へ進む。
         // 最後の発言に付けた tail は、組み立て直しで「実行の前から持つ tail」として扱い、載せた節の発言が外れていれば全部の tail に替える
         const over = capacity > 0 && estimateRequest(systemText(system), history, apiTools, factor, pending).tokens > available;
@@ -1395,7 +1404,7 @@ export class ChatEngine {
           d.log?.(`[ERROR] run ${p.runId}: reducing the context of conversation ${p.conversationId} did not converge after ${reductions} tries`);
           return { ok: false, cancelled: false, partial: '', failure: { kind: 'context_overflow', message: engineText(language, 'fit.reduce_stuck', { count: reductions }), code: 'engine.fit.reduce_stuck', params: { count: reductions }, retryable: false, route }, usage: spent };
         }
-        if (over && ++reductions && await this.#reduce({ runId: p.runId, conversationId: p.conversationId, kind: p.kind, route, adapter, signal: p.signal, compaction: p.compaction, flags: p.flags, system, history, stored, apiTools, factor, pending, available, capacity, previous: conversation?.summary ?? null })) {
+        if (over && ++reductions && await this.#reduce({ runId: p.runId, conversationId: p.conversationId, kind: p.kind, readable, route, adapter, signal: p.signal, compaction: p.compaction, flags: p.flags, system, history, stored, apiTools, factor, pending, available, capacity, previous: conversation?.summary ?? null })) {
           const lastId = stored.at(-1)?.id;
           if (lastId !== undefined) this.#runTail.get(p.runId)?.delete(lastId);
           attempt--; continue;
@@ -1419,7 +1428,7 @@ export class ChatEngine {
         }
         const notRun = new Set<string>();
         const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'), notRun);
-        const sentCalls = new Set(paired.flatMap(m => (m.role === 'tool' && !notRun.has(m.toolCallId) ? [m.toolCallId] : [])));
+        const sentCalls = new Set(paired.flatMap(m => (m.role === 'tool' && !notRun.has(m.toolCallId) && !clearedCalls.has(m.toolCallId) ? [m.toolCallId] : [])));
         if (paired !== fitted.messages) fitted = { ...fitted, messages: [...paired], estimate: estimateRequest(systemText(system), paired, apiTools, factor, pending) };
 
         this.#sentCalls.set(p.runId, sentCalls);
@@ -1558,7 +1567,10 @@ export class ChatEngine {
     // 消した・外した会話（TE-4）でも、要約と同じく考える部分を送り返さない。消した位置より前の道具の結果は、nonce を消したあとに印へ替える
     const reduced = Boolean(conversation?.summary) || trimUpto > 0 || clearedUpto > 0;
     let history = stored.map(m => withThinkingFor(clean(forModel(m.message), p.runId ? fence : undefined), reduced ? undefined : { provider: model.provider, model: model.model }));
-    history = this.#clearResults(history, stored, clearedUpto, { conversationId: p.conversationId, kind: p.kind, fence: p.runId ? fence : undefined, language });
+    // 印に元を読む口を書くのは、この実行で history_read に届くときだけ（タスクの実行では書かない。自分の会話を読むと「外から読んだ」が付くため）
+    const readable = p.kind !== 'task' && this.#reachable(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen).some(t => t.name === HISTORY_READ);
+    const clearedCalls = new Set<string>();
+    history = this.#clearResults(history, stored, clearedUpto, { conversationId: p.conversationId, kind: p.kind, readable, fence: p.runId ? fence : undefined, language }, clearedCalls);
     // 発言に保存した tail（TE-1）は、次の実行でも同じ文で同じ場所に送る。実行の中では、いまの会話の印で囲まれたものだけ送る（ほかは外し、載せていた節は送っていないものとして付け直す）。
     // 実行の外（使用量）は保存したまま数える
     const kept = new Set<number>();
@@ -1625,7 +1637,7 @@ export class ChatEngine {
       try { replay = fitMessages({ system: systemText(system), messages: history, tools: apiTools, available, factor, tail: pending }).removed === 0; } catch (error) { if (!(error instanceof ContextOverflow)) throw error; }
       if (!replay) history = history.map(m => withThinkingFor(m));
     }
-    return { toolDefs, listed, system, pending, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor, trimmed };
+    return { toolDefs, listed, system, pending, history, replay, stored, conversation, apiTools, capacity, available, maxOutput, planned, factor, trimmed, readable, clearedCalls };
   }
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
@@ -1845,10 +1857,10 @@ export class ChatEngine {
     return { trimUpto: read('trim-upto'), clearedUpto: read('cleared-upto') };
   }
 
-  // upto 以下の id の道具の結果を短い印に替える（DB の元の結果は変えない）。印は道具の名前・入力の要点・全文のファイル・元を読む口を書き、
-  // やり直しを勧めるのは効果が read の道具だけ。子の担当（agent）は history_read を使えないので口を書かない。入力の要点は保存した呼び出しの入力から作り、伏せ字と nonce を消す。
-  // 呼び出しとの組（toolCallId）・tail はそのまま。印の方が長くなる結果は替えない
-  #clearResults(history: ChatMessage[], stored: readonly StoredMessage[], upto: number, c: { conversationId: string; kind: RunKind; fence: ReturnType<typeof makeFence> | undefined; language: Language }): ChatMessage[] {
+  // upto 以下の id の道具の結果を短い印に替える（DB の元の結果は変えない）。印は道具の名前・入力の要点・全文のファイル・元を読む口（readable のときだけ）を書き、
+  // やり直しを勧めるのは効果が read の道具だけ。タスクの結果の証拠の札（[E-n]）は印の後ろに残す。入力の要点は、保存した入力を JSON のまま伏せ → 見えない文字を消して 1 行に → 文として伏せ → nonce を消す。
+  // 呼び出しとの組（toolCallId）・tail はそのまま。印の方が長くなる結果は替えない。替えた呼び出しの id は cleared に入れる
+  #clearResults(history: ChatMessage[], stored: readonly StoredMessage[], upto: number, c: { conversationId: string; kind: RunKind; readable: boolean; fence: ReturnType<typeof makeFence> | undefined; language: Language }, cleared?: Set<string>): ChatMessage[] {
     if (upto <= 0) return history;
     const d = this.#d;
     const inputs = new Map<string, unknown>();
@@ -1858,29 +1870,33 @@ export class ChatEngine {
     return history.map((m, i) => {
       const id = stored[i]!.id;
       if (m.role !== 'tool' || id > upto) return m;
-      const input = plainLine(scrub(redactSecrets(inputGist(inputs.get(m.toolCallId)), d.registry.secrets())), CLEARED_INPUT_CHARS) || '-';
+      const gist = plainLine(inputGist(redactJsonValue(boundedInput(inputs.get(m.toolCallId)))), CLEARED_INPUT_CHARS * 4);
+      const input = plainLine(scrub(redactSecrets(gist, d.registry.secrets())), CLEARED_INPUT_CHARS) || '-';
       const file = fullRefIn(m.content, outputs);
       const marker = scrub(engineText(c.language, 'context.cleared', {
         tool: m.name, input,
         file: file ? engineText(c.language, 'context.cleared_file', { path: file }) : '',
-        read: c.kind === 'agent' ? '' : engineText(c.language, 'context.cleared_read', { conversation: c.conversationId, id }),
+        read: c.readable ? engineText(c.language, 'context.cleared_read', { conversation: c.conversationId, id }) : '',
         again: d.tools?.registry.get(m.name)?.effect === 'read' ? engineText(c.language, 'context.cleared_again') : '',
       }));
-      if (marker.length >= m.content.length && !m.images?.length) return m;
+      const tag = c.kind === 'task' ? /\n(\[E-\d+\])$/u.exec(m.content)?.[1] : undefined;
+      const content = tag ? `${marker}\n${tag}` : marker;
+      if (content.length >= m.content.length && !m.images?.length) return m;
+      cleared?.add(m.toolCallId);
       const { images: _images, ...rest } = m;
-      return { ...rest, content: marker };
+      return { ...rest, content };
     });
   }
 
-  // 送る量が available を超えたとき（TE-4）: (1) 新しい方から KEEP_TOOL_RESULTS + 1 個目の道具の結果までを印に替える位置を覚える（減る量が clearFloor 未満なら替えない）。
-  // (2) それでも目標（available × CONTEXT_TARGET_RATIO）を超えるなら、古いやり取りを目標まで外す位置を覚え、外した発言（前に要約せずに外した分も）を要約する。
-  // 外したなら発言の数によらず要約を頼む（黙って捨てない）。位置が動いたら true（呼ぶ側が組み立て直す）
   // 古いやり取りを外せば available に入るか
   #trimFits(input: Parameters<typeof fitMessages>[0]): boolean {
     try { fitMessages(input); return true; } catch (error) { if (error instanceof ContextOverflow) return false; throw error; }
   }
 
-  async #reduce(c: { runId: string; conversationId: string; kind: RunKind; route: Route; adapter: ProviderAdapter; signal: AbortSignal; compaction: CompactionState; flags: string[]; system: ModelRequest['system']; history: ChatMessage[]; stored: StoredMessage[]; apiTools: ToolSpec[]; factor: number; pending: string; available: number; capacity: number; previous: string | null }): Promise<boolean> {
+  // 送る量が available を超えたとき（TE-4）: (1) 新しい方から KEEP_TOOL_RESULTS + 1 個目の道具の結果までを印に替える位置を覚える（減る量が clearFloor 未満なら替えない）。
+  // (2) それでも目標（available × CONTEXT_TARGET_RATIO）を超えるなら、古いやり取りを目標まで外す位置を覚え、外した発言（前に要約せずに外した分も）を要約する。
+  // 外したなら発言の数によらず要約を頼む（黙って捨てない）。位置が動いたら true（呼ぶ側が組み立て直す）
+  async #reduce(c: { runId: string; conversationId: string; kind: RunKind; readable: boolean; route: Route; adapter: ProviderAdapter; signal: AbortSignal; compaction: CompactionState; flags: string[]; system: ModelRequest['system']; history: ChatMessage[]; stored: StoredMessage[]; apiTools: ToolSpec[]; factor: number; pending: string; available: number; capacity: number; previous: string | null }): Promise<boolean> {
     const d = this.#d;
     const language = languageOf(d.config());
     const system = systemText(c.system);
@@ -1892,7 +1908,7 @@ export class ChatEngine {
     let moved = false;
     const upto = c.stored.filter(m => m.message.role === 'tool').at(-(KEEP_TOOL_RESULTS + 1))?.id;
     if (upto !== undefined && upto > clearedUpto) {
-      const cleared = this.#clearResults(c.history, c.stored, upto, { conversationId: c.conversationId, kind: c.kind, fence: this.#fence(c.runId, c.conversationId), language }).map(m => withThinkingFor(m));
+      const cleared = this.#clearResults(c.history, c.stored, upto, { conversationId: c.conversationId, kind: c.kind, readable: c.readable, fence: this.#fence(c.runId, c.conversationId), language }).map(m => withThinkingFor(m));
       // 減る量が下限未満でも、古いやり取りを外しても available に入らない（1 つの長いやり取り）なら消す（ContextOverflow で止めるより先に）
       const saving = measure(base) - measure(cleared);
       if (saving >= clearFloor(c.available) || (saving > 0 && !this.#trimFits({ system, messages: base, tools: c.apiTools, available: c.available, factor: c.factor, tail: c.pending }))) {

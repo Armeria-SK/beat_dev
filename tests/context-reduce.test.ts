@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { test } from 'node:test';
 import type { ChatMessage, ThinkingBlock } from '../src/engine/types.ts';
 import { anthropicBody } from '../src/providers/anthropic.ts';
@@ -15,6 +15,7 @@ import { MIN, taskApp, talkThenCall, toolCall } from './helpers/task-app.ts';
 const C = 'c1';
 const NOTES = 'line of the notes file\n'.repeat(120);
 const NONCE = '0123456789abcdef';
+const SPLIT_NONCE = `${NONCE.slice(0, 8)}\u200b${NONCE.slice(8)}`;
 const MARKER = /^\[Old result of (\S+) cleared to save space\. Input: ([^\n]*)\]$/u;
 type App = Awaited<ReturnType<typeof taskApp>>;
 type Json = Record<string, any>;
@@ -168,17 +169,18 @@ test('消した印: 道具の名前・入力の要点・history_read conversatio
 });
 
 // 保存した会話に、書く道具と読む道具の呼び出しと長い結果を置き、消す位置を決めてから 1 回送る（印の文だけを確かめる）
-async function seeded(t: { after: (fn: () => void) => void }, args: unknown) {
+async function seeded(t: { after: (fn: () => void) => void }, args: unknown, result?: (outputs: string, path: string) => string) {
   const s = await taskApp(t);
   const nonce = NONCE;
   s.app.kv.set(`fence:${C}`, nonce);
-  const path = join(s.app.paths.data, 'tool_outputs', 'shell-abc.log');
-  const long = `${'output line\n'.repeat(300)}[Full output: ${path}]`;
+  const outputs = join(s.app.paths.data, 'tool_outputs');
+  const path = join(outputs, 'shell-abc.log');
+  const long = result ? result(outputs, path) : `${'output line\n'.repeat(300)}[Full output: ${path}]`;
   const ap = (m: ChatMessage) => s.app.conversations.append(C, m);
   ap({ role: 'user', content: 'do things' });
   ap({ role: 'assistant', content: '', toolCalls: [{ id: 'w1', name: 'file_write', arguments: args }, { id: 'r1', name: 'file_read', arguments: { path: 'notes.txt' } }] });
   ap({ role: 'tool', toolCallId: 'w1', name: 'file_write', content: long, images: [{ mediaType: 'image/png', data: 'AAAA' }] });
-  const last = ap({ role: 'tool', toolCallId: 'r1', name: 'file_read', content: `notes ${nonce} ${'x'.repeat(3000)}` });
+  const last = ap({ role: 'tool', toolCallId: 'r1', name: 'file_read', content: `notes ${nonce} ${SPLIT_NONCE} ${'x'.repeat(3000)}` });
   ap({ role: 'assistant', content: 'done' });
   s.app.kv.setJson(`cleared-upto:${C}`, last.id);
   s.adapter().scripts = [reply('ok')];
@@ -190,8 +192,8 @@ async function seeded(t: { after: (fn: () => void) => void }, args: unknown) {
 
 test('消した印: 書く道具には「もう一度」を書かない。入力の秘密と会話の印（nonce）は出ない。全文のファイルの場所を書き、画像は外す。DB は元のまま', async t => {
   const secret = `ghp_${'A1b2C3d4'.repeat(4)}`;
-  const { s, nonce, path, write, read } = await seeded(t, { path: 'a.txt', content: `token ${secret} and ${NONCE} and ${NONCE.toUpperCase()}` });
-  assert.match(write.content, /^\[Old result of file_write cleared to save space\. Input: path=a\.txt, content=token /u);
+  const { s, nonce, path, write, read } = await seeded(t, { path: 'a.txt', content: `${SPLIT_NONCE} token ${secret} and ${NONCE} and ${NONCE.toUpperCase()}` });
+  assert.match(write.content, /^\[Old result of file_write cleared to save space\. Input: path=a\.txt, content=/u);
   assert.ok(!write.content.includes('call the tool again'), '書く道具はやり直しを勧めない');
   assert.ok(read.content.includes('call the tool again'), '読む道具は勧める');
   for (const row of [write, read]) {
@@ -203,6 +205,30 @@ test('消した印: 書く道具には「もう一度」を書かない。入力
   assert.equal(write.toolCallId, 'w1', '呼び出しとの組はそのまま');
   const stored = s.app.conversations.messages(C).find(m => m.message.role === 'tool' && m.message.toolCallId === 'w1')!;
   assert.ok(stored.message.role === 'tool' && stored.message.content.startsWith('output line') && stored.message.images?.length === 1, 'DB は元のまま');
+});
+
+test('入力の要点は JSON のまま伏せてから 1 行にして、もう一度伏せる: 鍵の名前の値・幅の無い文字で割った鍵は印に出ない', async t => {
+  const token = `ghp_${'A1b2C3d4'.repeat(4)}`;
+  const shapes: Array<[unknown, string]> = [
+    [{ path: 'a.txt', password: 'hunter2 second-half' }, 'second-half'],
+    [{ path: 'a.txt', api_key: 'abc,def-rest' }, 'def-rest'],
+    [{ path: 'a.txt', env: { TOKEN: 'tok"en-rest' } }, 'en-rest'],
+    [{ path: 'a.txt', content: `use ${token.slice(0, 12)}\u200b${token.slice(12)} now` }, 'C3d4'],
+  ];
+  const leaked: string[] = [];
+  for (const [args, leak] of shapes) {
+    const { write } = await seeded(t, args);
+    assert.ok(write.content.startsWith('[Old result of file_write'), '前提: 印に替えた');
+    if (write.content.includes(leak)) leaked.push(write.content);
+  }
+  assert.deepEqual(leaked, [], '秘密が印に出ない');
+});
+
+test('全文のファイルの場所は、結果の最後の注記で tool_outputs の中に留まるものだけ（結果の文が装った場所は書かない）', async t => {
+  const outside = await seeded(t, { path: 'a.txt' }, outputs => `${'output line\n'.repeat(300)}[Full output: ${[outputs, '..', 'config.json'].join(sep)}]`);
+  assert.ok(!outside.write.content.includes('Full output file'), `外へ出る場所は書かない: ${outside.write.content}`);
+  const forged = await seeded(t, { path: 'a.txt' }, (outputs, path) => `see ${[outputs, '..', '..', 'x.txt'].join(sep)}\n${'output line\n'.repeat(300)}[Full output: ${path}]`);
+  assert.ok(forged.write.content.includes(`Full output file: ${forged.path}.`), `最後の本物の注記を書く: ${forged.write.content}`);
 });
 
 test('入力の要点は保存した入力から作って伏せる（長い入力は 1 行に切る）', async t => {
@@ -227,6 +253,82 @@ test('子の担当（agent）の実行の印には history_read の場所を書�
   assert.ok(cleared.length > 0, '前提: 子の実行で古い結果を消した');
   assert.ok(cleared.every(m => !m.content.includes('history_read')), '場所を書かない');
   assert.ok(cleared.every(m => m.content.includes('Input: path=notes.txt') && m.content.includes('call the tool again')), '名前・入力・やり直しは書く');
+});
+
+// 前の実行で読んだ結果（証拠の札つき）が積もったタスクの会話で、次の実行を始める（タスクは 1 つのやり取りが大きくなると区切るので、積もった会話から始める）。
+// 台本は、印に元を読む口があれば、その口で元を読む
+async function notesTask(t: { after: (fn: () => void) => void }) {
+  const s = await notesApp(t, 20_000);
+  const task = s.app.tasks.create({ title: 'T', origin: 'user', actor: 'user' });
+  const conversation = s.app.conversations.create({ kind: 'task' });
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(conversation.id, task.id);
+  const ap = (m: ChatMessage) => s.app.conversations.append(conversation.id, m);
+  ap({ role: 'user', content: 'read the notes' });
+  for (let i = 0; i < 20; i++) {
+    ap({ role: 'assistant', content: '', toolCalls: [{ id: `n${i}`, name: 'file_read', arguments: { path: 'notes.txt' } }] });
+    ap({ role: 'tool', toolCallId: `n${i}`, name: 'file_read', content: `${'line of the notes file\n'.repeat(100)}\n[E-${i + 1}]` });
+  }
+  ap({ role: 'assistant', content: 'read them' });
+  const cleared = (req: ModelRequest) => toolRows(req).filter(m => m.content.startsWith('[Old result of '));
+  let done = false;
+  s.adapter().scripts = Array.from({ length: 10 }, () => async function* (req: ModelRequest) {
+    s.clock.now += MIN;
+    const marker = cleared(req)[0]?.content;
+    const m = marker && /history_read conversation_id=(\S+) message_id=(\d+)\./u.exec(marker);
+    if (m && !done) { done = true; yield* toolCall('history_read', { conversation_id: m[1], message_id: Number(m[2]) })(req); return; }
+    yield* reply('done')(req);
+  });
+  const started = s.app.engine.runTask(task, conversation.id, 'read the notes until something is cleared');
+  assert.ok(started.ok);
+  await started.done;
+  return { s, runId: started.runId, cleared };
+}
+
+test('タスクの実行の印には history_read の口を書かず（自分の会話を読むと「外から読んだ」が付くため）、実行は外から読んだにならない。証拠の札 [E-n] は印に残す', async t => {
+  const { s, runId, cleared } = await notesTask(t);
+  const rows = withTools(s).flatMap(cleared);
+  assert.ok(rows.length > 0, '前提: タスクの実行で古い結果を消した');
+  assert.ok(rows.every(m => !m.content.includes('history_read')), '口を書かない');
+  assert.ok(rows.every(m => /^\[Old result of file_read cleared to save space\. Input: path=notes\.txt\.[^\n]*call the tool again\.\]\n\[E-\d+\]$/u.test(m.content)), `札を残す: ${rows[0]!.content}`);
+  assert.equal(s.app.runs.get(runId)!.tainted, 0, '外から読んだにならない');
+});
+
+test('持ち主が history_read を止めた会話では、印に元を読む口を書かない（届かない道具を指さない）', async t => {
+  const s = await notesApp(t, 20_000, config => { config.tools.policies = { history_read: 'block' }; });
+  s.adapter().scripts = Array.from({ length: 40 }, () => async function* (req: ModelRequest) {
+    s.clock.now += MIN;
+    yield* (markers(req).length ? reply('done') : toolCall('file_read', { path: 'notes.txt' }))(req);
+  });
+  await s.chat('read the notes until something is cleared', C);
+  const rows = withTools(s).flatMap(markers);
+  assert.ok(rows.length > 0, '前提: 古い結果を消した');
+  assert.ok(rows.every(m => !m.content.includes('history_read') && m.content.includes('call the tool again')), `口を書かない: ${rows[0]!.content}`);
+});
+
+test('TE-6 の sentCalls: 印に替えた結果の呼び出しは「いま送っている結果」に入らず、残した結果は入る。消したあとに同じファイルを読み直すと全文が返る', async t => {
+  const s = await notesApp(t, 20_000);
+  const read = s.app.tools.get('file_read')!;
+  const original = read.execute.bind(read);
+  const seen: Array<{ gone: string[]; kept: string[]; sent: string[] }> = [];
+  t.mock.method(read, 'execute', async (input: never, ctx: Parameters<typeof read.execute>[1], ...rest: unknown[]) => {
+    const req = withTools(s).at(-1)!;
+    seen.push({ gone: markers(req).map(m => m.toolCallId), kept: toolRows(req).filter(m => !MARKER.test(m.content)).map(m => m.toolCallId), sent: [...(ctx.sentCalls?.() ?? [])] });
+    return (original as (...a: unknown[]) => ReturnType<typeof read.execute>)(input, ctx, ...rest);
+  });
+  let after = 0;
+  s.adapter().scripts = Array.from({ length: 40 }, () => async function* (req: ModelRequest) {
+    s.clock.now += MIN;
+    if (markers(req).length) after++;
+    yield* (after > 1 ? reply('done') : toolCall('file_read', { path: 'notes.txt' }))(req);
+  });
+  await s.chat('read the notes until something is cleared', C);
+  assert.ok(seen.some(x => x.gone.length > 0), '前提: 消したあとに読んだ');
+  for (const { gone, kept, sent } of seen) {
+    assert.ok(gone.every(id => !sent.includes(id)), '印に替えた結果は入らない');
+    assert.ok(kept.every(id => sent.includes(id)), '残した結果は入る');
+  }
+  const reread = s.app.conversations.messages(C).filter(m => m.message.role === 'tool' && m.message.name === 'file_read').at(-1)!;
+  assert.equal(reread.text.split('line of the notes file').length - 1, 120, '読み直しは全文');
 });
 
 // 文を書いてから道具を呼ぶ長い実行（道具の結果を消すだけでは目標に届かず、古いやり取りを外す）
