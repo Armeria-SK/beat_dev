@@ -288,6 +288,8 @@ test('9-1a A-1・A-2: 作業用の文脈の中継にループバックが通る�
   await page.goto(`http://localhost:${port}/hello`, 15_000);
   assert.ok(hits.some(hit => hit.at === 'v4' && hit.url === '/hello'), 'A-1: localhost の受け口に届く');
   assert.ok(proxy.stats().accepted > before.accepted, 'A-1: 文脈の中継が通した');
+  const shot = await page.screenshot();
+  assert.ok(shot.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) && shot.length > 1000, '見えない形の作業用のブラウザでも、欄に映す 1 枚が撮れる');
   const blockedBefore = proxy.stats().blocked;
   const refused = await page.goto(`http://127.0.0.1:${deniedPort}/x`, 15_000).catch((e: unknown) => e);
   await settle(page);

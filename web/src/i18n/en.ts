@@ -1392,7 +1392,7 @@ export const en = {
   'ui.set.browser.state.running': (tabs: number) => `Running · ${tabs} ${tabs === 1 ? 'tab' : 'tabs'}`,
   'ui.set.browser.state.idle': 'Closed · stays signed in',
   'ui.set.browser.show': 'Show the window',
-  'ui.set.browser.showDesc': 'Off: the browser runs out of sight',
+  'ui.set.browser.showDesc': 'Only for the browser with your sign-ins (the profile above). Off: it runs out of sight. The browser for tasks and product dev servers never shows a window; watch it in the Browser pane',
   'ui.set.browser.noDisplay': 'This PC has no screen for it',
   'ui.set.browser.channel': 'Which browser',
   'ui.set.browser.channel.auto': 'Automatic',

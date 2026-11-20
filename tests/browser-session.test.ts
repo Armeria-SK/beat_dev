@@ -72,6 +72,14 @@ test('設定の channel / executablePath / headless と PC の locale を起動�
   assert.equal(r2.driver.current!.options.channel, 'chrome');
 });
 
+test('作業用のブラウザは設定の headless が false でも見えない形で起動する（持ち主のブラウザは設定のまま）', async t => {
+  const r = rig(t, c => { c.tools.browser.headless = false; });
+  await r.session.run(call(r), async api => { await api.openTab('work'); await api.openTab('owner'); });
+  assert.equal(r.driver.workLaunches, 1);
+  assert.equal(r.driver.work!.options.headless, true);
+  assert.equal(r.driver.current!.options.headless, false);
+});
+
 test('無効なら起動しない（disabled）', async t => {
   const r = rig(t, c => { c.tools.browser.enabled = false; });
   await assert.rejects(r.session.run(call(r), async api => { await api.openTab('owner'); }), (e: unknown) => e instanceof BrowserFailure && e.code === 'disabled');

@@ -401,7 +401,7 @@ export const ja = {
   'ui.set.browser.clearWarn': 'Clear sign-ins · 元に戻せません',
   'ui.set.browser.clearNote': 'このプロフィールの Cookie と保存したログインを消します',
   'ui.set.browser.failed': 'できませんでした',
-  'ui.set.browser.showDesc': 'オフ: ブラウザは見えない所で動きます',
+  'ui.set.browser.showDesc': 'あなたのログインが残るブラウザ（上のプロフィール）だけに効きます。オフ: 見えない所で動きます。タスクや製品の開発サーバーを開くブラウザは窓を出さず、Browser の欄に映ります',
   'ui.set.browser.noDisplay': 'この PC にはブラウザを出す画面がありません',
   'ui.set.browser.pathDesc': '起動するプログラム',
   'ui.set.mcp.none': 'まだサーバーがありません',
