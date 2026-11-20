@@ -1,5 +1,5 @@
 // Adapted from deepseek-harness packages/jobs/jobs-local/src/ring.ts (commit fcc0ad4621).
-// MIT License, Copyright (c) 2026 DeepSeek. Full license text in THIRD_PARTY.md.
+// MIT License, Copyright (c) 2026 DeepSeek.
 
 export type JobChannel = 'stdout' | 'stderr' | 'log';
 
