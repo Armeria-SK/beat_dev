@@ -47,6 +47,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.browserDisplay !== undefined ? { browserDisplay: options.browserDisplay } : {}),
     ...(options.projectFolderExempt ? { projectFolderExempt: options.projectFolderExempt } : {}),
     ...(options.downloadNetwork ? { downloadNetwork: options.downloadNetwork } : {}),
+    ...(options.webNetwork ? { webNetwork: options.webNetwork } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.botMemory ? { botMemory: true } : {}),
     ...(options.folderDialog ? { folderDialog: options.folderDialog } : {}),

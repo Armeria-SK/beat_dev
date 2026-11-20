@@ -103,8 +103,8 @@ export const JUDGE_LIMITS: JudgeLimitSet = { chat: { answerMs: 20_000, slotWaitM
 
 // Pending に積めない実行（振り返り・考える実行・直す実行）と、判定役を呼べない実行（振り返り・考える実行）。
 // 直す実行（beat 8-6a D-11）は Pending に積まないが、判定役は呼べる（4 の形の npm test などを止めないため。考える実行の印で動かすと 4 の形より前で断られる）
-export const cannotPark = (ctx: Pick<ToolContext, 'kind' | 'scout' | 'fix'>): boolean => ctx.kind === 'review' || ctx.scout === true || ctx.fix === true;
-export const cannotJudge = (ctx: Pick<ToolContext, 'kind' | 'scout'>): boolean => ctx.kind === 'review' || ctx.scout === true;
+export const cannotPark = (ctx: Pick<ToolContext, 'kind' | 'scout' | 'fix' | 'research'>): boolean => ctx.kind === 'review' || ctx.scout === true || ctx.fix === true || ctx.research !== undefined;
+export const cannotJudge = (ctx: Pick<ToolContext, 'kind' | 'scout' | 'research'>): boolean => ctx.kind === 'review' || ctx.scout === true || ctx.research !== undefined;
 
 // 直す実行の判定役に見せる頼みの文: beat が書いた決まった文だけ（提案の文は Web から来たので入れない。D-11）
 export function judgeRequestOf(ctx: Pick<ToolContext, 'fix' | 'project'>, deps: Pick<PipelineDeps, 'lastUserRequest'>): string {
@@ -285,6 +285,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (!projectAllows(tool, { kind: ctx.kind, project: ctx.project !== undefined, memoryProject: ctx.memoryProject !== undefined })) return refuse('deny', 'registry', toolText(language, 'pipeline.project_only', { name: call.name }));
   if (tool.scoutOnly === true && !ctx.scout) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
+  if (tool.researchOnly === true && !ctx.research) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   if (tool.acceptanceState !== undefined) {
     const frozen = Boolean(ctx.project && ctx.services?.acceptance?.latest(ctx.project.id));
     if (!acceptanceAllows(tool, frozen)) return refuse('deny', 'registry', toolText(language, frozen ? 'pipeline.acceptance_frozen' : 'pipeline.acceptance_draft', { name: call.name }));

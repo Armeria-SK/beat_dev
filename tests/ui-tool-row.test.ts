@@ -199,6 +199,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   deviation_add: [{ what: 'Skipped the CLI flag', why: 'w' }, 'Note deviation', 'Skipped the CLI flag'],
   mesh_decision_add: [{ decision: 'Use SQLite' }, 'Note decision', 'Use SQLite'],
   ledger_record: [{ title: 'Upload checks', checked: 'read upload.ts', result: 'no problem' }, 'Note checked area', 'Upload checks'],
+  research_record: [{ research_id: 'r1', kind: 'similar', name: 'Alpha Notes', url: 'https://alpha.example' }, 'Note research row', 'Alpha Notes'],
   proposal_add: [{ title: 'Add retry to upload', kind: 'bug', why: 'w', size: 'S' }, 'Propose', 'Add retry to upload'],
   browser_open: [{ url: 'https://example.com' }, 'Open page', 'https://example.com'],
   browser_read: [{}, 'Search', 'current page'],

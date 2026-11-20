@@ -24,6 +24,7 @@ export const engineJa = {
   'no_usable': "使えるモデルが無いので、何も送っていません。設定の画面を確かめてください。\n{lines}",
   'tool.invalid_streak': "モデルが正しい形で道具を呼べませんでした（{count} 回続けて）。道具をうまく扱えるモデルに替えるか、使わない道具をオフにしてください",
   'tool.invalid_streak_hint': "使わない道具をオフにしてください",
+  'tool.not_run_stopped': "この道具の呼び出しを動かす前に実行が止まったので、動かしていません",
   'tool.truncated_call': "返事が出力の上限で切れたので、この道具の呼び出しは動かしていません。短くするか分けてください（長い書き込みは、一部を先に書いて残りを足してください）",
   'tool.truncated_skill_draft': "返事が出力の上限で切れたので、この呼び出しは動かしていません。スキルの本文を短くして、もう一度呼んでください",
   'tool.truncated_streak': "返事が出力の上限で {count} 回続けて切れたので止めました。Settings › Models › Advanced の Longest reply を上げるか、頼みを小さく分けてください",

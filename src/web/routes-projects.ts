@@ -17,6 +17,9 @@ import type { ProjectFilter } from '../tasks/store.ts';
 import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 import { maskedTaskView } from './task-view.ts';
+import { pickedLanguage } from '../research/store.ts';
+import { Value } from '@sinclair/typebox/value';
+import { ResearchConfig } from '../config/schema.ts';
 
 const MAX_PATH_CHARS = 4096;
 const ACCEPTANCE_STATUS: Partial<Record<string, number>> = { stale: 409, not_pending: 409, no_change: 404 };
@@ -118,6 +121,10 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const docLanguage = body.docLanguage === null ? null : languageTagOf(body.docLanguage);
     if (body.docLanguage !== undefined && docLanguage === undefined) throw problem(400, 'invalid_field', 'bad_language', { field: 'docLanguage', params: { field: 'docLanguage' } });
     if (body.scoutMode !== undefined && !(SCOUT_MODES as readonly unknown[]).includes(body.scoutMode)) throw projectProblem(400, new ProjectError('bad_scout_mode'));
+    // 作る前に調べるの製品ごとの上書き（R-4）。null か空なら全体の設定どおり。形は設定の research の塊と同じ
+    const research = body.researchSettings;
+    if (research !== undefined && research !== null && !Value.Check(ResearchConfig, research)) throw problem(400, 'invalid_field', 'invalid_body', { field: 'researchSettings' });
+    const researchSettings = research === undefined ? undefined : research === null || Object.keys(research as object).length === 0 ? null : JSON.stringify(research);
     // Research and pre-fix は確かめのコマンドのある製品だけ（Q-P8-10。同じ PATCH で書いた確かめのコマンドも数える）
     // Research and pre-fix のあいだに確かめのコマンドを消す PATCH も断る（モードは黙って変えない）
     const fixAfter = body.scoutMode === 'fix' || (body.scoutMode === undefined && current.scout_mode === 'fix' && rawCheck !== undefined);
@@ -128,6 +135,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
       ...(typeof body.archived === 'boolean' ? { archived: body.archived } : {}),
       ...(body.refreshRemotes === true ? { remotes: readRemotes(current.root) } : {}),
       ...(body.scoutMode !== undefined ? { scoutMode: body.scoutMode as ScoutMode } : {}),
+      ...(researchSettings !== undefined ? { researchSettings } : {}),
     }));
     const updated = docLanguage === undefined ? changed : app.projects.setDocLanguage(current.id, docLanguage);
     const change = updated.archived_at !== null && current.archived_at === null ? 'archived' : updated.archived_at === null && current.archived_at !== null ? 'restored' : 'updated';
@@ -334,7 +342,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
     let built;
     try {
-      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), now: app.now }, project.id, { planHash, acceptanceHash, conversationId })));
+      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), pickedLanguage: id => pickedLanguage(app.db, id), now: app.now }, project.id, { planHash, acceptanceHash, conversationId })));
     } catch (error) {
       if (error instanceof BuildError) throw domainProblem(error.code === 'no_plan' ? 400 : 409, 'build', error);
       if (error instanceof ProjectError) throw projectProblem(400, error);

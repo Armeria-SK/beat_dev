@@ -20,6 +20,7 @@ import {
   apiDetail, canEdit, canSave, editedBy, followDoc, keptDraft, PLAN_EDITS, planDirty, planDrafts, planState, rebase, reviewButton, reviewClick, reviewSeen, saveOutcome, startDraft, typed, type PlanDraft, type ReviewSeen, type SaveOutcome,
 } from '../plan.ts';
 import { RowConfirm } from '../RowConfirm.tsx';
+import { ResearchSection } from './ResearchSection.tsx';
 import { routeHash } from '../routes.ts';
 import { hasUnsavedEdits, setUnsaved } from '../unsaved.ts';
 
@@ -448,6 +449,7 @@ function BeforeBuild({ productId, conversationId, acc, coverage, sectionRef }: {
           {g.answers.map(a => <li key={a.item.id} className="bt-row ui-cov__row"><span className="ui-cov__said">{a.question} · {a.answer}</span><span className="ui-cov__arrow" aria-hidden="true">→</span><ItemRef item={a.item} /></li>)}
         </Group>
       )}
+      {g.picks.length > 0 && <Group label={t('ui.acc.source.pick')}>{g.picks.map(p => <li key={p.item.id} className="bt-row ui-cov__row" data-pick><span className="ui-cov__said">{p.label}</span><span className="ui-cov__arrow" aria-hidden="true">→</span><ItemRef item={p.item} /></li>)}</Group>}
       {g.ai.length > 0 && <Group label={t('ui.acc.source.ai')}>{g.ai.map(i => <li key={i.id} className="bt-row ui-cov__row"><ItemRef item={i} /></li>)}</Group>}
       {g.edited.length > 0 && <Group label={t('ui.acc.source.edit')}>{g.edited.map(i => <li key={i.id} className="bt-row ui-cov__row"><ItemRef item={i} /></li>)}</Group>}
       {coverage.unreferenced_total > 0 && <Unreferenced productId={productId} conversationId={conversationId} coverage={coverage} />}
@@ -711,6 +713,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
         {!planless && action?.kind === 'build' && <Button variant="primary" small disabled={action.disabled} onClick={() => void build()}>{t(action.label)}</Button>}
         {action?.kind === 'building' && <span ref={runningRef} role="status" tabIndex={-1}><Pill {...(pill.tone ? { tone: pill.tone } : {})}>{t(pill.label)}</Pill></span>}
       </div>
+      {acc !== null && !acc.frozen && <ResearchSection productId={productId} conversationId={conversationId} revision={revision} />}
       <div role="status" className="ui-plan__live">
         {action?.kind === 'building' && wait && <p className="bt-meta" data-wait>{waitText(wait)}</p>}
         {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}

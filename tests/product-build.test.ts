@@ -666,7 +666,7 @@ test('3-2-s 対応表の口（coverage）: 出どころごとの数と手で確�
   await s.send(uuid(1), { text: 'Please go ahead with this plan.', generated: true, permissionMode: 'auto' });
   await s.send(uuid(2), { text: 'Also it should be blue', projectId: shop.id });
   const body = await s.list(shop.id);
-  assert.deepEqual({ ...body.coverage, unreferenced: undefined }, { owner_words: 1, owner_choice: 0, owner_edit: 0, ai_added: 2, by_hand: 2, unreferenced: undefined, unreferenced_total: 1 });
+  assert.deepEqual({ ...body.coverage, unreferenced: undefined }, { owner_words: 1, owner_choice: 0, owner_edit: 0, owner_pick: 0, ai_added: 2, by_hand: 2, unreferenced: undefined, unreferenced_total: 1 });
   assert.deepEqual(body.coverage.unreferenced.map((m: { text: string; conversation_id: string }) => [m.text, m.conversation_id]), [['Also it should be blue', uuid(2)]]);
   const entry = body.coverage.unreferenced[0];
   assert.deepEqual(Object.keys(entry).sort(), ['conversation_id', 'created_at', 'message_id', 'text']);
@@ -675,7 +675,7 @@ test('3-2-s 対応表の口（coverage）: 出どころごとの数と手で確�
   const empty = await setup(t);
   const bare = await empty.product('bare');
   const none = await empty.list(bare.id);
-  assert.deepEqual(none.coverage, { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 });
+  assert.deepEqual(none.coverage, { owner_words: 0, owner_choice: 0, owner_edit: 0, owner_pick: 0, ai_added: 0, by_hand: 0, unreferenced: [], unreferenced_total: 0 });
 });
 
 test('3-2-s 対応表の口: 引かれていない発言が 120 件あれば 50 件と total 120、unreferencedBefore で次の 50 件、最後に 20 件。文は 300 文字まで。読めない続きの値は 400', async t => {

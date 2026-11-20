@@ -17,6 +17,7 @@ const JAPANESE = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|[　-�
 // 持ち主が「ここを日本語に」と頼んだ鍵は、その表のファイルにここで 1 行足す（理由に「持ち主が日本語を頼んだ鍵」）。
 const EXCEPTIONS: Record<string, { strings: string[]; reason: string }> = {
   'src/tools/hooks/shell-lex.ts': { strings: ['/[\u{FF01}-\u{FF5E}\u{3000}]/u'], reason: 'FULLWIDTH: 引用符の外の全角の文字を見つける（シェルの見張り。安全）' },
+  'src/research/choices.ts': { strings: ['デスクトップ', 'コマンドライン', 'サーバー', 'サーバ', 'ブラウザ', 'ウェブ', 'サイト', '大量', '高速', 'リアルタイム', '同時に多く'], reason: 'beat R: 持ち主の日本語の発言から配り方と負荷の語を見つける（物差しの入力。画面には出さない）' },
   'src/shared/fence.ts': { strings: ['＜', '＞'], reason: 'neutralizeFence: MCP・ブラウザ・mesh の中身の <<< >>> を全角にして枠の偽装を防ぐ（安全）' },
   'src/tools/browser/checks.ts': { strings: ['/password|passcode|passwd|パスワード|暗証|one[- ]?time|verification code|認証コード|card number|カード番号|cvc|cvv|security code|セキュリティコード/iu'], reason: 'SECRET_NAME: Web ページの日本語のパスワード欄を見分ける（安全）' },
   'src/shared/pdf-text.ts': { strings: ['/[\\s\u{3000}]+$/u'], reason: 'PDF の本文の行末の全角の空白を落とす' },

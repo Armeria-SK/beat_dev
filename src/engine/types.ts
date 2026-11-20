@@ -123,6 +123,8 @@ export type RunEvent =
   | { type: 'task.changed'; task: TaskView }
   // 考える役の状態（GET /api/projects/:id/scout）が変わった。画面は状態を読み直す
   | { type: 'scout.changed'; projectId: string }
+  // 調べる記録（beat R）が始まった・部分が進んだ・終わった・確定した。画面は GET /api/projects/:id/research を読み直す
+  | { type: 'research.changed'; projectId: string; researchId: string }
   | { type: 'task.deleted'; id: string }
   | { type: 'background.changed'; projectId: string; conversationId: string; id: string; state: 'running' | 'exited' | 'stopped' }
   | { type: 'notification'; notification: Notification }

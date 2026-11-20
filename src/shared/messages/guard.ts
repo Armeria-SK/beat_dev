@@ -218,6 +218,11 @@ const en = {
   'shell.unresolved_path': '(cannot be determined)',
 
   'web.scout_fetch_limit': 'This scout run has already read {max} web pages (the lead and its scouts together). Work with what was read',
+  'web.research_fetch_limit': 'This research has already read {max} web pages (all its parts together). Record what was read',
+  'web.research_search_limit': 'This research has already searched {max} times (all its parts together). Record what was found',
+  'web.research_time': 'The time for this research is up. Record what was found',
+  'web.research_unseen': 'Research can open only a URL it has seen in this research: a search result, a link listed on a page it read, or the page it was given. Search for the page first',
+  'web.research_bang': 'Search words starting with ! (they send the search to another site) cannot be used in research',
   'web.fetch_off': 'web_fetch is turned off in the settings (tools.web.fetch)',
   'browser.off': 'The browser tools are turned off in the settings (tools.browser.enabled)',
   'browser.open.listed': 'Opens a site in the operation list. You may be signed in, so just opening it (especially with a query, or after reading text from elsewhere) can trigger an action; asking first',

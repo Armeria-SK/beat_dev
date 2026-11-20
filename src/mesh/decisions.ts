@@ -112,3 +112,21 @@ export function appendDecision(dir: string, line: string): { moved: number; line
   }
   return { moved: extra, lineMoved };
 }
+
+// beat R (D12): 調べた一覧で持ち主が確定した言語・やり方の行。値はコードの一覧の値か持ち主の選んだ選択肢。外を読んだ実行が書いた選択肢の文には [src: external]
+export interface ResearchDecision { date: string; researchId: string; what: 'language' | 'approach'; question: string; label: string; kept: boolean | null; external: boolean }
+
+export function researchDecisionLine(d: ResearchDecision): string {
+  const head = `- ${d.date} research #${d.researchId.slice(0, 8)}: owner picked`;
+  const suggested = d.kept === true ? ' (the suggested one)' : '';
+  const tail = d.external ? EXTERNAL_MARK : '';
+  const body = d.what === 'language' ? ` language: "${clip(aiText(d.label), 80)}"` : ` "${clip(aiText(d.label), 80)}" for "${clip(aiText(d.question), 80)}"`;
+  return `${head}${body}${suggested}${tail}`;
+}
+
+export function addResearchDecisions(projectsDir: string, projectId: string, rows: readonly ResearchDecision[]): void {
+  if (!rows.length) return;
+  const dir = projectDir(projectsDir, projectId);
+  mkdirSync(dir, { recursive: true });
+  for (const row of rows) appendDecision(dir, researchDecisionLine(row));
+}

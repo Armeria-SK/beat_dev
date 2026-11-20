@@ -1,7 +1,7 @@
 import type { PlainKey } from '../../i18n/index.ts';
 import type { UiIconName } from '../icons.ts';
 
-export type CategoryId = 'models' | 'skills' | 'background' | 'folders' | 'hooks' | 'browser' | 'mcp' | 'server' | 'persona' | 'appearance' | 'advanced';
+export type CategoryId = 'models' | 'skills' | 'background' | 'research' | 'folders' | 'hooks' | 'browser' | 'mcp' | 'server' | 'persona' | 'appearance' | 'advanced';
 export type GroupId = 'agent' | 'computer' | 'customize';
 
 export interface Category {
@@ -21,6 +21,8 @@ export const CATEGORIES: readonly Category[] = [
     rows: ['ui.set.skills.grow', 'ui.set.skills.ask', 'ui.set.skills.registered', 'ui.set.skills.tools', 'ui.set.rules.title', 'ui.set.shell.title', 'ui.set.shell.enabled', 'ui.set.shell.kind', 'ui.set.shell.timeout', 'ui.set.shell.allow', 'ui.set.shell.ask', 'ui.set.shell.deny'] },
   { id: 'background', group: 'agent', icon: 'refresh', label: 'ui.set.cat.background',
     rows: ['ui.set.bg.on', 'ui.set.bg.perHour', 'ui.set.bg.parallel'] },
+  { id: 'research', group: 'agent', icon: 'search', label: 'ui.set.cat.research',
+    rows: ['ui.set.rs.when', 'ui.set.rs.mode', 'ui.set.rs.model', 'ui.set.rs.candidates', 'ui.set.rs.searches', 'ui.set.rs.fetches', 'ui.set.rs.minutes', 'ui.set.rs.askLanguage', 'ui.set.rs.prefer', 'ui.set.rs.avoid', 'ui.set.rs.columns'] },
   { id: 'folders', group: 'computer', icon: 'folder', label: 'ui.set.cat.folders',
     rows: ['ui.set.folders.allowed', 'ui.set.folders.add', 'ui.set.folders.deny', 'ui.set.folders.outside'] },
   { id: 'hooks', group: 'computer', icon: 'hook', label: 'ui.set.cat.hooks',

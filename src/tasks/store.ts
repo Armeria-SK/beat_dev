@@ -93,6 +93,7 @@ const FINISHED_T = 'COALESCE(completed_at, updated_at)';
 const OPEN_CHILD = "('ready', 'running', 'waiting')";
 const NO_OPEN_CHILD = `NOT EXISTS (SELECT 1 FROM tasks child WHERE child.spawned_by = tasks.id AND child.status IN ${OPEN_CHILD})`;
 export const SCOUT_RUN = 'scout-run';
+// 持ち主の行ではない見えない行の印。調べる実行（beat R）の部分も同じ印を使う。履歴から外すのは調べる会話だけ
 export const isScoutRun = (task: Pick<Task, 'proposed_by'>): boolean => task.proposed_by === SCOUT_RUN;
 const NOT_SCOUT = `proposed_by IS NOT '${SCOUT_RUN}'`;
 const PRODUCT_FREE = `(project_id IS NULL OR NOT EXISTS (SELECT 1 FROM tasks busy WHERE busy.project_id = tasks.project_id AND busy.status = 'running' AND busy.${NOT_SCOUT}))`;

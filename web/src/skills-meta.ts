@@ -25,6 +25,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   mesh_state_set: { icon: 'pencil', desc: 'tool.mesh_state_set' },
   mesh_decision_add: { icon: 'pencil', desc: 'tool.mesh_decision_add' },
   ledger_record: { icon: 'pencil', desc: 'tool.ledger_record' },
+  research_record: { icon: 'pencil', desc: 'tool.research_record' },
   proposal_add: { icon: 'tasks', desc: 'tool.proposal_add' },
   web_fetch: { icon: 'globe', desc: 'tool.web_fetch' },
   web_search: { icon: 'search', desc: 'tool.web_search' },

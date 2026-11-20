@@ -29,7 +29,9 @@ export type FirstSource =
   | { kind: 'owner_words'; quote: string; messageId: number; conversationId: string; context?: string }
   | { kind: 'owner_choice'; question: string; questionMessageId: number; answer: string; answerMessageId: number; conversationId: string }
   | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: UncheckedReason; quote?: string; question?: string; answer?: string }
-  | { kind: 'owner_edit' };
+  | { kind: 'owner_edit' }
+  // beat R (D8): 持ち主が調べた一覧で確定した名前と、引用がまるごと同じ
+  | { kind: 'owner_pick'; researchId: string; itemId: number; label: string };
 export type AcceptanceSource = FirstSource | { kind: 'owner_answer'; questionId: number; answer: string; picked: 'option' | 'text'; was: FirstSource };
 
 export interface AcceptanceItem {
@@ -102,14 +104,16 @@ export function quoteWeight(text: string): number {
 interface OwnerView { text: string; norm: string; at: number[]; starts: number[]; ends: number[] }
 interface Spoken { id: number; conversationId: string; raw: string; view?: OwnerView | undefined }
 
-export interface Speech { owner: Spoken[]; budget: { left: number } }
+// lines: 確定の文に書いた、この選びの行（「Feature: 名前」など）。引用がそのどれかとまるごと同じでも当てる
+export interface OwnerPick { researchId: string; itemId: number; label: string; lines?: readonly string[] }
+export interface Speech { owner: Spoken[]; budget: { left: number }; picks?: readonly OwnerPick[] }
 
-export function prepareSpeech(rows: readonly SpeechRow[], scanBudget = SCAN_BUDGET): Speech {
+export function prepareSpeech(rows: readonly SpeechRow[], scanBudget = SCAN_BUDGET, picks: readonly OwnerPick[] = []): Speech {
   const owner = rows
     .filter(row => row.role === 'user' && row.generated !== 1)
     .map(row => ({ id: row.id, conversationId: row.conversation_id, raw: stripAttachments(row.text) }))
     .sort((a, b) => b.id - a.id);
-  return { owner, budget: { left: scanBudget } };
+  return { owner, budget: { left: scanBudget }, picks };
 }
 
 function foldChar(text: string, i: number): [string, number] {
@@ -174,6 +178,10 @@ export function verifySource(speech: Speech, claimed: ClaimedSource): Acceptance
   if (claimed.kind === 'ai_added') return { kind: 'ai_added' };
   if (claimed.kind === 'owner_choice') return { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: claimed.question, answer: claimed.answer };
   const unchecked = (reason: UncheckedReason): AcceptanceSource => ({ kind: 'ai_added', claimed: 'owner_words', reason, quote: claimed.quote });
+  // R3.11 M7: 確定した名前とまるごと同じ引用は、重さの確かめより前に当てる（「タグ」のような短い名前も）
+  const whole = claimed.quote.normalize('NFKC').trim();
+  const pick = speech.picks?.find(p => p.label.normalize('NFKC') === whole || (p.lines ?? []).some(line => line.normalize('NFKC') === whole));
+  if (pick) return { kind: 'owner_pick', researchId: pick.researchId, itemId: pick.itemId, label: pick.label };
   if (quoteWeight(claimed.quote) < MIN_QUOTE_WEIGHT) return unchecked('too_short');
   const folded = fold(claimed.quote);
   for (const message of speech.owner) {
@@ -400,6 +408,7 @@ export interface Coverage {
   owner_words: number;
   owner_choice: number;
   owner_edit: number;
+  owner_pick: number;
   ai_added: number;
   by_hand: number;
   unreferenced: Array<{ message_id: number; conversation_id: string; text: string; created_at: number }>;
@@ -414,7 +423,7 @@ function clip(text: string): string {
 
 export function coverageOf(doc: AcceptanceDoc | undefined, rows: readonly SpeechRow[], before?: number): Coverage {
   const items = (doc?.items ?? []).filter(entry => entry.removedIn === null);
-  const counts = { owner_words: 0, owner_choice: 0, owner_edit: 0, ai_added: 0 };
+  const counts = { owner_words: 0, owner_choice: 0, owner_edit: 0, owner_pick: 0, ai_added: 0 };
   const origin = (source: AcceptanceSource | undefined): FirstSource | undefined => (source?.kind === 'owner_answer' ? source.was : source);
   for (const entry of items) {
     const kind = origin(entry.source)?.kind;

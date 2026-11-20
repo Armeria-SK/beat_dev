@@ -11,6 +11,7 @@ const REFUSED = [
   'hard.password', 'hard.user_add', 'hard.user_del', 'hard.net', 'hard.schedule',
   'list.winargs', 'list.winargs_ps',
   'web.secret_text', 'web.long_query', 'web.fetch_off', 'web.search_off', 'web.scout_fetch_limit',
+  'web.research_fetch_limit', 'web.research_search_limit', 'web.research_time', 'web.research_unseen', 'web.research_bang',
   'file.outside', 'file.root_write', 'file.root_read', 'file.root_sep', 'file.readonly', 'file.symlink',
   'wt.git_shared', 'wt.write_main', 'wt.push_beat', 'wt.main_path', 'wt.opaque', 'wt.git_env', 'wt.outside_path',
   'fix.outside', 'fix.push', 'fix.network', 'fix.background',

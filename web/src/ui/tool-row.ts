@@ -90,6 +90,7 @@ const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
   history_read: a => idOf(a['conversation_id']),
   calculate: a => str(a, 'expression'),
   question_add: a => str(a, 'question'),
+  research_record: a => str(a, 'name') || str(a, 'url'),
   ask_owner: a => (Array.isArray(a['questions']) ? a['questions'] : []).map(q => (q && typeof q === 'object' ? str(q as Args, 'header') : '')).filter(Boolean).join(', '),
   task_complete: a => str(a, 'summary'),
   task_checkpoint: a => str(a, 'next_action'),

@@ -30,6 +30,7 @@ export interface ProjectRow {
   remotes: string;
   doc_language: string | null;
   doc_language_pinned: number;
+  research_settings: string | null;
   archived_at: number | null;
   created_at: number;
   updated_at: number;
@@ -103,7 +104,7 @@ export class ProjectStore {
     return this.get(id)!;
   }
 
-  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined; remotes?: readonly Remote[] | undefined; scoutMode?: ScoutMode | undefined }): ProjectRow {
+  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined; remotes?: readonly Remote[] | undefined; scoutMode?: ScoutMode | undefined; researchSettings?: string | null | undefined }): ProjectRow {
     const current = this.get(id);
     if (!current) throw new ProjectError('unknown');
     const restoring = patch.archived === false && current.archived_at !== null;
@@ -111,8 +112,8 @@ export class ProjectStore {
     const now = this.#now();
     const archivedAt = patch.archived === undefined ? current.archived_at : patch.archived ? current.archived_at ?? now : null;
     try {
-      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, remotes = ?, scout_mode = ?, updated_at = ? WHERE id = ?')
-        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, patch.remotes ? JSON.stringify(patch.remotes) : current.remotes, patch.scoutMode ?? current.scout_mode, now, id);
+      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, remotes = ?, scout_mode = ?, research_settings = ?, updated_at = ? WHERE id = ?')
+        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, patch.remotes ? JSON.stringify(patch.remotes) : current.remotes, patch.scoutMode ?? current.scout_mode, patch.researchSettings === undefined ? current.research_settings : patch.researchSettings, now, id);
     } catch (error) {
       if (isRootConflict(error)) throw new ProjectError('root_in_use');
       throw error;
@@ -134,6 +135,16 @@ export class ProjectStore {
     if (!this.get(id)) throw new ProjectError('unknown');
     this.#db.prepare('UPDATE projects SET doc_language = ?, doc_language_pinned = ?, updated_at = ? WHERE id = ?').run(tag ?? this.#detected(id), tag === null ? 0 : 1, this.#now(), id);
     return this.get(id)!;
+  }
+
+  // beat R（D14）: いちばん新しい調べる記録の状態をコードの数だけで（名前は入れない）。記録が無い・飛ばした記録は null
+  researchState(id: string): string | null {
+    const row = this.#db.prepare(`SELECT r.status, (SELECT COUNT(*) FROM research_items i WHERE i.research_id = r.id) AS n FROM research_runs r
+      WHERE r.project_id = ? ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1`).get(id) as { status: string; n: number } | undefined;
+    if (!row || row.status === 'skipped') return null;
+    if (row.status === 'running') return 'running (the list fills in on the owner\'s Plan pane)';
+    if (row.status === 'confirmed') return 'confirmed by the owner';
+    return `${Number(row.n)} rows waiting for the owner to pick in the Plan pane`;
   }
 
   counts(id: string): { proposals: number; questions: number; lastActivityAt: number | null } {

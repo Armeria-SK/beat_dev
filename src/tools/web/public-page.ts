@@ -159,6 +159,7 @@ const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 async function followPublic<R extends { status: number; location?: string | undefined }>(
   input: string, signal: AbortSignal, resolveHost: PageNetwork['resolve'],
   send: (url: URL, address: string) => Promise<R>, discard: (response: R) => void,
+  hosts?: ReadonlySet<string>,
 ): Promise<{ url: URL; response: R }> {
   let url = pageUrl(input);
   for (let redirects = 0; ; redirects++) {
@@ -171,6 +172,8 @@ async function followPublic<R extends { status: number; location?: string | unde
     if (redirects === 5) throw failure('invalid_response', 'fetch.redirects');
     const next = pageUrl(new URL(response.location, url).href);
     if (url.protocol === 'https:' && next.protocol === 'http:') throw failure('policy_blocked', 'fetch.redirect_downgrade');
+    // beat R (R3.11 M1): 行き先のホストを限る呼び出し（調べる実行の検索）は、その外へは転送をたどらない
+    if (hosts && !hosts.has(next.hostname.toLowerCase())) throw failure('policy_blocked', 'fetch.redirect_host', { host: clip(next.hostname, 200) });
     url = next;
   }
 }
@@ -181,10 +184,10 @@ function transferFailure(error: unknown, cancellation: AbortSignal, signal: Abor
   return failure('http_failure', 'fetch.connect', { detail: clip((error as Error).message, 200) });
 }
 
-export async function fetchPublic(input: string, signal: AbortSignal | undefined, transport: PageNetwork = defaultNetwork, timeoutMs = 20_000, types: RegExp = PAGE_TYPES): Promise<FetchedPage> {
+export async function fetchPublic(input: string, signal: AbortSignal | undefined, transport: PageNetwork = defaultNetwork, timeoutMs = 20_000, types: RegExp = PAGE_TYPES, hosts?: ReadonlySet<string>): Promise<FetchedPage> {
   const cancellation = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
   try {
-    const { url, response } = await followPublic(input, cancellation, transport.resolve, (next, address) => transport.get(next, address, cancellation), () => undefined);
+    const { url, response } = await followPublic(input, cancellation, transport.resolve, (next, address) => transport.get(next, address, cancellation), () => undefined, hosts);
     if (response.status !== 200) throw failure(response.status === 404 ? 'not_found' : 'http_failure', 'fetch.http_status', { status: response.status }, response.status);
     if (!types.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: typeShown(response.contentType) });
     return { url: url.href, contentType: response.contentType, body: response.body, truncated: Boolean(response.truncated) };

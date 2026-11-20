@@ -40,6 +40,7 @@ import type { AgentRunInput, RunKind, RunPlace, TaskControl, ToolContext, ToolDe
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { growSkills, type SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
+import type { ResearchSession } from '../research/evidence.ts';
 import { CreatedFiles } from '../projects/created.ts';
 import type { PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
@@ -47,7 +48,7 @@ import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, contextAvailable, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
-import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
+import { closeToolCalls, ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, looksLikeTextToolCall } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, Usage } from './types.ts';
@@ -141,6 +142,10 @@ export const SCOUT_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list
 // beat 8-6a: 直す実行に渡す道具（許す一覧）。読む・書く・表・シェル（裏のコマンドは shell.ts が断る）・mesh を読む・計算。Web・ブラウザ・MCP・agent_run・task_*・question_add・proposal_add・ledger_record は渡さない
 export const FIX_TOOLS: ReadonlySet<string> = new Set(['file_read', 'file_list', 'file_search', 'file_write', 'file_edit', 'table_write', 'shell_run', 'mesh_read', 'mesh_search', 'calculate', 'date_calc']);
 class FixAllow extends AllBut {}
+// beat R (D1): 調べる実行に渡す道具（許す一覧）。Web を読むことと記録だけ。製品のフォルダ・mesh・記憶・agent_run・tool_search は渡さない
+export const RESEARCH_TOOLS: ReadonlySet<string> = new Set(['web_search', 'web_fetch', 'research_record']);
+class ResearchAllow extends AllBut {}
+export interface ResearchPrompt { prompt: string; followUp?: string | undefined }
 // 直す実行の置き場（写しの行）。root は写し、productRoot は本体
 export interface FixPlace { id: string; path: string; productRoot: string; branch: string; base: string; ceiling: string; job?: RunJob }
 export const SCOUT_AGENT_TIMEOUT_MS = 1_800_000;
@@ -271,6 +276,7 @@ export class ChatEngine {
   #initialTaint = new Map<string, string[]>();
   #reviewEvidence = new Map<string, NonNullable<ToolContext['reviewEvidence']>>();
   #scoutEnds = new Map<string, ScoutEnd>();
+  #researchSessions = new Map<string, ResearchSession>();
   #scoutChildren = new Map<string, { spawned: number; ok: number; area?: string }>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
@@ -330,6 +336,13 @@ export class ChatEngine {
     return { ok: true, runId: running, queued: true, pendingId: pending.id };
   }
 
+  // beat R (R3.13 の 1): 新しい発言を足さずに、会話の最後の発言へ返事の実行を始める。会話が動いていれば断る（呼ぶ側は確かめてから同期で呼ぶ）
+  reply(conversationId: string): SendOutcome {
+    if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
+    if (!this.#d.conversations.get(conversationId)) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: 'conversation not found' };
+    return this.#beginChat(conversationId, [], {});
+  }
+
   // 待っている発言（画面に出す形）
   pending(conversationId: string): Array<{ id: string; text: string; attachments: AttachmentMeta[]; interrupt: boolean; createdAt: number }> {
     return (this.#pending.get(conversationId) ?? []).map(p => ({ id: p.id, text: stripAttachments(p.content), attachments: p.attachments, interrupt: p.interrupt, createdAt: p.createdAt }));
@@ -375,7 +388,7 @@ export class ChatEngine {
     }
     this.#taintFromHistory(runId, conversationId);
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, effort);
-    return { ok: true, runId, messageId: firstId! };
+    return { ok: true, runId, ...(firstId !== undefined ? { messageId: firstId } : {}) };
   }
 
   // 外から読んだ内容が残ったまま始まる実行は、シェルと書き込みを承認制にする（taint）。次のどれかなら、始まる実行も「外から読んだ」扱いにする:
@@ -666,6 +679,39 @@ export class ChatEngine {
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
 
+  // beat R (D1・D4): 調べる実行の 1 つの部分。見えない行と調べる会話で動き、Pending にも判定役にも回さない。モデルは routing.research、無ければ計画の会話の組（pinned か routing.chat）
+  researchRoute(pinned: string | null): ScoutRoute | null {
+    const first = this.#chain('research', pinned).usable[0];
+    if (!first) return null;
+    const { capacity, maxOutput } = this.#d.status.limits(first.model);
+    let host = '';
+    try { host = first.provider.baseUrl ? new URL(first.provider.baseUrl).hostname : ''; } catch { host = ''; }
+    return { modelId: first.model.id, providerId: first.provider.id, local: host !== '' && isLoopbackHost(host), room: true, available: capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined };
+  }
+
+  runResearch(task: Task, conversationId: string, prompt: ResearchPrompt, options: { pinned: string | null; session: ResearchSession; initialTaint?: readonly string[] | undefined; tools?: ReadonlySet<string> | undefined }): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
+    const chain = this.#chain('research', options.pinned);
+    if (!chain.usable.length) {
+      const outcome = this.#noUsableModel(chain.problems);
+      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
+    }
+    const runId = randomUUID();
+    if (prompt.prompt) {
+      const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt.prompt });
+      this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
+    if (prompt.followUp) {
+      const extra = this.#d.conversations.append(conversationId, { role: 'user', content: prompt.followUp, generated: true });
+      this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: extra.id, role: 'user' });
+    }
+    if (options.initialTaint?.length) this.#initialTaint.set(runId, [...options.initialTaint]);
+    this.#researchSessions.set(runId, options.session);
+    const allowed = options.tools ? new Set([...options.tools].filter(name => RESEARCH_TOOLS.has(name))) : RESEARCH_TOOLS;
+    this.#start(runId, conversationId, chain.usable, 'task', { task, control: { value: { outcome: 'none' } } }, new ResearchAllow(allowed, []), null);
+    return { ok: true, runId, done: this.#active.get(runId)!.done };
+  }
+
   scoutEnd(runId: string): ScoutEnd | undefined { return this.#scoutEnds.get(runId); }
 
   scoutArea(runId: string): string | null { return this.#scoutChildren.get(runId)?.area ?? null; }
@@ -765,10 +811,11 @@ export class ChatEngine {
   }
 
   // 会話で選んだモデルがあれば（pinned）、そのモデルだけで鎖を作る。使えなければ、ほかのモデルへ切り替えずに、そのモデルの問題だけを返す
-  #chain(route: 'chat' | 'background' | 'scout', pinned: string | null = null): { usable: Route[]; problems: ModelProblem[] } {
+  #chain(route: 'chat' | 'background' | 'scout' | 'research', pinned: string | null = null): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const ids = pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : candidateModelIds(config, route);
+    const research = route === 'research' ? config.routing.research ?? [] : [];
+    const ids = research.length ? [...research] : pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : candidateModelIds(config, route === 'research' ? 'chat' : route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
@@ -834,6 +881,7 @@ export class ChatEngine {
         this.#hardStops.delete(runId);
         this.#modeHost.delete(conversationId);
         this.#agentSpawned.delete(runId);
+        this.#researchSessions.delete(runId);
         setTimeout(() => { this.#preempted.delete(runId); this.#scoutEnds.delete(runId); this.#scoutChildren.delete(runId); }, 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
         this.#flushNotes(conversationId, runId);
@@ -856,7 +904,8 @@ export class ChatEngine {
   #excluded(kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'auto', inProject = false, frozen = false): (t: ToolDef) => boolean {
     const config = this.#d.config();
     const scout = forbid instanceof ScoutAllow;
-    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.scoutOnly === true && !scout) || (t.name === 'agent_run' && !scout && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || (t.name === 'skill_draft' && (!growSkills(config) || (started !== undefined && !growSkills(started)))) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+    const research = forbid instanceof ResearchAllow;
+    return (t: ToolDef) => (kind === 'review' && !reviewAllows(t)) || (t.scoutOnly === true && !scout) || (t.researchOnly === true && !research) || (t.name === 'agent_run' && !scout && (agentOff(config, kind) || (started !== undefined && agentOff(started, kind)))) || (isBrowserTool(t.name) && (!config.tools.browser.enabled || started?.tools.browser.enabled === false)) || (t.name === 'skill_draft' && (!growSkills(config) || (started !== undefined && !growSkills(started)))) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
       || (mode === 'plan' && !planAllows(t)) || !projectAllows(t, { kind, project: inProject, memoryProject: inProject }) || !acceptanceAllows(t, frozen);
   }
 
@@ -895,7 +944,9 @@ export class ChatEngine {
     // 直す実行は写しが本体のものか確かめられたときだけ（productRoot が本体）。持ち主の記憶は渡さない（考える実行と同じ）
     const fix = fixPlace !== undefined && place?.kind === 'fix' && own?.productRoot !== undefined;
     if (fixPlace && !fix) throw new Error('The fix copy does not belong to this product');
-    const snapshot = this.#snapshot(conversationId, resolved, scout || fix);
+    const research = !agent && kind === 'task' && forbid instanceof ResearchAllow ? this.#researchSessions.get(runId) : undefined;
+    if (forbid instanceof ResearchAllow && !research) throw new Error('A research run needs its research session');
+    const snapshot = this.#snapshot(conversationId, resolved, scout || fix, research !== undefined);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
@@ -918,7 +969,7 @@ export class ChatEngine {
     allRoots();
     const productRoots = agent || kind === 'review' ? [] : allRoots;
     // 考える実行は製品を読むだけ。直す実行は写しだけ（持ち主の足した許可フォルダは渡さない。写しは buildPolicy が書ける場所に足す）
-    const reach: AppConfig = scout ? { ...config, tools: { ...config.tools, roots: project?.root ? [{ path: project.root, mode: 'read' }] : [] } }
+    const reach: AppConfig = research ? { ...config, tools: { ...config.tools, roots: [] } } : scout ? { ...config, tools: { ...config.tools, roots: project?.root ? [{ path: project.root, mode: 'read' }] : [] } }
       : fix ? { ...config, tools: { ...config.tools, roots: [] } } : config;
     const base = agent ? undefined : buildPolicy(reach, d.paths, undefined, productRoots);
     const policy = agent?.parent.policy ?? (project?.root ? buildPolicy(reach, d.paths, { root: project.root }, productRoots) : base!);
@@ -946,6 +997,7 @@ export class ChatEngine {
       ...(agent ? { parent: { runId: agent.parent.runId, conversationId: agent.parent.conversationId, kind: agent.parent.kind, title: d.conversations.get(conversationId)?.title ?? '', ...(agent.parent.task ? { taskId: agent.parent.task.id } : {}) } } : {}),
       ...(scout ? { scout: true as const, scoutFetches: agent?.parent.scoutFetches ?? { n: 0 } } : {}),
       ...(fix ? { fix: true as const, ...(fixPlace?.job ? { fixJob: fixPlace.job } : {}) } : {}),
+      ...(research ? { research } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
@@ -969,7 +1021,7 @@ export class ChatEngine {
     }
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
     // 子の担当を任せる道具の入口（設定で有効のときだけ。子は孫を作れない。タスクは tools.agent.inTasks で許したときだけ）
-    if (kind !== 'agent' && !fix && (scout || (config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))))) {
+    if (kind !== 'agent' && !fix && !research && (scout || (config.tools.agent.enabled && (kind === 'chat' || (kind === 'task' && config.tools.agent.inTasks))))) {
       ctx.agent = (input, callId) => this.#runAgent({ ctx, routes: chain.slice(index), forbid }, input, callId);
     }
     // 外から読んだ印は、実行の記録に読んだ時点で書く（途中で止まる・落ちる実行でも、やり直し・続きが引き継げるように）
@@ -1030,7 +1082,7 @@ export class ChatEngine {
     const ceiling = kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
     // 長さの区切りは、この実行の中でやり取りが育ったときだけ。始めから超えていた実行は区切らず、縮める・あふれるの今の道に任せる（区切っても同じ始まりを繰り返すだけ）。
     // 見るのは 3 往復目の頭から（モデルは、最初の道具の結果を見たあと必ず 1 回は動ける）
-    const splits = Boolean(task) && kind === 'task' && !scout && !fix;
+    const splits = Boolean(task) && kind === 'task' && !scout && !fix && !research;
     let startedOver = false;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
@@ -1114,25 +1166,39 @@ export class ChatEngine {
 
       let invalidThisRound = 0;
       let askedOwner = false;
-      for (const toolCall of call.toolCalls) {
-        if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
-        counters.toolCalls++;
-        if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
-        // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
-        const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
-        ctx.outputTokens = budget.tokens;
-        ctx.contextAvailable = budget.available;
-        ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
-        const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
-        recordTaint();
-        countDone(toolCall.name, outcome);
-        if (outcome.invalidArguments) invalidThisRound++;
-        if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
-        const toolSaved = d.conversations.append(conversationId, {
-          role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
-          ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
-        }, runId);
-        d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
+      // 呼び出しごとに結果の行を必ず残す（結果の無い呼び出しが残ると、次の頼みを提供元が断る）
+      const unrun = [...call.toolCalls];
+      const closeUnrun = () => {
+        for (const left of unrun.splice(0)) {
+          const closed = d.conversations.append(conversationId, { role: 'tool', toolCallId: left.id, name: left.name, content: engineText(languageOf(config), 'tool.not_run_stopped'), isError: true }, runId);
+          d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: closed.id, role: 'tool' });
+        }
+      };
+      try {
+        for (const toolCall of call.toolCalls) {
+          if (signal.aborted) { closeUnrun(); return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags); }
+          counters.toolCalls++;
+          if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
+          // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
+          const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
+          ctx.outputTokens = budget.tokens;
+          ctx.contextAvailable = budget.available;
+          ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
+          const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
+          recordTaint();
+          countDone(toolCall.name, outcome);
+          if (outcome.invalidArguments) invalidThisRound++;
+          if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
+          const toolSaved = d.conversations.append(conversationId, {
+            role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
+            ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
+          }, runId);
+          unrun.shift();
+          d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
+        }
+      } catch (error) {
+        try { closeUnrun(); } catch { }
+        throw error;
       }
       if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
       // タスクの終え方（完了・途中経過・質問）が決まったら、モデルを呼び直さずに終える
@@ -1313,6 +1379,8 @@ export class ChatEngine {
             detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
+        const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'));
+        if (paired !== fitted.messages) fitted = { ...fitted, messages: [...paired], estimate: estimateRequest(systemText(system), paired, apiTools, factor, pending) };
         // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
         // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）
         if (fitted.removed >= COMPACT_MIN_MESSAGES && !p.compaction.failed && p.compaction.count < MAX_COMPACTIONS_PER_RUN) {
@@ -1447,11 +1515,12 @@ export class ChatEngine {
     const jobs = d.background?.list({ conversationId: p.conversationId }) ?? [];
     const checklist = checklistSection(list, language);
     const background = backgroundSection(jobs, language);
-    const row = p.project?.root ? d.projects?.get(p.project.id) : undefined;
+    const bare = p.forbid instanceof ResearchAllow;
+    const row = p.project?.root && !bare ? d.projects?.get(p.project.id) : undefined;
     const planMemory = p.kind === 'chat' && mode === 'plan' && row?.archived_at === null && !d.botMemory && d.memoryFiles ? (config.memory.review ? 'review' as const : 'off' as const) : undefined;
     const worktree = p.project?.worktree && p.project.productRoot ? { branch: p.project.worktree.branch, productRoot: p.project.productRoot } : undefined;
     const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language, memory: planMemory, worktree } : undefined;
-    const { index: mesh, status: productStatus } = this.#meshIndex(p.runId, p.project, available, p.conversationId);
+    const { index: mesh, status: productStatus } = bare ? { index: '', status: '' } : this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     // dynamic は実行のあいだ変わらない部分だけ（日付まで）。時刻・Checklist・裏のコマンドは tail へ（S1。dynamic が変わると後ろの履歴が全部書き直しになる）
     const now = d.now?.() ?? new Date();
@@ -1615,7 +1684,7 @@ export class ChatEngine {
     const project = runProject(d.projects, d.conversations.projectOf(conversationId));
     const snapshot = existing?.snapshot ?? this.#buildSnapshotText(language, conversationId, project).text;
     const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat', project });
-    const { tokens } = estimateRequest(systemText(built.system), built.history, built.apiTools, built.factor, built.pending);
+    const { tokens } = estimateRequest(systemText(built.system), closeToolCalls(built.history, engineText(language, 'tool.not_run_stopped')), built.apiTools, built.factor, built.pending);
     return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
   }
 
@@ -1776,20 +1845,21 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  #snapshot(conversationId: string, project: ToolContext['project'], scout = false): string {
+  #snapshot(conversationId: string, project: ToolContext['project'], scout = false, bare = false): string {
     const d = this.#d;
     const existing = d.conversations.get(conversationId)?.snapshot;
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log, scout);
+    const snapshot = this.#buildSnapshotText(language, conversationId, project, d.log, scout, bare);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 
   // 会話の始めに固定する system の文。作るだけで、何も書かない
-  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void, scout = false) {
+  #buildSnapshotText(language: Language, conversationId: string, project: ToolContext['project'], log?: (line: string) => void, scout = false, bare = false) {
     const d = this.#d;
+    if (bare) return buildSnapshot(d.paths, { persona: false }, language);
     const product = d.conversations.projectOf(conversationId) !== null;
     const root = project?.root ? project.productRoot ?? project.root : undefined;
     const rootKey = root && project ? d.projects?.get(project.id)?.root_key : undefined;

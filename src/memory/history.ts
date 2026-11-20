@@ -18,6 +18,8 @@ function snippet(text: string, terms: readonly string[], width = 160): string {
   return `${start > 0 ? '…' : ''}${text.slice(start, start + width).replace(/\s+/gu, ' ').trim()}${start + width < text.length ? '…' : ''}`;
 }
 
+const RESEARCH_CONVERSATIONS = "SELECT json_extract(p.value, '$.conversationId') FROM research_runs r, json_each(r.parts) p WHERE json_extract(p.value, '$.conversationId') IS NOT NULL";
+
 export function searchHistory(db: DatabaseSync, query: string, options: { days?: number | undefined; limit?: number; now?: number; excludeConversationId?: string } = {}): HistoryHit[] {
   const terms = searchTerms(query);
   if (!terms.length) return [];
@@ -25,7 +27,8 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
   const since = options.days ? (options.now ?? Date.now()) - options.days * 86_400_000 : 0;
   const exclude = options.excludeConversationId ?? '';
   // 子の担当（agent_run）の会話は、親の作業の内側のもの。画面の検索でも出さない（parent_run_id を持つ会話）
-  const hiddenClause = ' AND c.parent_run_id IS NULL';
+  // 調べる記録の会話（beat R・R3.11 M3）も出さない。計画役が外を読んだ文を読んで、計画の会話に印が付かないように
+  const hiddenClause = ` AND c.parent_run_id IS NULL AND c.id NOT IN (${RESEARCH_CONVERSATIONS})`;
   const rows = terms.every(t => [...t].length >= 3)
     ? db.prepare(`
         SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title, c.project_id FROM messages_fts f
@@ -43,6 +46,7 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
 
 export function readHistory(db: DatabaseSync, conversationId: string, options: { aroundMessageId?: number | undefined; limit?: number } = {}): Array<{ id: number; role: string; text: string; createdAt: number }> {
   if (db.prepare('SELECT 1 FROM conversations WHERE id = ? AND parent_run_id IS NOT NULL').get(conversationId)) return [];
+  if (db.prepare(`SELECT 1 WHERE ? IN (${RESEARCH_CONVERSATIONS})`).get(conversationId)) return [];
   const limit = Math.min(options.limit ?? 20, 60);
   const rows = options.aroundMessageId === undefined
     ? db.prepare('SELECT id, role, text, created_at FROM (SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id').all(conversationId, limit)

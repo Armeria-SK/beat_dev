@@ -63,6 +63,7 @@ import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
 import { ledgerRecord } from './tools/builtin/ledger.ts';
 import { proposalAdd } from './tools/builtin/proposal.ts';
+import { researchRecord } from './tools/builtin/research.ts';
 import { scoutState } from './scout/run.ts';
 import { deferredSection, toolSearch } from './tools/builtin/tool-search.ts';
 import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
@@ -83,6 +84,7 @@ import { setGitNotice } from './mesh/folders.ts';
 import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
+import { ResearchRunner } from './research/run.ts';
 import { pendingDecided, sweepPendingWaits, type PendingWakeDeps } from './tasks/pending-wake.ts';
 import { QuestionStore, type QuestionChange, type QuestionRow } from './questions/store.ts';
 import { Uploads } from './uploads/store.ts';
@@ -113,7 +115,7 @@ export function builtinTools(): ToolDef[] {
     imageView, webDownload,
     agentRun,
     questionList, deviationAdd, meshDecisionAdd,
-    ledgerRecord, proposalAdd,
+    ledgerRecord, proposalAdd, researchRecord,
     ...BROWSER_TOOLS,
   ];
 }
@@ -194,6 +196,7 @@ export class App {
   readonly folderDialog: FolderDialog;
   readonly engine: ChatEngine;
   readonly worker: Worker;
+  readonly research: ResearchRunner;
   readonly health: HealthMonitor;
   readonly log: (line: string) => void;
   // いま動いている Web サーバーの設定（起動したとき、または画面から反映したときの値）。設定ファイルの server がこれと違えば、反映が要る
@@ -312,6 +315,8 @@ export class App {
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background, fixes: this.fixes,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
+    this.research = new ResearchRunner({ db: this.db, engine: this.engine, tasks: this.tasks, conversations: this.conversations, projects: this.projects, plans: this.plans, bus: this.bus, notifications: this.notifications, config: () => this.config(), dataDir: this.paths.data, projectsDir: this.paths.projects, log: this.log, now });
+    this.research.recover();
     this.tasks.onChange = task => {
       if (isScoutRun(task)) { this.worker.poke(); return; }
       this.bus.publish({ type: 'task.changed', task: maskedTaskView(this, task) });
@@ -643,6 +648,7 @@ export class App {
     this.folderDialog.stop();
     this.worker.stop();
     this.engine.saveQueued();
+    this.research.close();
     this.engine.stopAll();
     this.db.close();
   }

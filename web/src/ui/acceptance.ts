@@ -21,7 +21,7 @@ export const shownItems = (acc: Acceptance): AcceptanceItem[] => acc.items.filte
 export const shownNotDoing = (acc: Acceptance): NotDoingItem[] => [...acc.not_doing].sort(byId);
 
 const SOURCE = {
-  owner_words: 'ui.acc.source.words', owner_choice: 'ui.acc.source.choice', owner_answer: 'ui.acc.source.choice', ai_added: 'ui.acc.source.ai', owner_edit: 'ui.acc.source.edit',
+  owner_words: 'ui.acc.source.words', owner_choice: 'ui.acc.source.choice', owner_answer: 'ui.acc.source.choice', ai_added: 'ui.acc.source.ai', owner_edit: 'ui.acc.source.edit', owner_pick: 'ui.acc.source.pick',
 } as const;
 
 export const sourceLabel = (source: AcceptanceSource): (typeof SOURCE)[keyof typeof SOURCE] | 'ui.acc.source.other' =>
@@ -92,6 +92,7 @@ const REASON = { not_found: 'ui.acc.reason.not_found', too_short: 'ui.acc.reason
 
 function sourceDetails(source: AcceptanceSource, nested = false): Detail[] {
   if (source.kind === 'owner_edit') return [];
+  if (source.kind === 'owner_pick') return [{ label: 'ui.acc.detail.picked', text: source.label }];
   const out: Detail[] = [];
   if (source.kind === 'ai_added' && source.claimed && Object.hasOwn(CLAIMED, source.claimed)) {
     out.push({ label: 'ui.acc.detail.claimed', note: CLAIMED[source.claimed] });
@@ -175,10 +176,11 @@ export function buildFailure(error: unknown): BuildFailure {
   return { kind: 'failed', detail: apiDetail(error) };
 }
 
-type CountKey = 'ui.cov.words' | 'ui.cov.answers' | 'ui.cov.ai' | 'ui.cov.byHand' | 'ui.cov.edited';
+type CountKey = 'ui.cov.words' | 'ui.cov.answers' | 'ui.cov.picks' | 'ui.cov.ai' | 'ui.cov.byHand' | 'ui.cov.edited';
 
 export function coverageCounts(c: Coverage): Array<[CountKey, number]> {
   const out: Array<[CountKey, number]> = [['ui.cov.words', c.owner_words], ['ui.cov.answers', c.owner_choice], ['ui.cov.ai', c.ai_added], ['ui.cov.byHand', c.by_hand]];
+  if ((c.owner_pick ?? 0) > 0) out.splice(2, 0, ['ui.cov.picks', c.owner_pick ?? 0]);
   if (c.owner_edit > 0) out.push(['ui.cov.edited', c.owner_edit]);
   return out;
 }
@@ -186,16 +188,18 @@ export function coverageCounts(c: Coverage): Array<[CountKey, number]> {
 export interface CoverageGroups {
   words: Array<{ quote: string; item: AcceptanceItem }>;
   answers: Array<{ question: string; answer: string; item: AcceptanceItem }>;
+  picks: Array<{ label: string; item: AcceptanceItem }>;
   ai: AcceptanceItem[];
   edited: AcceptanceItem[];
 }
 
 export function coverageGroups(acc: Acceptance): CoverageGroups {
-  const g: CoverageGroups = { words: [], answers: [], ai: [], edited: [] };
+  const g: CoverageGroups = { words: [], answers: [], picks: [], ai: [], edited: [] };
   for (const item of shownItems(acc)) {
     const s = item.source.kind === 'owner_answer' ? item.source.was : item.source;
     if (s?.kind === 'owner_words') g.words.push({ quote: s.quote, item });
     else if (s?.kind === 'owner_choice') g.answers.push({ question: s.question, answer: s.answer, item });
+    else if (s?.kind === 'owner_pick') g.picks.push({ label: s.label, item });
     else if (s?.kind === 'ai_added') g.ai.push(item);
     else if (s?.kind === 'owner_edit') g.edited.push(item);
   }

@@ -100,6 +100,18 @@ export function growthStats(db: DatabaseSync, query: GrowthQuery = {}): GrowthSt
     entry.noAssumption += none;
   }
 
+  // beat R (R-3): 調べた一覧の選択の行（おすすめがあった行）も、質問と同じ数え方で当たり率に入れる
+  const research = projectSql('r.project_id');
+  for (const row of db.prepare(`SELECT r.project_id, i.decision, i.answer_kind, r.confirmed_at FROM research_items i JOIN research_runs r ON r.id = i.research_id
+    WHERE r.status = 'confirmed' AND i.kind = 'choice' AND i.recommended IS NOT NULL AND r.confirmed_at >= ? AND r.confirmed_at < ?${research.sql}`)
+    .all(since, until, ...research.args) as Array<{ project_id: string; decision: string | null; answer_kind: string | null; confirmed_at: number }>) {
+    const b = bucket(Number(row.confirmed_at), row.project_id);
+    if (!b) continue;
+    b.questions.asked++;
+    if (row.decision !== null) b.questions.answered++;
+    if (row.answer_kind === 'kept') b.questions.kept++;
+  }
+
   const judgeProjects = query.project !== undefined ? [query.project]
     : (db.prepare('SELECT DISTINCT project_id FROM judge_calls WHERE created_at >= ? AND created_at < ?').all(since, until) as Array<{ project_id: string | null }>).map(r => r.project_id);
   for (const projectId of judgeProjects) {

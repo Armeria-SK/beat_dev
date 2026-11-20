@@ -141,6 +141,7 @@ const en = {
   'fetch.not_public': '"{host}" is not a public address, so it is not read',
   'fetch.redirects': 'Too many redirects',
   'fetch.redirect_downgrade': 'Redirects from https to http are not followed',
+  'fetch.redirect_host': 'The redirect to {host} is not followed in research',
   'fetch.timeout': 'Timed out ({seconds} s)',
   'fetch.connect': 'Could not connect: {detail}',
 
