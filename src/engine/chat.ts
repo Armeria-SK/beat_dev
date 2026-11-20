@@ -1556,7 +1556,9 @@ export class ChatEngine {
     // 印・要約に元を読む口を書くのは、この実行で history_read に届くときだけ（タスクの実行では書かない。自分の会話を読むと「外から読んだ」が付くため）
     const readable = p.kind !== 'task' && this.#reachable(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen).some(t => t.name === HISTORY_READ);
     // 要約の頭の行（外した発言の id の範囲・元を読む口）はコードが書く（TE-5）
-    const summary = summarySection(conversation?.summary ?? '', language, { from: all[0]?.id ?? 0, to: summaryUpto, read: readable ? p.conversationId : undefined });
+    // 範囲の頭は会話の最初の発言（messages は新しい 500 行だけなので、別に数える）
+    const first = conversation?.summary ? (d.conversations.db.prepare('SELECT MIN(id) AS id FROM messages WHERE conversation_id = ?').get(p.conversationId) as { id: number | null } | undefined)?.id ?? 0 : 0;
+    const summary = summarySection(conversation?.summary ?? '', language, { from: first, to: summaryUpto, read: readable ? p.conversationId : undefined });
     const list = readChecklist(d.kv, p.conversationId);
     const jobs = d.background?.list({ conversationId: p.conversationId }) ?? [];
     const checklist = checklistSection(list, language);
@@ -1946,16 +1948,17 @@ export class ChatEngine {
     const gone = d.conversations.messages(c.conversationId).filter(m => m.id > summaryUpto && m.id <= until);
     // 要約は 1 回の実行で失敗したらその実行のあいだは頼まない（次に超えたとき、外した発言をまとめて要約する）。
     // 実行をまたいで同じモデルで COMPACT_FAILURE_LIMIT 回続けて失敗した会話では、要約をやめて外すだけにする（kv の compact-failures:<会話> = { n, model }。
-    // 成功で消す。取り消しは数えない。失敗したのと違うモデルで要約するときは数え直す）
+    // 成功で消す。取り消しと、再試行してよい提供元の誤り（混雑・429・通信）は数えない。失敗したのと違うモデルで要約するときは数え直す）
     const model = c.route.model.id;
     const stored = d.kv.getJson<{ n?: unknown; model?: unknown }>(`compact-failures:${c.conversationId}`);
     const failures = stored && stored.model === model && typeof stored.n === 'number' ? stored.n : 0;
     if (!c.compaction.failed && c.compaction.count < MAX_COMPACTIONS_PER_RUN && failures < COMPACT_FAILURE_LIMIT) {
       c.compaction.count++;
-      const summarized = await this.#compact({ route: c.route, adapter: c.adapter, runId: c.runId, conversationId: c.conversationId, removed: gone, previous: c.previous, capacity: c.capacity, available: c.available, signal: c.signal,
+      const outcome = await this.#compact({ route: c.route, adapter: c.adapter, runId: c.runId, conversationId: c.conversationId, kind: c.kind, removed: gone, previous: c.previous, capacity: c.capacity, available: c.available, signal: c.signal,
         prefix: { system: c.system, history: c.history, apiTools: c.apiTools, factor: c.factor, pending: c.pending } });
+      const summarized = outcome === 'ok';
       if (summarized) d.kv.delete(`compact-failures:${c.conversationId}`);
-      else if (!c.signal.aborted) {
+      else if (outcome === 'failed' && !c.signal.aborted) {
         d.kv.setJson(`compact-failures:${c.conversationId}`, { n: failures + 1, model });
         if (failures + 1 >= COMPACT_FAILURE_LIMIT) d.log?.(`[WARN] summarizing conversation ${c.conversationId} with model ${model} failed ${failures + 1} times in a row; old messages are only trimmed until another model is used`);
       }
@@ -1982,9 +1985,11 @@ export class ChatEngine {
   // - 前半を読み直す形: いま送っている発言（prefix）の後ろに要約の頼みを 1 つ足す。この実行でそのモデルの提供元が読みを報告したときだけ（読めない提供元では入力が写しの何倍にもなる）。
   //   入りきらない・道具を呼んだ・失敗したら写しの形へ。決まった見出しの無い返事は 1 回だけ頼み直し、それでも無ければ写しの形へ
   // - 写しの形（今まで）: 外した発言を 1 発言 1,500 字・全体 60,000 字に切った写しから、道具なしで作る
-  // 返事から見えない文字を消し、秘密を伏せ、会話の nonce を消してから、決まった節に組む。持ち主の発言と触ったファイルの節はコードが作る
-  async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; removed: StoredMessage[]; previous: string | null; capacity: number; available: number; signal: AbortSignal;
-    prefix?: { system: ModelRequest['system']; history: readonly ChatMessage[]; apiTools: ToolSpec[]; factor: number; pending: string } }): Promise<boolean> {
+  // 返事から見えない文字を消し、秘密を伏せ、会話の nonce を消してから、決まった節に組む。持ち主の発言と触ったファイルの節はコードが作る。
+  // 外を読んだ節（Checklist・裏のコマンド）を載せた tail がこの会話にあれば、前半の形は使わない（前半は保存した tail を含むので、要約に写ると dynamic へ移り、tail の taint の数えから外れる）。
+  // 結果: ok = 要約した / failed = 使えない返事・入りきらない・再試行しない誤り（3 回の数えに入る）/ transient = 取り消し・再試行してよい提供元の誤り（数えない）
+  async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; kind: RunKind; removed: StoredMessage[]; previous: string | null; capacity: number; available: number; signal: AbortSignal;
+    prefix?: { system: ModelRequest['system']; history: readonly ChatMessage[]; apiTools: ToolSpec[]; factor: number; pending: string } }): Promise<'ok' | 'failed' | 'transient'> {
     const d = this.#d;
     const language = languageOf(d.config());
     const fence = this.#fence(c.runId, c.conversationId);
@@ -2005,14 +2010,14 @@ export class ChatEngine {
       return { text, calls, record: { runId: c.runId, purpose: 'compact' as const, model: c.route.model.id, usage, estTokens, removed: c.removed.length, tools: req.tools, system: req.system, startedAt } };
     };
     const save = (reply: string): number => {
-      const summary = scrub(composeSummary(scrub(reply), { ...this.#filesTouched(c.conversationId, scrub), owner: this.#ownerWords(c.conversationId, upto, ownerWordsTokens(c.available), scrub, language) }, language));
+      const summary = scrub(composeSummary(scrub(reply), { ...this.#filesTouched(c.conversationId, scrub), owner: this.#ownerWords(c.conversationId, c.kind, upto, ownerWordsTokens(c.available), scrub, language) }, language));
       d.conversations.setSummary(c.conversationId, summary, upto);
       return summary.length;
     };
     let release: (() => void) | undefined;
     try {
       release = await d.limiter.acquire(c.route.provider.id, () => c.route.provider.maxParallel, c.signal);
-      if (c.prefix && this.#cacheSeen.get(c.runId)?.has(c.route.model.id)) {
+      if (c.prefix && this.#cacheSeen.get(c.runId)?.has(c.route.model.id) && !this.#tailTainted(c.conversationId)) {
         const head = [...closeToolCalls(c.prefix.history, engineText(language, 'tool.not_run_stopped'))];
         for (const retry of [false, true]) {
           const messages: ChatMessage[] = [...head, { role: 'user', content: compactRequest(language, retry) }];
@@ -2020,39 +2025,50 @@ export class ChatEngine {
           if (estTokens + maxOutputTokens > room) break;
           let got;
           try { got = await ask({ system: c.prefix.system, messages, tools: c.prefix.apiTools }, estTokens); } catch (error) {
-            if (c.signal.aborted) return false;
+            if (c.signal.aborted) return 'transient';
             d.log?.(`[WARN] summarizing conversation ${c.conversationId} after the sent part failed, using the transcript instead: ${redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP)}`);
             break;
           }
           const usable = got.calls === 0 && got.text.trim() !== '' && hasSummarySections(got.text, language);
           d.runs.recordCall({ ...got.record, ...(usable ? { summaryChars: save(got.text) } : {}) });
-          if (usable) return true;
+          if (usable) return 'ok';
           if (got.calls > 0) break;
         }
       }
       const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, m.message.role === 'user' && m.message.note !== undefined ? COMPACT_NOTE_CHARS : 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
       const prompt = compactPrompt({ previous: c.previous, transcript }, language);
-      if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > room) return false;
+      if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > room) return 'failed';
       const got = await ask({ system: { frozen: compactSystem(language), dynamic: '', tail: '' }, messages: [{ role: 'user', content: prompt }], tools: [] }, estimateTextTokens(prompt));
       const usable = got.text.trim() !== '';
       d.runs.recordCall({ ...got.record, ...(usable ? { summaryChars: save(got.text) } : {}) });
-      return usable;
-    } catch {
-      if (c.signal.aborted) return false;
+      return usable ? 'ok' : 'failed';
+    } catch (error) {
+      if (c.signal.aborted) return 'transient';
       d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compaction_failed', message: engineText(language, 'warn.compaction_failed') });
-      return false;
+      return error instanceof ProviderError && error.retryable ? 'transient' : 'failed';
     } finally { release?.(); }
   }
 
-  // 要約に原文で残す持ち主の発言（upto 以下の、generated でも note でも札の答えでもない user の発言。添付の中身は除く）。新しい方から、合計 budget（見積もりのトークン）まで。
-  // 入りきらない発言は頭だけ残して印を付け、そこで止める
-  #ownerWords(conversationId: string, upto: number, budget: number, scrub: (text: string) => string, language: Language): string[] {
-    const rows = this.#d.conversations.messages(conversationId)
-      .filter(({ id, message }) => id <= upto && message.role === 'user' && !message.generated && !message.note && !message.askAnswer);
+  // 要約に原文で残す持ち主の発言。ctx.ownerText と同じ決まり（9-1b の D-7）: 会話（chat）は upto 以下の、generated でも note でも札の答えでもない user の発言（添付の中身は除く）、
+  // タスクは持ち主の頼み（ownerRequestText）、ほか（振り返り・子の担当）は無し（user の発言はコードが組んだ頼みで、外の文や beat の書いた文を含む）。
+  // 新しい方から、合計 budget（見積もりのトークン）まで。入りきらない発言は頭だけ残して印を付け、そこで止める
+  #ownerWords(conversationId: string, kind: RunKind, upto: number, budget: number, scrub: (text: string) => string, language: Language): string[] {
+    const d = this.#d;
+    let rows: Array<{ id: number | undefined; text: string }> = [];
+    if (kind === 'chat') {
+      rows = d.conversations.messages(conversationId)
+        .filter(({ id, message }) => id <= upto && message.role === 'user' && !message.generated && !message.note && !message.askAnswer)
+        .map(row => ({ id: row.id, text: row.message.role === 'user' ? stripAttachments(row.message.content) : '' }))
+        .reverse();
+    } else if (kind === 'task') {
+      const task = d.tasks?.byConversation(conversationId);
+      const text = task ? d.tasks?.ownerRequestText(task.id) : undefined;
+      if (text) rows = [{ id: undefined, text }];
+    }
     const picked: string[] = [];
     let used = 0;
-    for (const row of rows.reverse()) {
-      const words = scrub(stripAttachments(row.message.content)).trim();
+    for (const row of rows) {
+      const words = scrub(row.text).trim();
       if (!words) continue;
       const tokens = estimateTextTokens(words);
       if (used + tokens <= budget) { picked.push(quoteOwner(row.id, words, false, language)); used += tokens; continue; }
@@ -2061,6 +2077,12 @@ export class ChatEngine {
       break;
     }
     return picked;
+  }
+
+  // 外を読んだ節を載せて保存した tail（tail-state の tainted）が、この会話にまだ 1 つでもあるか（要約の前半の形を使わない。TE-5）
+  #tailTainted(conversationId: string): boolean {
+    const tainted = this.#d.kv.getJson<TailState>(`tail-state:${conversationId}`)?.tainted;
+    return (tainted?.checklist?.length ?? 0) > 0 || (tainted?.background?.length ?? 0) > 0;
   }
 
   // 要約の「触ったファイル」: 書き換えの記録（file_changes。recordToolWrite が書く）にある、この会話で作った・変えたファイル。新しい順に FILES_TOUCHED_MAX まで

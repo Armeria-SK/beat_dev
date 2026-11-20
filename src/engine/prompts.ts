@@ -103,6 +103,12 @@ export function compactRequest(language: Language, retry = false): string {
   return [text.compactRequest, ...(retry ? [text.compactRetry] : []), shape(language)].join('\n');
 }
 
+// 行の区切り。見えない文字を消しても残る \r・行や段落の区切りの文字・縦タブ・改ページも区切る（1 行に見せかけた文が、後で読み直したとき見出しにならないように）
+const LINE_BREAK = /\r\n?|[\n\u2028\u2029\u0085\v\f]/u;
+// 見出しに見える行（# か全角の ＃ で始まる・太字で始まる・setext の下線）。モデルが書いた節の中では先頭に \ を付けて見出しにしない（見出しの行を書くのはコードだけ。名前では見分けない）
+const HEADING_LIKE = new RegExp(`^\\s*(?:[#${String.fromCharCode(0xff03)}]|\\*\\*)|^\\s*(?:=+|-+)\\s*$`, 'u');
+const neutral = (line: string): string => (HEADING_LIKE.test(line) ? `\\${line.trimStart()}` : line);
+
 const norm = (line: string): string => line.replace(/^#{1,6}\s*/u, '').replace(/^\d+[.)]\s*/u, '').replace(/[*_:\uFF1A]/gu, '').replace(/\s+/gu, ' ').trim().toLowerCase();
 
 // 返事を節に分ける。見出しの行（# の数・番号・太字・コロンは問わない）だけを節の境目にし、知らない見出しは前の節の文に残す。最初の見出しより前の文は request へ
@@ -116,7 +122,7 @@ function parseSections(reply: string, language: Language): { found: Set<SummaryS
   const found = new Set<SummarySection>();
   const body = new Map<SummarySection, string[]>();
   let current: SummarySection = 'request';
-  for (const line of reply.replace(/\r\n?/gu, '\n').split('\n')) {
+  for (const line of reply.split(LINE_BREAK)) {
     const heading = /^\s*(?:#{1,6}\s*|\*\*)/u.test(line) ? names.get(norm(line.replace(/\*\*/gu, ''))) : undefined;
     if (heading) { current = heading; found.add(heading); continue; }
     const list = body.get(current) ?? [];
@@ -146,13 +152,13 @@ export function composeSummary(reply: string, code: { owner: readonly string[]; 
   const owner = code.owner.length ? code.owner.join('\n') : text.ownerNone;
   const files = code.files.length ? [...code.files.map(f => `- ${f}`), ...(code.more > 0 ? [text.filesMore(code.more)] : [])].join('\n') : text.filesNone;
   return SECTION_ORDER.map(s => {
-    const content = s === 'owner' ? owner : s === 'files' ? files : (body.get(s) ?? []).join('\n').trim() || '-';
+    const content = s === 'owner' ? owner : s === 'files' ? files : (body.get(s) ?? []).map(neutral).join('\n').trim() || '-';
     return `${text.sections[s]}\n${content}`;
   }).join('\n\n');
 }
 
-// 持ち主の発言 1 つを、見出しを装えないよう 1 行ずつ「> 」で引く
-export function quoteOwner(id: number, words: string, cut: boolean, language: Language): string {
-  const lines = `${words}${cut ? ` ${TEXT[language].ownerCut}` : ''}`.split('\n').map(line => `> ${line}`);
-  return [`- (message ${id})`, ...lines].join('\n');
+// 持ち主の発言 1 つを、見出しを装えないよう 1 行ずつ「> 」で引く。id が無いのはタスクの頼み（ownerRequestText）
+export function quoteOwner(id: number | undefined, words: string, cut: boolean, language: Language): string {
+  const lines = `${words}${cut ? ` ${TEXT[language].ownerCut}` : ''}`.split(LINE_BREAK).map(line => `> ${line}`);
+  return [id === undefined ? '- (task request)' : `- (message ${id})`, ...lines].join('\n');
 }
