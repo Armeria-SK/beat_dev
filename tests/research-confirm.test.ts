@@ -208,6 +208,24 @@ test('owner_pick（D8・R3.11 M7）: 確定した名前とまるごと同じ引�
   await Promise.all(s.records().map(x => s.app.research.waitFor(x.id)));
 });
 
+test('owner_pick（B2）: 確定の文の行をまるごと引いた引用（「Feature: 名前」）も owner_pick。選んでいない名前の行・行の一部は ai_added', async t => {
+  const s = await setup(t);
+  const r = seed(s);
+  const speech = () => prepareSpeech(ownerSpeech(s.app.db, s.projectId), SCAN_BUDGET, confirmedPicks(s.app.db, s.projectId));
+  s.adapter().scripts.push(reply('ok'), reply('lib'));
+  const ok = await s.confirm(r.record.id, { shownHash: r.hash(), picks: [{ id: r.short.id, decision: 'picked' }, { id: r.beta.id, decision: 'build' }] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const sent = s.app.conversations.messages(uuid(1)).map(m => m.message).filter(m => m.role === 'user' && m.generated).at(-1)!;
+  assert.ok(sent.content.split('\n').includes('Feature: タグ'), 'the confirm message has the line as quoted');
+  assert.deepEqual(verifySource(speech(), { kind: 'owner_words', quote: 'Feature: タグ' }), { kind: 'owner_pick', researchId: r.record.id, itemId: r.short.id, label: 'タグ' });
+  assert.equal(verifySource(speech(), { kind: 'owner_words', quote: ' Feature: タグ ' }).kind, 'owner_pick');
+  assert.equal(verifySource(speech(), { kind: 'owner_words', quote: 'Feature: Tag search' }).kind, 'ai_added', 'a feature that was not picked');
+  assert.equal(verifySource(speech(), { kind: 'owner_words', quote: 'Feature: タグ付け' }).kind, 'ai_added');
+  assert.equal(verifySource(speech(), { kind: 'owner_words', quote: 'Feature:' }).kind, 'ai_added');
+  await waitFor(() => !s.app.engine.chatting, 'reply ended');
+  await Promise.all(s.records().map(x => s.app.research.waitFor(x.id)));
+});
+
 test('土台にする: 土台にある機能はチェックの対象から外れ（選ぶと 400）、決めは残らない。足りない機能だけが入る', async t => {
   const s = await setup(t);
   const r = seed(s);

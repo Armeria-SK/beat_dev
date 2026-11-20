@@ -5,6 +5,7 @@ import { normalizeQuote, prepareSpeech, verifySource, type OwnerPick } from '../
 import type { SpeechRow } from '../db/conversations.ts';
 import { normalizeUrl, quoteHasName, sourceKey, type PartKind } from './evidence.ts';
 import { checkLabel, ResearchError, type LabelKind } from './labels.ts';
+import { pickLine } from './confirm.ts';
 
 export type ResearchPhase = 'products' | 'libraries';
 export type ResearchMode = 'batch' | 'one_by_one';
@@ -127,10 +128,11 @@ export function confirmedPicks(db: DatabaseSync, projectId: string): OwnerPick[]
     WHERE r.project_id = ? AND r.status = 'confirmed' AND i.decision IS NOT NULL ORDER BY i.id`).all(projectId) as Array<{ id: number; research_id: string; kind: ItemKind; name_or_label: string; options: string | null; decision: string }>;
   const picks: OwnerPick[] = [];
   for (const row of rows) {
-    if ((row.kind === 'feature' && row.decision === 'picked') || (row.kind === 'similar' && (row.decision === 'use' || row.decision === 'base'))) picks.push({ researchId: row.research_id, itemId: row.id, label: row.name_or_label });
+    if (row.kind === 'feature' && row.decision === 'picked') picks.push({ researchId: row.research_id, itemId: row.id, label: row.name_or_label, lines: [pickLine('feature', row.name_or_label)] });
+    if (row.kind === 'similar' && (row.decision === 'use' || row.decision === 'base')) picks.push({ researchId: row.research_id, itemId: row.id, label: row.name_or_label, lines: [pickLine(row.decision, row.name_or_label)] });
     if (row.kind === 'choice' && /^\d$/u.test(row.decision)) {
       const label = (JSON.parse(row.options ?? '[]') as string[])[Number(row.decision)];
-      if (label !== undefined) picks.push({ researchId: row.research_id, itemId: row.id, label });
+      if (label !== undefined) picks.push({ researchId: row.research_id, itemId: row.id, label, lines: [pickLine('choice', row.name_or_label, label)] });
     }
   }
   return picks;

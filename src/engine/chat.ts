@@ -1166,8 +1166,16 @@ export class ChatEngine {
 
       let invalidThisRound = 0;
       let askedOwner = false;
+      // 呼び出しごとに結果の行を必ず残す（結果の無い呼び出しが残ると、次の頼みを提供元が断る）
+      const unrun = [...call.toolCalls];
+      const closeUnrun = () => {
+        for (const left of unrun.splice(0)) {
+          const closed = d.conversations.append(conversationId, { role: 'tool', toolCallId: left.id, name: left.name, content: engineText(languageOf(config), 'tool.not_run_stopped'), isError: true }, runId);
+          d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: closed.id, role: 'tool' });
+        }
+      };
       for (const toolCall of call.toolCalls) {
-        if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
+        if (signal.aborted) { closeUnrun(); return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags); }
         counters.toolCalls++;
         if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
         // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
@@ -1184,6 +1192,7 @@ export class ChatEngine {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
           ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
         }, runId);
+        unrun.shift();
         d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
       }
       if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);

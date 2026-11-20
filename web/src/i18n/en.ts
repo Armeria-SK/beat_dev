@@ -2021,6 +2021,8 @@ export const en = {
   'ui.rs.runningLibraries': 'Looking for the libraries your picked features need. The conversation keeps going meanwhile',
   'ui.rs.partial': 'Stopped partway at a limit. The rows found so far are below',
   'ui.rs.partialTime': 'Stopped at the time limit. The rows found so far are below',
+  'ui.rs.partialStopped': 'The research was stopped partway. The rows found so far are below',
+  'ui.rs.searchBlocked': 'Web search did not work: every search was refused or failed, so nothing could be looked up. This does not mean nothing exists. Try again later',
   'ui.rs.skippedText': 'Skipped. Nothing from it goes into the plan',
   'ui.rs.failedText': 'The research stopped with an error. The rows found so far are below',
   'ui.rs.cancelledText': 'The research was cancelled. The rows found so far are below',

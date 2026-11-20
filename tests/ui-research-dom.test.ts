@@ -147,3 +147,14 @@ test('確定のあと: 選んだものだけを読み戻して出し、入力は
   assert.ok(byText(lib as HTMLElement, '.bt-row__title', 'goldmark'));
   assert.equal(([...lib.querySelectorAll('label')].find(l => l.textContent?.startsWith('Go'))?.querySelector('input') as HTMLInputElement).checked, false);
 });
+
+test('止まり方の見え方（B1・B3）: 検索ができなかった記録は「何も見つからなかった」と言わず、検索ができなかったと言う。持ち主が止めた記録は「上限」と言わない', async () => {
+  serve(() => view(record({ status: 'failed', stopReason: 'search_blocked', items: [] })));
+  const blocked = await pane();
+  assert.match(blocked.querySelector('[data-failed]')?.textContent ?? '', /Web search did not work/u);
+  assert.equal(blocked.querySelector('[data-empty]') === null, true, 'no "nothing was found" line');
+  await cleanup();
+  serve(() => view(record({ status: 'done', partial: true, stopReason: 'stopped' })));
+  const stopped = await pane();
+  assert.equal(stopped.querySelector('[data-partial]')?.textContent, 'The research was stopped partway. The rows found so far are below');
+});

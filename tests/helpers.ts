@@ -99,9 +99,13 @@ export class FakeAdapter implements ProviderAdapter {
   scripts: Script[];
   probeResult: Partial<ProbeResult> = {};
   readonly probeLanguages: Array<string | undefined> = [];
+  // Anthropic と同じに、結果の無い道具の呼び出しが残る頼みを 400 で断る（opt-in）
+  strictToolPairs = false;
   constructor(provider: ProviderConfig, scripts: Script[] = []) { this.provider = provider; this.scripts = scripts; }
   async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
     this.calls.push(req);
+    const unpaired = this.strictToolPairs ? unpairedToolCall(req.messages) : undefined;
+    if (unpaired) throw new Error(`400 messages: tool_use ids were found without tool_result blocks immediately after: ${unpaired}`);
     const script = this.scripts.shift() ?? reply('（台本なし）');
     yield* script(req);
   }
@@ -112,7 +116,17 @@ export class FakeAdapter implements ProviderAdapter {
   }
 }
 
-export const isJudgeRequest = (req: ModelRequest): boolean => req.tools.length === 0 && req.system.frozen.includes('safety checker');
+export function unpairedToolCall(messages: ModelRequest['messages']): string | undefined {
+  for (const [i, m] of messages.entries()) {
+    if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+    const open = new Set(m.toolCalls.map(c => c.id));
+    for (let j = i + 1; messages[j]?.role === 'tool'; j++) open.delete((messages[j] as { toolCallId: string }).toolCallId);
+    if (open.size) return [...open][0];
+  }
+  return undefined;
+}
+
+export const isJudgeRequest =(req: ModelRequest): boolean => req.tools.length === 0 && req.system.frozen.includes('safety checker');
 export const judgeTextOf = (req: ModelRequest): string => JSON.stringify(req.messages) + req.system.frozen + req.system.dynamic;
 
 export class JudgeAdapter extends FakeAdapter {

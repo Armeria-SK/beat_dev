@@ -124,7 +124,10 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const language = languageOf(ctx.config);
     const limit = input.max_results ?? 5;
     // 自動アクセスの判定で続けて止められたら、この実行のあいだは通信しない（同じ失敗でステップを使い切らせない）
-    if ((ctx.searchBlocks ?? 0) >= SEARCH_BLOCK_LIMIT) return { content: toolText(language, 'web.search_unavailable'), isError: true, noRemoteContent: true };
+    if ((ctx.searchBlocks ?? 0) >= SEARCH_BLOCK_LIMIT) {
+      if (ctx.research) ctx.research.budget.failed = (ctx.research.budget.failed ?? 0) + 1;
+      return { content: toolText(language, 'web.search_unavailable'), isError: true, noRemoteContent: true };
+    }
     try {
       const wait = web(ctx).throttle.take(w.maxSearchesPerHour);
       if (wait) await new Promise<void>((resolve, reject) => {
@@ -134,6 +137,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       if (ctx.research) ctx.research.budget.searches += 1;
       const hits = await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network, onlySearchHosts: ctx.research !== undefined });
       ctx.searchBlocks = 0;
+      if (ctx.research) ctx.research.budget.answered = (ctx.research.budget.answered ?? 0) + 1;
       if (ctx.research) for (const hit of hits) ctx.research.see(hit.url);
       if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }) };
       return {
@@ -146,6 +150,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
         ].join('\n'),
       };
     } catch (error) {
+      if (ctx.research && !ctx.signal.aborted) ctx.research.budget.failed = (ctx.research.budget.failed ?? 0) + 1;
       if (error instanceof SearchFailure && error.key === 'search.blocked') {
         ctx.searchBlocks = (ctx.searchBlocks ?? 0) + 1;
         if (ctx.searchBlocks === SEARCH_BLOCK_LIMIT) {

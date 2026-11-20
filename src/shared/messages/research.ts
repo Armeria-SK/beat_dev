@@ -26,6 +26,8 @@ const en = {
   'notify_done': 'The research before building is ready',
   'notify_failed': 'The research before building stopped',
   'notify_body': '{rows} rows are waiting for you in the Plan pane',
+  'notify_search_blocked': 'The research before building could not search the web',
+  'notify_search_blocked_body': 'Every web search was refused or failed, so nothing was looked up. This does not mean nothing exists. Try again later from the Plan pane',
   'candidate_only_first': 'Candidates can be recorded only in the first part of a one-by-one research',
   'candidates_part': 'This part only collects candidates: record each with kind candidate, its name and the URL from a search result',
   'candidate_recorded': 'Candidate {n} recorded.',

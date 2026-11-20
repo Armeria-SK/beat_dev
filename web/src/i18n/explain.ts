@@ -613,6 +613,8 @@ export const EXPLAIN_KEYS = [
   'ui.rs.runningLibraries',
   'ui.rs.partial',
   'ui.rs.partialTime',
+  'ui.rs.partialStopped',
+  'ui.rs.searchBlocked',
   'ui.rs.skippedText',
   'ui.rs.failedText',
   'ui.rs.cancelledText',

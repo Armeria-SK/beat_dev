@@ -57,7 +57,10 @@ function seedV23(path: string): void {
     event.run('t-clean', 'note', 'beat','fine', 'r-ok');
     event.run('t-clean', 'reason', 'beat','not text', 'r-read');
     event.run('tpl', 'note', 'beat','EVIL2', 'r-clean-in-read');
+    // 今の消す処理を v23 の形の DB で使う（消すのは本物では全部の移し替えのあとだけ）。v23 に無い表への書き込みのために、空の表をそのあいだだけ置く
+    db.exec('CREATE TABLE research_runs (source_conversation_id TEXT)');
     eraseConversation({ db, uploadsDir: dirname(path), toolOutputsDir: dirname(path) }, 'chat-early');
+    db.exec('DROP TABLE research_runs');
     assert.equal((db.prepare("SELECT conversation_id FROM engine_runs WHERE id = 'r-early'").get() as { conversation_id: string | null }).conversation_id, null);
     assert.equal(new TaskStore(db).judgeRequest('t-erased'), 'Owner task\nowner body\n- INJECTED', '前提: 移し替えの前は、消した会話の AI の文が判定役に届く');
   } finally { db.close(); }
@@ -92,6 +95,8 @@ test('移し替え 24: 前からある、外を読んだ実行・会話の書い
     assert.equal(count(db), total, '同じ移し替えを重ねても印は増えない');
 
     const tasks = new TaskStore(db);
+    // 消す処理も今の DB の形を前提にする（beat R で research_runs.source_conversation_id を外す）。その移し替えだけを足す（版の番号は変えない）
+    db.exec(String(MIGRATIONS.find(m => typeof m === 'string' && m.includes('ALTER TABLE research_runs ADD COLUMN source_conversation_id'))));
     eraseConversation({ db, uploadsDir: dir, toolOutputsDir: dir }, 'chat-read');
     eraseConversation({ db, uploadsDir: dir, toolOutputsDir: dir }, 'chat-clean');
     for (const id of ['t-note', 't-run', 't-gone', 't-marked', 't-child', 't-erased', 't-orphan']) assert.equal(tasks.judgeRequest(id), '', id);

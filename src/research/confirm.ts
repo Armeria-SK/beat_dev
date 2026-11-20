@@ -103,8 +103,11 @@ const HEAD: Record<ResearchPhase, string> = {
 };
 const LINE: Record<ConfirmLine['kind'], string> = { use: 'Use this existing product instead of building: ', base: 'Build on this existing product: ', build: 'Build it from scratch.', feature: 'Feature: ', choice: '' };
 
+// 確定の文の 1 行（B2: 受け入れの owner_words がこの行をまるごと引いても、選んだ名前に当てる）
+export const pickLine = (kind: ConfirmLine['kind'], name: string, option?: string): string => (kind === 'choice' ? `${name} -> ${option ?? ''}` : `${LINE[kind]}${name}`);
+
 export function confirmMessage(phase: ResearchPhase, plan: Pick<ConfirmPlan, 'lines'>): string {
-  const body = plan.lines.map(line => line.kind === 'choice' ? `${line.name} -> ${line.option}` : `${LINE[line.kind]}${line.name}`);
+  const body = plan.lines.map(line => pickLine(line.kind, line.name, line.option));
   return [HEAD[phase], '<<<picked', ...body, '>>>'].join('\n');
 }
 

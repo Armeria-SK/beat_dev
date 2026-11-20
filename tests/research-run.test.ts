@@ -8,7 +8,8 @@ import { OwnerAct, OWNER_TEXT_MAX } from '../src/research/run.ts';
 import { settled, uuid, waitFor } from './app-setup.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
-import { reply } from './helpers.ts';
+import { ProviderError } from '../src/providers/types.ts';
+import { fail, reply } from './helpers.ts';
 import { ALPHA, BETA, researchApp } from './helpers/research-app.ts';
 import { toolCall } from './helpers/task-app.ts';
 
@@ -397,4 +398,101 @@ test('確定（審査 LOW-5）: 持ち主の印が無い確定は断る', async 
   const record = s.records()[0]!;
   assert.throws(() => s.app.research.confirm(record.id, { shownHash: s.app.research.store.shownHash(record.id), picks: [] }, {} as OwnerAct), (error: { code?: string }) => error.code === 'not_owner');
   assert.equal(s.app.research.store.get(record.id)!.status, 'done');
+});
+
+test('譲る（B1）: 道具を呼んだ直後に譲っても、続きの部分は結果の無い呼び出しで断られず、記録は partial にならない', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  s.adapter().strictToolPairs = true;
+  let entered!: () => void;
+  const inside = new Promise<void>(resolve => { entered = resolve; });
+  s.adapter().scripts.push(async function* (req) {
+    yield { type: 'tool_call' as const, call: { id: 'call_y', name: 'web_search', arguments: { query: 'notes' } } };
+    yield { type: 'done' as const, stop: 'tool_use' as const };
+    entered();
+    const signal = (req as { signal?: AbortSignal }).signal;
+    await new Promise<void>(resolve => { if (!signal || signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true }); });
+  });
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await inside;
+  s.adapter().scripts.push(reply('chat answer'), reply('continued'));
+  await s.send(2, 'another question');
+  await s.settle();
+  const record = s.records()[0]!;
+  const runs = (s.app.db.prepare('SELECT ok, error_message FROM engine_runs WHERE conversation_id = ? ORDER BY started_at').all(s.app.research.store.parts(record.id)[0]!.conversationId) as Array<{ ok: number; error_message: string | null }>);
+  assert.equal(runs.length, 2, 'the part yielded once and continued');
+  assert.equal(runs[1]!.ok, 1, runs[1]!.error_message ?? '');
+  assert.deepEqual([record.status, record.partial], ['done', 0]);
+});
+
+test('止まり方（B1）: 部分の実行が提供元の誤りで終わると、記録は「上限で止まった」ではなく failed', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  const broken = () => fail(new ProviderError('provider_error', 'http 400', { retryable: false }));
+  s.adapter().scripts.push(broken(), broken());
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.deepEqual([record.status, record.stop_reason], ['failed', 'failed']);
+});
+
+test('止まり方（B1）: 持ち主が部分の実行を止めると、記録は partial で、理由は stopped', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  let entered!: () => void;
+  const inside = new Promise<void>(resolve => { entered = resolve; });
+  s.adapter().scripts.push(async function* (req) {
+    entered();
+    const signal = (req as { signal?: AbortSignal }).signal;
+    await new Promise<void>((_, reject) => { if (signal?.aborted) reject(new Error('aborted')); signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
+    yield { type: 'done' as const, stop: 'end_turn' as const };
+  });
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await inside;
+  const runId = s.app.research.store.parts(s.records()[0]!.id)[0]!.runId!;
+  assert.equal((await s.json(`/api/runs/${runId}/stop`, 'POST', {})).status, 200);
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.deepEqual([record.status, record.partial, record.stop_reason], ['done', 1, 'stopped']);
+});
+
+test('検索ができない（B3）: どの検索も断られた記録は「何も無かった」ではなく failed・search_blocked で、知らせもそう言う', async t => {
+  const s = await researchApp(t, { blockSearch: true, configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), toolCall('web_search', { query: 'markdown notes' }), reply('Nothing found.'));
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.deepEqual([record.status, record.stop_reason, s.app.research.store.items(record.id).length], ['failed', 'search_blocked', 0]);
+  const notice = s.app.notifications.list().find(n => n.title.includes('could not search the web'));
+  assert.ok(notice, s.app.notifications.list().map(n => n.title).join('\n'));
+  assert.ok(!(notice.body ?? '').includes('rows are waiting'));
+  const view = await s.json(`/api/projects/${s.projectId}/research`, 'GET');
+  assert.equal(view.body.products.stopReason, 'search_blocked');
+});
+
+test('検索ができない（B3）: 一部の検索だけ断られ、ほかが答えたなら search_blocked にしない（done）', async t => {
+  const s = await researchApp(t, { blockSearch: 1, configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), toolCall('web_search', { query: 'markdown notes' }), reply('Nothing to record.'));
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.deepEqual([record.status, record.stop_reason], ['done', null]);
+});
+
+test('検索ができない（B3）: 結果 0 件で答えた検索は「見つからなかった」のまま（done）', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), reply('Nothing to record.'));
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.deepEqual([record.status, record.stop_reason], ['done', null]);
 });

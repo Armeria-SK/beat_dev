@@ -17,13 +17,16 @@ export const ddg = (links: readonly string[]): PageResponse => html(`<div id="li
 export const ALPHA = 'https://alpha.zqnotes.net/notes';
 export const BETA = 'https://beta.zqnotes.net/app';
 
-export function fakeWeb(hold?: { search?: Promise<void> }) {
+export function fakeWeb(hold?: { search?: Promise<void> }, blockSearch: boolean | number = false) {
   const asked: string[] = [];
+  let searches = 0;
   const network: PageNetwork = {
     resolve: async () => ['93.184.216.34'],
     get: async (url: URL, _address: string, signal: AbortSignal) => {
       asked.push(url.href);
       if (url.hostname === 'html.duckduckgo.com') {
+        searches++;
+        if (blockSearch === true || searches <= Number(blockSearch)) return html('<p>Unfortunately, bots use DuckDuckGo too. Please complete the following challenge.</p>');
         if (hold?.search) await Promise.race([hold.search, new Promise<void>((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))]);
         return ddg([ALPHA, BETA]);
       }
@@ -33,9 +36,9 @@ export function fakeWeb(hold?: { search?: Promise<void> }) {
   return { network, asked };
 }
 
-export async function researchApp(t: Parameters<typeof startApp>[0], options: { configure?: (config: AppConfig) => void; contextLength?: number; hold?: { search?: Promise<void> } } = {}) {
+export async function researchApp(t: Parameters<typeof startApp>[0], options: { configure?: (config: AppConfig) => void; contextLength?: number; hold?: { search?: Promise<void> }; blockSearch?: boolean | number } = {}) {
   const products = realpathSync.native(tempDir(t as never));
-  const web = fakeWeb(options.hold);
+  const web = fakeWeb(options.hold, options.blockSearch);
   const s = await startApp(t, {
     projectFolderExempt: [products], tools: builtinTools(), webNetwork: web.network,
     ...(options.contextLength ? { models: [fakeModel('m1', { contextLength: options.contextLength }), fakeModel('m2', { contextLength: options.contextLength })] } : {}),

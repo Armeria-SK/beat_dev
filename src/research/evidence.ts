@@ -74,7 +74,8 @@ export class OpenedPages {
 
 export type PartKind = 'first' | 'candidate' | 'continue' | 'libraries';
 
-export interface ResearchBudget { fetches: number; searches: number; started: number }
+// answered: 返事が来た検索（結果 0 件も数える）・failed: 断られた・失敗した検索（全部が failed なら「検索ができなかった」）
+export interface ResearchBudget { fetches: number; searches: number; started: number; answered?: number; failed?: number }
 
 export interface Candidate { name: string; url: string }
 

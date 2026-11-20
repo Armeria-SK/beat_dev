@@ -104,7 +104,8 @@ export function quoteWeight(text: string): number {
 interface OwnerView { text: string; norm: string; at: number[]; starts: number[]; ends: number[] }
 interface Spoken { id: number; conversationId: string; raw: string; view?: OwnerView | undefined }
 
-export interface OwnerPick { researchId: string; itemId: number; label: string }
+// lines: 確定の文に書いた、この選びの行（「Feature: 名前」など）。引用がそのどれかとまるごと同じでも当てる
+export interface OwnerPick { researchId: string; itemId: number; label: string; lines?: readonly string[] }
 export interface Speech { owner: Spoken[]; budget: { left: number }; picks?: readonly OwnerPick[] }
 
 export function prepareSpeech(rows: readonly SpeechRow[], scanBudget = SCAN_BUDGET, picks: readonly OwnerPick[] = []): Speech {
@@ -179,7 +180,7 @@ export function verifySource(speech: Speech, claimed: ClaimedSource): Acceptance
   const unchecked = (reason: UncheckedReason): AcceptanceSource => ({ kind: 'ai_added', claimed: 'owner_words', reason, quote: claimed.quote });
   // R3.11 M7: 確定した名前とまるごと同じ引用は、重さの確かめより前に当てる（「タグ」のような短い名前も）
   const whole = claimed.quote.normalize('NFKC').trim();
-  const pick = speech.picks?.find(p => p.label.normalize('NFKC') === whole);
+  const pick = speech.picks?.find(p => p.label.normalize('NFKC') === whole || (p.lines ?? []).some(line => line.normalize('NFKC') === whole));
   if (pick) return { kind: 'owner_pick', researchId: pick.researchId, itemId: pick.itemId, label: pick.label };
   if (quoteWeight(claimed.quote) < MIN_QUOTE_WEIGHT) return unchecked('too_short');
   const folded = fold(claimed.quote);
