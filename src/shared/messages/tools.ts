@@ -105,6 +105,7 @@ const en = {
   'bg.state_stopped_system': 'stopped by beat',
   'bg.state_spawn_failed': 'could not be started: {detail}',
   'bg.orphaned': '(some child processes may have kept running after it was stopped)',
+  'bg.not_contained': '(not in beat\'s process container: {reason}. Processes it started may keep running after it is stopped)',
   'bg.header': '{id}: {state} (cwd: {cwd})\n$ {command}',
   'bg.skipped': '[{bytes} bytes of output before this point were not returned]',
   'bg.no_new_output': '[No new complete output line]',

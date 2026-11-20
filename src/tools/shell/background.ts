@@ -64,6 +64,8 @@ export interface JobView extends JobOwner {
   fetched: boolean;
   tainted?: boolean;
   spawnError?: string;
+  contained?: false;
+  containReason?: string;
   logPath: string;
   logCut: boolean;
 }
@@ -269,6 +271,14 @@ function deferred(): Deferred {
   return { promise, resolve };
 }
 
+// GUI を開く道具は beat の外に窓を出さない（Vite・Create React App は BROWSER=none でブラウザを開かない）。開いた窓はコマンドと一緒に止まるので
+function backgroundEnv(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) if (key.toUpperCase() !== 'BROWSER') out[key] = value;
+  out.BROWSER = 'none';
+  return out;
+}
+
 function within(promise: Promise<void>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([promise, new Promise<void>(r => { timer = setTimeout(r, ms); })]).finally(() => clearTimeout(timer));
@@ -292,6 +302,8 @@ interface Job extends JobOwner {
   spawnError?: string;
   child: ChildProcess | undefined;
   runJob: RunJob | undefined;
+  jobClosing: boolean;
+  containReason?: string;
   ring: OutputRing;
   decoders: Record<Channel, StringDecoder>;
   gates: Record<Channel, LineGate>;
@@ -359,7 +371,7 @@ export class BackgroundJobs {
     const gate = () => new LineGate(this.#limits.partialLineBytes, this.#limits.keyHoldBytes);
     const job: Job = {
       ...owner, id: `bg-${seq}`, command: redactSecrets(input.command), cwd: input.cwd, startedAt: this.#now(), state: 'running', exitCode: null, orphaned: false,
-      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, runJob: undefined, ring: new OutputRing(),
+      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, runJob: undefined, jobClosing: false, ring: new OutputRing(),
       decoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }, gates: { stdout: gate(), stderr: gate() },
       incoming: { stdout: '', stderr: '' }, flushTimer: undefined, cursor: 0,
       log: undefined, logOpened: false, logQueue: [], logPath: join(this.#logDir, `bg-${input.conversationId}-${seq}-${this.#instance}.log`), logBytes: 0, logCut: false,
@@ -378,7 +390,8 @@ export class BackgroundJobs {
       void opening.then(made => {
         const runJob = 'failed' in made ? undefined : made;
         if (job.state !== 'running') { void runJob?.close(); return; }
-        job.runJob = runJob;
+        if ('failed' in made) this.#uncontained(job, made.failed);
+        else this.#attach(job, made);
         this.#spawn(job, input);
       });
       this.#emit(job);
@@ -386,10 +399,10 @@ export class BackgroundJobs {
     }
     if (!this.#spawn(job, input)) return { id: job.id };
     void opening.then(made => {
-      if ('failed' in made) return;
-      job.runJob = made;
-      if (job.child) made.add(job.child);
-      if (job.state !== 'running') void made.close();
+      if ('failed' in made) { this.#uncontained(job, made.failed); return; }
+      this.#attach(job, made);
+      if (job.child) made.add(job.child, reason => this.#uncontained(job, reason));
+      if (job.state !== 'running') void this.#closeJob(job);
     });
     this.#emit(job);
     return { id: job.id };
@@ -398,7 +411,7 @@ export class BackgroundJobs {
   #spawn(job: Job, input: StartInput): boolean {
     try {
       job.child = spawn(input.file, [...input.args], {
-        cwd: input.cwd, env: input.env, windowsHide: true, detached: !WINDOWS, shell: false,
+        cwd: input.cwd, env: backgroundEnv(input.env), windowsHide: true, detached: !WINDOWS, shell: false,
         stdio: [input.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -407,7 +420,7 @@ export class BackgroundJobs {
       return false;
     }
     const child = job.child;
-    job.runJob?.add(child);
+    job.runJob?.add(child, reason => this.#uncontained(job, reason));
     child.stdout?.on('data', (chunk: Buffer) => this.#data(job, 'stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer) => this.#data(job, 'stderr', chunk));
     if (input.stdin !== undefined) {
@@ -600,7 +613,7 @@ export class BackgroundJobs {
     stopTree(job.child, this.#limits.termGraceMs);
     job.halting = (async () => {
       await within(job.rootExit.promise, this.#limits.termGraceMs + 1000);
-      if (WINDOWS && job.runJob) await within(job.runJob.close(), this.#limits.stopWaitMs);
+      if (WINDOWS && job.runJob) await within(this.#closeJob(job), this.#limits.stopWaitMs);
       await within(job.done.promise, this.#limits.stopWaitMs);
       if (job.state !== 'running') return;
       if (job.child) {
@@ -614,6 +627,22 @@ export class BackgroundJobs {
     return job.halting;
   }
 
+  #attach(job: Job, runJob: RunJob): void {
+    job.runJob = runJob;
+    void runJob.ended.then(() => { if (!job.jobClosing && job.state === 'running') this.#uncontained(job, 'the job helper stopped, which also ends the processes inside the job'); });
+  }
+
+  #closeJob(job: Job): Promise<void> {
+    job.jobClosing = true;
+    return job.runJob?.close() ?? Promise.resolve();
+  }
+
+  #uncontained(job: Job, reason: string): void {
+    if (job.containReason !== undefined) return;
+    job.containReason = redactSecrets(reason);
+    if (job.state === 'running') this.#emit(job);
+  }
+
   #finish(job: Job): void {
     if (job.state !== 'running') return;
     this.#flush(job, true);
@@ -621,7 +650,7 @@ export class BackgroundJobs {
     job.endedAt = this.#now();
     job.finishedOrder = ++this.#finished;
     if (!job.logCut) job.log?.end();
-    void job.runJob?.close();
+    void this.#closeJob(job);
     job.rootExit.resolve();
     job.done.resolve();
     try { job.onExit?.(); } catch { }
@@ -658,6 +687,7 @@ export class BackgroundJobs {
       command: job.command, cwd: job.cwd, startedAt: job.startedAt, ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
       state: job.state, exitCode: job.exitCode, ...(job.stoppedBy ? { stoppedBy: job.stoppedBy } : {}), orphaned: job.orphaned,
       unread: job.ring.total > job.cursor, fetched: job.fetched, ...(job.tainted ? { tainted: true } : {}), ...(job.spawnError !== undefined ? { spawnError: job.spawnError } : {}),
+      ...(job.containReason !== undefined ? { contained: false as const, containReason: job.containReason } : {}),
       logPath: job.logPath, logCut: job.logCut,
     };
   }

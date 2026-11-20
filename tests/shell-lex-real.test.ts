@@ -36,6 +36,8 @@ const PS_ROWS = [
   'Write-Output $x\y', 'Write-Output $x"b"', 'Write-Output $x,"b"', 'Write-Output "a"-x', "Write-Output 'a'.Length", "Set-Content 'x'.Replace('x','SOUL.md') hi", 'Write-Output 5', 'Write-Output 1.5kb',
   // 引数の位置の @名前 に / - \ = + @ ! % * ~ ^ が続くと、本物の Parser は splatting ではなく @ ごと 1 つの語と読む
   'npm view @types/three version', 'npm i @fontsource/noto-sans-jp', 'npm i -D @types/node@24', 'Write-Output @a/b @a-b @a\\b @a=b @a+b @a@b @a!b @a%b @a*b @a~b @a^b', 'Write-Output @1/x @é/x @a?/x @a/b@c -p @a/b',
+  // 1 字の特別な名前の splatting（$^ $$ と同じ）は、本物の Parser も splatting（値は実行時に決まる）
+  'Write-Output @^', 'Write-Output @$', 'Write-Output @^ x', 'Write-Output @args',
 ];
 
 function realBash(): string | undefined {

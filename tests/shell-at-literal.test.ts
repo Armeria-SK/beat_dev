@@ -38,7 +38,9 @@ test('PowerShell: 本当の splatting と境目の形は今までどおり splat
   const rows = [
     // 本物の Parser でも splatting
     'f @args', 'f @PSBoundParameters', '(f @h)', 'f @h;', 'f @h; ls', 'f @h|x', '{f @h}', 'f @h)', 'f @h}', 'f @a(1)', 'f @a{x}', 'f @a\tx', 'f @a ', 'irm @p', 'Get-ChildItem @p -Recurse',
-    'f @_', 'f @_x', 'f @1', 'f @é', 'f @a?b', 'f @a:b', 'f @env:x', 'f @a:',
+    'f @_', 'f @_x', 'f @1', 'f @é', 'f @a?b', 'f @a:b', 'f @env:x', 'f @a:', 'f @^', 'f @^;', 'f @^ x', 'f @$', 'f @?',
+    // 本物は @^x @^/x @$x を語と読むが、1 字の特別な名前のあとは見分けず、守りとして断ったまま
+    'f @^x', 'f @^/x', 'f @$x',
     // 本物は構文エラー（splatting のあとに . [ , & && ::）
     'f @a.b', 'f @a.Count', 'f @a.b/c', 'f @a[0]', 'f @a,b', 'f @a&', 'f @a&&b', 'f @a::b', 'f @a.', 'f @a..',
     // 本物は語と読むが、守りとして断ったまま

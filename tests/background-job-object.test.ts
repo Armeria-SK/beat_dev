@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ChildProcess } from 'node:child_process';
 import { test } from 'node:test';
-import type { RunJob } from '../src/os/run-job.ts';
+import { openRunJob, type RunJob } from '../src/os/run-job.ts';
+import { jobLines, jobState } from '../src/tools/builtin/shell-bg.ts';
 import { BackgroundJobs, type BackgroundOptions, type JobView } from '../src/tools/shell/background.ts';
 import { resolveShell, scrubEnv } from '../src/tools/shell/runner.ts';
 import { tempDir } from './helpers.ts';
@@ -86,6 +88,7 @@ test('shell_stop: the root exited, a grandchild still holds the output pipe -> s
   assert.equal(jobs.get(id)!.state, 'running', 'the grandchild keeps the pipe, so the command is still running');
   const view = await jobs.stop(id, 'model', 'c1');
   assert.equal(view!.orphaned, false);
+  assert.equal(view!.containReason, undefined, 'closing the job object on stop is not a lost container');
   assert.equal(await gone(grand), true, `grandchild ${grand} survived shell_stop`);
 });
 
@@ -117,8 +120,14 @@ test('closeAll (beat stops): a grandchild that outlived the root is stopped too'
   assert.equal(await gone(grand), true, `grandchild ${grand} survived closeAll`);
 });
 
-function fakeJob(): RunJob & { added: number; closed: number } {
-  const fake = { added: 0, closed: 0, add: () => { fake.added += 1; }, close: async () => { fake.closed += 1; } };
+function fakeJob(over: { add?: (child: ChildProcess, onFail?: (reason: string) => void) => void } = {}): RunJob & { added: number; closed: number; lose: () => void } {
+  let lose!: () => void;
+  const ended = new Promise<void>(r => { lose = r; });
+  const fake = {
+    added: 0, closed: 0, ended, lose: () => lose(),
+    add: (child: ChildProcess, onFail?: (reason: string) => void) => { fake.added += 1; over.add?.(child, onFail); },
+    close: async () => { fake.closed += 1; lose(); },
+  };
   return fake;
 }
 
@@ -129,6 +138,74 @@ test('when the job object cannot be made, the command still runs as before', asy
   const view = await until(() => { const v = jobs.get(result.id)!; return v.state !== 'running' && v; });
   assert.equal(view.exitCode, 0);
   assert.match(jobs.peek(result.id, 0)!.text, /hello/u);
+  // 入れ物に入っていないことは、状態の文・一覧の行に 1 行で出る
+  assert.equal(view.contained, false);
+  assert.equal(view.containReason, 'no job');
+  assert.match(jobState(view, 'en'), /not in beat's process container: no job/u);
+  assert.match(jobLines([view], 'en'), /not in beat's process container: no job/u);
+});
+
+const node = (jobs: BackgroundJobs, script: string, env = scrubEnv()) => {
+  const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'node', cwd: process.cwd(), file: process.execPath, args: ['-e', script], env, fetched: false });
+  assert.ok('id' in result);
+  return result.id;
+};
+
+test('when the command cannot be put in the job object, it keeps running and the reason is reported (not killed)', async t => {
+  const fake = fakeJob({ add: (_child, onFail) => onFail?.('the process could not be put in the job') });
+  const { jobs } = setup(t, { openJob: async () => fake });
+  const id = node(jobs, "setTimeout(() => console.log('still here'), 600)");
+  await until(() => jobs.get(id)!.containReason);
+  assert.equal(jobs.get(id)!.state, 'running');
+  const view = await until(() => { const v = jobs.get(id)!; return v.state !== 'running' && v; });
+  assert.equal(view.exitCode, 0);
+  assert.match(jobs.peek(id, 0)!.text, /still here/u);
+  assert.equal(view.containReason, 'the process could not be put in the job');
+});
+
+test('when the job helper stops while the command runs, the command is marked as no longer contained', async t => {
+  const fake = fakeJob();
+  const { jobs } = setup(t, { openJob: async () => fake });
+  const id = node(jobs, 'setInterval(() => {}, 1000)');
+  await until(() => fake.added > 0);
+  assert.equal(jobs.get(id)!.containReason, undefined);
+  fake.lose();
+  await until(() => jobs.get(id)!.containReason);
+  await jobs.stop(id, 'model', 'c1');
+  assert.match(jobState(jobs.get(id)!, 'en'), /job helper stopped/u);
+});
+
+test('a normal end closes the job object without marking the command as uncontained', async t => {
+  const fake = fakeJob();
+  const { jobs } = setup(t, { openJob: async () => fake });
+  const id = node(jobs, "console.log('x')");
+  await until(() => jobs.get(id)!.state !== 'running');
+  await until(() => fake.closed > 0);
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(jobs.get(id)!.containReason, undefined);
+});
+
+test('run-job: a process that cannot be assigned is reported through onFail instead of being killed', { skip: !WINDOWS && 'Windows only' }, async () => {
+  const made = await openRunJob();
+  assert.ok(!('failed' in made), 'failed' in made ? made.failed : '');
+  try {
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    await new Promise(r => child.once('exit', r));
+    const reason = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('onFail was not called')), 10_000);
+      made.add(child, why => { clearTimeout(timer); resolve(why); });
+    });
+    assert.equal(reason, 'the process could not be put in the job');
+  } finally { await made.close(); }
+});
+
+test('background commands run with BROWSER=none, whatever the owner set (dev servers do not open a browser outside beat)', async t => {
+  const { jobs } = setup(t);
+  const id = node(jobs, "console.log('ENV ' + JSON.stringify(Object.keys(process.env).filter(k => /^browser$/i.test(k)).map(k => k + '=' + process.env[k])))", { ...scrubEnv(), Browser: 'chrome' });
+  await until(() => jobs.get(id)!.state !== 'running');
+  const out = jobs.peek(id, 0)!.text;
+  assert.ok(out.includes('ENV ["BROWSER=none"]'), out);
 });
 
 test('the job object gets the command, and is closed when the command ends', async t => {
@@ -159,4 +236,16 @@ test('stopped before the job object is ready: the command never starts and the j
   assert.equal(fake.added, 0);
   assert.equal(existsSync(marker), false);
   assert.deepEqual(seen, ['running', 'stopped']);
+});
+
+test('closing the job object on a stop does not mark the command as uncontained, even while its pipe is still open', { skip: !WINDOWS && 'Windows only (POSIX does not close the job on a stop)' }, async t => {
+  const fake = fakeJob();
+  const { jobs, start, grandPid } = setup(t, { openJob: async () => fake, limits: { stopWaitMs: 1000 } });
+  const { id, pidFile } = start('pipe');
+  const grand = await grandPid(pidFile);
+  await rootDone(jobs, id);
+  const view = await jobs.stop(id, 'model', 'c1');
+  try { process.kill(grand, 'SIGKILL'); } catch { }
+  assert.equal(fake.closed > 0, true);
+  assert.equal(view!.containReason, undefined);
 });
