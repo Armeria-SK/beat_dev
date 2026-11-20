@@ -152,8 +152,9 @@ test('research_record: 調べる実行でない（記録が無い・開けたペ
   assert.match(out.content, /only while a research run/u);
 });
 
-test('research_record: allowedIn は空のまま（どの実行にも渡らない）', () => {
-  assert.deepEqual(researchRecord.allowedIn, []);
+test('research_record（R の M2）: タスクの実行の道具で、調べる実行（researchOnly）でだけ渡る', () => {
+  assert.deepEqual(researchRecord.allowedIn, ['task']);
+  assert.equal(researchRecord.researchOnly, true);
 });
 
 async function twoProducts(t: { after: (fn: () => void) => void }) {

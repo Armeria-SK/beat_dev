@@ -75,12 +75,14 @@ export function parseDuckDuckGo(html: string, limit: number): SearchHit[] {
   return hits;
 }
 
-export async function searchDuckDuckGo(query: string, options: { limit: number; region: string; signal?: AbortSignal | undefined; network?: PageNetwork | undefined }): Promise<SearchHit[]> {
+export const SEARCH_HOSTS: ReadonlySet<string> = new Set(['html.duckduckgo.com', 'duckduckgo.com']);
+
+export async function searchDuckDuckGo(query: string, options: { limit: number; region: string; signal?: AbortSignal | undefined; network?: PageNetwork | undefined; onlySearchHosts?: boolean | undefined }): Promise<SearchHit[]> {
   const url = new URL('https://html.duckduckgo.com/html/');
   url.searchParams.set('q', query);
   if (options.region) url.searchParams.set('kl', options.region);
   try {
-    const page = await fetchPublic(url.href, options.signal, options.network ?? searchNetwork, 15_000);
+    const page = await fetchPublic(url.href, options.signal, options.network ?? searchNetwork, 15_000, undefined, options.onlySearchHosts ? SEARCH_HOSTS : undefined);
     return parseDuckDuckGo(decodeText(page.body, page.contentType), options.limit);
   } catch (error) {
     // 202 は DuckDuckGo の「自動アクセスの確認」。回避はせずに知らせる

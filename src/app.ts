@@ -63,6 +63,7 @@ import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
 import { ledgerRecord } from './tools/builtin/ledger.ts';
 import { proposalAdd } from './tools/builtin/proposal.ts';
+import { researchRecord } from './tools/builtin/research.ts';
 import { scoutState } from './scout/run.ts';
 import { deferredSection, toolSearch } from './tools/builtin/tool-search.ts';
 import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from './tools/hooks/protect-files.ts';
@@ -113,7 +114,7 @@ export function builtinTools(): ToolDef[] {
     imageView, webDownload,
     agentRun,
     questionList, deviationAdd, meshDecisionAdd,
-    ledgerRecord, proposalAdd,
+    ledgerRecord, proposalAdd, researchRecord,
     ...BROWSER_TOOLS,
   ];
 }

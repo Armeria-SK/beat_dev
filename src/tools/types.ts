@@ -169,6 +169,8 @@ export interface ToolContext {
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
   scout?: true | undefined;
   scoutFetches?: { n: number } | undefined;
+  // beat R (D1): 調べる実行の部分（見た URL・開けたページ・記録ごとの数）。Pending にも判定役にも回さない
+  research?: import('../research/evidence.ts').ResearchSession | undefined;
   // beat 8-6a: 人のいない直す実行（その回だけの製品の写しで動く。place.kind は 'fix'）。Pending に積めないが、判定役は呼べる（D-11）
   fix?: true | undefined;
   // 直す実行のプロセスの入れ物（os/run-job.ts）。シェルが起こしたプロセスを入れる。直す実行でこれが無ければシェルは動かさない
@@ -223,6 +225,8 @@ export interface ToolDef<I = any> {
   // projectOnly の道具のうち、製品の会話・タスクの振り返り（memoryProject のある振り返り）でも使えるもの（製品の記憶の道具）
   productReview?: true;
   scoutOnly?: true;
+  // beat R: 調べる実行（ctx.research）でだけ渡る道具
+  researchOnly?: true;
   acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;

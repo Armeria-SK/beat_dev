@@ -49,12 +49,20 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
     let url: URL;
     try { url = pageUrl(input.url); } catch (error) { return { decision: 'deny', reasons: [error instanceof RetrievalFailure ? error.text(language) : (error as Error).message] }; }
     if (ctx.scout && (ctx.scoutFetches?.n ?? 0) >= SCOUT_FETCH_MAX) return { decision: 'deny', reasons: [guardText(language, 'web.scout_fetch_limit', { max: SCOUT_FETCH_MAX })] };
-    return exfiltrationCheck(input.url, language, (ctx.scout ? url.hostname.length + url.pathname.length + url.search.length : url.search.length) > 300);
+    const research = ctx.research;
+    if (research) {
+      // beat R (守り 7・R3.11 H1・M2): 見た URL とまるごと同じものだけ。数と時間は記録ごと
+      if (research.overTime()) return { decision: 'deny', reasons: [guardText(language, 'web.research_time')] };
+      if (research.budget.fetches >= research.limits.fetches) return { decision: 'deny', reasons: [guardText(language, 'web.research_fetch_limit', { max: research.limits.fetches })] };
+      if (!research.saw(input.url)) return { decision: 'deny', reasons: [guardText(language, 'web.research_unseen')] };
+    }
+    return exfiltrationCheck(input.url, language, (ctx.scout || research ? url.hostname.length + url.pathname.length + url.search.length : url.search.length) > 300);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_fetch'), body: input.url }),
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
     if (ctx.scoutFetches) ctx.scoutFetches.n += 1;
+    if (ctx.research) ctx.research.budget.fetches += 1;
     try {
       const page = await fetchPublic(input.url, ctx.signal, web(ctx).network);
       const raw = decodeText(page.body, page.contentType).replace(page.truncated ? /�$/u : /(?!)/u, '');
@@ -64,6 +72,11 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
       if (!text.trim()) return { content: toolText(language, 'web.no_text', { url: clip(page.url, 200) }), isError: true };
       const start = Math.min(input.offset ?? 0, text.length);
       const end = start + PAGE_CHARS;
+      if (ctx.research) {
+        ctx.research.see(page.url);
+        ctx.research.pages.add(page.url, text.slice(start, end));
+        if (!start) for (const link of extracted?.links.slice(0, 15) ?? []) ctx.research.see(link.url);
+      }
       const lines = [
         toolText(language, 'web.external'),
         `URL: ${page.url}`,
@@ -94,6 +107,13 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const w = ctx.config.tools.web;
     const language = languageOf(ctx.config);
     if (w.search === 'off') return { decision: 'deny', reasons: [guardText(language, 'web.search_off')] };
+    const research = ctx.research;
+    if (research) {
+      // beat R (R3.11 M1・M2): DuckDuckGo の !bang（ほかのサイトへ送る語）は使わせない。数と時間は記録ごと
+      if (input.query.split(/\s+/u).some(word => word.startsWith('!') || word.startsWith('\uFF01'))) return { decision: 'deny', reasons: [guardText(language, 'web.research_bang')] };
+      if (research.overTime()) return { decision: 'deny', reasons: [guardText(language, 'web.research_time')] };
+      if (research.budget.searches >= research.limits.searches) return { decision: 'deny', reasons: [guardText(language, 'web.research_search_limit', { max: research.limits.searches })] };
+    }
     return exfiltrationCheck(input.query, language);
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_search'), body: input.query }),
@@ -109,8 +129,10 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
         const timer = setTimeout(resolve, wait);
         ctx.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new SearchFailure(toolText('en', 'fetch.aborted'), 'fetch.aborted')); }, { once: true });
       });
-      const hits = await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network });
+      if (ctx.research) ctx.research.budget.searches += 1;
+      const hits = await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network, onlySearchHosts: ctx.research !== undefined });
       ctx.searchBlocks = 0;
+      if (ctx.research) for (const hit of hits) ctx.research.see(hit.url);
       if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }) };
       return {
         content: [
