@@ -336,6 +336,13 @@ export class ChatEngine {
     return { ok: true, runId: running, queued: true, pendingId: pending.id };
   }
 
+  // beat R (R3.13 の 1): 新しい発言を足さずに、会話の最後の発言へ返事の実行を始める。会話が動いていれば断る（呼ぶ側は確かめてから同期で呼ぶ）
+  reply(conversationId: string): SendOutcome {
+    if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
+    if (!this.#d.conversations.get(conversationId)) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: 'conversation not found' };
+    return this.#beginChat(conversationId, [], {});
+  }
+
   // 待っている発言（画面に出す形）
   pending(conversationId: string): Array<{ id: string; text: string; attachments: AttachmentMeta[]; interrupt: boolean; createdAt: number }> {
     return (this.#pending.get(conversationId) ?? []).map(p => ({ id: p.id, text: stripAttachments(p.content), attachments: p.attachments, interrupt: p.interrupt, createdAt: p.createdAt }));
@@ -381,7 +388,7 @@ export class ChatEngine {
     }
     this.#taintFromHistory(runId, conversationId);
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, effort);
-    return { ok: true, runId, messageId: firstId! };
+    return { ok: true, runId, ...(firstId !== undefined ? { messageId: firstId } : {}) };
   }
 
   // 外から読んだ内容が残ったまま始まる実行は、シェルと書き込みを承認制にする（taint）。次のどれかなら、始まる実行も「外から読んだ」扱いにする:

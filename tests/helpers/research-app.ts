@@ -41,6 +41,8 @@ export async function researchApp(t: Parameters<typeof startApp>[0], options: { 
     ...(options.contextLength ? { models: [fakeModel('m1', { contextLength: options.contextLength }), fakeModel('m2', { contextLength: options.contextLength })] } : {}),
     configure: c => { c.memory.review = false; c.research = { when: 'new' }; options.configure?.(c); },
   });
+  // PC の道具の確かめは試験では動かさない（本物の実行ファイルを起こさない）
+  s.app.research.toolchain = async names => names.map(name => ({ name, state: 'missing' as const, path: null, version: null }));
   const root = join(products, 'Notes');
   mkdirSync(root, { recursive: true });
   const made = await s.json('/api/projects', 'POST', { root });

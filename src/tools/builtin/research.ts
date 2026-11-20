@@ -11,7 +11,9 @@ const QUOTE = Type.String({ minLength: 1, maxLength: 300 });
 const FIELDS = ['license', 'updated', 'language'] as const;
 
 interface ResearchRecordInput {
-  kind: 'similar' | 'feature' | 'library' | 'candidate';
+  kind: 'similar' | 'feature' | 'library' | 'candidate' | 'choice';
+  options?: string[];
+  recommended?: number;
   name: string;
   url?: string;
   detail?: string;
@@ -23,12 +25,14 @@ interface ResearchRecordInput {
 
 export const researchRecord: ToolDef<ResearchRecordInput> = {
   name: 'research_record',
-  description: 'Record one row of the research. candidate (only when the request asks for candidates): name and the url of the page from a search result; nothing else. similar / library: name, the url of the page you opened with web_fetch in this run, and license, updated, language: for each, copy the whole sentence from that page word for word (such as "Released under the MIT License", not just "MIT"); a short quote or one not found on the page is kept as unknown. feature: name, and evidence: for each similar product that has it, the url of its row and the whole sentence from that page that names the feature, copied word for word. Names are one short plain line.',
+  description: 'Record one row of the research. candidate (only when the request asks for candidates): name and the url of the page from a search result; nothing else. similar / library: name, the url of the page you opened with web_fetch in this run, and license, updated, language: for each, copy the whole sentence from that page word for word (such as "Released under the MIT License", not just "MIT"); a short quote or one not found on the page is kept as unknown. feature: name, and evidence: for each similar product that has it, the url of its row and the whole sentence from that page that names the feature, copied word for word. choice (only when the request asks how to build): name is the question, options are 2 to 4 short answers, recommended is the index of the one you suggest. Names are one short plain line.',
   input: Type.Object({
-    kind: Type.Union([Type.Literal('similar'), Type.Literal('feature'), Type.Literal('library'), Type.Literal('candidate')]),
+    kind: Type.Union([Type.Literal('similar'), Type.Literal('feature'), Type.Literal('library'), Type.Literal('candidate'), Type.Literal('choice')]),
     name: Type.String({ minLength: 1, maxLength: 200 }),
     url: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
     detail: Type.Optional(Type.String({ maxLength: 500 })),
+    options: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 200 }), { maxItems: 4 })),
+    recommended: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })),
     license: Type.Optional(QUOTE),
     updated: Type.Optional(QUOTE),
     language: Type.Optional(QUOTE),
@@ -59,6 +63,10 @@ export const researchRecord: ToolDef<ResearchRecordInput> = {
         return { content: researchText(language, 'candidate_recorded', { n: session.candidates.length }) };
       }
       if (session?.takesCandidates) return { content: researchText(language, 'candidates_part'), isError: true };
+      if (input.kind === 'choice') {
+        const row = research.addChoice(run.id, { label: input.name, detail: input.detail ?? null, options: input.options ?? [], recommended: input.recommended ?? null });
+        return { content: researchText(language, 'recorded_all', { id: row.id }) };
+      }
       if (input.kind === 'feature') {
         const similar = new Map(research.items(run.id).filter(i => i.kind === 'similar').map(i => [i.url, i.id]));
         const evidence: FeatureEvidence[] = [];

@@ -18,6 +18,18 @@ export function pageKey(raw: string): string | null {
   return `${url.hostname.replace(/\.$/u, '')}${url.pathname.toLowerCase().replace(/\/+$/u, '')}`;
 }
 
+const REPO_HOSTS: ReadonlySet<string> = new Set(['github.com', 'gitlab.com', 'codeberg.org']);
+
+// P-R3-6: 置き場のページ（github.com・gitlab.com・codeberg.org）は owner/repo で同じものとみなす。似ているものの重複と「定番」の数え方だけに使う（開ける URL の確かめには使わない）
+export function sourceKey(raw: string): string | null {
+  const key = pageKey(raw);
+  if (key === null) return null;
+  const [host, ...path] = key.split('/');
+  const bare = host!.replace(/^www\./u, '');
+  if (!REPO_HOSTS.has(bare) || path.length < 2 || !path[0] || !path[1]) return key;
+  return `${bare}/${path[0]}/${path[1].replace(/\.git$/u, '')}`;
+}
+
 export class OpenedPages {
   readonly #pages = new Map<string, string>();
 

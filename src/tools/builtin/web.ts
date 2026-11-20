@@ -110,7 +110,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const research = ctx.research;
     if (research) {
       // beat R (R3.11 M1・M2): DuckDuckGo の !bang（ほかのサイトへ送る語）は使わせない。数と時間は記録ごと
-      if (input.query.split(/\s+/u).some(word => word.startsWith('!') || word.startsWith('\uFF01'))) return { decision: 'deny', reasons: [guardText(language, 'web.research_bang')] };
+      if (input.query.split(/\s+/u).some(word => /^[!\u{FF01}]/u.test(word))) return { decision: 'deny', reasons: [guardText(language, 'web.research_bang')] };
       if (research.overTime()) return { decision: 'deny', reasons: [guardText(language, 'web.research_time')] };
       if (research.budget.searches >= research.limits.searches) return { decision: 'deny', reasons: [guardText(language, 'web.research_search_limit', { max: research.limits.searches })] };
     }

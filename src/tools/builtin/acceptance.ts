@@ -1,9 +1,10 @@
 import { Type, type Static } from '@sinclair/typebox';
 import { ownerSpeech } from '../../db/conversations.ts';
 import {
-  AcceptanceError, buildDraft, checkedSource, prepareSpeech, type AcceptanceCheck, type ChangeOp, type ChangeOpKind, type ClaimedSource, type Speech,
+  AcceptanceError, buildDraft, checkedSource, prepareSpeech, SCAN_BUDGET, type AcceptanceCheck, type ChangeOp, type ChangeOpKind, type ClaimedSource, type Speech,
 } from '../../projects/acceptance.ts';
 import { CHECK_COMMAND_MAX, languageTagOf } from '../../projects/store.ts';
+import { confirmedPicks } from '../../research/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { errorText } from '../../shared/messages/define.ts';
 import { toolText } from '../../shared/messages/tools.ts';
@@ -73,7 +74,7 @@ export const acceptanceChange: ToolDef<Static<typeof CHANGE_INPUT>> = {
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
     try {
-      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id));
+      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id), SCAN_BUDGET, confirmedPicks(services.db, ctx.project.id));
       const ops = input.changes.map(entry => changeOf(entry, speech));
       const row = services.acceptance.propose(ctx.project.id, ops, { language: tainted ? null : languageTagOf(input.language) ?? null, conversationId: ctx.conversationId, tainted });
       services.emit({ type: 'acceptance.changed', projectId: ctx.project.id, version: row.base_version, draft: false });
@@ -111,7 +112,7 @@ export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
     try {
-      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id));
+      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id), SCAN_BUDGET, confirmedPicks(services.db, ctx.project.id));
       const docLanguage = services.projects?.get(ctx.project.id)?.doc_language ?? null;
       const { doc, verified, changed } = buildDraft({ items: input.items.map(entry => ({ result: entry.result, source: claimOf(entry), check: checkOf(entry) })), notDoing: input.notDoing?.map(entry => ({ text: entry.text, source: claimOf(entry) })) }, speech, { language: docLanguage, taintedRuns: tainted ? [ctx.runId] : [] });
       services.acceptance.writeDraft(ctx.project.id, ctx.conversationId, doc);

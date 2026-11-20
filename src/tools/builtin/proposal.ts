@@ -6,11 +6,12 @@ import { languageOf } from '../../shared/language.ts';
 import { scoutText } from '../../shared/messages/scout.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { plainLine } from '../../shared/plain-text.ts';
+import { researchSeed } from '../../research/store.ts';
 import { DEEPENED_EVENT, deepenNote, PROPOSAL_LIMITS, type Proposal } from '../../tasks/proposal.ts';
 import { TaskError } from '../../tasks/store.ts';
 import type { ToolDef } from '../types.ts';
 
-interface ProposalAddInput { title: string; kind: 'feature' | 'bug'; why: string; area?: string[]; size: 'S' | 'M' | 'L'; goal?: string; evidence?: string; ledger?: string; deepen?: string; fixable?: boolean }
+interface ProposalAddInput { title: string; kind: 'feature' | 'bug'; why: string; area?: string[]; size: 'S' | 'M' | 'L'; goal?: string; evidence?: string; ledger?: string; deepen?: string; fixable?: boolean; research_item?: number }
 
 export const REJECTED_WINDOW_MS = 30 * 86_400_000;
 export const PROPOSAL_OPEN_MAX = 10;
@@ -20,7 +21,7 @@ export const sameTitle = (title: string): string => title.normalize('NFKC').toLo
 export const goalText = (raw: string): string | null => plainLine(raw.replace(/^\s*(?:#{1,6}|[-*+])(?:\s+|$)/u, ''), PROPOSAL_LIMITS.goal) || null;
 
 // beat 8-6b: Research and pre-fix の製品でだけ、説明に fixable を足す
-const DESCRIPTION = 'Put one proposal on the Kanban (Proposed) for the owner to approve or reject, from a scout report. title: one short English line. kind: feature or bug. why: at most two sentences. area: product paths it touches. size: S, M or L. goal: the plan heading it serves, exactly as listed under Plan goals (leave it out only when no heading fits). evidence: what the scout saw. ledger: the ledger entry id (L-0007) if there is one. A proposal with the same title as an open one, or one rejected in the last 30 days, is refused. deepen: the id of an open proposal to update with what a closer check found (same fields; the title stays), once per proposal per commit. English only; never write instructions or requests.';
+const DESCRIPTION = 'Put one proposal on the Kanban (Proposed) for the owner to approve or reject, from a scout report. title: one short English line. kind: feature or bug. why: at most two sentences. area: product paths it touches. size: S, M or L. goal: the plan heading it serves, exactly as listed under Plan goals (leave it out only when no heading fits). evidence: what the scout saw. ledger: the ledger entry id (L-0007) if there is one. A proposal with the same title as an open one, or one rejected in the last 30 days, is refused. deepen: the id of an open proposal to update with what a closer check found (same fields; the title stays), once per proposal per commit. research_item: the id of a deferred feature from the research list, when the proposal is that feature (one proposal per feature). English only; never write instructions or requests.';
 const FIXABLE = ' fixable: set true only for a bug of size S or M that a short unattended run could fix inside a private copy of the product and prove with the product check command; beat may then try the fix before the owner decides. Leave it out otherwise.';
 
 export const proposalAdd: ToolDef<ProposalAddInput> = {
@@ -38,6 +39,7 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
     ledger: Type.Optional(Type.String({ pattern: '^L-[0-9]{4,8}$' })),
     deepen: Type.Optional(Type.String({ pattern: '^[0-9a-fA-F]{8}[0-9a-fA-F-]{0,28}$' })),
     fixable: Type.Optional(Type.Boolean()),
+    research_item: Type.Optional(Type.Integer({ minimum: 1 })),
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['task'],
@@ -60,12 +62,14 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
       evidence: input.evidence?.trim() ? input.evidence.trim().slice(0, PROPOSAL_LIMITS.evidence) : null,
       ledger: input.ledger ?? null,
       ...(input.fixable === true ? { fixable: true as const } : {}),
+      ...(input.research_item !== undefined && input.deepen === undefined ? { researchItem: input.research_item } : {}),
     };
     if (input.deepen !== undefined) {
       const prefix = input.deepen.toLowerCase();
-      const rows = db.prepare(`SELECT id, title FROM tasks WHERE project_id = ? AND proposal IS NOT NULL AND status = 'inbox' AND substr(id, 1, ?) = ?`).all(project.id, prefix.length, prefix) as Array<{ id: string; title: string }>;
+      const rows = db.prepare(`SELECT id, title, json_extract(proposal, '$.researchItem') AS research_item FROM tasks WHERE project_id = ? AND proposal IS NOT NULL AND status = 'inbox' AND substr(id, 1, ?) = ?`).all(project.id, prefix.length, prefix) as Array<{ id: string; title: string; research_item: number | null }>;
       if (rows.length !== 1) return { content: scoutText(language, 'proposal.deepen_unknown', { id: input.deepen }), isError: true };
       const row = rows[0]!;
+      if (typeof row.research_item === 'number') proposal.researchItem = row.research_item;
       const note = deepenNote(await headOf(project.root, ctx.paths.data).catch(() => null));
       if (db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? AND content = ?').get(row.id, DEEPENED_EVENT, note)) {
         return { content: scoutText(language, 'proposal.deepen_done', { id: row.id.slice(0, 8) }), isError: true };
@@ -91,6 +95,10 @@ export const proposalAdd: ToolDef<ProposalAddInput> = {
     if (open >= PROPOSAL_OPEN_MAX) return { content: scoutText(language, 'proposal.too_many', { max: PROPOSAL_OPEN_MAX }), isError: true };
     try {
       const task = transaction(db, () => {
+        if (proposal.researchItem !== undefined) {
+          const seed = researchSeed(db, project.id, proposal.researchItem);
+          if (seed !== 'free') throw new TaskError('error.bad_proposal', { reason: seed === 'unknown' ? scoutText(language, 'proposal.research_item_unknown', { id: proposal.researchItem }) : scoutText(language, 'proposal.research_item_taken', { id: proposal.researchItem, task: seed.slice(0, 8) }) });
+        }
         const made = tasks.create({ title, body: proposal.why, origin: 'self', propose: true, projectId: project.id, proposal, actor: 'beat' });
         tasks.markUntrusted(made.id, 'scout', scoutText(language, 'proposal.untrusted'));
         return made;

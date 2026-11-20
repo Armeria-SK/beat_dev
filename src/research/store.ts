@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
-import { normalizeQuote, prepareSpeech, verifySource } from '../projects/acceptance.ts';
+import { normalizeQuote, prepareSpeech, verifySource, type OwnerPick } from '../projects/acceptance.ts';
 import type { SpeechRow } from '../db/conversations.ts';
-import { normalizeUrl, pageKey, quoteHasName, type PartKind } from './evidence.ts';
+import { normalizeUrl, quoteHasName, sourceKey, type PartKind } from './evidence.ts';
 import { checkLabel, ResearchError, type LabelKind } from './labels.ts';
 
 export type ResearchPhase = 'products' | 'libraries';
@@ -74,7 +74,7 @@ export interface SourceItem {
 
 export interface FeatureItem { label: string; detail?: string | null | undefined; evidence: readonly FeatureEvidence[] }
 
-export interface ChoiceItem { label: string; detail?: string | null | undefined; options: readonly string[]; recommended?: number | null | undefined }
+export interface ChoiceItem { label: string; detail?: string | null | undefined; options: readonly string[]; recommended?: number | null | undefined; what?: 'language' | 'load' | 'delivery' | undefined }
 
 export interface ResearchStart {
   projectId: string;
@@ -88,6 +88,53 @@ export interface ResearchStart {
 }
 
 export interface FinishOptions { partial?: boolean; stopReason?: string | null }
+
+export interface ConfirmDecision { id: number; decision: string | null; reason: string | null; answerKind: 'kept' | 'changed' | null }
+
+// R3.11 M5: 「あとで」の行を提案の種にできるか。free / unknown（この製品の確定した記録の later の機能でない）/ つながっている提案の id
+export function researchSeed(db: DatabaseSync, projectId: string, itemId: number): string {
+  const row = db.prepare("SELECT 1 FROM research_items i JOIN research_runs r ON r.id = i.research_id WHERE i.id = ? AND r.project_id = ? AND r.status = 'confirmed' AND i.kind = 'feature' AND i.decision = 'later'").get(itemId, projectId);
+  if (!row) return 'unknown';
+  const taken = db.prepare("SELECT id FROM tasks WHERE project_id = ? AND proposal IS NOT NULL AND json_extract(proposal, '$.researchItem') = ? LIMIT 1").get(projectId, itemId) as { id: string } | undefined;
+  return taken ? taken.id : 'free';
+}
+
+export const SEED_LINES_MAX = 40;
+export const SEED_REASON_MAX = 200;
+
+// R3.11 M5: 考える実行の材料の節。確定した記録の「あとで」（まだ提案につながっていないもの、id つき）と「いらない」（持ち主の理由つき）。合わせて 40 行まで
+export function researchSeeds(db: DatabaseSync, projectId: string): { later: Array<{ id: number; label: string }>; notNeeded: Array<{ label: string; reason: string | null }> } {
+  const rows = db.prepare(`SELECT i.id, i.name_or_label, i.decision, i.reason FROM research_items i JOIN research_runs r ON r.id = i.research_id
+    WHERE r.project_id = ? AND r.status = 'confirmed' AND i.kind = 'feature' AND i.decision IN ('later', 'not_needed')
+      AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = r.project_id AND t.proposal IS NOT NULL AND json_extract(t.proposal, '$.researchItem') = i.id)
+    ORDER BY i.id LIMIT ?`).all(projectId, SEED_LINES_MAX) as Array<{ id: number; name_or_label: string; decision: string; reason: string | null }>;
+  return {
+    later: rows.filter(r => r.decision === 'later').map(r => ({ id: r.id, label: r.name_or_label })),
+    notNeeded: rows.filter(r => r.decision === 'not_needed').map(r => ({ label: r.name_or_label, reason: r.reason ? [...r.reason].slice(0, SEED_REASON_MAX).join('') : null })),
+  };
+}
+
+// D12: その製品の最後に確定した言語の行の値（コードの一覧の値。コードが作った行だけ）
+export function pickedLanguage(db: DatabaseSync, projectId: string): string | null {
+  const row = db.prepare(`SELECT i.options, i.decision FROM research_items i JOIN research_runs r ON r.id = i.research_id WHERE r.project_id = ? AND r.status = 'confirmed' AND i.kind = 'choice'
+    AND i.decision IS NOT NULL AND json_extract(i.evidence, '$.what') = 'language' ORDER BY r.confirmed_at DESC, i.id DESC LIMIT 1`).get(projectId) as { options: string; decision: string } | undefined;
+  return row ? (JSON.parse(row.options) as string[])[Number(row.decision)] ?? null : null;
+}
+
+// D8: その製品の確定した選びの名前（受け入れの一覧の owner_pick の照らし先）。機能の picked・似ているものの use / base・選択の行の選んだ選択肢
+export function confirmedPicks(db: DatabaseSync, projectId: string): OwnerPick[] {
+  const rows = db.prepare(`SELECT i.id, i.research_id, i.kind, i.name_or_label, i.options, i.decision FROM research_items i JOIN research_runs r ON r.id = i.research_id
+    WHERE r.project_id = ? AND r.status = 'confirmed' AND i.decision IS NOT NULL ORDER BY i.id`).all(projectId) as Array<{ id: number; research_id: string; kind: ItemKind; name_or_label: string; options: string | null; decision: string }>;
+  const picks: OwnerPick[] = [];
+  for (const row of rows) {
+    if ((row.kind === 'feature' && row.decision === 'picked') || (row.kind === 'similar' && (row.decision === 'use' || row.decision === 'base'))) picks.push({ researchId: row.research_id, itemId: row.id, label: row.name_or_label });
+    if (row.kind === 'choice' && /^\d$/u.test(row.decision)) {
+      const label = (JSON.parse(row.options ?? '[]') as string[])[Number(row.decision)];
+      if (label !== undefined) picks.push({ researchId: row.research_id, itemId: row.id, label });
+    }
+  }
+  return picks;
+}
 
 export class ResearchStore {
   readonly #db: DatabaseSync;
@@ -218,6 +265,22 @@ export class ResearchStore {
     return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
   }
 
+  // 守り 3 の 2: 1 回だけ書く。見せたものの印が今の DB と同じで、終わった記録（done / failed / cancelled）のときだけ confirmed にし、持ち主の選びを書く
+  confirm(id: string, shownHash: string, decisions: readonly ConfirmDecision[]): ResearchRunRow {
+    return transaction(this.#db, () => {
+      const run = this.get(id);
+      if (!run) throw new ResearchError('not_found', { id });
+      if (run.status === 'running') throw new ResearchError('not_finished');
+      if (this.shownHash(id) !== shownHash) throw new ResearchError('changed');
+      const changed = this.#db.prepare("UPDATE research_runs SET status = 'confirmed', confirmed_at = ?, shown_hash = ? WHERE id = ? AND status IN ('done', 'failed', 'cancelled')")
+        .run(this.#now(), shownHash, id).changes;
+      if (Number(changed) !== 1) throw new ResearchError('finished', { id });
+      const write = this.#db.prepare('UPDATE research_items SET decision = ?, reason = ?, answer_kind = ? WHERE id = ? AND research_id = ?');
+      for (const d of decisions) write.run(d.decision, d.reason, d.answerKind, d.id, id);
+      return this.get(id)!;
+    });
+  }
+
   items(researchId: string): ResearchItemRow[] {
     return this.#db.prepare('SELECT * FROM research_items WHERE research_id = ? ORDER BY id').all(researchId).map(r => ({ ...r }) as unknown as ResearchItemRow);
   }
@@ -228,7 +291,7 @@ export class ResearchStore {
       const items = this.#open(researchId, item.kind);
       const url = normalizeUrl(item.url);
       if (url === null) throw new ResearchError('url_invalid');
-      if (items.some(i => i.kind === item.kind && (pageKey(i.url ?? '') === pageKey(url) || normalizeQuote(i.name_or_label) === normalizeQuote(name)))) throw new ResearchError('duplicate', { what: name });
+      if (items.some(i => i.kind === item.kind && (sourceKey(i.url ?? '') === sourceKey(url) || normalizeQuote(i.name_or_label) === normalizeQuote(name)))) throw new ResearchError('duplicate', { what: name });
       const id = this.#db.prepare('INSERT INTO research_items (research_id, kind, name_or_label, detail, url, license, updated, language, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(researchId, item.kind, name, item.detail ?? null, url, item.license ?? null, item.updated ?? null, item.language ?? null, JSON.stringify({ ...item.evidence, url })).lastInsertRowid;
       return this.#item(Number(id));
@@ -247,7 +310,7 @@ export class ResearchStore {
       const existing = items.find(i => i.kind === 'feature' && normalizeQuote(i.name_or_label) === normalizeQuote(label));
       const evidence = [...(existing ? JSON.parse(existing.evidence) as FeatureEvidence[] : []), ...fresh];
       const products = [...new Set(evidence.map(e => e.similar))].sort((a, b) => a - b);
-      const urls = new Set(evidence.filter(e => quoteHasName(e.quote, label)).map(e => pageKey(similar.get(e.similar)?.url ?? '')).filter(u => u !== null));
+      const urls = new Set(evidence.filter(e => quoteHasName(e.quote, label)).map(e => sourceKey(similar.get(e.similar)?.url ?? '')).filter(u => u !== null));
       const standard = urls.size >= STANDARD_PRODUCTS;
       if (existing) {
         this.#db.prepare("UPDATE research_items SET evidence = ?, products = ?, default_checked = ?, default_reason = ? WHERE id = ?")
@@ -267,8 +330,9 @@ export class ResearchStore {
       this.#open(researchId, 'choice');
       if (options.length < 2 || options.length > 4) throw new ResearchError('options_count');
       const recommended = item.recommended !== undefined && item.recommended !== null && item.recommended >= 0 && item.recommended < options.length ? item.recommended : null;
-      const id = this.#db.prepare('INSERT INTO research_items (research_id, kind, name_or_label, detail, options, recommended) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(researchId, 'choice', label, item.detail ?? null, JSON.stringify(options), recommended).lastInsertRowid;
+      const evidence = JSON.stringify(item.what ? { by: 'code', what: item.what } : { by: 'model' });
+      const id = this.#db.prepare('INSERT INTO research_items (research_id, kind, name_or_label, detail, options, recommended, evidence) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(researchId, 'choice', label, item.detail ?? null, JSON.stringify(options), recommended, evidence).lastInsertRowid;
       return this.#item(Number(id));
     });
   }

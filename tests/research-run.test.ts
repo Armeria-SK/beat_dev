@@ -177,7 +177,7 @@ test('始める道は持ち主の口だけ（R3.12・R3.13 の 3）: 持ち主�
   assert.equal(code(() => s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(5), trigger: 'owner_button', owner: {} as OwnerAct })), 'not_owner');
   assert.equal(code(() => s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(5), trigger: 'tool' as never, owner: new OwnerAct() })), 'not_owner');
   assert.equal(code(() => s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(5), trigger: 'owner_confirm', owner: new OwnerAct() })), 'not_owner', 'owner_confirm cannot start a products record');
-  assert.equal(code(() => s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(5), trigger: 'owner_confirm', owner: new OwnerAct(), phase: 'libraries' })), 'not_confirmed');
+  assert.equal(code(() => s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(5), trigger: 'owner_confirm', owner: new OwnerAct(), phase: 'libraries' })), 'not_owner', 'owner_confirm only from the confirm route');
   assert.equal(code(() => s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(5), trigger: 'owner_button', owner: new OwnerAct(), phase: 'libraries' })), 'not_owner');
   assert.deepEqual(builtinTools().map(tool => tool.name).filter(name => name.includes('research')), ['research_record']);
   assert.equal(s.records().length, 0);

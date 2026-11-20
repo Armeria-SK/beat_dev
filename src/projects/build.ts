@@ -15,10 +15,11 @@ const RUN_ID = /^[0-9a-f-]{36}$/u;
 const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
 const MAX_MARKED_RUNS = 20;
 
-export const BUILD_BODY = (docLanguage: string | null, only?: readonly string[]): string => [
+export const BUILD_BODY = (docLanguage: string | null, only?: readonly string[], language?: string | null): string => [
   'Build the product as planned. Read the plan with mesh_read("plan.md") and the acceptance items with mesh_read("acceptance.json").',
   ...(only ? [`This build covers only the new or changed acceptance items ${only.join(', ')}.`] : []),
   ...(docLanguage ? [`Owner-facing notes go in ${docLanguage}.`] : []),
+  ...(language ? [`Use ${language} for the product (the owner picked it before building; see DECISIONS.md).`] : []),
 ].join(' ');
 
 const ITEMS_SHARE = 0.5;
@@ -46,6 +47,8 @@ export interface BuildDeps {
   acceptance: AcceptanceStore;
   tasks: TaskStore;
   language: () => Language;
+  // beat R (D12): 調べた一覧で持ち主が確定した言語（コードの一覧の値）
+  pickedLanguage?: (projectId: string) => string | null;
   now?: () => number;
 }
 
@@ -95,7 +98,7 @@ export function startBuild(d: BuildDeps, projectId: string, wanted: { planHash: 
   let task: Task | undefined;
   const makeTask = () => {
     task = d.tasks.create({
-      title, body: BUILD_BODY(language, only), origin: 'user', actor: 'user', projectId, ownerRequest: true, ownerPlan: gist, ownerItems: items, ownerPlanOutside: untrusted,
+      title, body: BUILD_BODY(language, only, d.pickedLanguage?.(projectId) ?? null), origin: 'user', actor: 'user', projectId, ownerRequest: true, ownerPlan: gist, ownerItems: items, ownerPlanOutside: untrusted,
       acceptanceItems: only ?? doc.items.filter(entry => entry.removedIn === null).map(entry => entry.id),
       createdInConversation: wanted.conversationId,
     });

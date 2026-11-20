@@ -7,6 +7,7 @@ import { plainLine } from '../shared/plain-text.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
 import { validCommit } from './areas.ts';
 import { dispatchLine, ledgerView, type LedgerEntry } from './ledger.ts';
+import { researchSeeds } from '../research/store.ts';
 import { DEEPENED_EVENT, deepenNote, OWNER_EDITED_SQL } from '../tasks/proposal.ts';
 import { readSleep } from './sleep.ts';
 
@@ -168,6 +169,7 @@ export async function scoutMaterials(input: MaterialsInput): Promise<Materials> 
   const { project } = input;
   const view = await ledgerView(input.projectsDir, project.id, project.root, input.dataDir);
   const proposals = proposalLines(input.db, project.id, input.now);
+  const seeds = researchSeeds(input.db, project.id);
   const goals = planHeadings(input.db, input.plans, project.id);
   const commits = await commitsSince(project.root, input.dataDir, input.previousHead);
   const share = Math.max(500, Math.floor(input.budgetChars / 8));
@@ -215,6 +217,8 @@ export async function scoutMaterials(input: MaterialsInput): Promise<Materials> 
     section('Open proposals (do not propose these again)', proposals.open),
     section('Rejected proposals in the last 30 days, with the owner\'s reasons (do not propose these again)', proposals.rejected),
     section('Earlier proposals and their state', proposals.earlier),
+    ...(seeds.later.length ? [section('Features the owner deferred before building (from the research list; to propose one, set research_item to its number)', seeds.later.map(s => `- #${s.id} ${plainLine(s.label, 80)}`))] : []),
+    ...(seeds.notNeeded.length ? [section('Features the owner said are not needed before building (do not propose these)', seeds.notNeeded.map(s => `- ${plainLine(s.label, 80)}${s.reason ? ` | the owner's reason: ${plainLine(s.reason, 200)}` : ''}`))] : []),
   ].join('\n');
   return { prompt, head: view.head, stale: view.stale.size, unseen: view.unseen.length, examined: view.places.length - view.unseen.length, open: proposals.openCount, deepen: targets.length };
 }

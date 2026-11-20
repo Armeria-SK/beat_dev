@@ -3,6 +3,8 @@ import { defineMessages } from './define.ts';
 const en = {
   'unavailable': 'The scout ledger can be written only in a scout run on a product',
   'proposal.unavailable': 'Proposals can be added only in a scout run on a product',
+  'proposal.research_item_unknown': 'Not added: {id} is not a deferred feature from a confirmed research list of this product',
+  'proposal.research_item_taken': 'Not added: deferred feature {id} already has a proposal ({task})',
   'proposal.duplicate': 'Not added: "{title}" is already open or was rejected in the last 30 days ({id}). Do not propose it again',
   'proposal.too_many': 'Not added: the product already has {max} open proposals waiting for the owner. Do not add more until the owner approves or rejects some. Deepen an open one instead (proposal_add with deepen set to its id)',
   'proposal.deepen_unknown': 'Not deepened: no single open proposal of this product has an id starting with {id}',

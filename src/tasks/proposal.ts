@@ -7,6 +7,8 @@ export interface Proposal {
   evidence: string | null;
   ledger: string | null;
   fixable?: true;
+  // beat R (R3.11 M5): この提案の元になった、調べた一覧の「あとで」の行（research_items.id）
+  researchItem?: number;
 }
 
 export const PROPOSAL_LIMITS = { why: 400, areas: 10, area: 200, goal: 200, evidence: 2000, ledger: 64 } as const;
@@ -18,7 +20,7 @@ export const deepenNote = (head: string | null): string => `commit ${head ?? 'no
 // 持ち主が直した提案（PATCH /api/tasks/:id が残す 'edited' / 'user' の経過）。考える実行はこれを書き換えない
 export const OWNER_EDITED_SQL = "EXISTS (SELECT 1 FROM task_events oe WHERE oe.task_id = tasks.id AND oe.kind = 'edited' AND oe.actor = 'user')";
 
-const KEYS = ['kind', 'why', 'area', 'size', 'goal', 'evidence', 'ledger', 'fixable'] as const;
+const KEYS = ['kind', 'why', 'area', 'size', 'goal', 'evidence', 'ledger', 'fixable', 'researchItem'] as const;
 
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const LINE_BREAKS = /[\r\n\t]/gu;
@@ -47,6 +49,7 @@ export function proposalProblem(value: unknown): string | null {
   }
   if (p.size !== 'S' && p.size !== 'M' && p.size !== 'L') return 'size must be S, M or L';
   if (p.fixable !== undefined && p.fixable !== true) return 'fixable must be true when given';
+  if (p.researchItem !== undefined && !(Number.isSafeInteger(p.researchItem) && (p.researchItem as number) > 0)) return 'researchItem must be a positive whole number when given';
   return optionalProblem('goal', p.goal, PROPOSAL_LIMITS.goal)
     ?? optionalProblem('evidence', p.evidence, PROPOSAL_LIMITS.evidence, true)
     ?? optionalProblem('ledger', p.ledger, PROPOSAL_LIMITS.ledger);

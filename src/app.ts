@@ -315,7 +315,7 @@ export class App {
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background, fixes: this.fixes,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
-    this.research = new ResearchRunner({ db: this.db, engine: this.engine, tasks: this.tasks, conversations: this.conversations, projects: this.projects, plans: this.plans, bus: this.bus, notifications: this.notifications, config: () => this.config(), dataDir: this.paths.data, log: this.log, now });
+    this.research = new ResearchRunner({ db: this.db, engine: this.engine, tasks: this.tasks, conversations: this.conversations, projects: this.projects, plans: this.plans, bus: this.bus, notifications: this.notifications, config: () => this.config(), dataDir: this.paths.data, projectsDir: this.paths.projects, log: this.log, now });
     this.research.recover();
     this.tasks.onChange = task => {
       if (isScoutRun(task)) { this.worker.poke(); return; }

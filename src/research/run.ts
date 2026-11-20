@@ -15,9 +15,14 @@ import { researchText } from '../shared/messages/research.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import { stripAttachments } from '../uploads/store.ts';
 import { ResearchSession, type Candidate, type PartKind } from './evidence.ts';
+import { CONFIRM_MESSAGE_MAX, confirmMessage, librariesFollowUp, planConfirm, type ConfirmInput, type ConfirmResult } from './confirm.ts';
+import { addResearchDecisions, type ResearchDecision } from '../mesh/decisions.ts';
+import { dateIn } from '../mesh/files.ts';
+import { DELIVERY_OPTIONS, DELIVERY_QUESTION, deliveryIn, heavyIn, isLanguage, LANGUAGE_OPTIONS_MAX, LANGUAGE_QUESTION, languageDecided, languagesIn, LOAD_OPTIONS, LOAD_QUESTION, pastLanguages, rankLanguages, toolsFor } from './choices.ts';
 import { ResearchError } from './labels.ts';
+import { checkToolchain, TOOLCHAIN, type ToolCheck } from './toolchain.ts';
 import { ONE_BY_ONE_BELOW, parseProjectResearch, researchSettings } from './settings.ts';
-import { ResearchStore, type ResearchPhase, type ResearchRunRow } from './store.ts';
+import { ResearchStore, type ConfirmDecision, type ResearchItemRow, type ResearchPhase, type ResearchRunRow } from './store.ts';
 
 export type ResearchTrigger = 'owner_send' | 'owner_button' | 'owner_confirm';
 export const OWNER_TEXT_MAX = 2_000;
@@ -41,6 +46,7 @@ export interface ResearchRunnerDeps {
   notifications?: Notifications | undefined;
   config: () => AppConfig;
   dataDir: string;
+  projectsDir?: string | undefined;
   log?: ((line: string) => void) | undefined;
   now?: () => number;
 }
@@ -69,6 +75,8 @@ export class ResearchRunner {
   readonly #d: ResearchRunnerDeps;
   readonly store: ResearchStore;
   readonly #live = new Map<string, Live>();
+  // PC の道具の確かめ（試験で差し替える）
+  toolchain: (names: readonly string[]) => Promise<ToolCheck[]> = names => checkToolchain(names);
 
   constructor(deps: ResearchRunnerDeps) {
     this.#d = deps;
@@ -100,7 +108,13 @@ export class ResearchRunner {
     }
   }
 
+  // 外から始める口（送信・ボタン）。owner_confirm は確定の口の中（#begin）だけが使う（R3.13 の 3）
   start(input: StartResearch): ResearchRunRow {
+    if (input.trigger === 'owner_confirm') throw new ResearchError('not_owner');
+    return this.#begin(input);
+  }
+
+  #begin(input: StartResearch): ResearchRunRow {
     if (!(input.owner instanceof OwnerAct) || !['owner_send', 'owner_button', 'owner_confirm'].includes(input.trigger)) throw new ResearchError('not_owner');
     const phase = input.phase ?? 'products';
     if ((input.trigger === 'owner_confirm') !== (phase === 'libraries')) throw new ResearchError('not_owner');
@@ -145,6 +159,52 @@ export class ResearchRunner {
   }
 
   waitFor(id: string): Promise<void> { return this.#live.get(id)?.done ?? Promise.resolve(); }
+
+  // 守り 3（R-2s）: 持ち主の「この選択で計画へ」。確かめ → 1 つの取引（状態・選び・計画の会話への generated の発言・入れて設定するタスク）→ 同期で返事を始める。
+  // 確かめと取引のあいだに await を挟まない（R3.13 の 1）
+  confirm(id: string, input: ConfirmInput, owner: OwnerAct): ConfirmResult {
+    if (!(owner instanceof OwnerAct)) throw new ResearchError('not_owner');
+    const d = this.#d;
+    const record = this.store.get(id);
+    if (!record) throw new ResearchError('not_found', { id });
+    if (record.status === 'running') throw new ResearchError('not_finished');
+    if (!['done', 'failed', 'cancelled'].includes(record.status)) throw new ResearchError('finished', { id });
+    const source = record.source_conversation_id ? d.conversations.get(record.source_conversation_id) : undefined;
+    if (!source || source.kind !== 'chat' || source.project_id !== record.project_id || source.archived === 1 || source.parent_run_id) throw new ResearchError('source_gone');
+    if (d.engine.activeRuns().some(run => run.conversationId === source.id)) throw new ResearchError('conversation_running');
+    const items = this.store.items(id);
+    const plan = planConfirm(record, items, input.picks);
+    const message = confirmMessage(record.phase, plan);
+    if (message.length > CONFIRM_MESSAGE_MAX) throw new ResearchError('too_long', { length: message.length, max: CONFIRM_MESSAGE_MAX });
+    const language = languageOf(d.config());
+    let setupTask: string | undefined;
+    const confirmed = transaction(d.db, () => {
+      const row = this.store.confirm(id, input.shownHash, plan.decisions);
+      if (plan.lines.length) d.conversations.append(source.id, { role: 'user', content: message, generated: true });
+      if (plan.setup) {
+        const { item } = plan.setup;
+        const license = researchText(language, item.license ? 'license_checked' : 'license_unknown');
+        const task = d.tasks.create({ title: researchText(language, 'setup_title', { name: item.name_or_label }), body: researchText(language, 'setup_body', { name: item.name_or_label, url: item.url ?? '', license }), origin: 'user', projectId: record.project_id, ownerRequest: false, actor: 'user' });
+        d.tasks.markUntrusted(task.id, 'research', researchText(language, 'setup_untrusted'));
+        setupTask = task.id;
+      }
+      return row;
+    });
+    let replied: string | undefined;
+    if (plan.lines.length) {
+      const started = d.engine.reply(source.id);
+      if (started.ok) replied = started.runId;
+    }
+    this.#changed(confirmed);
+    let libraries: ResearchRunRow | undefined;
+    if (record.phase === 'products' && !plan.use) {
+      try {
+        libraries = this.#begin({ projectId: record.project_id, sourceConversationId: source.id, trigger: 'owner_confirm', owner, phase: 'libraries', afterRunId: replied, followUp: librariesFollowUp(plan) });
+      } catch (error) { d.log?.(`[WARN] research ${id}: the libraries research did not start: ${(error as Error).message}`); }
+    }
+    if (record.phase === 'libraries') this.#recordChoices(confirmed, items, plan.decisions);
+    return { record: confirmed, replied: replied !== undefined, ...(setupTask ? { setupTask } : {}), ...(libraries ? { libraries } : {}) };
+  }
 
   #halt(id: string, why: NonNullable<Live['stop']>): Live | undefined {
     const live = this.#live.get(id);
@@ -194,7 +254,8 @@ export class ResearchRunner {
       };
       const source = record.source_conversation_id!;
       if (record.phase === 'libraries') {
-        const out = await this.#part(record, live, pinned, 'libraries', session('libraries'), this.prompt(source, LIBRARIES), followUp, true);
+        const considered = await this.#prepareLibraries(record);
+        const out = await this.#part(record, live, pinned, 'libraries', session('libraries'), this.prompt(source, LIBRARIES), [followUp, considered].filter(Boolean).join('\n'), true);
         partial ||= out.partial;
       } else if (record.mode === 'batch') {
         const out = await this.#part(record, live, pinned, 'first', session('first'), this.prompt(source, BATCH(limits.candidates)), undefined, false);
@@ -295,6 +356,59 @@ export class ResearchRunner {
       await Promise.all(runs.map(r => this.#d.engine.wait(r.runId)?.catch(() => undefined)));
       await new Promise(resolve => setTimeout(resolve, 10));
     }
+  }
+
+  // R-3: 2 回目の部分の前に、コードが言語・配り方・負荷の問いを作る（聞かないときは作らない）。頼みに足す generated の 1 行を返す
+  async #prepareLibraries(record: ResearchRunRow): Promise<string> {
+    const d = this.#d;
+    const project = d.projects.get(record.project_id);
+    const settings = this.#settings(record.project_id);
+    if (!project || !settings) return '';
+    const ownerText = record.source_conversation_id ? this.ownerText(record.source_conversation_id) : '';
+    const files = project.root ? (await withGit(project.root, d.dataDir, async git => gitPlaces(git)).catch(() => undefined)) ?? walkPlaces(project.root) : [];
+    const decided = languageDecided({ files, settings, ownerText });
+    const delivery = deliveryIn(ownerText);
+    const tools = await this.toolchain(TOOLCHAIN).catch(() => []);
+    const products = this.store.latest(record.project_id, 'products');
+    const similar = products?.status === 'confirmed' ? this.store.items(products.id).filter(i => i.kind === 'similar' && i.language).flatMap(i => languagesIn(i.language!).slice(0, 1)) : [];
+    const ranked = rankLanguages({ delivery, heavy: heavyIn(ownerText), tools, similar, prefer: settings.preferLanguages, avoid: settings.avoidLanguages, past: pastLanguages(d.db, record.project_id) });
+    if (this.store.get(record.id)?.status !== 'running') return '';
+    if (decided.ask && ranked.length >= 2) this.store.addChoice(record.id, { label: LANGUAGE_QUESTION, options: ranked.slice(0, LANGUAGE_OPTIONS_MAX).map(r => r.language), recommended: 0, what: 'language' });
+    if (!delivery) this.store.addChoice(record.id, { label: DELIVERY_QUESTION, options: [...DELIVERY_OPTIONS], recommended: null, what: 'delivery' });
+    this.store.addChoice(record.id, { label: LOAD_QUESTION, options: [...LOAD_OPTIONS], recommended: null, what: 'load' });
+    this.#changed(record);
+    const languages = decided.ask ? ranked.slice(0, 3).map(r => r.language) : [decided.language];
+    return `Languages being considered: ${languages.join(', ')}`;
+  }
+
+  // D12: libraries の確定のあとにだけ、DECISIONS.md に言語とやり方の行を書き、言語の道具が PC に無ければ知らせる
+  #recordChoices(record: ResearchRunRow, items: readonly ResearchItemRow[], decisions: readonly ConfirmDecision[]): void {
+    const d = this.#d;
+    const byId = new Map(items.map(i => [i.id, i]));
+    const rows: ResearchDecision[] = [];
+    let language: string | undefined;
+    const date = dateIn(this.#now, d.config().timezone);
+    for (const decision of decisions) {
+      const item = byId.get(decision.id);
+      if (item?.kind !== 'choice' || decision.decision === null) continue;
+      const mark = JSON.parse(item.evidence || '{}') as { by?: string; what?: string };
+      const label = (JSON.parse(item.options ?? '[]') as string[])[Number(decision.decision)];
+      if (label === undefined) continue;
+      if (mark.what === 'language') language = label;
+      rows.push({ date, researchId: record.id, what: mark.what === 'language' ? 'language' : 'approach', question: item.name_or_label, label, kept: decision.answerKind === null ? null : decision.answerKind === 'kept', external: mark.by !== 'code' });
+    }
+    if (d.projectsDir) {
+      try { addResearchDecisions(d.projectsDir, record.project_id, rows); } catch (error) { d.log?.(`[ERROR] research ${record.id}: DECISIONS.md: ${(error as Error).message}`); }
+    }
+    if (language === undefined || !isLanguage(language)) return;
+    const needs = toolsFor(language);
+    if (!needs.length) return;
+    const picked = language;
+    void this.toolchain(needs).then(found => {
+      if (found.some(t => t.state === 'installed' || t.state === 'found')) return;
+      const lang = languageOf(d.config());
+      d.notifications?.notify({ kind: 'info', title: researchText(lang, 'tools_missing_title', { language: picked }), body: researchText(lang, 'tools_missing_body', { tools: needs.join(', ') }), link: `#/projects/${record.project_id}`, dedupKey: `research-tools:${record.id}`, projectId: record.project_id, noForward: true });
+    }).catch(() => undefined);
   }
 
   #notifyEnd(record: ResearchRunRow): void {

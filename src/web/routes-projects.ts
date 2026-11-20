@@ -17,6 +17,7 @@ import type { ProjectFilter } from '../tasks/store.ts';
 import type { PendingCounts } from '../pending/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type HttpProblem, type Router } from './http.ts';
 import { maskedTaskView } from './task-view.ts';
+import { pickedLanguage } from '../research/store.ts';
 
 const MAX_PATH_CHARS = 4096;
 const ACCEPTANCE_STATUS: Partial<Record<string, number>> = { stale: 409, not_pending: 409, no_change: 404 };
@@ -334,7 +335,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     if (folderMissing(project)) throw projectProblem(409, new ProjectError('folder_missing'));
     let built;
     try {
-      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), now: app.now }, project.id, { planHash, acceptanceHash, conversationId })));
+      built = accepted(() => planned(() => startBuild({ projects: app.projects, plans: app.plans, acceptance: app.acceptance, tasks: app.tasks, language: () => languageOf(app.config()), pickedLanguage: id => pickedLanguage(app.db, id), now: app.now }, project.id, { planHash, acceptanceHash, conversationId })));
     } catch (error) {
       if (error instanceof BuildError) throw domainProblem(error.code === 'no_plan' ? 400 : 409, 'build', error);
       if (error instanceof ProjectError) throw projectProblem(400, error);

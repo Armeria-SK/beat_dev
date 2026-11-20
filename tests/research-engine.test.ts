@@ -3,12 +3,12 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import type { AppConfig } from '../src/config/schema.ts';
+import type { AppConfig, ModelConfig } from '../src/config/schema.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
 import { ResearchSession, type PartKind } from '../src/research/evidence.ts';
 import { ResearchStore } from '../src/research/store.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
-import { settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir } from './helpers.ts';
 import { toolCall } from './helpers/task-app.ts';
 
@@ -37,10 +37,10 @@ function fakeWeb() {
   return { network, asked };
 }
 
-async function setup(t: Parameters<typeof startApp>[0], configure?: (config: AppConfig) => void) {
+async function setup(t: Parameters<typeof startApp>[0], configure?: (config: AppConfig) => void, extra: { botMemory?: boolean; models?: ModelConfig[] } = {}) {
   const products = realpathSync.native(tempDir(t as never));
   const web = fakeWeb();
-  const s = await startApp(t, { projectFolderExempt: [products], tools: builtinTools(), webNetwork: web.network, configure: c => { c.memory.review = false; configure?.(c); } });
+  const s = await startApp(t, { projectFolderExempt: [products], tools: builtinTools(), webNetwork: web.network, ...extra, configure: c => { c.memory.review = false; configure?.(c); } });
   const root = join(products, 'Notes');
   mkdirSync(root, { recursive: true });
   writeFileSync(join(root, 'AGENTS.md'), 'ZQ-INSTRUCTIONS-MARKER: always use tabs');
@@ -241,4 +241,35 @@ test('調べる実行（D1）: ふつうのタスクの実行には research_rec
   assert.equal(refused.isError, true);
   assert.match(refused.content, /cannot be used in this kind of run/u);
   assert.equal(s.store.items(record.id).length, 0);
+});
+
+test('調べる実行（D3 (a)・M2 の残り）: 持ち主の記憶と技の目次は調べる実行の system に入らない（同じアプリの会話には入る）', async t => {
+  const s = await setup(t, undefined, { botMemory: true });
+  s.app.memory.save({ book: 'user', content: 'ZQ-MEMORY-MARKER likes tabs', actor: 'user' });
+  s.app.skills.write({ name: 'zq-skill-marker', description: 'ZQ-SKILL-MARKER steps', body: 'Steps' });
+  s.adapter().scripts.push(reply('chat ok'));
+  const sent = await s.json(`/api/conversations/${uuid(3)}/messages`, 'POST', { text: 'hello' });
+  await settled(s.app, sent.body.runId);
+  const chat = s.adapter().calls.at(-1)!;
+  const chatSystem = `${chat.system.frozen}\n${chat.system.dynamic}`;
+  assert.ok(chatSystem.includes('ZQ-MEMORY-MARKER') && chatSystem.includes('zq-skill-marker'), 'the chat sees both (the markers are real)');
+  s.adapter().scripts.push(reply('done'));
+  const run = s.part();
+  await run.done;
+  const call = s.adapter().calls.at(-1)!;
+  const system = `${call.system.frozen}\n${call.system.dynamic}\n${call.system.tail ?? ''}`;
+  assert.ok(!system.includes('ZQ-MEMORY-MARKER'));
+  assert.ok(!system.includes('zq-skill-marker') && !system.includes('ZQ-SKILL-MARKER'));
+});
+
+test('調べる実行（L2）: 調べる部分はやり取りが長くなっても context で区切られない（ふつうのタスクなら区切る長さでも）', async t => {
+  const s = await setup(t, undefined, { models: [fakeModel('m1', { contextLength: 32_000 })] });
+  const long = (n: number) => `https://a.zqnotes.net/${'x'.repeat(4_000)}${n}`;
+  const big = (i: number) => toolCall('research_record', { kind: 'feature', name: `Feature ${i}`, url: long(i), evidence: [{ url: long(i + 100), quote: 'q' }, { url: long(i + 200), quote: 'q' }] });
+  s.adapter().scripts.push(...Array.from({ length: 6 }, (_, i) => big(i)), reply('done'));
+  const run = s.part();
+  const ended = await run.done;
+  const row = s.app.db.prepare('SELECT flags FROM engine_runs WHERE id = ?').get(run.runId) as { flags: string };
+  assert.ok(!(JSON.parse(row.flags) as string[]).includes('context_split'), row.flags);
+  assert.ok(s.adapter().calls.length >= 4, `the part went on past the third round (${s.adapter().calls.length} calls, ok=${ended.ok} ${JSON.stringify(s.app.db.prepare('SELECT error_kind, flags, iterations FROM engine_runs WHERE id = ?').get(run.runId))})`);
 });
