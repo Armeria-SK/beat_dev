@@ -82,6 +82,7 @@ export const ja = {
   'tool.mesh_state_set': '製品の作業がどこまで進んだかを書き留めます',
   'tool.mesh_decision_add': '製品の作業中に決めたことを書き留めます',
   'tool.ledger_record': 'Scout が調べた範囲を書き留めます（Scout の実行だけ）',
+  'tool.research_record': '作る前に調べたことを 1 行書き留めます（調べる実行だけ）',
   'tool.proposal_add': 'あなたの承認を求める提案を Kanban に置きます（Scout の実行だけ）',
   'tool.web_fetch': '公開されている Web ページを読みます',
   'tool.web_search': 'Web を検索します',

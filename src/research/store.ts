@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
 import { normalizeQuote, prepareSpeech, verifySource } from '../projects/acceptance.ts';
@@ -210,6 +210,12 @@ export class ResearchStore {
 
   failRunning(): number {
     return Number(this.#db.prepare("UPDATE research_runs SET status = 'failed', finished_at = ? WHERE status = 'running'").run(this.#now()).changes);
+  }
+
+  // 守り 3 の 2: 画面に見せたものの印。DB にある欄だけ（id・種類・名前・初めのチェックと理由・おすすめ・選択肢）を id の順で
+  shownHash(researchId: string): string {
+    const rows = this.items(researchId).map(i => [i.id, i.kind, i.name_or_label, i.default_checked, i.default_reason, i.recommended, i.options]);
+    return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
   }
 
   items(researchId: string): ResearchItemRow[] {

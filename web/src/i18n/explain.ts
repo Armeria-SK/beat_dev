@@ -81,6 +81,7 @@ export const EXPLAIN_KEYS = [
   'tool.mesh_state_set',
   'tool.mesh_decision_add',
   'tool.ledger_record',
+  'tool.research_record',
   'tool.proposal_add',
   'tool.web_fetch',
   'tool.web_search',

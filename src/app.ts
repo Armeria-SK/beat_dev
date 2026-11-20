@@ -84,6 +84,7 @@ import { setGitNotice } from './mesh/folders.ts';
 import { Mesh } from './mesh/index.ts';
 import { AcceptanceStore } from './projects/acceptance.ts';
 import { Worker } from './tasks/worker.ts';
+import { ResearchRunner } from './research/run.ts';
 import { pendingDecided, sweepPendingWaits, type PendingWakeDeps } from './tasks/pending-wake.ts';
 import { QuestionStore, type QuestionChange, type QuestionRow } from './questions/store.ts';
 import { Uploads } from './uploads/store.ts';
@@ -195,6 +196,7 @@ export class App {
   readonly folderDialog: FolderDialog;
   readonly engine: ChatEngine;
   readonly worker: Worker;
+  readonly research: ResearchRunner;
   readonly health: HealthMonitor;
   readonly log: (line: string) => void;
   // いま動いている Web サーバーの設定（起動したとき、または画面から反映したときの値）。設定ファイルの server がこれと違えば、反映が要る
@@ -313,6 +315,8 @@ export class App {
       questions: this.questions, pendingWake: () => sweepPendingWaits(this.#wakeDeps()), plans: this.plans, places: this.places, worktrees: this.worktrees, background: this.background, fixes: this.fixes,
       onScoutChange: projectId => this.bus.publish({ type: 'scout.changed', projectId }),
     });
+    this.research = new ResearchRunner({ db: this.db, engine: this.engine, tasks: this.tasks, conversations: this.conversations, projects: this.projects, plans: this.plans, bus: this.bus, notifications: this.notifications, config: () => this.config(), dataDir: this.paths.data, log: this.log, now });
+    this.research.recover();
     this.tasks.onChange = task => {
       if (isScoutRun(task)) { this.worker.poke(); return; }
       this.bus.publish({ type: 'task.changed', task: maskedTaskView(this, task) });

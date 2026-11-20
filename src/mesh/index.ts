@@ -41,6 +41,7 @@ export interface IndexMaterials {
   acceptance: AcceptanceSummary | 'unreadable' | null;
   files: Array<{ path: string; updatedAt: number; heading: string | null }>;
   counts: { questions: number; proposals: number };
+  research?: string | null | undefined;
   timezone: string;
   decisions?: { rows: number } | null;
   ledger?: { entries: number; stale?: number } | 'unreadable' | null;
@@ -131,7 +132,7 @@ export function composeIndexParts(m: IndexMaterials, limit: number, split = true
   const heading = m.plan?.clean && m.plan.heading ? secretFree(safeText(m.plan.heading, 60)) : undefined;
   const planLine = m.plan === undefined ? undefined : m.plan ? `plan.md${heading ? ` — ${m.plan.ai ? AI_NOTE : ''}${heading}` : ''} (updated ${date(m.plan.updatedAt)})` : 'plan.md — not written yet';
   const counts = `questions: ${m.counts.questions} unanswered (question_list) / proposals: ${m.counts.proposals}`;
-  const status = split ? [...notes, ...(planLine ? [`- ${planLine}`] : []), `- acceptance.json — ${acceptanceText(m.acceptance, false)}`, counts] : [];
+  const status = split ? [...notes, ...(planLine ? [`- ${planLine}`] : []), `- acceptance.json — ${acceptanceText(m.acceptance, false)}`, counts, ...(m.research ? [`research before building: ${m.research}`] : [])] : [];
 
   const special = (path: string) => (path === DECISIONS_FILE && m.decisions) || inScout(path);
   if (limit > MESH_INDEX_MIN) {
@@ -196,6 +197,7 @@ interface Light {
   stateMtime: number | null;
   acceptance: IndexMaterials['acceptance'];
   counts: IndexMaterials['counts'];
+  research: string | null;
   running: string[];
   timezone: string;
   decisions: { rows: number } | null;
@@ -271,6 +273,7 @@ export class Mesh {
     const notes = stateStat ? parseNotes(readFileSync(stateFile, 'utf8')) : [];
     const { summary: acceptance } = this.#acceptance(projectId, plan ?? null);
     const counts = this.#d.projects?.counts(projectId) ?? { questions: 0, proposals: 0 };
+    const research = this.#d.projects?.researchState?.(projectId) ?? null;
     const running = this.#d.tasks?.list({ statuses: ['ready', 'running'], project: projectId, limit: 50 }).map(task => plainLine(task.title, 60)) ?? [];
     const timezone = this.#d.timezone();
     const stateMtime = stateStat ? Math.floor(stateStat.mtimeMs) : null;
@@ -282,8 +285,8 @@ export class Mesh {
     const ledger = summary && summary !== 'unreadable' && stale !== undefined ? { ...summary, stale } : summary;
     const memory = this.#d.memory?.list(projectId);
     const memoryKey = memory ? [this.#d.memory!.lastEventId(projectId), memory.map(note => [note.name, note.mtime, note.tainted])] : null;
-    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions, ledger, memoryKey]);
-    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, running, timezone, decisions, ledger, memory };
+    const key = JSON.stringify([files.map(f => [f.rel, f.mtime]), notes, stateMtime === null ? null : dateIn(stateMtime, timezone), acceptance, { questions: counts.questions, proposals: counts.proposals, research }, running, timezone, plan === undefined ? 'none' : plan, planMeta, planStat, decisions, ledger, memoryKey]);
+    return { key, files, notes, stateMtime, acceptance, counts: { questions: counts.questions, proposals: counts.proposals }, research, running, timezone, decisions, ledger, memory };
   }
 
   #materials(projectId: string, light: Light, plan: string | null | undefined): IndexMaterials {
@@ -295,6 +298,7 @@ export class Mesh {
       acceptance: light.acceptance,
       files: light.files.filter(file => file.rel !== PLAN_FILE && !this.#inScout(projectId, file.rel, file.abs) && !(this.#d.memory && this.#memoryName(projectId, file.rel, file.abs) !== undefined)).map(file => ({ path: file.rel, updatedAt: file.mtime, heading: firstHeading(file.abs) })),
       counts: light.counts,
+      research: light.research,
       timezone: light.timezone,
       decisions: light.decisions,
       ledger: light.ledger,

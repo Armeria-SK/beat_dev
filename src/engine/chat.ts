@@ -690,8 +690,10 @@ export class ChatEngine {
       return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
     }
     const runId = randomUUID();
-    const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt.prompt });
-    this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    if (prompt.prompt) {
+      const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt.prompt });
+      this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
     if (prompt.followUp) {
       const extra = this.#d.conversations.append(conversationId, { role: 'user', content: prompt.followUp, generated: true });
       this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: extra.id, role: 'user' });

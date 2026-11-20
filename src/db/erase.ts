@@ -49,6 +49,7 @@ export function eraseConversation(deps: EraseDeps, id: string): EraseResult {
       UNION SELECT id FROM conversations WHERE source_conversation_id = ? AND kind = 'task'`).all(id, id) as Array<{ id: string }>).map(r => r.id);
     for (const reviewId of reviewIds) eraseOne(deps, reviewId, files);
     db.prepare('UPDATE memory_jobs SET review_conversation_id = NULL, note = NULL WHERE conversation_id = ?').run(id);
+    db.prepare('UPDATE research_runs SET source_conversation_id = NULL WHERE source_conversation_id = ?').run(id);
     return { ...eraseOne(deps, id, files), reviews: reviewIds.length };
   });
   deps.markDeleted?.([id, ...reviewIds]);

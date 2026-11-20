@@ -40,6 +40,8 @@ import { registerQuestionRoutes } from './routes-questions.ts';
 import { registerGrowthRoutes } from './routes-growth.ts';
 import { registerMemoryRoutes } from './routes-memory.ts';
 import { registerChangeRoutes } from './routes-changes.ts';
+import { registerResearchRoutes } from './routes-research.ts';
+import { OwnerAct } from '../research/run.ts';
 import { registerFilesRoutes } from './routes-files.ts';
 import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
@@ -227,6 +229,8 @@ export function createWebServer(app: App): WebServer {
     if (conversation.kind !== 'chat') throw problem(409, 'conflict', 'conversation_not_deletable');
     const running = () => app.engine.activeRuns().some(r => r.conversationId === id);
     if (running()) throw problem(409, 'conflict', 'conversation_running');
+    // beat R（R3.13 の 2）: この会話を元にした調べる記録を止めて、終わるのを待つ（写した持ち主の文が、あとの部分に残らないように）
+    await app.research.stopForSource(id);
     // 振り返りを止めて待つあいだに、次の振り返りが始まらないよう、毎回、待っている振り返りを先に外してから、動いているものを止める。動いているものが無くなるまで繰り返す。
     // 最後の確かめと消すところのあいだには await が無いので、そのあいだに振り返りは始まらない
     for (let round = 0; ; round++) {
@@ -330,6 +334,12 @@ export function createWebServer(app: App): WebServer {
     if (projectFolderGone(app.projects, projectId ?? existing?.project_id)) throw projectProblem(409, new ProjectError('folder_missing'));
     const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt, projectId, generated: body.generated === true });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
+    // beat R（R3.12 (a)）: 持ち主が製品の会話に送ったら、新しい製品のときだけ調べる記録を始める（送信の実行が終わってから。待たない）
+    const researchProject = projectId ?? existing?.project_id ?? null;
+    if (researchProject && body.generated !== true) {
+      app.research.autoStart({ projectId: researchProject, sourceConversationId: id, owner: new OwnerAct(), afterRunId: outcome.runId })
+        .catch(error => app.log(`[WARN] Research could not start: ${(error as Error).message}`));
+    }
     // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
     // 考える深さを新しいモデルに無いので戻したときは、effortReset で知らせる（PATCH と同じ）
     const reset = effortReset ? { effortReset: true } : {};
@@ -445,6 +455,7 @@ export function createWebServer(app: App): WebServer {
   registerProjectRoutes(router, app);
   registerMemoryRoutes(router, app);
   registerChangeRoutes(router, app);
+  registerResearchRoutes(router, app);
   registerFilesRoutes(router, app);
   // ── タスク・ワーカー・通知・プロフィール ──
   registerTaskRoutes(router, app);
