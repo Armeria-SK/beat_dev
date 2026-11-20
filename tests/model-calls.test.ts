@@ -52,6 +52,11 @@ const readNotes: Script = async function* (req) {
   for (const c of withLoad({ id: `call_${Math.random().toString(36).slice(2)}`, name: 'file_read', arguments: { path: 'notes.txt' } }, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
+// 文も書いてから読む（TE-4 のあと、古い結果を消すだけでは足りず要約する）
+const talkNotes: Script = async function* (req) {
+  yield { type: 'text', delta: 'Thinking it through step by step. '.repeat(40) };
+  yield* readNotes(req);
+};
 
 interface CallRow { run_id: string; seq: number; purpose: string; model: string; input_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; output_tokens: number | null; est_tokens: number | null; removed: number; tools_hash: string; frozen_hash: string; dynamic_hash: string; started_at: number; duration_ms: number }
 const callsOf = (app: App, runId: string): CallRow[] => app.db.prepare('SELECT * FROM model_calls WHERE run_id = ? ORDER BY seq').all(runId) as unknown as CallRow[];
@@ -108,7 +113,7 @@ test('要約の呼び出しは compact の行（外した発言の数つき）�
     if (req.tools.length === 0) { compacts++; yield { type: 'usage' as const, usage: { inputTokens: 4000, outputTokens: 300 } }; yield* reply('SUMMARY')(req); return; }
     calls++;
     if (calls === 8) s.app.engine.addNote(C, 'note', false);
-    yield* withUsage({ outputTokens: 7 }, calls === 24 ? reply('done') : readNotes)(req);
+    yield* withUsage({ outputTokens: 7 }, calls === 24 ? reply('done') : talkNotes)(req);
   });
   const { runId, result } = await s.run('start the build');
   assert.ok(result!.ok, JSON.stringify(result));

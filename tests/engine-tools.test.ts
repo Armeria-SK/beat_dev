@@ -190,7 +190,8 @@ test('道具の結果の量は、削れない分だけから決まる: 古いや
   const line = Math.max(...lines.split('\n').map(l => l.length + 1));
   const diff = toolText(long).length - toolText(fresh).length;
   assert.ok(diff >= -line && diff <= 2 * line, `長い会話でもほぼ同じ量: ${toolText(long).length} と ${toolText(fresh).length}`);
-  assert.equal(long.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), true, '入りきらない分は、結果を小さくするのでなく古い発言を外して収める');
+  // 外した発言は要約する（TE-4: 外した発言が 4 つ未満でも黙って捨てない）。要約に失敗したときは「外しました」
+  assert.equal(long.events.some(e => e.type === 'compaction' || (e.type === 'warning' && e.code === 'context_trimmed')), true, '入りきらない分は、結果を小さくするのでなく古い発言を外して収める');
 });
 
 test('本文に書かれたツール呼び出し（<tool_call>）も拾って実行する', async t => {

@@ -45,3 +45,11 @@ export function raisedOutputFor(model: Pick<ModelConfig, 'maxOutputTokens'>, cap
 }
 
 export const contextAvailable = (capacity: number, maxOutput: number): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - maxOutput;
+
+// TE-4: 送る量が available を超えたら、まず古い道具の結果を短い印に替え（モデルを呼ばない）、それでも目標（available のこの割合）を超えるなら古いやり取りを目標まで外して要約する。
+// どちらも「どこまで」を会話に覚え、次に超えるまで動かさない（その間、前半はバイト単位で同じ）。0.7 は持ち主の決め（Q3）の出発点で、場面 (C) と実機の数字で 0.6〜0.8 の間で決め直す
+export const CONTEXT_TARGET_RATIO = 0.7;
+// 消すと決めた時点で、新しい方から残す道具の結果の数
+export const KEEP_TOOL_RESULTS = 6;
+// 消して減る量がこれ未満なら消さない（消すたびに後ろが書き直しになるので、小さく何度も消さない）
+export const clearFloor = (available: number): number => Math.max(2_000, Math.floor(available * 0.1));

@@ -11,7 +11,8 @@ import type { Script } from './helpers.ts';
 const isSummaryCall = (req: ModelRequest) => req.system.frozen.includes('conversation summarizer');
 
 // 要約の呼び出しには要約を、それ以外は「道具を N 回呼んでから返事」で答える台本。要約を失敗させる回数なども決められる
-function router(options: { tools: number; summaryFails?: (n: number) => boolean }) {
+// talk: 道具の呼び出しの前に文を書き、呼び出しのたびに区切りの注記を足す（TE-4 のあと、古い結果を消すだけでは足りず、外して要約し続ける場面）
+function router(options: { tools: number; summaryFails?: (n: number) => boolean; talk?: (() => void) | undefined }) {
   let tools = 0;
   let summaries = 0;
   const calls = { summaries: [] as ModelRequest[], answers: [] as ModelRequest[] };
@@ -27,6 +28,7 @@ function router(options: { tools: number; summaryFails?: (n: number) => boolean 
     calls.answers.push(req);
     if (tools < options.tools) {
       tools++;
+      if (options.talk) { options.talk(); yield { type: 'text', delta: 'か'.repeat(1500) }; }
       const call: ToolCall = { id: `call_${tools}`, name: 'file_read', arguments: { path: 'big.txt' } };
       yield { type: 'tool_call', call };
       yield { type: 'done', stop: 'tool_use' as StopReason };
@@ -38,11 +40,11 @@ function router(options: { tools: number; summaryFails?: (n: number) => boolean 
   return { script, calls };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, options: { tools: number; summaryFails?: (n: number) => boolean }) {
+async function setup(t: { after: (fn: () => void) => void }, options: { tools: number; summaryFails?: (n: number) => boolean; talk?: boolean }) {
   const s = await startApp(t, { models: [fakeModel('m1', { contextLength: 32768, maxOutputTokens: 1024 })] });
   mkdirSync(s.paths.workspace, { recursive: true });
   writeFileSync(join(s.paths.workspace, 'big.txt'), 'う'.repeat(2000));
-  const r = router(options);
+  const r = router({ ...options, talk: options.talk ? () => s.app.engine.addNote(CONVERSATION, 'note', false) : undefined });
   s.adapter().scripts.push(...Array.from({ length: 80 }, () => r.script));
   // 古い発言がたくさんある会話（小さい発言を何十も）
   for (let i = 0; i < 30; i++) {
@@ -100,7 +102,7 @@ test('要約に失敗したら、その実行のあいだは外すだけに戻�
 });
 
 test('要約を重ねる回数には上限がある（1 回の実行で 5 回まで）。上限のあとは外すだけで、無限に繰り返さない', async t => {
-  const { s, r, run } = await setup(t, { tools: 8 });
+  const { s, r, run } = await setup(t, { tools: 20, talk: true });
   const runId = await run();
   assert.equal(s.app.runs.get(runId)!.ok, 1);
   assert.equal(r.calls.summaries.length, 5, '上限まで使い切って止まる');
