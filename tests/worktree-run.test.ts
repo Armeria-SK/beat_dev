@@ -19,7 +19,7 @@ import { mainGitChanges, mainGitPrint, Worktrees } from '../src/projects/worktre
 import { TaskPlaces } from '../src/tasks/place.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
-import { fileWrite } from '../src/tools/builtin/files.ts';
+import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
 import type { StatementFacts } from '../src/tools/hooks/shell-facts.ts';
 import { linkOutOfCopy, mainWrites, worktreeGitRefusal } from '../src/tools/hooks/worktree-git.ts';
@@ -97,7 +97,7 @@ async function wtRig(t: { after: (fn: () => void) => void }, options: { roots?: 
   assert.ok(made.ok, JSON.stringify(made));
   const wt = made.row;
   const wtPath = wt.path!;
-  const registry = new ToolRegistry().register(shellRun).register(fileWrite);
+  const registry = new ToolRegistry().register(shellRun).register(fileRead).register(fileWrite);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const approvals = new ApprovalBroker(db);
   const judged: string[] = [];
@@ -210,6 +210,7 @@ test('8-2: 作業コピーの実行の file_write は本体の絶対パスを断
   const out = await r.call('file_write', { path: join(r.product, 'a.txt'), content: 'bad' });
   assert.equal(out.decision, 'deny', out.output.content);
   assert.equal(readFileSync(join(r.product, 'a.txt'), 'utf8'), 'one\n');
+  await r.call('file_read', { path: 'a.txt' });
   const ok = await r.call('file_write', { path: 'a.txt', content: 'two\n' });
   assert.equal(ok.decision, 'allow', ok.output.content);
   assert.equal(readFileSync(join(r.wtPath, 'a.txt'), 'utf8'), 'two\n');
@@ -547,9 +548,9 @@ test('8-2 見直し HIGH 3: 許可フォルダが本体を含んでいても、�
   assert.equal(out.decision, 'deny', out.output.content);
   assert.match(out.output.content, /main folder|product folder|not writable here|working copy/iu);
   assert.equal(existsSync(join(r.product, 'zz-probe.txt')), false);
-  const check = fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.ctx) as { reasonKeys?: string[] };
+  const check = await fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.ctx);
   assert.deepEqual(check.reasonKeys, ['wt.write_main']);
-  const mainOk = fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.mainCtx) as { decision: string };
+  const mainOk = await fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.mainCtx);
   assert.notEqual(mainOk.decision, 'deny', '本体の会話では今までどおり');
 });
 

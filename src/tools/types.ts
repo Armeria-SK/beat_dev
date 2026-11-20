@@ -165,6 +165,10 @@ export interface ToolContext {
   runTool?: ((name: string, input: unknown) => Promise<ToolRunResult>) | undefined;
   reachable?: (() => ToolDef[]) | undefined;
   deferred?: { loaded: ReadonlySet<string>; sent: ReadonlySet<string>; list: () => ToolDef[]; load: (names: readonly string[]) => void } | undefined;
+  // TE-6: この会話で読んだ・書いたファイルの中身の指紋（kv の file-reads:<会話>）。file_edit・上書きの file_write が、読んでいない・読んだあと変わったファイルを断るのに使う。無ければ ctx ごとのメモリ
+  fileReads?: FileReadLog | undefined;
+  // TE-6: いまモデルへ送っている発言にある道具の結果の呼び出しの id（エンジンが呼ぶたびに入れ直す。結果の無い呼び出しに足した「動かしていない」は入れない）
+  sentCalls?: (() => ReadonlySet<string>) | undefined;
   // 子の担当の実行: 親の実行（権限・taint・承認の表示先の元）
   parent?: { runId: string; conversationId: string; kind: RunKind; title: string; taskId?: string | undefined } | undefined;
   scout?: true | undefined;
@@ -176,6 +180,8 @@ export interface ToolContext {
   // 直す実行のプロセスの入れ物（os/run-job.ts）。シェルが起こしたプロセスを入れる。直す実行でこれが無ければシェルは動かさない
   fixJob?: { add(child: import('node:child_process').ChildProcess): void } | undefined;
 }
+
+export interface FileReadLog { get(path: string): string | undefined; set(path: string, hash: string): void }
 
 export interface RunPlace { kind: 'worktree' | 'fix'; id: string; productRoot: string; branch: string; base: string; ceiling: string }
 

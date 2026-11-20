@@ -14,7 +14,7 @@ import { undoEntries, writeBack } from '../src/changes/restore.ts';
 import { pruneChanges } from '../src/changes/retention.ts';
 import { SNAPSHOT_EVENT, snapshotBeforeBuild, snapshotLine } from '../src/projects/snapshot-before.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script, withLoad } from './helpers.ts';
+import { readThen, reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 const WINDOWS = process.platform === 'win32';
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -75,7 +75,7 @@ test('8-4 記録: file_write・file_edit・table_write は書く前に元の中�
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n' });
   const made = await s.run(p.id, [
-    call('file_write', { path: 'a.txt', content: 'v2\n' }),
+    readThen('file_write', { path: 'a.txt', content: 'v2\n' }),
     call('file_edit', { path: 'a.txt', old: 'v2', new: 'v3' }),
     call('file_write', { path: 'sub/new.txt', content: 'fresh\n' }),
     call('table_write', { path: 't.csv', rows: [['x', 1]] }),
@@ -100,7 +100,7 @@ test('8-4 Undo / Redo（記録の元・git でない製品）: 元に戻り、�
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n', 'keep.txt': 'same\n' });
   await s.run(p.id, [
-    call('file_write', { path: 'a.txt', content: 'v2\n' }),
+    readThen('file_write', { path: 'a.txt', content: 'v2\n' }),
     call('file_edit', { path: 'a.txt', old: 'v2', new: 'v3' }),
     call('file_write', { path: 'sub/new.txt', content: 'fresh\n' }),
     call('table_write', { path: 't.csv', rows: [['x', 1]] }),
@@ -179,7 +179,7 @@ test('8-4 持ち主がコミットせずに書き足したファイル: 「前�
 test('8-4 Redo: Undo のあとに中身が変わったファイルは書かない（changed）', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n' });
-  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' })]);
+  await s.run(p.id, [readThen('file_write', { path: 'a.txt', content: 'v2\n' })]);
   const undone = await s.undo(p.id, { paths: ['a.txt'] });
   writeFileSync(join(p.root, 'a.txt'), 'owner edit\n');
   const redone = await s.redo(p.id, undone.body.redo);
@@ -257,7 +257,7 @@ test('8-4 秘密らしいファイル: .env は hidden で中身を返さず、U
 test('8-4 動いているあいだ: 製品のタスクが動いていれば Undo・Redo は 409、差分は読める', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n' });
-  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' })]);
+  await s.run(p.id, [readThen('file_write', { path: 'a.txt', content: 'v2\n' })]);
   const undone = await s.undo(p.id, { paths: ['a.txt'] });
   const task = s.app.tasks.create({ title: 'busy', origin: 'user', actor: 'user', projectId: p.id });
   s.app.db.prepare("UPDATE tasks SET status = 'running' WHERE id = ?").run(task.id);
@@ -271,7 +271,7 @@ test('8-4 動いているあいだ: 製品のタスクが動いていれば Undo
 test('8-4 大きさ: 5MB を超えるファイルは控えず（kept 0）、その記録からの Undo は not_kept', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'big.txt': Buffer.alloc(KEEP_MAX_BYTES + 1, 0x61) });
-  await s.run(p.id, [call('file_write', { path: 'big.txt', content: 'small\n' })]);
+  await s.run(p.id, [readThen('file_write', { path: 'big.txt', content: 'small\n' }, { limit: 1 })]);
   assert.deepEqual(s.rows(p.id).map(r => [r.action, r.kept, r.before_hash, r.size]), [['modify', 0, null, KEEP_MAX_BYTES + 1]]);
   assert.equal(existsSync(join(changesDir(s.paths), p.id)), false, '控えのファイルは作らない');
   const listed = await s.changes(p.id);
@@ -296,7 +296,7 @@ test('8-4 CRLF の製品: 改行の変換だけの違いは差分に出ず、Und
   const original = Buffer.from('one\r\ntwo\r\n');
   const g = await s.product('crlf', { 'a.txt': original, 'b.txt': 'lf one\nlf two\n' }, { git: true, attributes: '* text eol=crlf\n' });
   assert.deepEqual((await s.changes(g.id, '?base=commit')).body.files, [], '改行だけでは差分にならない');
-  await s.run(g.id, [call('file_write', { path: 'a.txt', content: 'one\r\nTWO\r\n' }), call('file_write', { path: 'b.txt', content: 'lf one\nLF TWO\n' })]);
+  await s.run(g.id, [readThen('file_write', { path: 'a.txt', content: 'one\r\nTWO\r\n' }), readThen('file_write', { path: 'b.txt', content: 'lf one\nLF TWO\n' })]);
   const listed = await s.changes(g.id, '?base=commit');
   assert.deepEqual(listed.body.files.map((f: any) => [f.path, f.added, f.removed]), [['a.txt', 1, 1], ['b.txt', 1, 1]]);
   const undone = await s.undo(g.id, { base: 'commit', paths: ['a.txt', 'b.txt'] });
@@ -332,7 +332,7 @@ test('8-4 前の Build の始まり: 6-0 の控えのコミットから差分を
 test('8-4 タスクを消す: 書き換えの記録があっても消せて、記録の行は残り（タスクとの結び付きだけ空になる）、差分と Undo はそのまま動く', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n' });
-  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' })]);
+  await s.run(p.id, [readThen('file_write', { path: 'a.txt', content: 'v2\n' })]);
   const task = s.app.tasks.create({ title: 'nightly', origin: 'user', actor: 'user', projectId: p.id, cron: '0 9 * * *', timezone: 'UTC' });
   s.app.db.prepare('UPDATE file_changes SET task_id = ? WHERE project_id = ?').run(task.id, p.id);
   assert.deepEqual((await s.changes(p.id, `?base=records&task=${task.id}`)).body.files.map((f: any) => f.path), ['a.txt']);
@@ -480,7 +480,7 @@ test('8-4 大文字小文字だけの違い: 同じファイルとして読み�
 test('8-4 大文字小文字の違う 2 回の書き込み: README.md → readme.md → 持ち主の書き足し C のあと、Undo all で元に戻り、Redo で C に戻る', { skip: !WINDOWS }, async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'README.md': 'O\n' });
-  await s.run(p.id, [call('file_write', { path: 'README.md', content: 'X\n' }), call('file_write', { path: 'readme.md', content: 'Y\n' })]);
+  await s.run(p.id, [readThen('file_write', { path: 'README.md', content: 'X\n' }), call('file_write', { path: 'readme.md', content: 'Y\n' })]);
   assert.deepEqual(s.rows(p.id).map(r => r.path), ['README.md', 'README.md'], '記録はディスクの上の名前');
   writeFileSync(join(p.root, 'README.md'), 'C\n');
   const listed = await s.changes(p.id);
@@ -514,7 +514,7 @@ test('8-4 大文字小文字だけ違う記録の行は 1 つのファイルに�
 test('8-4 動いているあいだ（会話の実行）: 製品の会話の実行が動いていれば Undo は 409', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n' });
-  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' })]);
+  await s.run(p.id, [readThen('file_write', { path: 'a.txt', content: 'v2\n' })]);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const waiting: Script = async function* (req) { await gate; yield* reply('later')(req); };
@@ -539,8 +539,10 @@ test('8-4 書き込みに失敗したら記録の行は残さない（控えは�
   chmodSync(join(p.root, 'a.txt'), 0o444);
   chmodSync(join(p.root, 't.csv'), 0o444);
   t.after(() => { try { chmodSync(join(p.root, 'a.txt'), 0o666); chmodSync(join(p.root, 't.csv'), 0o666); } catch { } });
-  await s.run(p.id, [call('file_write', { path: 'a.txt', content: 'v2\n' }), call('table_write', { path: 't.csv', rows: [['y']], overwrite: true })]);
+  await s.run(p.id, [readThen('file_write', { path: 'a.txt', content: 'v2\n' }), call('table_write', { path: 't.csv', rows: [['y']], overwrite: true })]);
   assert.equal(read(p.root, 'a.txt'), 'v1\n', '書き込みは失敗している');
+  const wrote = s.app.db.prepare("SELECT output_preview AS out FROM tool_calls WHERE tool = 'file_write'").get() as { out: string };
+  assert.doesNotMatch(wrote.out, /has not been read|changed after it was last read/u, '失敗の理由は読み取り専用で、読んでいないことではない');
   assert.equal(read(p.root, 't.csv'), 'x\n');
   assert.deepEqual(s.rows(p.id), []);
 });

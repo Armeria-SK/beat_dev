@@ -3,6 +3,7 @@ import { DEFAULT_LANGUAGE, type AppConfig, type Language, type ModelConfig, type
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
 import type { KV } from '../db/kv.ts';
+import { fileReadLog } from '../tools/builtin/files.ts';
 import type { Runs } from '../db/runs.ts';
 import { conversationSawOutside } from '../db/outside.ts';
 import type { AppPaths } from '../paths.ts';
@@ -288,6 +289,7 @@ export class ChatEngine {
   // この実行が tail を付けた発言の id（実行の前から tail を持つ最後の発言に、新しい tail が要るときだけ付け替えるため）
   #runTail = new Map<string, Set<number>>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
+  #sentCalls = new Map<string, ReadonlySet<string>>();
   // 考えるだけで上限に達したあと、その実行で上げた返事の上限（実行 → モデルの ID → 上限。上げたモデルにだけ、#assemble がそのモデルの許す範囲で使う）
   #outputCap = new Map<string, Map<string, number>>();
   // 止める操作（stop）を受けた実行
@@ -876,6 +878,7 @@ export class ChatEngine {
         this.#runIndex.delete(runId);
         this.#runTail.delete(runId);
         this.#loaded.delete(runId);
+        this.#sentCalls.delete(runId);
         this.#outputCap.delete(runId);
         this.#reviewEvidence.delete(runId);
         this.#stopped.delete(runId);
@@ -1001,6 +1004,8 @@ export class ChatEngine {
       ...(research ? { research } : {}),
     };
     ctx.noteCreated = abs => this.created.note(ctx, abs);
+    ctx.fileReads = fileReadLog(d.kv, conversationId);
+    ctx.sentCalls = () => this.#sentCalls.get(runId) ?? new Set();
     ctx.isCreated = abs => this.created.isCreated(abs, ctx);
     ctx.toolWindow = () => this.created.open(ctx);
     ctx.reachable = () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined || ctx.memoryProject !== undefined, this.#frozen(ctx.project?.id));
@@ -1382,7 +1387,9 @@ export class ChatEngine {
             detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
-        const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'));
+        const notRun = new Set<string>();
+        const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'), notRun);
+        const sentCalls = new Set(paired.flatMap(m => (m.role === 'tool' && !notRun.has(m.toolCallId) ? [m.toolCallId] : [])));
         if (paired !== fitted.messages) fitted = { ...fitted, messages: [...paired], estimate: estimateRequest(systemText(system), paired, apiTools, factor, pending) };
         // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
         // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）
@@ -1411,6 +1418,7 @@ export class ChatEngine {
           if (!p.flags.includes('context_trimmed')) p.flags.push('context_trimmed');
         }
 
+        this.#sentCalls.set(p.runId, sentCalls);
         let text = '';
         let usage: Usage = {};
         let stop: StopReason = 'other';

@@ -13,7 +13,7 @@ import { createWebServer } from '../src/web/server.ts';
 import type { Conversation, Project } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import type { ChangesTarget } from '../web/src/ui/kanban.ts';
-import { FakeAdapter, reply, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, readThen, reply, tempDir, testConfig } from './helpers.ts';
 import { toolCall } from './helpers/task-app.ts';
 
 // beat 8-6c: the real server task view (8-6b's GET /api/tasks and GET /api/tasks/:id for a real Pre-fix) drawn by the board and the task screen
@@ -84,7 +84,7 @@ async function realPrefix(t: { after: (fn: () => void | Promise<void>) => void }
     proposal: { kind: 'bug', why: 'a.txt says bug. The check fails on it.', area: ['a.txt'], size: 'S', goal: null, evidence: null, ledger: null, fixable: true },
   });
   app.tasks.markUntrusted(proposal.id, 'scout', 'Proposed by a scout run');
-  adapters.get('near')!.scripts.push(toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' }), reply('Changed bug to fixed.'));
+  adapters.get('near')!.scripts.push(readThen('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' }), reply('Changed bug to fixed.'));
   assert.equal(await app.worker.tick(), 'ran');
   const row = app.db.prepare("SELECT id, branch, state FROM worktrees WHERE kind = 'fix'").get() as { id: string; branch: string; state: string } | undefined;
   assert.equal(row?.state, 'branch', 'the fix run left a Pre-fix branch');

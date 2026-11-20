@@ -8,7 +8,7 @@ import { MERGE_WATCH_MS, MergeWatch } from '../src/projects/merge-watch.ts';
 import { markSessionChecked, sessionChecks } from '../src/projects/session-check.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, tempDir, type Script, withLoad } from './helpers.ts';
+import { readThen, reply, tempDir, type Script, withLoad } from './helpers.ts';
 
 // beat 8-3: 取り込み待ち（done + 作業コピーの行が branch）の見回り・Mark merged・Discard と、ファイルを変えた会話のカード
 
@@ -235,7 +235,7 @@ test('8-3（Q-P8-12）: 製品のファイルを変えた会話だけが Session
     await settled(s.app, sent.body.runId);
     return { conversation: id, runId: sent.body.runId as string };
   };
-  const wrote = await run(plain.id, [call('file_write', { path: 'a.txt', content: 'two\n' })]);
+  const wrote = await run(plain.id, [readThen('file_write', { path: 'a.txt', content: 'two\n' })]);
   const talked = await run(plain.id, []);
   const sessions = async (project?: string) => ((await s.json(`/api/session-checks${project ? `?project=${project}` : ''}`, 'GET')).body.sessions as Array<{ conversation_id: string }>).map(x => x.conversation_id);
   assert.deepEqual(await sessions(plain.id), [wrote.conversation], '道具で書いた会話だけ（話しただけの会話は Done のまま）');
@@ -260,7 +260,7 @@ test('8-3（Q-P8-12）: 製品のファイルを変えた会話だけが Session
   assert.deepEqual(await sessions(plain.id), [], 'Mark checked で外れる');
   assert.equal((await s.json(`/api/conversations/${uuid(999)}/checked`, 'POST', {})).status, 404);
   // そのあと同じ会話でまた書けば、また出る
-  s.adapter().scripts = [call('file_write', { path: 'a.txt', content: 'three\n' }), reply('done')];
+  s.adapter().scripts = [readThen('file_write', { path: 'a.txt', content: 'three\n' }), reply('done')];
   const again = await s.json(`/api/conversations/${wrote.conversation}/messages`, 'POST', { text: 'more', projectId: plain.id, permissionMode: 'auto' });
   await settled(s.app, again.body.runId);
   assert.deepEqual(await sessions(plain.id), [wrote.conversation]);
@@ -571,7 +571,7 @@ test('8-3: 失敗したタスクの作業コピーのブランチも Discard で
 test('8-3（Q-P8-12）: 会話を調べている途中で持ち主が Mark checked を押しても、その印を上書きしない', { skip: !gitAvailable }, async t => {
   const s = await rig(t);
   const plain = await s.product('plain', false);
-  s.adapter().scripts = [call('file_write', { path: 'a.txt', content: 'two\n' }), reply('done')];
+  s.adapter().scripts = [readThen('file_write', { path: 'a.txt', content: 'two\n' }), reply('done')];
   const conversation = uuid(1);
   const sent = await s.json(`/api/conversations/${conversation}/messages`, 'POST', { text: 'work', projectId: plain.id, permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);

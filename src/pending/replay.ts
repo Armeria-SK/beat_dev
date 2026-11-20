@@ -4,12 +4,14 @@ import { dirname, join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import type { AppConfig } from '../config/schema.ts';
+import { KV } from '../db/kv.ts';
 import type { AppPaths } from '../paths.ts';
 import { folderMissing, type ProjectStore } from '../projects/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { previewJson } from '../shared/json-preview.ts';
 import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { isBrowserTool } from '../tools/browser/names.ts';
+import { fileReadLog } from '../tools/builtin/files.ts';
 import { runCommandHook } from '../tools/hooks/command-hook.ts';
 import { isInside, placePath, windowsNames } from '../tools/hooks/scope.ts';
 import type { TaskPlaces } from '../tasks/place.ts';
@@ -153,6 +155,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       ...(parent ? { parent } : {}),
       log: deps.log ?? (() => undefined),
       services: deps.services?.(),
+      fileReads: fileReadLog(new KV(deps.db), row.conversation_id),
     };
 
     const recheck = async (): Promise<PreCheck | undefined> => {
@@ -225,6 +228,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
     const fetched = (network && !(output.isError && output.noRemoteContent)) || again?.fetched === true || output.fetched === true || egress;
     const kept = deps.conversationExists(row.conversation_id);
+    if (!kept) new KV(deps.db).delete(`file-reads:${row.conversation_id}`);
     if (!kept && output.fullRef && resolve(output.fullRef).startsWith(resolve(join(deps.paths.data, 'tool_outputs')) + sep)) {
       try { rmSync(output.fullRef, { force: true }); } catch { }
     }

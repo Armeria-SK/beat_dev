@@ -93,6 +93,16 @@ export function sse(res: ServerResponse, chunks: unknown[], options: { done?: bo
 
 export type Script = (req: ModelRequest) => AsyncGenerator<StreamEvent>;
 
+// TE-6: file_edit・上書きの file_write は、この会話で読んでからでないと断られる。同じ返事の中で file_read してから書く
+export function readThen(name: string, args: { path: string } & Record<string, unknown>, read: { limit?: number } = {}): Script {
+  return async function* (req) {
+    const id = Math.random().toString(36).slice(2);
+    for (const c of withLoad({ id: `read_${id}`, name: 'file_read', arguments: { path: args.path, ...read } }, req)) yield { type: 'tool_call', call: c };
+    for (const c of withLoad({ id: `call_${id}`, name, arguments: args }, req)) yield { type: 'tool_call', call: c };
+    yield { type: 'done', stop: 'tool_use' };
+  };
+}
+
 export class FakeAdapter implements ProviderAdapter {
   readonly provider: ProviderConfig;
   readonly calls: ModelRequest[] = [];

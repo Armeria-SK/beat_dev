@@ -14,7 +14,7 @@ import type { Task } from '../src/tasks/store.ts';
 import { proposalAdd } from '../src/tools/builtin/proposal.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, fail, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, fail, readThen, reply, type Script, tempDir, testConfig } from './helpers.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import { taskUpdate } from '../src/tools/builtin/tasks.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -66,7 +66,7 @@ const onlyBeatBranch = (keys: string[]): boolean => keys.every(key => /^git:(?:l
 const branchesOf = (product: string): string[] => gitIn(product, 'for-each-ref', '--format=%(refname)', 'refs/heads/').split('\n').filter(Boolean);
 
 const BUG: Proposal = { kind: 'bug', why: 'a.txt says bug.', area: ['a.txt'], size: 'S', goal: null, evidence: null, ledger: null, fixable: true };
-const editFix = (): Script => toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' });
+const editFix = (): Script => readThen('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' });
 
 function gate(): { script: Script; started: Promise<void> } {
   let begin!: () => void;
@@ -265,12 +265,14 @@ test('8-6b: Reject on a Pre-fix cancels the proposal and removes its beat branch
 test('8-6b: the same proposal is tried once per HEAD; a failed fix leaves one "Pre-fix not kept" line and the next turn thinks instead', { skip: !gitAvailable }, async t => {
   const s = await setup(t);
   const proposal = s.propose();
-  s.model().scripts.push(toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'still broken' }), reply('done'));
+  s.model().scripts.push(readThen('file_edit', { path: 'a.txt', old: 'bug', new: 'still broken' }), reply('done'));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.fixRows().length, 1);
   assert.equal(s.fixRows()[0]!.state, 'discarded');
   const [line] = s.events(proposal.id, 'prefix');
   assert.match(line ?? '', /^Pre-fix not kept: the check command did not pass/u);
+  const edited = s.app.db.prepare("SELECT output_preview AS out FROM tool_calls WHERE tool = 'file_edit'").get() as { out: string };
+  assert.equal(edited.out, 'Replaced 1 occurrence(s): a.txt', 'the edit was written and the check failed on it');
   assert.equal(s.app.tasks.get(proposal.id)!.status, 'inbox', 'the proposal stays as it was');
   const plain = (await s.json(`/api/tasks/${proposal.id}`, 'GET')).body.task;
   assert.deepEqual([plain.worktree, plain.prefix], [null, null], 'a thrown-away fix leaves no worktree or prefix on the open proposal');
@@ -576,7 +578,7 @@ test('8-6b: a provider key in the fix diff is masked before the sample line is c
   assert.equal(put.status, 200, JSON.stringify(put.body));
   assert.ok(s.app.registry.secrets().includes(key), 'the key is one of the registry secrets');
   const proposal = s.propose();
-  s.model().scripts.push(toolCall('file_edit', { path: 'a.txt', old: 'bug', new: `fixed${'x'.repeat(177)}${key}` }), reply('done'));
+  s.model().scripts.push(readThen('file_edit', { path: 'a.txt', old: 'bug', new: `fixed${'x'.repeat(177)}${key}` }), reply('done'));
   assert.equal(await s.app.worker.tick(), 'ran');
   const prefix = (await s.json(`/api/tasks/${proposal.id}`, 'GET')).body.task.prefix;
   assert.ok(prefix, JSON.stringify(s.app.tasks.events(proposal.id)));
