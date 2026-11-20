@@ -10,7 +10,10 @@ import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts'
 import { estimateRequest, estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { SKILLS_INDEX_DESCRIPTION_MAX, SkillStore, skillsIndexBudget } from '../src/tools/skills/store.ts';
+import { projectDir } from '../src/projects/store.ts';
+import { skillView } from '../src/tools/builtin/skills.ts';
+import { SKILLS_INDEX_DESCRIPTION_MAX, SkillStore, skillsIndexBudget, type Skill } from '../src/tools/skills/store.ts';
+import type { ToolContext } from '../src/tools/types.ts';
 import { MEASURE_MODEL, measure, renderTable, type Measured } from '../scripts/tool-tokens.ts';
 import { settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir } from './helpers.ts';
@@ -97,12 +100,21 @@ const write200 = (skills: Pick<App['skills'], 'write'>, order: number[] = [...Ar
   for (const i of order) skills.write({ name: skillName(i), description: longDescription(i), body: 'Steps' });
 };
 const allOn = (c: AppConfig) => { c.tools.browser.enabled = true; c.tools.agent.enabled = true; c.tools.agent.inTasks = true; };
+// コードが上限を持つほかの部分も目いっぱいにする: 指示ファイル（使える量の 5%）と mesh の目次（2%）
+const fillAll = (app: App, product: { root: string; projectId: string }) => {
+  write200(app.skills);
+  writeFileSync(join(product.root, 'AGENTS.md'), '指示ファイルの決まりをここに書いておく。'.repeat(5_000));
+  const mesh = projectDir(app.paths.projects, product.projectId);
+  mkdirSync(mesh, { recursive: true });
+  for (let i = 0; i < 300; i++) writeFileSync(join(mesh, `notes-${String(i).padStart(3, '0')}-${'x'.repeat(40)}.md`), `# ${'見出しの文'.repeat(20)}\n`);
+};
+const skillCtx = (skills: SkillStore) => ({ config: defaultConfig(), services: { skills }, kind: 'chat', conversationId: 'c1', runId: 'r1' }) as unknown as ToolContext;
 
 test('TE-7 固定の部分の線: 既定・全部オン・skills 200 個のどれでも、どのモードも 64k の使える量の 35% 以内', async () => {
   for (const [label, configure, prepare] of [
     ['default', () => undefined, undefined],
     ['all on', allOn, undefined],
-    ['all on + 200 skills', allOn, (app: App) => write200(app.skills)],
+    ['all on + 200 skills + full instructions and mesh index', allOn, fillAll],
   ] as const) {
     const measured = await measure(shaped(configure), prepare ? { prepare } : {});
     assert.equal(measured.available, 45_875);
@@ -151,4 +163,24 @@ test('TE-7 skills の一覧: 線は会話で使えるいちばん小さいモデ
   assert.ok(budget > 1_376, String(budget));
   assert.equal(section.join('\n'), s.app.skills.index('en', budget).split('\n').slice(2).join('\n'));
   assert.ok(listed > s.app.skills.index('en').split('\n').length - 3, String(listed));
+});
+
+test('TE-7 skills の一覧: 渡された並びによらず、一覧そのものが名前の順に並べる', t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const skill = (name: string): Skill => ({ name, description: name, body: 'Steps', uses: 0, lastUsedAt: null, updatedAt: 0, registered: true });
+  class Reversed extends SkillStore { override listRegistered(): Skill[] { return [skill('b-skill'), skill('a-skill')]; } }
+  const lines = new Reversed(db, join(tempDir(t), 'skills')).index('en').split('\n').slice(2);
+  assert.deepEqual(lines, ['- a-skill: a-skill', '- b-skill: b-skill']);
+});
+
+test('TE-7 skills の一覧: 一覧から落ちた skill も skill_view で見つかる（知らない名前で全部の名前が返る）', async t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const skills = new SkillStore(db, join(tempDir(t), 'skills'));
+  write200(skills);
+  assert.ok(!skills.index('en', skillsIndexBudget(45_875)).includes(skillName(199)));
+  const out = await skillView.execute({ name: '?' }, skillCtx(skills));
+  assert.equal(out.isError, true);
+  assert.ok(out.content.includes(skillName(199)), out.content.slice(0, 200));
 });

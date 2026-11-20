@@ -66,7 +66,7 @@ async function settle(app: App, runId: string): Promise<void> {
   for (let i = 0; i < 400 && app.runs.get(runId)?.ended_at == null; i++) await new Promise(r => setTimeout(r, 5));
 }
 
-export async function measure(source: AppConfig, options: { prepare?: (app: App) => void } = {}): Promise<Measured> {
+export async function measure(source: AppConfig, options: { prepare?: (app: App, product: { root: string; projectId: string }) => void } = {}): Promise<Measured> {
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-tool-tokens-')));
   const adapter = recorder();
   let app: App | undefined;
@@ -77,7 +77,6 @@ export async function measure(source: AppConfig, options: { prepare?: (app: App)
     const products = join(dir, 'products');
     app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, env: {}, adapterOverride: () => adapter, projectFolderExempt: [products] });
     const live = app;
-    options.prepare?.(live);
     await live.status.probeAll(live.config());
     const available = contextAvailable(MEASURE_MODEL.contextLength!, maxOutputFor(MEASURE_MODEL, MEASURE_MODEL.contextLength!));
     const root = join(products, 'Demo');
@@ -85,6 +84,7 @@ export async function measure(source: AppConfig, options: { prepare?: (app: App)
     const checked = checkWorkFolder(root, { paths: live.paths, appRoot: APP_ROOT, config: live.config(), active: live.projects.list(), exempt: live.projectFolderExempt });
     if (!checked.ok) throw new Error(`could not register the measuring product (${checked.reason})`);
     const project = live.projects.create({ name: 'Demo', root: checked.root, rootKey: checked.rootKey, checkCommand: null });
+    options.prepare?.(live, { root: checked.root, projectId: project.id });
     const rows: ModeRow[] = [];
     const off: Mode[] = [];
     let n = 0;
