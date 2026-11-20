@@ -690,4 +690,13 @@ export const MIGRATIONS: readonly Migration[] = [
   ) STRICT;
   CREATE INDEX ix_model_calls_started ON model_calls (started_at);
   `,
+  `
+  ALTER TABLE research_runs ADD COLUMN source_conversation_id TEXT;
+  ALTER TABLE research_runs ADD COLUMN parts TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE research_runs ADD COLUMN partial INTEGER NOT NULL DEFAULT 0 CHECK (partial IN (0, 1));
+  ALTER TABLE research_runs ADD COLUMN auto INTEGER NOT NULL DEFAULT 0 CHECK (auto IN (0, 1));
+  ALTER TABLE research_runs ADD COLUMN stop_reason TEXT;
+  CREATE INDEX ix_research_runs_source ON research_runs (source_conversation_id) WHERE source_conversation_id IS NOT NULL;
+  ALTER TABLE projects ADD COLUMN research_settings TEXT;
+  `,
 ];

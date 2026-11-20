@@ -4,6 +4,7 @@ const en = {
   'not_running': 'Records can be written only while a research run is going on',
   'finished': 'Research {id} has ended, so its records cannot be changed',
   'not_found': 'Research {id} was not found',
+  'running': 'Research is already running for this product',
   'kind_phase': 'A {kind} row does not belong in this research',
   'url_not_opened': 'This run has not opened {url}. Open the page with web_fetch first, then record it with the URL you read',
   'url_invalid': 'The URL is not a web page address',

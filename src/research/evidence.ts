@@ -1,4 +1,5 @@
 import { MIN_QUOTE_WEIGHT, normalizeQuote, quoteWeight } from '../projects/acceptance.ts';
+import type { ResearchLimits } from '../shared/research-languages.ts';
 
 export const PAGE_CHARS = 20_000;
 
@@ -39,6 +40,56 @@ export class OpenedPages {
     if (page === undefined || excerpt === undefined || quoteWeight(excerpt) < MIN_QUOTE_WEIGHT) return false;
     return page.includes(normalizeQuote(excerpt));
   }
+}
+
+export type PartKind = 'first' | 'candidate' | 'continue' | 'libraries';
+
+export interface ResearchBudget { fetches: number; searches: number; started: number }
+
+export interface Candidate { name: string; url: string }
+
+export const CANDIDATE_MAX = 8;
+
+export class ResearchSession {
+  readonly researchId: string;
+  readonly part: PartKind;
+  readonly oneByOne: boolean;
+  readonly budget: ResearchBudget;
+  readonly limits: ResearchLimits;
+  readonly pages: OpenedPages;
+  readonly #seen: Set<string>;
+  readonly candidates: Candidate[];
+  readonly #now: () => number;
+
+  constructor(input: { researchId: string; part: PartKind; oneByOne?: boolean; budget: ResearchBudget; limits: ResearchLimits; pages?: OpenedPages; seen?: Set<string>; candidates?: Candidate[]; now?: () => number }) {
+    this.researchId = input.researchId;
+    this.part = input.part;
+    this.oneByOne = input.oneByOne ?? false;
+    this.budget = input.budget;
+    this.limits = input.limits;
+    this.pages = input.pages ?? new OpenedPages();
+    this.#seen = input.seen ?? new Set();
+    this.candidates = input.candidates ?? [];
+    this.#now = input.now ?? Date.now;
+  }
+
+  continued(): ResearchSession {
+    return new ResearchSession({ researchId: this.researchId, part: this.part, oneByOne: this.oneByOne, budget: this.budget, limits: this.limits, pages: this.pages, seen: this.#seen, candidates: this.candidates, now: this.#now });
+  }
+
+  see(url: string): void {
+    const key = normalizeUrl(url);
+    if (key !== null) this.#seen.add(key);
+  }
+
+  saw(url: string): boolean {
+    const key = normalizeUrl(url);
+    return key !== null && this.#seen.has(key);
+  }
+
+  get takesCandidates(): boolean { return this.oneByOne && this.part === 'first'; }
+
+  overTime(): boolean { return this.#now() - this.budget.started >= this.limits.minutes * 60_000; }
 }
 
 const RUNS = new Map<string, OpenedPages>();

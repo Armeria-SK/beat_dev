@@ -56,6 +56,7 @@ export function testConfig(): AppConfig {
       { id: 'local', label: 'ローカル', provider: 'local', model: 'qwen3:32b', contextLength: 65536, maxOutputTokens: 8192, vision: false },
     ],
     routing: { chat: ['claude-sonnet'], background: ['claude-haiku'], retriesPerModel: 2 },
+    research: { when: 'off' },
   };
 }
 

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
-import { normalizeQuote } from '../projects/acceptance.ts';
-import { normalizeUrl, pageKey, quoteHasName } from './evidence.ts';
+import { normalizeQuote, prepareSpeech, verifySource } from '../projects/acceptance.ts';
+import type { SpeechRow } from '../db/conversations.ts';
+import { normalizeUrl, pageKey, quoteHasName, type PartKind } from './evidence.ts';
 import { checkLabel, ResearchError, type LabelKind } from './labels.ts';
 
 export type ResearchPhase = 'products' | 'libraries';
@@ -28,7 +29,14 @@ export interface ResearchRunRow {
   created_at: number;
   finished_at: number | null;
   limits: string;
+  source_conversation_id: string | null;
+  parts: string;
+  partial: number;
+  auto: number;
+  stop_reason: string | null;
 }
+
+export interface ResearchPart { taskId: string; conversationId: string; runId: string | null; kind: PartKind; end: string | null }
 
 export interface ResearchItemRow {
   id: number;
@@ -75,7 +83,11 @@ export interface ResearchStart {
   phase: ResearchPhase;
   mode: ResearchMode;
   limits?: Record<string, number> | undefined;
+  sourceConversationId?: string | null | undefined;
+  auto?: boolean | undefined;
 }
+
+export interface FinishOptions { partial?: boolean; stopReason?: string | null }
 
 export class ResearchStore {
   readonly #db: DatabaseSync;
@@ -87,10 +99,72 @@ export class ResearchStore {
   }
 
   start(input: ResearchStart): ResearchRunRow {
-    const id = randomUUID();
-    this.#db.prepare("INSERT INTO research_runs (id, project_id, conversation_id, run_id, phase, mode, status, created_at, limits) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
-      .run(id, input.projectId, input.conversationId ?? null, input.runId ?? null, input.phase, input.mode, this.#now(), JSON.stringify(input.limits ?? {}));
-    return this.get(id)!;
+    return transaction(this.#db, () => {
+      if (this.running(input.projectId)) throw new ResearchError('running');
+      const id = randomUUID();
+      this.#db.prepare("INSERT INTO research_runs (id, project_id, conversation_id, run_id, phase, mode, status, created_at, limits, source_conversation_id, auto) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)")
+        .run(id, input.projectId, input.conversationId ?? null, input.runId ?? null, input.phase, input.mode, this.#now(), JSON.stringify(input.limits ?? {}), input.sourceConversationId ?? null, input.auto ? 1 : 0);
+      return this.get(id)!;
+    });
+  }
+
+  running(projectId: string): ResearchRunRow | undefined {
+    const row = this.#db.prepare("SELECT * FROM research_runs WHERE project_id = ? AND status = 'running' LIMIT 1").get(projectId);
+    return row ? { ...row } as unknown as ResearchRunRow : undefined;
+  }
+
+  hasAny(projectId: string, phase: ResearchPhase): boolean {
+    return this.#db.prepare('SELECT 1 FROM research_runs WHERE project_id = ? AND phase = ? LIMIT 1').get(projectId, phase) !== undefined;
+  }
+
+  list(projectId: string): ResearchRunRow[] {
+    return this.#db.prepare('SELECT * FROM research_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC').all(projectId).map(r => ({ ...r }) as unknown as ResearchRunRow);
+  }
+
+  latest(projectId: string, phase: ResearchPhase): ResearchRunRow | undefined {
+    const row = this.#db.prepare('SELECT * FROM research_runs WHERE project_id = ? AND phase = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(projectId, phase);
+    return row ? { ...row } as unknown as ResearchRunRow : undefined;
+  }
+
+  bySource(conversationId: string): ResearchRunRow[] {
+    return this.#db.prepare('SELECT * FROM research_runs WHERE source_conversation_id = ?').all(conversationId).map(r => ({ ...r }) as unknown as ResearchRunRow);
+  }
+
+  parts(id: string): ResearchPart[] {
+    const run = this.get(id);
+    return run ? JSON.parse(run.parts) as ResearchPart[] : [];
+  }
+
+  addPart(id: string, part: Omit<ResearchPart, 'end' | 'runId'>): number {
+    return transaction(this.#db, () => {
+      const run = this.get(id);
+      if (!run || run.status !== 'running') throw this.#ended(id);
+      const parts = JSON.parse(run.parts) as ResearchPart[];
+      parts.push({ ...part, runId: null, end: null });
+      this.#db.prepare('UPDATE research_runs SET parts = ? WHERE id = ?').run(JSON.stringify(parts), id);
+      return parts.length - 1;
+    });
+  }
+
+  setPart(id: string, index: number, change: { runId?: string; end?: string }): void {
+    transaction(this.#db, () => {
+      const run = this.get(id);
+      if (!run) throw this.#ended(id);
+      const parts = JSON.parse(run.parts) as ResearchPart[];
+      const part = parts[index];
+      if (!part) return;
+      if (change.runId !== undefined) {
+        if (run.status !== 'running') throw this.#ended(id);
+        part.runId = change.runId;
+        this.#db.prepare('UPDATE research_runs SET run_id = ? WHERE id = ?').run(change.runId, id);
+      }
+      if (change.end !== undefined) part.end = change.end;
+      this.#db.prepare('UPDATE research_runs SET parts = ? WHERE id = ?').run(JSON.stringify(parts), id);
+    });
+  }
+
+  detachSource(conversationId: string): void {
+    this.#db.prepare('UPDATE research_runs SET source_conversation_id = NULL WHERE source_conversation_id = ?').run(conversationId);
   }
 
   get(id: string): ResearchRunRow | undefined {
@@ -108,9 +182,30 @@ export class ResearchStore {
     if (Number(changed) !== 1) throw this.#ended(id);
   }
 
-  finish(id: string, status: ResearchEnd): void {
-    const changed = this.#db.prepare("UPDATE research_runs SET status = ?, finished_at = ? WHERE id = ? AND status = 'running'").run(status, this.#now(), id).changes;
-    if (Number(changed) !== 1) throw this.#ended(id);
+  finish(id: string, status: ResearchEnd, options: FinishOptions = {}): void {
+    transaction(this.#db, () => {
+      const changed = this.#db.prepare("UPDATE research_runs SET status = ?, finished_at = ?, partial = ?, stop_reason = COALESCE(?, stop_reason) WHERE id = ? AND status = 'running'")
+        .run(status, this.#now(), options.partial ? 1 : 0, options.stopReason ?? null, id).changes;
+      if (Number(changed) !== 1) throw this.#ended(id);
+      if (status !== 'skipped') this.#markOwnerSaid(id);
+    });
+  }
+
+  #markOwnerSaid(id: string): void {
+    const run = this.get(id)!;
+    if (!run.source_conversation_id) return;
+    const rows = this.#db.prepare(`SELECT id, conversation_id, role, text, 0 AS generated FROM messages
+      WHERE conversation_id = ? AND role = 'user'
+        AND COALESCE(json_extract(parts, '$.generated'), 0) IS NOT 1
+        AND json_extract(parts, '$.note') IS NULL
+        AND COALESCE(json_extract(parts, '$.askAnswer'), 0) IS NOT 1
+      ORDER BY id`).all(run.source_conversation_id) as unknown as SpeechRow[];
+    if (!rows.length) return;
+    const mark = this.#db.prepare("UPDATE research_items SET default_checked = 1, default_reason = 'owner_said' WHERE id = ?");
+    for (const item of this.items(id)) {
+      if (item.kind !== 'feature') continue;
+      if (verifySource(prepareSpeech(rows), { kind: 'owner_words', quote: item.name_or_label }).kind === 'owner_words') mark.run(item.id);
+    }
   }
 
   failRunning(): number {

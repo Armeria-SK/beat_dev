@@ -1,4 +1,5 @@
 import { Type, type Static } from '@sinclair/typebox';
+import { RESEARCH_LANGUAGES, RESEARCH_LIMIT_RANGE, RESEARCH_MODES, RESEARCH_WHEN } from '../shared/research-languages.ts';
 
 export const ProviderKind = Type.Union([
   Type.Literal('anthropic'),
@@ -54,6 +55,7 @@ export const RoutingConfig = Type.Object({
   judge: Type.Optional(Type.Array(Type.String())),
   judgeMode: Type.Optional(Type.Union([Type.Literal('on'), Type.Literal('off')])),
   scout: Type.Optional(Type.Array(Type.String())),
+  research: Type.Optional(Type.Array(Type.String())),
   retriesPerModel: Type.Integer({ minimum: 0, maximum: 5, default: 2 }),
 }, { additionalProperties: false });
 
@@ -233,6 +235,19 @@ export const McpConfig = Type.Object({
   }, { additionalProperties: false, default: {} }),
 }, { additionalProperties: false, default: {} });
 
+const limit = (key: keyof typeof RESEARCH_LIMIT_RANGE) => Type.Optional(Type.Integer({ minimum: RESEARCH_LIMIT_RANGE[key].min, maximum: RESEARCH_LIMIT_RANGE[key].max }));
+const researchLanguages = Type.Optional(Type.Array(Type.Union(RESEARCH_LANGUAGES.map(l => Type.Literal(l))), { maxItems: RESEARCH_LANGUAGES.length, uniqueItems: true }));
+
+export const ResearchConfig = Type.Object({
+  when: Type.Optional(Type.Union(RESEARCH_WHEN.map(w => Type.Literal(w)))),
+  mode: Type.Optional(Type.Union(RESEARCH_MODES.map(m => Type.Literal(m)))),
+  limits: Type.Optional(Type.Object({ candidates: limit('candidates'), searches: limit('searches'), fetches: limit('fetches'), minutes: limit('minutes') }, { additionalProperties: false })),
+  askLanguage: Type.Optional(Type.Boolean()),
+  preferLanguages: researchLanguages,
+  avoidLanguages: researchLanguages,
+}, { additionalProperties: false });
+export type ResearchConfig = Static<typeof ResearchConfig>;
+
 export const AppConfig = Type.Object({
   $schema: Type.Optional(Type.String()),
   version: Type.Literal(1),
@@ -276,6 +291,7 @@ export const AppConfig = Type.Object({
     // 考える実行（まとめ役と、その子の調べ役）の考える深さ。書かなければモデルの既定（何も送らない）。そのモデルが受けない値も送らない
     effort: Type.Optional(Type.String({ pattern: EFFORT_PATTERN })),
   }, { additionalProperties: false })),
+  research: Type.Optional(ResearchConfig),
 }, { additionalProperties: false });
 
 export type ProviderConfig = Static<typeof ProviderConfig>;

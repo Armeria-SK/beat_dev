@@ -97,7 +97,7 @@ test('research_record: リダイレクトのあとの URL で開いたページ�
 test('research_record: 別の実行で開いた URL は当たらない（表は実行ごと）', async t => {
   const { db, store } = setup(t, 'run-1');
   pagesOf('run-1')!.add('https://example.com/a', PAGE_A);
-  const other = store.start({ projectId: 'p1', runId: 'run-2', phase: 'products', mode: 'one_by_one' });
+  const other = store.start({ projectId: 'p2', runId: 'run-2', phase: 'products', mode: 'one_by_one' });
   beginPages('run-2');
   t.after(() => endPages('run-2'));
   const out = await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a' }, 'run-2');
@@ -240,7 +240,7 @@ test('同じページ: クエリだけ・スキームだけ・パスの大文字
 
 test('定番: 名前は語の切れ目で当てる。「Mit」は commits を含む抜き書きでは定番にならず、「Live preview」は語として入れば当たる', async t => {
   const { store } = setup(t);
-  const run = store.start({ projectId: 'p1', runId: 'run-x', phase: 'products', mode: 'batch' });
+  const run = store.start({ projectId: 'p-x', runId: 'run-x', phase: 'products', mode: 'batch' });
   const a = store.addSource(run.id, { kind: 'similar', name: 'A', url: 'https://a.example.com/x', evidence: {} });
   const b = store.addSource(run.id, { kind: 'similar', name: 'B', url: 'https://b.example.com/x', evidence: {} });
   const mit = store.addFeature(run.id, { label: 'Mit', evidence: [
@@ -284,7 +284,7 @@ test('research_record: 機能の根拠を落としたときは、落とした数
 
 test('定番: 行が同じページを指していれば（表に直接入った ?a と ?b の行でも）1 つに数える', async t => {
   const { db, store } = setup(t);
-  const run = store.start({ projectId: 'p1', runId: 'run-y', phase: 'products', mode: 'batch' });
+  const run = store.start({ projectId: 'p-y', runId: 'run-y', phase: 'products', mode: 'batch' });
   const insert = db.prepare("INSERT INTO research_items (research_id, kind, name_or_label, url) VALUES (?, 'similar', ?, ?)");
   const a = Number(insert.run(run.id, 'A', 'https://example.com/notes?a=1').lastInsertRowid);
   const b = Number(insert.run(run.id, 'B', 'http://example.com/Notes?b=2').lastInsertRowid);
@@ -302,7 +302,7 @@ test('ページの同じさ（pageKey）: ホストの末尾の . とポート�
 
 test('定番: 漢字・かなだけの名前は 2 字以上のときだけ当てる（1 字の「表」は当てない）', async t => {
   const { store } = setup(t);
-  const run = store.start({ projectId: 'p1', runId: 'run-z', phase: 'products', mode: 'batch' });
+  const run = store.start({ projectId: 'p-z', runId: 'run-z', phase: 'products', mode: 'batch' });
   const a = store.addSource(run.id, { kind: 'similar', name: 'A', url: 'https://a.example.com/x', evidence: {} });
   const b = store.addSource(run.id, { kind: 'similar', name: 'B', url: 'https://b.example.com/x', evidence: {} });
   const evidence = (word: string) => [
