@@ -34,6 +34,7 @@ beat が決めかねたことは、選択肢つきの質問として出てくる
 新しい製品について話し始めると、beat は先に Web で「似ている製品」と「よくある機能」を調べます（設定で、ボタンを押したときだけにも、オフにもできます）。
 見つかったものを見て、「これを使う」「これを土台にする」「自分で作る」や、入れたい機能を選びます。計画に入るのは、あなたが選んだものだけです。
 計画ができたら「Build with this plan」で作業を始めます。
+Web の検索は、既定で複数の検索サイト（DuckDuckGo・Bing・Wikipedia）へ問いを送ります。どこへ送るかは設定の `tools.web.engines` で選べます。断られたサイトはしばらく休ませ、別のサイトに移ります。
 
 ![右の Plan の欄に、調べた結果と選択肢が並んでいるところ](assets/readme/research.png)
 
@@ -171,3 +172,6 @@ Overview の「Pause」で、裏の作業をまとめて一時停止できます
 
 サーバーは `src/`、画面は `web/src/`（React + Vite）、テストは `tests/` にあります。
 `node scripts/preview-server.ts` で、作り物のデータだけを使う試しのサーバー（ポート 4797）を起動できます。この README の画像も、このサーバーで撮りました。
+検索サイトごとに本当に使えるかは `node --import ./tests/helpers/tsx-loader.mjs scripts/search-smoke.ts` で確かめられます（各サイトへ 1 回ずつ問いを送ります）。
+
+Web 検索の作り（複数の検索サイトを少しずつ同時に試す・断られたサイトを休ませる・結果を URL でまとめて並べる）は、[ddgs](https://github.com/deedy5/ddgs)（MIT）と [open-websearch](https://github.com/aas-ee/open-websearch)（Apache-2.0）の考え方を参考にしました。コードは写していません。

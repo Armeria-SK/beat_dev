@@ -4,6 +4,7 @@ import { accessKey, accessWidening } from '../web/src/settings/access.ts';
 import { applyEdits, diffConfig } from '../web/src/settings/merge.ts';
 import type { Config } from '../web/src/settings/model.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { DEFAULT_SEARCH_ENGINES } from '../src/shared/search-engines.ts';
 
 function base(): Config {
   return {
@@ -452,6 +453,6 @@ test('広がりの検出（検索先）: tools.web.engines に前に無かった
   const narrowed = structuredClone(unset);
   narrowed.tools.web.engines = ['bing'];
   assert.deepEqual(kinds(unset, narrowed), [], '既定の先から絞るのは広がりではない');
-  assert.deepEqual(kinds(before, unset).sort(), ['web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added', 'web-search-engine-added'], '既定に戻すと、足される 6 つの先');
+  assert.deepEqual(accessWidening(before, unset), DEFAULT_SEARCH_ENGINES.filter(id => !['duckduckgo-html', 'wikipedia'].includes(id)).map(engine => ({ kind: 'web-search-engine-added', engine })), '既定に戻すと、既定の先のうち無かったものが足される');
   assert.match((en as any)['access.webSearchEngine']('bing'), /search site "bing"/u);
 });
