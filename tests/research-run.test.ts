@@ -9,7 +9,7 @@ import { settled, uuid, waitFor } from './app-setup.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { fail, reply } from './helpers.ts';
+import { fail, reply, type Script } from './helpers.ts';
 import { ALPHA, BETA, researchApp } from './helpers/research-app.ts';
 import { toolCall } from './helpers/task-app.ts';
 
@@ -435,7 +435,7 @@ test('止まり方（B1）: 部分の実行が提供元の誤りで終わると�
   assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
   await s.settle();
   const record = s.records()[0]!;
-  assert.deepEqual([record.status, record.stop_reason], ['failed', 'failed']);
+  assert.deepEqual([record.status, record.stop_reason, record.partial], ['failed', 'failed', 0]);
 });
 
 test('止まり方（B1）: 持ち主が部分の実行を止めると、記録は partial で、理由は stopped', async t => {
@@ -552,5 +552,23 @@ test('止まり方（B1）: 1 件ずつのとき、どの部分も提供元の�
   const record = s.records()[0]!;
   assert.equal(record.mode, 'one_by_one');
   assert.deepEqual(s.app.research.store.parts(record.id).map(p => [p.kind, p.end]), [['first', 'failed']]);
-  assert.deepEqual([record.status, record.stop_reason], ['failed', 'failed']);
+  assert.deepEqual([record.status, record.stop_reason, record.partial], ['failed', 'failed', 0]);
+});
+
+test('止まり方（B1）: 1 件ずつのとき、最初の部分が失敗し、候補の部分は時間切れで始まらなかったら、始まらなかった部分を数えず記録は failed（partial なし）', async t => {
+  let clock = Date.now();
+  const s = await researchApp(t, { contextLength: 24_000, now: () => clock });
+  const brokenLate = (): Script => async function* () { clock += 24 * 60 * 60_000; throw new ProviderError('provider_error', 'http 400', { retryable: false }); };
+  s.adapter().scripts.push(
+    reply('ok'),
+    toolCall('web_search', { query: 'markdown notes' }),
+    toolCall('research_record', { kind: 'candidate', name: 'Alpha Notes', url: ALPHA }),
+    brokenLate(), brokenLate(),
+  );
+  await s.send(1, 'I want a Markdown notes app.');
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.equal(record.mode, 'one_by_one');
+  assert.deepEqual(s.app.research.store.parts(record.id).map(p => [p.kind, p.end]), [['first', 'failed']], 'the candidate part never started');
+  assert.deepEqual([record.status, record.stop_reason, record.partial], ['failed', 'failed', 0]);
 });

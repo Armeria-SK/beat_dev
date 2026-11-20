@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { closeToolCalls } from '../src/engine/fit.ts';
+import { toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { estimateRequest } from '../src/engine/tokens.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
 import { settled, startApp, uuid, waitFor } from './app-setup.ts';
@@ -137,4 +138,26 @@ test('止める（B1）: 道具の輪の途中で中の誤りが投げられて�
   const tools = store.messages(uuid(1)).map(m => m.message).filter((m): m is ToolRow => m.role === 'tool');
   assert.deepEqual(tools.map(m => [m.toolCallId, m.content]), [['call_a', NOT_RUN], ['call_b', NOT_RUN]]);
   assert.equal(unpairedToolCall(store.messages(uuid(1)).map(m => m.message)), undefined);
+});
+
+test('組の直し: 直した回の tail（残した行のものと、外した行のもの）は、その回の最後の結果の行に移り、Anthropic の結果の並びが切れない', () => {
+  const call = (id: string) => ({ id, name: 'web_search', arguments: {} });
+  const row = (id: string, tail?: string): ChatMessage => ({ role: 'tool', toolCallId: id, name: 'web_search', content: `r${id}`, ...(tail ? { tail } : {}) });
+  // 残した行の tail のあとに「動かしていない」行を足す（retry で最後が道具の行のとき）
+  const fixed = closeToolCalls([{ role: 'user', content: 'q' }, { role: 'assistant', content: '', toolCalls: [call('a'), call('b')] }, row('a', 'TAIL')], 'n');
+  assert.deepEqual(fixed.slice(2), [
+    { role: 'tool', toolCallId: 'a', name: 'web_search', content: 'ra' },
+    { role: 'tool', toolCallId: 'b', name: 'web_search', content: 'n', isError: true, tail: 'TAIL' },
+  ]);
+  const turn = toAnthropicMessages(fixed, false).at(-1)!;
+  const blocks = (turn.content as Array<{ type: string }>).map(b => b.type);
+  assert.deepEqual(blocks, ['tool_result', 'tool_result', 'text'], 'the tail comes after every tool_result of the turn');
+  // 回の中の組の無い行の tail も、最後の行に残る
+  assert.deepEqual(closeToolCalls([{ role: 'assistant', content: '', toolCalls: [call('a')] }, row('a'), row('z', 'Z')], 'n').at(-1), { role: 'tool', toolCallId: 'a', name: 'web_search', content: 'ra', tail: 'Z' });
+  // 回の外の組の無い行の tail は、前の user の発言に足す。前が assistant なら次の user の発言へ
+  assert.deepEqual(closeToolCalls([{ role: 'user', content: 'q', tail: 'U' }, row('z', 'Z')], 'n'), [{ role: 'user', content: 'q', tail: 'U\nZ' }]);
+  assert.deepEqual(closeToolCalls([{ role: 'assistant', content: 'hi' }, row('z', 'Z'), { role: 'user', content: 'q' }], 'n'), [{ role: 'assistant', content: 'hi' }, { role: 'user', content: 'q', tail: 'Z' }]);
+  // 組なら tail はそのまま（同じ配列）
+  const ok: ChatMessage[] = [{ role: 'assistant', content: '', toolCalls: [call('a')] }, row('a', 'T')];
+  assert.equal(closeToolCalls(ok, 'n'), ok);
 });
