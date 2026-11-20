@@ -699,4 +699,7 @@ export const MIGRATIONS: readonly Migration[] = [
   CREATE INDEX ix_research_runs_source ON research_runs (source_conversation_id) WHERE source_conversation_id IS NOT NULL;
   ALTER TABLE projects ADD COLUMN research_settings TEXT;
   `,
+  `
+  ALTER TABLE model_calls ADD COLUMN summary_chars INTEGER;
+  `,
 ];

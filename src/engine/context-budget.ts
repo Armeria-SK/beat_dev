@@ -53,3 +53,9 @@ export const CONTEXT_TARGET_RATIO = 0.7;
 export const KEEP_TOOL_RESULTS = 6;
 // 消して減る量がこれ未満なら消さない（消すたびに後ろが書き直しになるので、小さく何度も消さない）
 export const clearFloor = (available: number): number => Math.max(2_000, Math.floor(available * 0.1));
+
+// TE-5: 要約の返事の上限（available の 8%、2,000〜6,000）と、要約に原文で残す持ち主の発言の合計（available の 5%。見積もりのトークン）
+export const compactOutputTokens = (available: number): number => Math.min(6_000, Math.max(2_000, Math.floor(available * 0.08)));
+export const ownerWordsTokens = (available: number): number => Math.max(0, Math.floor(available * 0.05));
+// 要約を続けて失敗したら、その会話では要約をやめて外すだけにする回数
+export const COMPACT_FAILURE_LIMIT = 3;
