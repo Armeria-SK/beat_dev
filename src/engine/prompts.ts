@@ -105,9 +105,11 @@ export function compactRequest(language: Language, retry = false): string {
 
 // 行の区切り。見えない文字を消しても残る \r・行や段落の区切りの文字・縦タブ・改ページも区切る（1 行に見せかけた文が、後で読み直したとき見出しにならないように）
 const LINE_BREAK = /\r\n?|[\n\u2028\u2029\u0085\v\f]/u;
-// 見出しに見える行（# か全角の ＃ で始まる・太字で始まる・setext の下線）。モデルが書いた節の中では先頭に \ を付けて見出しにしない（見出しの行を書くのはコードだけ。名前では見分けない）
-const HEADING_LIKE = new RegExp(`^\\s*(?:[#${String.fromCharCode(0xff03)}]|\\*\\*)|^\\s*(?:=+|-+)\\s*$`, 'u');
-const neutral = (line: string): string => (HEADING_LIKE.test(line) ? `\\${line.trimStart()}` : line);
+// 見出しに見える行（# か全角の ＃・小さい ﹟ で始まる・HTML の h1-h6・行まるごとの太字・setext の下線〔前の行が文のときだけ〕・コードの引用の頭「- (message N)」「- (task request)」）。モデルが書いた節の中では、字下げは残してその後ろに \ を入れ、見出しにしない（見出しの行を書くのはコードだけ。名前では見分けない）
+const HEADING_LIKE = new RegExp(`^\\s*(?:[#${String.fromCharCode(0xff03, 0xfe5f)}]|<\\s*h[1-6]\\b|\\*\\*[^*]+\\*\\*:?\\s*$|-\\s*\\((?:message \\d+|task request)\\))`, 'iu');
+const SETEXT = /^\s*(?:=+|-+)\s*$/u;
+const neutral = (line: string, i: number, lines: readonly string[]): string =>
+  HEADING_LIKE.test(line) || (SETEXT.test(line) && i > 0 && (lines[i - 1] ?? '').trim() !== '') ? line.replace(/^\s*/u, ws => `${ws}\\`) : line;
 
 const norm = (line: string): string => line.replace(/^#{1,6}\s*/u, '').replace(/^\d+[.)]\s*/u, '').replace(/[*_:\uFF1A]/gu, '').replace(/\s+/gu, ' ').trim().toLowerCase();
 
