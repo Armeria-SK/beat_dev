@@ -157,4 +157,8 @@ test('止まり方の見え方（B1・B3）: 検索ができなかった記録�
   serve(() => view(record({ status: 'done', partial: true, stopReason: 'stopped' })));
   const stopped = await pane();
   assert.equal(stopped.querySelector('[data-partial]')?.textContent, 'The research was stopped partway. The rows found so far are below');
+  await cleanup();
+  serve(() => view(record({ status: 'done', partial: true, stopReason: 'part_failed' })));
+  const someFailed = await pane();
+  assert.equal(someFailed.querySelector('[data-partial]')?.textContent, 'Part of the research failed, so some candidates were not looked at. The rows found so far are below');
 });

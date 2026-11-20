@@ -37,6 +37,27 @@ export function irreducibleEstimate(input: { system: string; messages: readonly 
   return estimateRequest(input.system, groupExchanges(input.messages).at(-1) ?? [], input.tools, input.factor ?? 1, input.tail);
 }
 
+// 送る履歴の道具の呼び出しを結果と組にする: 結果の行が無い呼び出しには、その回の結果の行のあとに「動かしていない」行を足し、
+// 組になる呼び出しの無い結果の行は外す（前の不具合で残った行・道具の途中で閉じたアプリ。提供元は組でない履歴を断る）。何も変えなければ同じ配列を返す
+export function closeToolCalls(messages: readonly ChatMessage[], notRun: string): readonly ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let changed = false;
+  for (let i = 0; i < messages.length;) {
+    const m = messages[i]!;
+    i++;
+    if (m.role === 'tool') { changed = true; continue; }
+    out.push(m);
+    if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+    const open = new Map(m.toolCalls.map(call => [call.id, call.name]));
+    for (; i < messages.length && messages[i]!.role === 'tool'; i++) {
+      const row = messages[i] as Extract<ChatMessage, { role: 'tool' }>;
+      if (open.delete(row.toolCallId)) out.push(row); else changed = true;
+    }
+    for (const [toolCallId, name] of open) { out.push({ role: 'tool', toolCallId, name, content: notRun, isError: true }); changed = true; }
+  }
+  return changed ? out : messages;
+}
+
 export function fitMessages(input: {
   system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; available: number; factor?: number; tail?: string;
 }): Fitted {

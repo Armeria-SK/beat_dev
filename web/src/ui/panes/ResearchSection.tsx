@@ -211,7 +211,7 @@ function Record({ record, onChanged, onStart }: { record: ResearchRecord; onChan
         {onStart && (record.status === 'failed' || record.status === 'cancelled' || record.status === 'skipped') && <Button small variant="ghost" disabled={busy} onClick={onStart}>{t('ui.rs.again')}</Button>}
       </div>
       {running && <p className="bt-meta" role="status">{t(record.phase === 'products' ? 'ui.rs.runningText' : 'ui.rs.runningLibraries')}</p>}
-      {record.partial && <p className="bt-meta" data-partial>{t(record.stopReason === 'time' ? 'ui.rs.partialTime' : record.stopReason === 'stopped' ? 'ui.rs.partialStopped' : 'ui.rs.partial')}</p>}
+      {record.partial && <p className="bt-meta" data-partial>{t(record.stopReason === 'time' ? 'ui.rs.partialTime' : record.stopReason === 'stopped' ? 'ui.rs.partialStopped' : record.stopReason === 'part_failed' ? 'ui.rs.partFailed' : 'ui.rs.partial')}</p>}
       {record.status === 'skipped' && <p className="bt-meta">{t('ui.rs.skippedText')}</p>}
       {record.status === 'failed' && <p className="bt-meta ui-danger" data-failed={record.stopReason ?? ''}>{t(record.stopReason === 'search_blocked' ? 'ui.rs.searchBlocked' : 'ui.rs.failedText')}</p>}
       {record.status === 'cancelled' && <p className="bt-meta">{t('ui.rs.cancelledText')}</p>}

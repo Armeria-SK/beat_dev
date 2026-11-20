@@ -17,7 +17,7 @@ export const ddg = (links: readonly string[]): PageResponse => html(`<div id="li
 export const ALPHA = 'https://alpha.zqnotes.net/notes';
 export const BETA = 'https://beta.zqnotes.net/app';
 
-export function fakeWeb(hold?: { search?: Promise<void> }, blockSearch: boolean | number = false) {
+export function fakeWeb(hold?: { search?: Promise<void> }, blockSearch: boolean | number = false, emptySearch = false) {
   const asked: string[] = [];
   let searches = 0;
   const network: PageNetwork = {
@@ -28,7 +28,7 @@ export function fakeWeb(hold?: { search?: Promise<void> }, blockSearch: boolean 
         searches++;
         if (blockSearch === true || searches <= Number(blockSearch)) return html('<p>Unfortunately, bots use DuckDuckGo too. Please complete the following challenge.</p>');
         if (hold?.search) await Promise.race([hold.search, new Promise<void>((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))]);
-        return ddg([ALPHA, BETA]);
+        return ddg(emptySearch ? [] : [ALPHA, BETA]);
       }
       return html(`<p>${url.hostname} is released under the MIT License. It has Live Markdown preview and Tag search for notes.</p>`);
     },
@@ -36,11 +36,11 @@ export function fakeWeb(hold?: { search?: Promise<void> }, blockSearch: boolean 
   return { network, asked };
 }
 
-export async function researchApp(t: Parameters<typeof startApp>[0], options: { configure?: (config: AppConfig) => void; contextLength?: number; hold?: { search?: Promise<void> }; blockSearch?: boolean | number } = {}) {
+export async function researchApp(t: Parameters<typeof startApp>[0], options: { configure?: (config: AppConfig) => void; contextLength?: number; hold?: { search?: Promise<void> }; blockSearch?: boolean | number; emptySearch?: boolean; now?: () => number } = {}) {
   const products = realpathSync.native(tempDir(t as never));
-  const web = fakeWeb(options.hold, options.blockSearch);
+  const web = fakeWeb(options.hold, options.blockSearch, options.emptySearch);
   const s = await startApp(t, {
-    projectFolderExempt: [products], tools: builtinTools(), webNetwork: web.network,
+    projectFolderExempt: [products], tools: builtinTools(), webNetwork: web.network, ...(options.now ? { now: options.now } : {}),
     ...(options.contextLength ? { models: [fakeModel('m1', { contextLength: options.contextLength }), fakeModel('m2', { contextLength: options.contextLength })] } : {}),
     configure: c => { c.memory.review = false; c.research = { when: 'new' }; options.configure?.(c); },
   });

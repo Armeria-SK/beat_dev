@@ -118,6 +118,12 @@ export class FakeAdapter implements ProviderAdapter {
 
 export function unpairedToolCall(messages: ModelRequest['messages']): string | undefined {
   for (const [i, m] of messages.entries()) {
+    if (m.role === 'tool') {
+      let j = i - 1;
+      while (messages[j]?.role === 'tool') j--;
+      const owner = messages[j];
+      if (owner?.role !== 'assistant' || !owner.toolCalls?.some(c => c.id === m.toolCallId)) return m.toolCallId;
+    }
     if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
     const open = new Set(m.toolCalls.map(c => c.id));
     for (let j = i + 1; messages[j]?.role === 'tool'; j++) open.delete((messages[j] as { toolCallId: string }).toolCallId);
@@ -126,7 +132,7 @@ export function unpairedToolCall(messages: ModelRequest['messages']): string | u
   return undefined;
 }
 
-export const isJudgeRequest =(req: ModelRequest): boolean => req.tools.length === 0 && req.system.frozen.includes('safety checker');
+export const isJudgeRequest = (req: ModelRequest): boolean => req.tools.length === 0 && req.system.frozen.includes('safety checker');
 export const judgeTextOf = (req: ModelRequest): string => JSON.stringify(req.messages) + req.system.frozen + req.system.dynamic;
 
 export class JudgeAdapter extends FakeAdapter {

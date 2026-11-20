@@ -2022,6 +2022,7 @@ export const en = {
   'ui.rs.partial': 'Stopped partway at a limit. The rows found so far are below',
   'ui.rs.partialTime': 'Stopped at the time limit. The rows found so far are below',
   'ui.rs.partialStopped': 'The research was stopped partway. The rows found so far are below',
+  'ui.rs.partFailed': 'Part of the research failed, so some candidates were not looked at. The rows found so far are below',
   'ui.rs.searchBlocked': 'Web search did not work: every search was refused or failed, so nothing could be looked up. This does not mean nothing exists. Try again later',
   'ui.rs.skippedText': 'Skipped. Nothing from it goes into the plan',
   'ui.rs.failedText': 'The research stopped with an error. The rows found so far are below',

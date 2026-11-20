@@ -48,7 +48,7 @@ import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, contextAvailable, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
-import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
+import { closeToolCalls, ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, looksLikeTextToolCall } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, Usage } from './types.ts';
@@ -1174,26 +1174,31 @@ export class ChatEngine {
           d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: closed.id, role: 'tool' });
         }
       };
-      for (const toolCall of call.toolCalls) {
-        if (signal.aborted) { closeUnrun(); return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags); }
-        counters.toolCalls++;
-        if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
-        // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
-        const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
-        ctx.outputTokens = budget.tokens;
-        ctx.contextAvailable = budget.available;
-        ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
-        const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
-        recordTaint();
-        countDone(toolCall.name, outcome);
-        if (outcome.invalidArguments) invalidThisRound++;
-        if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
-        const toolSaved = d.conversations.append(conversationId, {
-          role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
-          ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
-        }, runId);
-        unrun.shift();
-        d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
+      try {
+        for (const toolCall of call.toolCalls) {
+          if (signal.aborted) { closeUnrun(); return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags); }
+          counters.toolCalls++;
+          if (!toolCall.name.startsWith('task_') && toolCall.name !== 'tool_search') counters.workCalls++;
+          // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
+          const budget = this.#toolResultTokens({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
+          ctx.outputTokens = budget.tokens;
+          ctx.contextAvailable = budget.available;
+          ctx.model = { id: lastRoute.model.id, vision: lastRoute.model.vision };
+          const outcome = await callTool(toolCall, cutRaw.has(toolCall.id) ? { message: engineText(languageOf(config), toolCall.name === 'skill_draft' ? 'tool.truncated_skill_draft' : 'tool.truncated_call'), raw: cutRaw.get(toolCall.id)! } : undefined);
+          recordTaint();
+          countDone(toolCall.name, outcome);
+          if (outcome.invalidArguments) invalidThisRound++;
+          if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
+          const toolSaved = d.conversations.append(conversationId, {
+            role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
+            ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
+          }, runId);
+          unrun.shift();
+          d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
+        }
+      } catch (error) {
+        try { closeUnrun(); } catch { }
+        throw error;
       }
       if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
       // タスクの終え方（完了・途中経過・質問）が決まったら、モデルを呼び直さずに終える
@@ -1374,6 +1379,8 @@ export class ChatEngine {
             detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
+        const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'));
+        if (paired !== fitted.messages) fitted = { ...fitted, messages: [...paired], estimate: estimateRequest(systemText(system), paired, apiTools, factor, pending) };
         // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
         // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）
         if (fitted.removed >= COMPACT_MIN_MESSAGES && !p.compaction.failed && p.compaction.count < MAX_COMPACTIONS_PER_RUN) {
@@ -1677,7 +1684,7 @@ export class ChatEngine {
     const project = runProject(d.projects, d.conversations.projectOf(conversationId));
     const snapshot = existing?.snapshot ?? this.#buildSnapshotText(language, conversationId, project).text;
     const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat', project });
-    const { tokens } = estimateRequest(systemText(built.system), built.history, built.apiTools, built.factor, built.pending);
+    const { tokens } = estimateRequest(systemText(built.system), closeToolCalls(built.history, engineText(language, 'tool.not_run_stopped')), built.apiTools, built.factor, built.pending);
     return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
   }
 

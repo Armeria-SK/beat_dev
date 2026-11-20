@@ -486,13 +486,71 @@ test('検索ができない（B3）: 一部の検索だけ断られ、ほかが�
   assert.deepEqual([record.status, record.stop_reason], ['done', null]);
 });
 
-test('検索ができない（B3）: 結果 0 件で答えた検索は「見つからなかった」のまま（done）', async t => {
-  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+test('検索ができない（B3）: 結果 0 件で答えた検索は「見つからなかった」のまま（done）。ほかの検索が断られても', async t => {
+  const s = await researchApp(t, { blockSearch: 1, emptySearch: true, configure: c => { c.research = { when: 'button' }; } });
   s.adapter().scripts.push(reply('ok'));
   await s.send(1, 'I want a notes app.');
-  s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), reply('Nothing to record.'));
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), toolCall('web_search', { query: 'markdown notes' }), reply('Nothing to record.'));
   assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
   await s.settle();
   const record = s.records()[0]!;
   assert.deepEqual([record.status, record.stop_reason], ['done', null]);
+});
+
+test('検索ができない（B3）: 検索が全部断られたまま時間切れで止まっても、理由は search_blocked（時間切れではない）', async t => {
+  let clock = Date.now();
+  const s = await researchApp(t, { blockSearch: true, now: () => clock, configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  let entered!: () => void;
+  const inside = new Promise<void>(resolve => { entered = resolve; });
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes app' }), async function* (req) {
+    entered();
+    const signal = (req as { signal?: AbortSignal }).signal;
+    await new Promise<void>((_, reject) => { if (signal?.aborted) reject(new Error('aborted')); signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); });
+    yield { type: 'done' as const, stop: 'end_turn' as const };
+  });
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await inside;
+  clock += 24 * 60 * 60_000;
+  s.adapter().scripts.push(reply('chat answer'));
+  await s.send(2, 'another question');
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.deepEqual([record.status, record.stop_reason], ['failed', 'search_blocked']);
+});
+
+test('止まり方（B1）: 1 件ずつのとき、候補の部分が提供元の誤りで失敗しても残りの候補を調べ、記録は done・partial・part_failed', async t => {
+  const s = await researchApp(t, { contextLength: 24_000 });
+  const broken = () => fail(new ProviderError('provider_error', 'http 400', { retryable: false }));
+  s.adapter().scripts.push(
+    reply('ok'),
+    toolCall('web_search', { query: 'markdown notes' }),
+    toolCall('research_record', { kind: 'candidate', name: 'Alpha Notes', url: ALPHA }),
+    toolCall('research_record', { kind: 'candidate', name: 'Beta App', url: BETA }),
+    reply('two candidates'),
+    broken(), broken(),
+    toolCall('web_fetch', { url: BETA }),
+    toolCall('research_record', { kind: 'similar', name: 'Beta App', url: BETA }),
+    reply('beta done'),
+  );
+  await s.send(1, 'I want a Markdown notes app.');
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.equal(record.mode, 'one_by_one');
+  assert.deepEqual(s.app.research.store.parts(record.id).map(p => [p.kind, p.end]), [['first', 'done'], ['candidate', 'failed'], ['candidate', 'done']]);
+  assert.deepEqual([record.status, record.partial, record.stop_reason], ['done', 1, 'part_failed']);
+  assert.deepEqual(s.app.research.store.items(record.id).filter(i => i.kind === 'similar').map(i => i.name_or_label), ['Beta App']);
+});
+
+test('止まり方（B1）: 1 件ずつのとき、どの部分も提供元の誤りで失敗したら記録は failed', async t => {
+  const s = await researchApp(t, { contextLength: 24_000 });
+  const broken = () => fail(new ProviderError('provider_error', 'http 400', { retryable: false }));
+  s.adapter().scripts.push(reply('ok'), broken(), broken());
+  await s.send(1, 'I want a Markdown notes app.');
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.equal(record.mode, 'one_by_one');
+  assert.deepEqual(s.app.research.store.parts(record.id).map(p => [p.kind, p.end]), [['first', 'failed']]);
+  assert.deepEqual([record.status, record.stop_reason], ['failed', 'failed']);
 });

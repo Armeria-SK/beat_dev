@@ -24,7 +24,7 @@ const en = {
   'tool.invalid_streak': 'The model could not call tools in a valid form ({count} times in a row). Switch to a model that handles tools well, or turn off tools you do not use',
   'tool.invalid_streak_hint': 'Turn off tools you do not use',
   'tool.not_run_stopped': 'The run stopped before this tool call, so it was not run',
-  'tool.truncated_call':'The reply was cut off at the output limit, so this tool call was not run. Make it shorter or split it up (for a long write, write part of it first and append the rest)',
+  'tool.truncated_call': 'The reply was cut off at the output limit, so this tool call was not run. Make it shorter or split it up (for a long write, write part of it first and append the rest)',
   'tool.truncated_skill_draft': 'The reply was cut off at the output limit, so this call was not run. Shorten the skill body and call it again',
   'tool.truncated_streak': 'Stopped because the reply was cut off at the output limit {count} times in a row. Raise Longest reply in Settings › Models › Advanced, or split the request into smaller parts',
   'hint.prompt_exceeds': 'Start a new conversation, or reduce long attachments and tool output',
