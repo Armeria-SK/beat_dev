@@ -13,6 +13,8 @@ export interface SearchEngine {
   readonly label: string;
   // 同じ結果の出どころ（Yahoo は Bing の結果）。同じ provider の先は 1 つの組に入れず、送る間隔を共有する
   readonly provider: string;
+  // 止められたときに一緒に休む先の名前（同じ仕組みで止める先。DuckDuckGo の html と lite）。無ければ id
+  readonly restGroup?: string;
   hosts(region: string): string[];
   readonly minIntervalMs: number;
   readonly maxPerHour: number;
@@ -21,13 +23,14 @@ export interface SearchEngine {
   readonly userAgent?: string;
   readonly accept?: string;
   request(query: string, region: string): URL;
-  read(body: string, contentType: string, limit: number): EngineRead;
+  // pageUrl: 返事を受け取った URL（転送のあと）。相対のリンクや、どの言語の頁かを読むのに使う
+  read(body: string, contentType: string, limit: number, pageUrl: string): EngineRead;
 }
 
 // 読み方の中で何が起きても外へ投げない（壊れた頁・形の変わった頁は unknown）
-export function readSafely(engine: SearchEngine, body: string, contentType: string, limit: number): EngineRead {
+export function readSafely(engine: SearchEngine, body: string, contentType: string, limit: number, pageUrl = ''): EngineRead {
   try {
-    const result = engine.read(body, contentType, limit);
+    const result = engine.read(body, contentType, limit, pageUrl);
     return result.hits.length ? { hits: result.hits.slice(0, limit), state: 'ok' } : { hits: [], state: result.state === 'ok' ? 'unknown' : result.state };
   } catch {
     return { hits: [], state: 'unknown' };

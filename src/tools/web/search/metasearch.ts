@@ -50,7 +50,7 @@ const realSleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolv
 function ordered(engines: readonly SearchEngine[], health: EngineHealth, turn: number): SearchEngine[] {
   const start = engines.length ? turn % engines.length : 0;
   const rotated = [...engines.slice(start), ...engines.slice(0, start)];
-  const tier = (engine: SearchEngine) => { const last = health.last(engine.id); return last === undefined || last === 'ok' || last === 'empty' ? 0 : last === 'unknown' ? 2 : 1; };
+  const tier = (engine: SearchEngine) => { const last = health.last(engine); return last === undefined || last === 'ok' || last === 'empty' ? 0 : last === 'unknown' ? 2 : 1; };
   return rotated.map((engine, index) => ({ engine, index, tier: tier(engine) })).sort((a, b) => a.tier - b.tier || a.index - b.index).map(x => x.engine);
 }
 
@@ -77,7 +77,7 @@ export async function metasearch(options: MetasearchOptions): Promise<Metasearch
     const transport = options.network ?? (options.networkFor ?? searchNetworkFor)(searchHeaders(engine, region, turn));
     try {
       const page = await fetchPublic(engine.request(options.query, region).href, signal, transport, REQUEST_MS, undefined, hosts);
-      const read = readSafely(engine, decodeText(page.body, page.contentType), page.contentType, limit);
+      const read = readSafely(engine, decodeText(page.body, page.contentType), page.contentType, limit, page.url);
       health.record(engine, read.state);
       return { engine, outcome: read.state, hits: read.hits };
     } catch (error) {
@@ -94,7 +94,7 @@ export async function metasearch(options: MetasearchOptions): Promise<Metasearch
       for (const engine of queue) {
         if (picked.length >= GROUP_SIZE) break;
         if (attempts.some(a => a.engine.id === engine.id) || picked.some(p => p.provider === engine.provider)) continue;
-        if (health.restingFor(engine.id) > 0 || health.overHourLimit(engine)) continue;
+        if (health.restingFor(engine) > 0 || health.overHourLimit(engine)) continue;
         picked.push(engine);
       }
       if (!picked.length) break;
@@ -130,7 +130,7 @@ function unavailableDetails(engines: readonly SearchEngine[], attempts: readonly
   const lines: string[] = [];
   for (const engine of engines) {
     const attempt = attempts.find(a => a.engine.id === engine.id);
-    const rest = health.restingFor(engine.id);
+    const rest = health.restingFor(engine);
     let key: ToolMessageKey | undefined;
     if (attempt) key = attempt.outcome === 'blocked' ? 'search.reason.blocked' : attempt.outcome === 'unknown' ? 'search.reason.unknown' : attempt.outcome === 'timeout' || attempt.outcome === 'aborted' ? 'search.reason.timeout' : attempt.outcome === 'error' ? 'search.reason.error' : undefined;
     else if (rest > 0) key = 'search.reason.resting';

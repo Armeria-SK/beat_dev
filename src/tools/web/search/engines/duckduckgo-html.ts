@@ -6,6 +6,7 @@ export const duckduckgoHtml: SearchEngine = {
   id: 'duckduckgo-html',
   label: 'DuckDuckGo',
   provider: 'duckduckgo',
+  restGroup: 'duckduckgo',
   hosts: () => ['html.duckduckgo.com', 'duckduckgo.com'],
   minIntervalMs: DEFAULT_INTERVAL_MS,
   maxPerHour: DEFAULT_PER_HOUR,

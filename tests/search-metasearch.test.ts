@@ -68,8 +68,8 @@ test('1 組目が両方 blocked なら 2 組目へ移り、1 組目は 5 分休�
   assert.deepEqual(net.gets, ['a', 'b', 'c', 'd']);
   assert.deepEqual(first.engines, ['C', 'D']);
   assert.equal(first.hits.length, 2);
-  assert.ok(Math.abs(health.restingFor('a') - 5 * MIN) < 10_000, String(health.restingFor('a')));
-  assert.ok(health.restingFor('b') > 4 * MIN);
+  assert.ok(Math.abs(health.restingFor(engines[0]!) - 5 * MIN) < 10_000, String(health.restingFor(engines[0]!)));
+  assert.ok(health.restingFor(engines[1]!) > 4 * MIN);
   net.gets.length = 0;
   await run(engines, net, health, c);
   assert.ok(!net.gets.includes('a') && !net.gets.includes('b'), `休み中の先へ送った: ${net.gets.join(',')}`);
@@ -83,8 +83,8 @@ test('2 回目の blocked で 15 分、3 回目で 60 分。成功で休みは�
   const rests: number[] = [];
   for (let i = 0; i < 5; i++) {
     await run([a], net, health, c).catch(() => undefined);
-    rests.push(Math.round(health.restingFor('a') / MIN));
-    c.at += health.restingFor('a') + 1;
+    rests.push(Math.round(health.restingFor(a) / MIN));
+    c.at += health.restingFor(a) + 1;
   }
   assert.deepEqual(rests, [5, 15, 60, 0, 5]);
 });
@@ -220,4 +220,21 @@ test('調べる実行（onlySearchHosts）では、先の外のホストへの�
   const followed = await run([engine('a'), engine('b')], free, new EngineHealth(c.now), c, { onlySearchHosts: true });
   assert.deepEqual(free.gets, ['a', 'b', 'b'], '有効な先のホストへの転送はたどる');
   assert.equal(followed.hits.length, 1);
+});
+
+test('restGroup が同じ先（DuckDuckGo の html と lite）は、片方が止められたら一緒に休む。provider だけ同じ先（Bing と Yahoo）は休まない', async () => {
+  const c = clock();
+  const health = new EngineHealth(c.now);
+  const html = engine('html', { provider: 'ddg', restGroup: 'ddg' });
+  const lite = engine('lite', { provider: 'ddg', restGroup: 'ddg' });
+  const bing = engine('bing');
+  const yahoo = engine('yahoo', { provider: 'bing' });
+  health.record(html, 'blocked');
+  health.record(bing, 'blocked');
+  assert.ok(health.restingFor(lite) > 4 * MIN);
+  assert.equal(health.restingFor(yahoo), 0);
+  const net = fakeNet({ lite: ok('https://x.example.org/'), yahoo: ok('https://y.example.org/') });
+  const result = await run([html, lite, bing, yahoo], net, health, c);
+  assert.deepEqual(net.gets, ['yahoo']);
+  assert.deepEqual(result.engines, ['YAHOO']);
 });
