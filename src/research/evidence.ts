@@ -32,6 +32,7 @@ export function sourceKey(raw: string): string | null {
 
 export class OpenedPages {
   readonly #pages = new Map<string, string>();
+  readonly #words = new Map<string, string>();
 
   add(url: string, text: string): void {
     const key = normalizeUrl(url);
@@ -39,6 +40,8 @@ export class OpenedPages {
     const before = this.#pages.get(key);
     const folded = normalizeQuote(text);
     this.#pages.set(key, (before === undefined ? folded : `${before}\u0000${folded}`).slice(0, PAGE_CHARS));
+    const words = this.#words.get(key);
+    this.#words.set(key, (words === undefined ? spaced(text) : `${words}\u0000${spaced(text)}`).slice(0, PAGE_CHARS * 2));
   }
 
   has(url: string): boolean {
@@ -52,6 +55,21 @@ export class OpenedPages {
     if (page === undefined || excerpt === undefined || quoteWeight(excerpt) < MIN_QUOTE_WEIGHT) return false;
     return page.includes(normalizeQuote(excerpt));
   }
+
+  // R-1a の申し送り (1): 両端がページの上で語の切れ目になっている抜き書きだけ（「is written in Go」は「Google Apps Script」のページで当たらない）
+  wholeQuoted(url: string, excerpt: string | undefined): boolean {
+    if (!this.quoted(url, excerpt)) return false;
+    const page = this.#words.get(normalizeUrl(url)!) ?? '';
+    const quote = spaced(excerpt!);
+    const first = [...quote][0];
+    const last = [...quote].at(-1);
+    for (let at = page.indexOf(quote); at >= 0; at = page.indexOf(quote, at + 1)) {
+      const before = [...page.slice(Math.max(0, at - 2), at)].at(-1);
+      const after = [...page.slice(at + quote.length, at + quote.length + 2)][0];
+      if (!joins(before, first) && !joins(last, after)) return true;
+    }
+    return false;
+  }
 }
 
 export type PartKind = 'first' | 'candidate' | 'continue' | 'libraries';
@@ -59,8 +77,6 @@ export type PartKind = 'first' | 'candidate' | 'continue' | 'libraries';
 export interface ResearchBudget { fetches: number; searches: number; started: number }
 
 export interface Candidate { name: string; url: string }
-
-export const CANDIDATE_MAX = 8;
 
 export class ResearchSession {
   readonly researchId: string;
@@ -102,20 +118,6 @@ export class ResearchSession {
   get takesCandidates(): boolean { return this.oneByOne && this.part === 'first'; }
 
   overTime(): boolean { return this.#now() - this.budget.started >= this.limits.minutes * 60_000; }
-}
-
-const RUNS = new Map<string, OpenedPages>();
-
-export function beginPages(runId: string): OpenedPages {
-  const pages = new OpenedPages();
-  RUNS.set(runId, pages);
-  return pages;
-}
-
-export const pagesOf = (runId: string): OpenedPages | undefined => RUNS.get(runId);
-
-export function endPages(runId: string): void {
-  RUNS.delete(runId);
 }
 
 const WORD = /[\p{L}\p{N}_]/u;

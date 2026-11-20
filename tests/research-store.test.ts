@@ -36,7 +36,7 @@ test('記録の store: 終わった記録（done / failed / cancelled / skipped�
     assert.equal(codeOf(() => store.addSource(run.id, similar(2))), 'finished', end);
     assert.equal(codeOf(() => store.addFeature(run.id, { label: 'Live preview', evidence: [] })), 'finished', end);
     assert.equal(codeOf(() => store.finish(run.id, 'done')), 'finished', end);
-    assert.equal(codeOf(() => store.attachRun(run.id, 'r-other')), 'finished', end);
+    assert.equal(codeOf(() => store.addPart(run.id, { taskId: 't-other', conversationId: 'c-other', kind: 'first' })), 'finished', end);
     assert.deepEqual(store.items(run.id), before);
     const row = store.get(run.id)!;
     assert.equal(row.status, end);
@@ -87,10 +87,10 @@ test('記録の store: 再起動のときの片付けで running の記録が fa
   assert.deepEqual([store.get(a.id)!.status, store.get(b.id)!.status], ['failed', 'done']);
 });
 
-test('記録の store: 1 件ずつの続きの実行は attachRun で実行を替え、runningFor は今の実行だけを返す', t => {
+test('記録の store: 部分の実行は setPart で実行を替え、runningFor は今の実行だけを返す', t => {
   const { store } = setup(t);
   const run = store.start({ projectId: 'p1', runId: 'r1', phase: 'products', mode: 'one_by_one' });
-  store.attachRun(run.id, 'r2');
+  store.setPart(run.id, store.addPart(run.id, { taskId: 't1', conversationId: 'cr1', kind: 'first' }), { runId: 'r2' });
   assert.equal(store.runningFor('r1'), undefined);
   assert.equal(store.runningFor('r2')!.id, run.id);
 });

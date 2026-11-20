@@ -246,6 +246,11 @@ export function createWebServer(app: App): WebServer {
       if (round >= MAX_REVIEW_STOP_ROUNDS) throw problem(409, 'conflict', 'conversation_running');
       await app.background.stopWhere({ conversationId: id });
     }
+    // 待つあいだにボタンから始まった調べる記録も止める。ここから消すまで await は無い
+    for (let round = 0; app.research.store.bySource(id).some(r => r.status === 'running'); round++) {
+      if (round >= MAX_REVIEW_STOP_ROUNDS) throw problem(409, 'conflict', 'conversation_running');
+      await app.research.stopForSource(id);
+    }
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     if (running()) throw problem(409, 'conflict', 'conversation_running');
     for (const job of app.background.list({ conversationId: id })) app.background.forget(job.id, id);

@@ -648,6 +648,7 @@ export class App {
     this.folderDialog.stop();
     this.worker.stop();
     this.engine.saveQueued();
+    this.research.close();
     this.engine.stopAll();
     this.db.close();
   }

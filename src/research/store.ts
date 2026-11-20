@@ -210,10 +210,6 @@ export class ResearchStore {
     });
   }
 
-  detachSource(conversationId: string): void {
-    this.#db.prepare('UPDATE research_runs SET source_conversation_id = NULL WHERE source_conversation_id = ?').run(conversationId);
-  }
-
   get(id: string): ResearchRunRow | undefined {
     const row = this.#db.prepare('SELECT * FROM research_runs WHERE id = ?').get(id);
     return row ? { ...row } as unknown as ResearchRunRow : undefined;
@@ -222,11 +218,6 @@ export class ResearchStore {
   runningFor(runId: string): ResearchRunRow | undefined {
     const row = this.#db.prepare("SELECT * FROM research_runs WHERE run_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1").get(runId);
     return row ? { ...row } as unknown as ResearchRunRow : undefined;
-  }
-
-  attachRun(id: string, runId: string): void {
-    const changed = this.#db.prepare("UPDATE research_runs SET run_id = ? WHERE id = ? AND status = 'running'").run(runId, id).changes;
-    if (Number(changed) !== 1) throw this.#ended(id);
   }
 
   finish(id: string, status: ResearchEnd, options: FinishOptions = {}): void {

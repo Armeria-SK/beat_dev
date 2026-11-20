@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { beginPages, endPages, normalizeUrl, OpenedPages, pageKey, pagesOf } from '../src/research/evidence.ts';
+import { normalizeUrl, OpenedPages, pageKey, ResearchSession } from '../src/research/evidence.ts';
 import { ResearchStore } from '../src/research/store.ts';
 import { researchRecord } from '../src/tools/builtin/research.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -12,20 +12,33 @@ import { testConfig } from './helpers.ts';
 const PAGE_A = 'Typora-like editor. Released under the MIT License. Last updated 2026-10-01. Written in TypeScript. Features: Live preview, Table editor, Export to PDF.';
 const PAGE_B = 'Another notes app. Licensed GPL-3.0. Written in Rust. It has a live preview and a table editor.';
 
+// 実行ごとの調べる部分（開けたページの表を持つ）。本物では engine が ctx.research に渡す
+const SESSIONS = new Map<string, ResearchSession>();
+const LIMITS = { candidates: 8, searches: 15, fetches: 30, minutes: 20 };
+
+function sessionFor(t: { after: (fn: () => void) => void }, researchId: string, runId: string): ResearchSession {
+  const session = new ResearchSession({ researchId, part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() }, limits: LIMITS });
+  SESSIONS.set(runId, session);
+  t.after(() => { SESSIONS.delete(runId); });
+  return session;
+}
+
 function setup(t: { after: (fn: () => void) => void }, runId = 'run-1') {
   const db = openDatabase(':memory:', MIGRATIONS);
-  t.after(() => { db.close(); endPages(runId); });
+  t.after(() => { db.close(); });
   const store = new ResearchStore(db);
   const research = store.start({ projectId: 'p1', conversationId: 'c-research', runId, phase: 'products', mode: 'batch' });
-  const pages = beginPages(runId);
+  const pages = sessionFor(t, research.id, runId).pages;
   return { db, store, research, pages };
 }
 
 function ctx(db: DatabaseSync, runId = 'run-1'): ToolContext {
+  const research = SESSIONS.get(runId);
   return {
     runId, conversationId: 'c-research', kind: 'task', signal: new AbortController().signal, config: testConfig(), paths: undefined as never,
     policy: undefined as never, workspace: '.', log: () => undefined, taint: { tainted: true, sources: ['web'] },
     services: { db, memory: undefined as never, emit: () => undefined },
+    ...(research ? { research } : {}),
   };
 }
 
@@ -95,11 +108,10 @@ test('research_record: リダイレクトのあとの URL で開いたページ�
 });
 
 test('research_record: 別の実行で開いた URL は当たらない（表は実行ごと）', async t => {
-  const { db, store } = setup(t, 'run-1');
-  pagesOf('run-1')!.add('https://example.com/a', PAGE_A);
+  const { db, store, pages } = setup(t, 'run-1');
+  pages.add('https://example.com/a', PAGE_A);
   const other = store.start({ projectId: 'p2', runId: 'run-2', phase: 'products', mode: 'one_by_one' });
-  beginPages('run-2');
-  t.after(() => endPages('run-2'));
+  sessionFor(t, other.id, 'run-2');
   const out = await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a' }, 'run-2');
   assert.equal(out.isError, true);
   assert.match(out.content, /has not opened/u);
@@ -123,6 +135,29 @@ test('research_record: 単語だけの抜き書きは「不明」。「MIT」は
   await record(db, { kind: 'similar', name: 'Commits App', url: 'https://example.com/c', license: 'MIT', language: 'Rust', updated: '2' });
   await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a', license: 'MIT', language: 'TypeScript', updated: '2026-10-01' });
   assert.deepEqual(store.items(research.id).map(r => [r.license, r.updated, r.language]), [[null, null, null], [null, null, null]]);
+});
+
+test('research_record（R-1a の申し送り (1)）: 言語の抜き書きは両端がページの上で語の切れ目のときだけ。「is written in Go」は「Google Apps Script」のページでは不明', async t => {
+  const { db, store, research, pages } = setup(t);
+  pages.add('https://example.com/g', 'This add-on is written in Google Apps Script. Released under the MIT License.');
+  pages.add('https://example.com/h', 'This tool is written in Go and ships as one binary.');
+  await record(db, { kind: 'similar', name: 'Sheet Notes', url: 'https://example.com/g', language: 'is written in Go', license: 'Released under the MIT' });
+  await record(db, { kind: 'similar', name: 'Go Notes', url: 'https://example.com/h', language: 'is written in Go' });
+  assert.deepEqual(store.items(research.id).map(r => [r.name_or_label, r.language, r.license]), [['Sheet Notes', null, 'Released under the MIT'], ['Go Notes', 'is written in Go', null]]);
+});
+
+test('research_record（LOW-2）: モデルの choice は断り、行を作らない（やり方の問いはコードだけが作る）', async t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => { db.close(); });
+  const store = new ResearchStore(db);
+  const libs = store.start({ projectId: 'p1', runId: 'run-libs', phase: 'libraries', mode: 'batch' });
+  const session = sessionFor(t, libs.id, 'run-libs');
+  session.pages.add('https://example.com/a', PAGE_A);
+  const out = await record(db, { kind: 'choice', name: 'How to store notes', url: 'https://example.com/a', options: ['Files', 'SQLite'], recommended: 1 }, 'run-libs');
+  assert.equal(out.isError, true, out.content);
+  assert.match(out.content, /does not belong/u);
+  assert.equal(store.items(libs.id).length, 0);
+  assert.ok(!JSON.stringify(researchRecord.input).includes('"choice"'), 'the tool schema does not offer choice');
 });
 
 test('research_record: 抜き書きの無い欄（モデルの記憶だけの値）は載らない', async t => {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { growthStats } from '../src/growth/stats.ts';
 import { BUILD_BODY } from '../src/projects/build.ts';
-import { languageDecided, languageOfFiles, languagesIn, pastLanguages, rankLanguages, LANGUAGE_QUESTION, LOAD_QUESTION, DELIVERY_QUESTION } from '../src/research/choices.ts';
+import { languageDecided, languageOfFiles, languagesIn, pastLanguages, rankLanguages, LANGUAGE_QUESTION, LOAD_QUESTION, DELIVERY_QUESTION, DELIVERY_OPTIONS } from '../src/research/choices.ts';
 import { pickedLanguage } from '../src/research/store.ts';
 import type { ToolCheck } from '../src/research/toolchain.ts';
 import { uuid, waitFor } from './app-setup.ts';
@@ -74,16 +74,17 @@ test('2 回目の部分（R-3）: products の確定のあと、コードが言�
   await Promise.all(s.records().map(x => s.app.research.waitFor(x.id)));
   const lib = s.records().find(x => x.phase === 'libraries')!;
   const rows = s.app.research.store.items(lib.id).filter(i => i.kind === 'choice');
-  assert.deepEqual(rows.map(i => [i.name_or_label, i.recommended, JSON.parse(i.evidence).by]), [[LANGUAGE_QUESTION, 0, 'code'], [DELIVERY_QUESTION, null, 'code'], [LOAD_QUESTION, null, 'code'], ['How to store notes', 1, 'model']]);
+  assert.deepEqual(rows.map(i => [i.name_or_label, i.recommended, JSON.parse(i.evidence).by]), [[LANGUAGE_QUESTION, 0, 'code'], [DELIVERY_QUESTION, null, 'code'], [LOAD_QUESTION, null, 'code']], 'the model cannot add a choice row');
   assert.equal(JSON.parse(rows[0]!.options!)[0], 'Go', 'Go is installed and Alpha is written in Go');
   const part = s.app.research.store.parts(lib.id)[0]!;
+  assert.deepEqual(s.tools(part.conversationId).filter(m => m.name === 'research_record').map(m => m.isError === true), [true], 'the model choice call is refused');
   const users = s.users(part.conversationId);
   assert.deepEqual(users.filter(m => m.generated === true).map(m => m.content), [`Features the owner picked:\n- Tag search\nLanguages being considered: ${JSON.parse(rows[0]!.options!).slice(0, 3).join(', ')}`]);
   assert.ok(!users.some(m => m.content.includes('Alpha Notes') || m.content.includes(ALPHA)), 'no researched text from the products record');
   const run = s.app.db.prepare('SELECT tainted FROM engine_runs WHERE id = ?').get(part.runId) as { tainted: number };
   assert.equal(run.tainted, 1, 'the libraries part starts as read from outside');
   const view = await s.json(`/api/projects/${s.projectId}/research`, 'GET');
-  assert.deepEqual(view.body.libraries.items.filter((i: { kind: string }) => i.kind === 'choice').map((i: { by: string }) => i.by), ['code', 'code', 'code', 'model']);
+  assert.deepEqual(view.body.libraries.items.filter((i: { kind: string }) => i.kind === 'choice').map((i: { by: string }) => i.by), ['code', 'code', 'code']);
 });
 
 test('聞かないとき（統合）: 持ち主が言語を言っていれば言語の問いは作らず、言った言語を頼みに渡す。配り方を言っていれば配り方の問いも作らない', async t => {
@@ -98,11 +99,11 @@ test('聞かないとき（統合）: 持ち主が言語を言っていれば言
   assert.ok(s.users(part.conversationId).some(m => m.generated === true && m.content.endsWith('Languages being considered: Python')));
 });
 
-test('libraries の確定まで DECISIONS.md と Build の文には何も書かれない。確定のあと、言語の行（コードの値）とやり方の行（[src: external]）が入り、Build の文に 1 文。道具が無ければ知らせる', async t => {
+test('libraries の確定まで DECISIONS.md と Build の文には何も書かれない。確定のあと、言語の行（コードの値）とやり方の行（コードの問いの選択肢）が入り、Build の文に 1 文。道具が無ければ知らせる', async t => {
   const s = await setup(t);
   s.app.research.toolchain = async names => names.map(name => tool(name, 'missing'));
   const p = await confirmedProducts(s);
-  s.adapter().scripts.push(reply('ok'), toolCall('research_record', { kind: 'choice', name: 'How to store notes', options: ['Plain files', 'SQLite'], recommended: 1 }), reply('libraries done'));
+  s.adapter().scripts.push(reply('ok'), reply('libraries done'));
   await s.json(`/api/research/${p.record.id}/confirm`, 'POST', { shownHash: p.hash(), picks: [{ id: p.f.id, decision: 'picked' }] });
   await Promise.all(s.records().map(x => s.app.research.waitFor(x.id)));
   await waitFor(() => !s.app.engine.chatting, 'reply ended');
@@ -113,7 +114,7 @@ test('libraries の確定まで DECISIONS.md と Build の文には何も書か�
   const lib = s.records().find(x => x.phase === 'libraries')!;
   const rows = s.app.research.store.items(lib.id);
   const language = rows.find(i => i.name_or_label === LANGUAGE_QUESTION)!;
-  const approach = rows.find(i => i.name_or_label === 'How to store notes')!;
+  const approach = rows.find(i => i.name_or_label === DELIVERY_QUESTION)!;
   const options = JSON.parse(language.options!) as string[];
   s.adapter().scripts.push(reply('noted'));
   const out = await s.json(`/api/research/${lib.id}/confirm`, 'POST', { shownHash: s.app.research.store.shownHash(lib.id), picks: [{ id: language.id, decision: 1 }, { id: approach.id, decision: 0 }] });
@@ -121,7 +122,7 @@ test('libraries の確定まで DECISIONS.md と Build の文には何も書か�
   const lines = readFileSync(decisions, 'utf8').split('\n').filter(l => l.includes('research #'));
   assert.deepEqual(lines.map(l => l.replace(/^- \S+ /u, '')), [
     `research #${lib.id.slice(0, 8)}: owner picked language: "${options[1]}"`,
-    `research #${lib.id.slice(0, 8)}: owner picked "Plain files" for "How to store notes" [src: external]`,
+    `research #${lib.id.slice(0, 8)}: owner picked "${DELIVERY_OPTIONS[0]}" for "${DELIVERY_QUESTION}"`,
   ]);
   assert.equal(pickedLanguage(s.app.db, s.projectId), options[1]);
   assert.ok(BUILD_BODY(null, undefined, pickedLanguage(s.app.db, s.projectId)).includes(`Use ${options[1]} for the product`));

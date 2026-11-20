@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ownerSpeech } from '../src/db/conversations.ts';
 import { OwnerAct, OWNER_TEXT_MAX } from '../src/research/run.ts';
-import { uuid, waitFor } from './app-setup.ts';
+import { settled, uuid, waitFor } from './app-setup.ts';
 import { reply } from './helpers.ts';
 import { ALPHA, BETA, researchApp } from './helpers/research-app.ts';
 import { toolCall } from './helpers/task-app.ts';
@@ -253,4 +253,96 @@ test('D14: 記録があるときだけ、計画の会話の tail の状態の行
   const tail = s.adapter().calls.at(-1)!.system.tail ?? '';
   assert.match(tail, /research before building: 1 rows waiting for the owner/u);
   assert.ok(!tail.includes('Alpha Notes'));
+});
+
+// beat R の審査（MEDIUM-1）: 待つところ（きっかけの返事・会話が空くのを待つ）で止められても、飛ばす・消すはすぐ返る
+const held = (hold: Promise<void>, entered?: () => void) => async function* (req: unknown) {
+  entered?.();
+  const signal = (req as { signal?: AbortSignal }).signal;
+  await new Promise<void>((resolve, reject) => { if (signal?.aborted) reject(new Error('aborted')); signal?.addEventListener('abort', () => reject(new Error('aborted'))); void hold.then(resolve); });
+  yield { type: 'text' as const, delta: 'late' };
+  yield { type: 'done' as const, stop: 'end_turn' as const };
+};
+
+test('飛ばす（MEDIUM-1）: きっかけの返事を待っているあいだ（部分 0）でも、飛ばすはすぐ skipped で返る', async t => {
+  const s = await researchApp(t);
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  t.after(() => release());
+  s.adapter().scripts.push(held(hold));
+  const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text: 'I want a notes app.', projectId: s.projectId });
+  assert.equal(sent.status, 202);
+  await waitFor(() => s.records()[0]?.status === 'running' && s.app.research.store.parts(s.records()[0]!.id).length === 0, 'record waiting for the reply');
+  const res = await s.api(`/api/research/${s.records()[0]!.id}/skip`, { method: 'POST', body: '{}', signal: AbortSignal.timeout(1000) });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as { research: { status: string } }).research.status, 'skipped');
+  assert.equal(s.app.engine.chatting, true, 'the reply is still being written');
+  release();
+  await settled(s.app, sent.body.runId);
+  assert.equal(s.app.research.store.parts(s.records()[0]!.id).length, 0, 'no part starts after the skip');
+});
+
+test('会話を消す（MEDIUM-1）: 調べる部分がほかの会話の返事に譲って待っているあいだでも、元の会話を消すとすぐ返り、記録は cancelled', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  let entered!: () => void;
+  const inside = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  t.after(() => release());
+  s.adapter().scripts.push(held(new Promise(() => undefined), entered));
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await inside;
+  s.adapter().scripts.push(held(hold));
+  const other = await s.json(`/api/conversations/${uuid(2)}/messages`, 'POST', { text: 'another question', projectId: s.projectId });
+  assert.equal(other.status, 202);
+  const record = s.records()[0]!;
+  await waitFor(() => { const runId = s.app.research.store.parts(record.id)[0]?.runId; return runId != null && s.app.runs.get(runId)?.ended_at != null; }, 'the research part yielded');
+  const res = await s.api(`/api/conversations/${uuid(1)}`, { method: 'DELETE', signal: AbortSignal.timeout(1000) });
+  assert.equal(res.status, 200);
+  assert.equal(s.app.research.store.get(record.id)!.status, 'cancelled');
+  release();
+  await settled(s.app, other.body.runId);
+  assert.equal(s.app.research.store.parts(record.id).length, 1, 'no continuation after the delete');
+});
+
+test('会話を消す（LOW-3）: 止めて待つあいだにボタンから始まった記録も、消す前に止める', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  s.adapter().scripts.push(held(new Promise(() => undefined)));
+  const original = s.app.research.stopForSource.bind(s.app.research);
+  let first = true;
+  s.app.research.stopForSource = async id => {
+    await original(id);
+    if (!first) return;
+    first = false;
+    s.app.research.start({ projectId: s.projectId, sourceConversationId: uuid(1), trigger: 'owner_button', owner: new OwnerAct() });
+  };
+  const res = await s.api(`/api/conversations/${uuid(1)}`, { method: 'DELETE', signal: AbortSignal.timeout(2000) });
+  assert.equal(res.status, 200);
+  assert.equal(s.records().length, 1);
+  assert.deepEqual(s.records().map(r => r.status), ['cancelled'], 'the record started meanwhile is not left running');
+  await Promise.all(s.records().map(r => s.app.research.waitFor(r.id)));
+});
+
+test('閉じる（LOW-4）: 記録が返事を待っているあいだに App を閉じても、閉じた DB に書きに行かず、拒否が残らない', async t => {
+  const s = await researchApp(t);
+  s.adapter().scripts.push(held(new Promise(() => undefined)));
+  const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text: 'I want a notes app.', projectId: s.projectId });
+  assert.equal(sent.status, 202);
+  await waitFor(() => s.records()[0]?.status === 'running', 'record waiting for the reply');
+  const id = s.records()[0]!.id;
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => { rejections.push(reason); };
+  process.on('unhandledRejection', onRejection);
+  t.after(() => { process.off('unhandledRejection', onRejection); });
+  const close = s.app.close.bind(s.app);
+  s.app.close = () => undefined;
+  close();
+  await s.app.research.waitFor(id);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(rejections.map(r => String(r)), []);
+  assert.ok(!s.logs.some(line => line.includes(`research ${id}`)), s.logs.filter(line => line.includes('research')).join('\n'));
 });
