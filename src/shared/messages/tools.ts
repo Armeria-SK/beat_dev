@@ -151,6 +151,14 @@ const en = {
 
   'search.blocked': 'DuckDuckGo judged this to be automated access and returned no results. Wait a while and try again',
   'search.limit': 'Searches are limited to {max} per hour (tools.web.maxSearchesPerHour)',
+  'search.all_unavailable': 'No search site could be used right now ({details}). Wait a while and try again',
+  'search.reason.blocked': '{engine}: refused as automated access, resting {minutes} more min',
+  'search.reason.resting': '{engine}: resting after a refusal, {minutes} more min',
+  'search.reason.unknown': '{engine}: the result page could not be read (its layout may have changed)',
+  'search.reason.hour_limit': '{engine}: reached its hourly limit',
+  'search.reason.error': '{engine}: could not connect',
+  'search.reason.timeout': '{engine}: did not answer in time',
+  'search.reason.none': 'no search site is turned on',
 
   'memory.saved': 'Saved to memory [{id}] ({label}: {used} characters in total). It will be used from the next conversation',
   'memory.updated': 'Rewritten [{id}]',
