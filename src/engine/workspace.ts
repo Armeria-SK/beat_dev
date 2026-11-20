@@ -94,7 +94,7 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
 
 export type PlanMemory = 'review' | 'off';
 
-const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; dateFormat: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; date: (formatted: string, timezone: string) => string; cleared: Record<'checklist' | 'background', string>; reply: string; plan: string; product: (name: string, root: string) => string; worktree: (branch: string, productRoot: string) => string; docLanguage: (tag: string) => string; planMemory: Record<PlanMemory, string> }> = {
+const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; dateFormat: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; date: (formatted: string, timezone: string) => string; cleared: Record<keyof TailSections, string>; reply: string; plan: string; product: (name: string, root: string) => string; worktree: (branch: string, productRoot: string) => string; docLanguage: (tag: string) => string; planMemory: Record<PlanMemory, string> }> = {
   en: {
     planMemory: {
       review: 'This product has a memory, but you cannot save to it in plan mode. If the owner asks you to remember something, say plainly that it is not saved now: the memory review that runs after this conversation reads the request and is meant to save it then. Do not say it is saved already, and do not point the owner to AGENTS.md or CLAUDE.md for it.',
@@ -108,7 +108,7 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
     dateFormat: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
     date: (formatted, timezone) => `Current date: ${formatted} (${timezone})`,
-    cleared: { checklist: 'Checklist: no open items now.', background: 'Background commands: none now.' },
+    cleared: { checklist: 'Checklist: no open items now.', background: 'Background commands: none now.', product: 'Product status: none now.' },
     reply: "Reply in the language the user writes in (the language of the user's own words, not of these instructions, templates or tool results).",
     plan: 'You are in "plan mode". You cannot change files, run commands, or write memories or tasks (only tools that read, and reading the web, are available). Do not change anything: investigate if needed, then finish by presenting a plan as a numbered list of steps.',
   },
@@ -117,7 +117,8 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
 // 時刻だけの tail を送り直す間隔（分）。Checklist・裏のコマンドが変わったときは、間隔に関わらず時刻を付けて送る
 export const TAIL_TIME_MINUTES = 10;
 
-export interface TailSections { checklist: string; background: string }
+// product: 製品の目次の状態の行（TE-2。now / next・plan.md・acceptance の数・質問と提案の数）。製品の無い会話と TE-2 より前の tail-state には無い
+export interface TailSections { checklist: string; background: string; product?: string }
 export interface TailSent extends TailSections { at: number }
 
 function timeLine(timezone: string, language: Language, now: Date): string {
@@ -125,19 +126,19 @@ function timeLine(timezone: string, language: Language, now: Date): string {
   return text.time(new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now), timezone);
 }
 
-// 毎回変わってよい部分の全体（いまの時刻・Checklist・裏のコマンド）。発言に付けずに system の後ろに置くとき・見積もりに使う
+// 毎回変わってよい部分の全体（いまの時刻・製品の状態・Checklist・裏のコマンド）。発言に付けずに system の後ろに置くとき・見積もりに使う
 export function buildTail(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), sections: TailSections = { checklist: '', background: '' }): string {
-  return [timeLine(timezone, language, now), sections.checklist, sections.background].filter(Boolean).join('\n\n');
+  return [timeLine(timezone, language, now), sections.product, sections.checklist, sections.background].filter(Boolean).join('\n\n');
 }
 
 // この呼び出しで新しく送る tail（前に送ったときから変わった節と、いまの時刻）。何も変わらず、時刻を送ってから TAIL_TIME_MINUTES 経っていなければ undefined。
 // 節が空になったときは「空になった」の 1 行を送る（前に送った一覧が、いまの状態に見えないため）
 export function nextTail(previous: TailSent | undefined, timezone: string, language: Language, now: Date, sections: TailSections): { text: string; sent: TailSent } | undefined {
-  const changed = (key: keyof TailSections) => (previous?.[key] ?? '') !== sections[key];
-  if (previous && !changed('checklist') && !changed('background') && now.getTime() - previous.at < TAIL_TIME_MINUTES * 60_000) return undefined;
+  const changed = (key: keyof TailSections) => (previous?.[key] ?? '') !== (sections[key] ?? '');
+  if (previous && !changed('checklist') && !changed('background') && !changed('product') && now.getTime() - previous.at < TAIL_TIME_MINUTES * 60_000) return undefined;
   const cleared = DYNAMIC[language].cleared;
   const part = (key: keyof TailSections) => (!changed(key) ? '' : sections[key] || cleared[key]);
-  return { text: [timeLine(timezone, language, now), part('checklist'), part('background')].filter(Boolean).join('\n\n'), sent: { ...sections, at: now.getTime() } };
+  return { text: [timeLine(timezone, language, now), part('product'), part('checklist'), part('background')].filter(Boolean).join('\n\n'), sent: { ...sections, at: now.getTime() } };
 }
 
 // tail は道具の結果と同じ発言に乗るので、会話ごとの nonce の印で囲む（道具の結果が beat の状態を装えないように）。中の nonce は消す。
