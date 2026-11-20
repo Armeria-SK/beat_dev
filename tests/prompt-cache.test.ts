@@ -725,12 +725,12 @@ function headReads(requests: ModelRequest[], heads: number[]): Array<{ head: num
 test('TE-2 場面 (B): acceptance の数が変わっても dynamic はバイト単位で同じ。読み込んだ道具は次の実行に残る。実行の最初の呼び出しは前の前半を 90% 以上読む。状態の行は tail に届く', async t => {
   const { requests, heads } = await productTask(t);
   for (const req of requests) assert.equal(req.system.dynamic, requests[0]!.system.dynamic, 'dynamic は 3 回の実行で同じ');
-  assert.doesNotMatch(requests[0]!.system.dynamic, /acceptance\.json — |questions: /u, '状態の行は dynamic に無い');
+  assert.doesNotMatch(requests[0]!.system.dynamic, /acceptance\.json — (\d|not)|questions: /u, '状態の行は dynamic に無い');
   assert.equal(JSON.stringify(requests[heads[2]!]!.tools), JSON.stringify(requests[heads[2]! - 1]!.tools), '3 回目の最初の道具の並びは 2 回目の最後と同じ（calculate が残る）');
   assert.ok(requests[heads[2]!]!.tools.some(tool => tool.name === 'calculate'));
   for (const { head, read, placed } of headReads(requests, heads)) assert.ok(read >= 0.9 * placed, `呼び出し ${head + 1}: 読み ${read} / 前の前半 ${placed}`);
-  assert.match(statusOf(requests[0]!), /^acceptance\.json — 2 items: 0 met \/ 2 open \/ 0 unverified \(v1\)$/mu, '1 回目は 2 つ');
-  assert.match(statusOf(requests[heads[1]!]!), /^acceptance\.json — 3 items: 0 met \/ 3 open \/ 0 unverified \(v\d+\)$/mu, '変わった数は 2 回目の最初の tail に届く');
+  assert.match(statusOf(requests[0]!), /^- acceptance\.json — 2 items: 0 met \/ 2 open \/ 0 unverified \(v1\)$/mu, '1 回目は 2 つ');
+  assert.match(statusOf(requests[heads[1]!]!), /^- acceptance\.json — 3 items: 0 met \/ 3 open \/ 0 unverified \(v\d+\)$/mu, '変わった数は 2 回目の最初の tail に届く');
   report(t, '(B) product task, 3 runs (TE-2)', scene(requests, heads));
 });
 
@@ -761,10 +761,10 @@ test('TE-2 製品の会話（計画モード）: plan_write と acceptance_write
     assert.equal(JSON.stringify(requests[head]!.tools), JSON.stringify(requests[head - 1]!.tools), `呼び出し ${head + 1}: 道具の並びが同じ`);
   }
   for (const { head, read, placed } of headReads(requests, heads)) assert.ok(read >= 0.9 * placed, `呼び出し ${head + 1}: 読み ${read} / 前の前半 ${placed}`);
-  assert.match(statusOf(requests[0]!), /^plan\.md — not written yet$/mu);
+  assert.match(statusOf(requests[0]!), /^- plan\.md — not written yet$/mu);
   const second = statusOf(requests[heads[1]!]!);
-  assert.match(second, /^plan\.md — \(AI note\) Shop plan \(updated [^)]+\)$/mu, '計画の行は次の実行の tail');
-  assert.match(second, /^acceptance\.json — 1 items: 0 met \/ 1 open \/ 0 unverified \(draft\)$/mu);
+  assert.match(second, /^- plan\.md — \(AI note\) Shop plan \(updated [^)]+\)$/mu, '計画の行は次の実行の tail');
+  assert.match(second, /^- acceptance\.json — 1 items: 0 met \/ 1 open \/ 0 unverified \(draft\)$/mu);
   assert.equal(statusOf(requests[heads[2]!]!), second, '変わっていなければ送り直さない（前の tail のまま届く）');
   report(t, '(plan) product conversation after plan_write', scene(requests, heads));
 });
@@ -779,12 +779,12 @@ test('TE-2 状態の行は、載せた発言が要約で消えても、次の ta
   s.app.conversations.create({ id: P, projectId: project.id });
   s.adapter().scripts.push(reply('one'), reply('two'));
   await s.chat('first', P);
-  assert.match(statusOf(withTools(s).at(-1)!), /^acceptance\.json — not written yet$/mu, '前提: 1 回目の tail に状態の行');
+  assert.match(statusOf(withTools(s).at(-1)!), /^- acceptance\.json — not written yet$/mu, '前提: 1 回目の tail に状態の行');
   s.app.conversations.setSummary(P, 'SUMMARY', s.app.conversations.messages(P).at(-1)!.id);
   await s.chat('second', P);
   const req = withTools(s).at(-1)!;
   assert.equal(req.messages.length, 1, '前提: 要約より前の発言は送らない');
-  assert.match(statusOf(req), /^acceptance\.json — not written yet$/mu, '要約のあとの最初の呼び出しに状態の行がある');
+  assert.match(statusOf(req), /^- acceptance\.json — not written yet$/mu, '要約のあとの最初の呼び出しに状態の行がある');
 });
 
 test('TE-2 状態の行を載せた発言だけが要約で消え、時刻はあとの発言が載せているときも、状態の行を付け直す', async t => {
@@ -805,5 +805,5 @@ test('TE-2 状態の行を載せた発言だけが要約で消え、時刻はあ
   s.app.conversations.setSummary(P, 'SUMMARY', reply1!.id);
   await s.chat('third', P);
   const req = withTools(s).at(-1)!;
-  assert.match(statusOf(req), /^acceptance\.json — not written yet$/mu, '状態の行が送る範囲のどこかにある');
+  assert.match(statusOf(req), /^- acceptance\.json — not written yet$/mu, '状態の行が送る範囲のどこかにある');
 });
