@@ -29,7 +29,7 @@ import type { ShellKind } from '../hooks/shell-lex.ts';
 import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv, type StreamRest } from '../shell/runner.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
-import { BACKGROUND_OUTPUT_CHARS, BACKGROUND_SETTLE_SEC, jobLines, jobState, newest } from './shell-bg.ts';
+import { BACKGROUND_OUTPUT_CHARS, BACKGROUND_SETTLE_SEC, jobLines, jobState, newest, notContained } from './shell-bg.ts';
 
 interface ShellInput { command: string; cwd?: string; timeoutSec?: number; background?: boolean }
 
@@ -322,7 +322,7 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
       ...(skipped > 0 ? [toolText(language, 'bg.skipped', { bytes: skipped.toLocaleString('en-US') })] : []),
       shown ? `${toolText(language, 'shell.bg_so_far')}\n${shown}` : toolText(language, 'shell.bg_none_yet'),
     ];
-    return { content: shellTranscript(input.command, toolText(language, 'shell.bg_started', { id: read.id, shell: shell.name, cwd }), parts), keepTail: true, ...mark };
+    return { content: shellTranscript(input.command, [toolText(language, 'shell.bg_started', { id: read.id, shell: shell.name, cwd }), notContained(read, language)].filter(Boolean).join(' '), parts), keepTail: true, ...mark };
   }
   if (read.spawnError !== undefined) {
     jobs.forget(read.id, ctx.conversationId);
@@ -364,6 +364,7 @@ export const shellRun: ToolDef<ShellInput> = {
     'For a long-running command (a dev server, a watcher, a long test run), set background: true and keep working. It goes through the same checks, waits about 2 seconds, then returns an id such as bg-3 with the output so far (if the command ends within those 2 seconds, you get the normal result instead). Read its later output with shell_output and stop it with shell_stop; the background commands of this conversation are listed in the system prompt.',
     'timeoutSec does not apply to a background command: it runs until it is stopped, this conversation is deleted or archived, the task ends, or beat stops. Background commands work only in a product\'s conversation or task, and git push cannot run in the background.',
     'Never put a command in the background yourself with &, nohup, start or Start-Process: beat could not see or stop it.',
+    'A window or GUI program that a background command opens (a browser, an app) is closed together with it; background commands run with BROWSER=none, so dev servers do not open a browser (look at the page with the browser tools instead).',
   ].join(' '),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),

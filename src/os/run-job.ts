@@ -9,9 +9,17 @@ import { killTree, scrubEnv } from '../tools/shell/runner.ts';
 import { powershellPath } from './win-job.ts';
 
 export interface RunJob {
-  add(child: ChildProcess): void;
+  // onFail を渡すと、入れられなかったプロセスを止めずに理由を返す（裏のコマンド）。渡さなければ止める（直す実行）
+  add(child: ChildProcess, onFail?: (reason: string) => void): void;
   close(): Promise<void>;
+  // 入れ物が無くなった（close・手伝いが止まった）
+  readonly ended: Promise<void>;
 }
+
+const NOT_ASSIGNED = 'the process could not be put in the job';
+const HELPER_GONE = 'the job helper stopped';
+type Waiter = { child: ChildProcess; onFail: ((reason: string) => void) | undefined };
+const refuse = (waiter: Waiter, reason: string): void => { if (waiter.onFail) waiter.onFail(reason); else killTree(waiter.child); };
 
 const READY_MS = 15_000;
 const CLOSE_MS = 10_000;
@@ -56,13 +64,15 @@ exit 0
 
 class WindowsRunJob implements RunJob {
   readonly #helper: ChildProcess;
-  readonly #waiting = new Map<number, ChildProcess>();
+  readonly #waiting = new Map<number, Waiter>();
   #closed = false;
   readonly #exited: Promise<void>;
+  readonly ended: Promise<void>;
 
   constructor(helper: ChildProcess, exited: Promise<void>) {
     this.#helper = helper;
     this.#exited = exited;
+    this.ended = exited;
     let buffer = '';
     helper.stdout?.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8');
@@ -72,20 +82,20 @@ class WindowsRunJob implements RunJob {
         buffer = buffer.slice(at + 1);
         const m = /^(ok|fail) (\d+)$/u.exec(line);
         if (!m) continue;
-        const child = this.#waiting.get(Number(m[2]));
+        const waiter = this.#waiting.get(Number(m[2]));
         this.#waiting.delete(Number(m[2]));
-        if (m[1] === 'fail' && child) killTree(child);
+        if (m[1] === 'fail' && waiter) refuse(waiter, NOT_ASSIGNED);
       }
     });
-    void exited.then(() => { for (const child of this.#waiting.values()) killTree(child); this.#waiting.clear(); });
+    void exited.then(() => { for (const waiter of this.#waiting.values()) refuse(waiter, HELPER_GONE); this.#waiting.clear(); });
   }
 
-  // 入れられない（手伝いがもういない・閉じたあと）プロセスは止める
-  add(child: ChildProcess): void {
+  // 入れられない（手伝いがもういない・閉じたあと）プロセスは止める（onFail があれば理由を返す）
+  add(child: ChildProcess, onFail?: (reason: string) => void): void {
     const pid = child.pid;
     if (!pid) return;
-    if (this.#closed || this.#helper.exitCode !== null || !this.#helper.stdin?.writable) { killTree(child); return; }
-    this.#waiting.set(pid, child);
+    if (this.#closed || this.#helper.exitCode !== null || !this.#helper.stdin?.writable) { refuse({ child, onFail }, HELPER_GONE); return; }
+    this.#waiting.set(pid, { child, onFail });
     this.#helper.stdin.write(`${pid}\n`);
   }
 
@@ -104,13 +114,16 @@ class WindowsRunJob implements RunJob {
 class PosixRunJob implements RunJob {
   readonly #groups = new Set<number>();
   #closed = false;
-  add(child: ChildProcess): void {
+  #end!: () => void;
+  readonly ended = new Promise<void>(r => { this.#end = r; });
+  add(child: ChildProcess, onFail?: (reason: string) => void): void {
     if (!child.pid) return;
-    if (this.#closed) { killTree(child); return; }
+    if (this.#closed) { refuse({ child, onFail }, HELPER_GONE); return; }
     this.#groups.add(child.pid);
   }
   async close(): Promise<void> {
     this.#closed = true;
+    this.#end();
     for (const group of this.#groups) { try { process.kill(-group, 'SIGKILL'); } catch { /* the group is already gone */ } }
     this.#groups.clear();
   }

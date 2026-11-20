@@ -9,6 +9,7 @@ import { gateText } from '../../shared/messages/gate.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
+import { jobLines } from './shell-bg.ts';
 
 function store(ctx: ToolContext): TaskStore {
   const tasks = ctx.services?.tasks;
@@ -224,7 +225,11 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
       passed = text.passed(check.command);
     }
     const waiting = ctx.services?.db ? (ctx.services.db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(ctx.task.id) as Array<{ id: number }>) : [];
-    const suffix = waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '';
+    const running = own?.project_id ? (ctx.services?.background?.list({ projectId: own.project_id }) ?? []).filter(view => view.taskId === taskId && view.state === 'running') : [];
+    const suffix = [
+      waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '',
+      running.length ? toolText(language, 'task.bg_running', { list: jobLines(running, language) }) : '',
+    ].filter(Boolean).join('\n');
     ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
     const done = toolText(language, 'task.completed', { end });
     const items = gate.kind === 'pass' ? gate.text : '';

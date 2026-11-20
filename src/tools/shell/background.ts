@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, unlinkSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { openRunJob, type RunJob } from '../../os/run-job.ts';
 import { isSensitiveName, redactSecrets } from '../../shared/redaction.ts';
 import { OutputRing } from './ring.ts';
 import { killTree, stopTree } from './runner.ts';
@@ -63,6 +64,8 @@ export interface JobView extends JobOwner {
   fetched: boolean;
   tainted?: boolean;
   spawnError?: string;
+  contained?: false;
+  containReason?: string;
   logPath: string;
   logCut: boolean;
 }
@@ -268,6 +271,14 @@ function deferred(): Deferred {
   return { promise, resolve };
 }
 
+// GUI を開く道具は beat の外に窓を出さない（Vite・Create React App は BROWSER=none でブラウザを開かない）。開いた窓はコマンドと一緒に止まるので
+function backgroundEnv(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) if (key.toUpperCase() !== 'BROWSER') out[key] = value;
+  out.BROWSER = 'none';
+  return out;
+}
+
 function within(promise: Promise<void>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([promise, new Promise<void>(r => { timer = setTimeout(r, ms); })]).finally(() => clearTimeout(timer));
@@ -290,6 +301,9 @@ interface Job extends JobOwner {
   tainted?: boolean;
   spawnError?: string;
   child: ChildProcess | undefined;
+  runJob: RunJob | undefined;
+  jobClosing: boolean;
+  containReason?: string;
   ring: OutputRing;
   decoders: Record<Channel, StringDecoder>;
   gates: Record<Channel, LineGate>;
@@ -320,6 +334,7 @@ export interface BackgroundOptions {
   now?: () => number;
   limits?: Partial<BackgroundLimits>;
   isOpen?: (owner: JobOwner) => boolean;
+  openJob?: () => Promise<RunJob | { failed: string }>;
 }
 
 export class BackgroundJobs {
@@ -329,6 +344,7 @@ export class BackgroundJobs {
   readonly #logDir: string;
   readonly #now: () => number;
   readonly #isOpen: (owner: JobOwner) => boolean;
+  readonly #openJob: () => Promise<RunJob | { failed: string }>;
   readonly #instance = randomBytes(4).toString('hex');
   #seq = 0;
   #finished = 0;
@@ -339,6 +355,7 @@ export class BackgroundJobs {
     this.#now = options.now ?? Date.now;
     this.#limits = { ...BACKGROUND_LIMITS, ...options.limits };
     this.#isOpen = options.isOpen ?? (() => true);
+    this.#openJob = options.openJob ?? openRunJob;
   }
 
   start(input: StartInput): StartResult {
@@ -354,7 +371,7 @@ export class BackgroundJobs {
     const gate = () => new LineGate(this.#limits.partialLineBytes, this.#limits.keyHoldBytes);
     const job: Job = {
       ...owner, id: `bg-${seq}`, command: redactSecrets(input.command), cwd: input.cwd, startedAt: this.#now(), state: 'running', exitCode: null, orphaned: false,
-      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, ring: new OutputRing(),
+      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, runJob: undefined, jobClosing: false, ring: new OutputRing(),
       decoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }, gates: { stdout: gate(), stderr: gate() },
       incoming: { stdout: '', stderr: '' }, flushTimer: undefined, cursor: 0,
       log: undefined, logOpened: false, logQueue: [], logPath: join(this.#logDir, `bg-${input.conversationId}-${seq}-${this.#instance}.log`), logBytes: 0, logCut: false,
@@ -368,17 +385,42 @@ export class BackgroundJobs {
       log.on('error', () => { if (job.log === log) job.log = undefined; });
       job.log = log;
     } catch { job.log = undefined; }
+    const opening = this.#openJob().catch((error: unknown) => ({ failed: (error as Error).message }));
+    if (WINDOWS) {
+      void opening.then(made => {
+        const runJob = 'failed' in made ? undefined : made;
+        if (job.state !== 'running') { void runJob?.close(); return; }
+        if ('failed' in made) this.#uncontained(job, made.failed);
+        else this.#attach(job, made);
+        this.#spawn(job, input);
+      });
+      this.#emit(job);
+      return { id: job.id };
+    }
+    if (!this.#spawn(job, input)) return { id: job.id };
+    void opening.then(made => {
+      if ('failed' in made) { this.#uncontained(job, made.failed); return; }
+      this.#attach(job, made);
+      if (job.child) made.add(job.child, reason => this.#uncontained(job, reason));
+      if (job.state !== 'running') void this.#closeJob(job);
+    });
+    this.#emit(job);
+    return { id: job.id };
+  }
+
+  #spawn(job: Job, input: StartInput): boolean {
     try {
       job.child = spawn(input.file, [...input.args], {
-        cwd: input.cwd, env: input.env, windowsHide: true, detached: !WINDOWS, shell: false,
+        cwd: input.cwd, env: backgroundEnv(input.env), windowsHide: true, detached: !WINDOWS, shell: false,
         stdio: [input.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
       job.spawnError = redactSecrets((error as Error).message);
       this.#finish(job);
-      return { id: job.id };
+      return false;
     }
     const child = job.child;
+    job.runJob?.add(child, reason => this.#uncontained(job, reason));
     child.stdout?.on('data', (chunk: Buffer) => this.#data(job, 'stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer) => this.#data(job, 'stderr', chunk));
     if (input.stdin !== undefined) {
@@ -398,8 +440,7 @@ export class BackgroundJobs {
       if (code !== null) job.exitCode = code;
       this.#finish(job);
     });
-    this.#emit(job);
-    return { id: job.id };
+    return true;
   }
 
   get(id: string): JobView | undefined {
@@ -568,9 +609,11 @@ export class BackgroundJobs {
     if (job.state !== 'running') return Promise.resolve();
     if (job.halting) return job.halting;
     if (!job.rootExited) job.stoppedBy = by;
-    if (job.child) stopTree(job.child, this.#limits.termGraceMs);
+    if (!job.child) { this.#finish(job); return Promise.resolve(); }
+    stopTree(job.child, this.#limits.termGraceMs);
     job.halting = (async () => {
       await within(job.rootExit.promise, this.#limits.termGraceMs + 1000);
+      if (WINDOWS && job.runJob) await within(this.#closeJob(job), this.#limits.stopWaitMs);
       await within(job.done.promise, this.#limits.stopWaitMs);
       if (job.state !== 'running') return;
       if (job.child) {
@@ -584,6 +627,22 @@ export class BackgroundJobs {
     return job.halting;
   }
 
+  #attach(job: Job, runJob: RunJob): void {
+    job.runJob = runJob;
+    void runJob.ended.then(() => { if (!job.jobClosing && job.state === 'running') this.#uncontained(job, 'the job helper stopped, which also ends the processes inside the job'); });
+  }
+
+  #closeJob(job: Job): Promise<void> {
+    job.jobClosing = true;
+    return job.runJob?.close() ?? Promise.resolve();
+  }
+
+  #uncontained(job: Job, reason: string): void {
+    if (job.containReason !== undefined || job.jobClosing) return;
+    job.containReason = redactSecrets(reason);
+    if (job.state === 'running') this.#emit(job);
+  }
+
   #finish(job: Job): void {
     if (job.state !== 'running') return;
     this.#flush(job, true);
@@ -591,6 +650,7 @@ export class BackgroundJobs {
     job.endedAt = this.#now();
     job.finishedOrder = ++this.#finished;
     if (!job.logCut) job.log?.end();
+    void this.#closeJob(job);
     job.rootExit.resolve();
     job.done.resolve();
     try { job.onExit?.(); } catch { }
@@ -627,6 +687,7 @@ export class BackgroundJobs {
       command: job.command, cwd: job.cwd, startedAt: job.startedAt, ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
       state: job.state, exitCode: job.exitCode, ...(job.stoppedBy ? { stoppedBy: job.stoppedBy } : {}), orphaned: job.orphaned,
       unread: job.ring.total > job.cursor, fetched: job.fetched, ...(job.tainted ? { tainted: true } : {}), ...(job.spawnError !== undefined ? { spawnError: job.spawnError } : {}),
+      ...(job.containReason !== undefined ? { contained: false as const, containReason: job.containReason } : {}),
       logPath: job.logPath, logCut: job.logCut,
     };
   }

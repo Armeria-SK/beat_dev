@@ -105,6 +105,7 @@ const en = {
   'bg.state_stopped_system': 'stopped by beat',
   'bg.state_spawn_failed': 'could not be started: {detail}',
   'bg.orphaned': '(some child processes may have kept running after it was stopped)',
+  'bg.not_contained': '(not in beat\'s process container: {reason}. Processes it started may keep running after it is stopped)',
   'bg.header': '{id}: {state} (cwd: {cwd})\n$ {command}',
   'bg.skipped': '[{bytes} bytes of output before this point were not returned]',
   'bg.no_new_output': '[No new complete output line]',
@@ -204,6 +205,7 @@ const en = {
   'task.checkpoint_saved': 'Saved the progress. beat continues in a new run right away. {end}',
   'task.checkpoint_note': 'Tried: {tried} / Result: {result}',
   'task.completed': 'Recorded as done. {end}',
+  'task.bg_running': 'Background commands of this task were still running at the end (beat stops them, including the processes they started):\n{list}',
 
   'calc.result': '{expression} = {value}',
   'calc.error.syntax': 'The expression cannot be read (around character {at})',

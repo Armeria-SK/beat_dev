@@ -15,7 +15,12 @@ export function jobState(view: JobView, language: Language): string {
     : view.state === 'running' ? toolText(language, 'bg.state_running')
       : view.state === 'stopped' ? toolText(language, view.stoppedBy === 'model' ? 'bg.state_stopped_model' : view.stoppedBy === 'owner' ? 'bg.state_stopped_owner' : 'bg.state_stopped_system')
         : toolText(language, 'bg.state_exited', { code: view.exitCode ?? '—' });
-  return view.orphaned ? `${base} ${toolText(language, 'bg.orphaned')}` : base;
+  return [base, ...(view.orphaned ? [toolText(language, 'bg.orphaned')] : []), notContained(view, language)].filter(Boolean).join(' ');
+}
+
+// 入れ物に入っていないコマンドは、止めても始めたプロセスが残りうる
+export function notContained(view: JobView, language: Language): string {
+  return view.containReason !== undefined ? toolText(language, 'bg.not_contained', { reason: view.containReason }) : '';
 }
 
 export const commandLine = (command: string): string => plainLine(command, COMMAND_CHARS);
@@ -29,7 +34,7 @@ export function newest(text: string, max = BACKGROUND_OUTPUT_CHARS): { text: str
 }
 
 export function jobLines(views: readonly JobView[], language: Language): string {
-  return views.map(view => toolText(language, 'shell.bg_line', { id: view.id, command: commandLine(view.command) })).join('\n');
+  return views.map(view => [toolText(language, 'shell.bg_line', { id: view.id, command: commandLine(view.command) }), notContained(view, language)].filter(Boolean).join(' ')).join('\n');
 }
 
 export function readText(read: JobRead, language: Language, lead?: string): string {

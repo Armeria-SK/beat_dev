@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { BACKGROUND_LIMITS, BackgroundJobs, type BackgroundLimits, type JobOwner, type StartInput } from '../src/tools/shell/background.ts';
+import { BACKGROUND_LIMITS, BackgroundJobs, type BackgroundLimits, type BackgroundOptions, type JobOwner, type StartInput } from '../src/tools/shell/background.ts';
 import { scrubEnv } from '../src/tools/shell/runner.ts';
 
 const WINDOWS = process.platform === 'win32';
@@ -24,7 +24,7 @@ const TREE = [
 
 const SLEEP = 'setInterval(() => {}, 1000);';
 
-function setup(t: { after: (fn: () => void | Promise<void>) => void }, options: { limits?: Partial<BackgroundLimits>; isOpen?: (owner: JobOwner) => boolean } = {}) {
+function setup(t: { after: (fn: () => void | Promise<void>) => void }, options: { limits?: Partial<BackgroundLimits>; isOpen?: (owner: JobOwner) => boolean; openJob?: NonNullable<BackgroundOptions['openJob']> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'beat-bg-'));
   const jobs = new BackgroundJobs({ logDir: join(dir, 'tool_outputs'), ...options });
   const extra: number[] = [];
@@ -260,7 +260,28 @@ test('stop waits only up to the cap when a detached grandchild keeps the pipe af
   const view = jobs.get(id)!;
   assert.equal(view.state, 'exited');
   assert.equal(view.exitCode, 0);
+  // Windows: the job object reaches the detached grandchild, so the pipe closes and nothing is left. POSIX: detached = its own session, outside the group
+  assert.equal(view.orphaned, !WINDOWS);
+  if (WINDOWS) assert.equal(await gone([grand]), true, `grandchild ${grand} survived`);
+});
+
+// Windows で入れ物が作れなかった（Add-Type が止められている など）・孫が入れ物を抜けた場合は、今までどおり上限まで待って orphaned にする
+test('without a job object, stop still waits only up to the cap and marks the command orphaned when a grandchild keeps the pipe', { skip: !WINDOWS && 'Windows only (POSIX never uses this path)' }, async t => {
+  const { jobs, start, extra } = setup(t, { limits: { stopWaitMs: 1000 }, openJob: async () => ({ failed: 'x' }) });
+  const id = start("const c = require('child_process').spawn(process.execPath, ['-e', \"console.log('GRAND ' + process.pid); setInterval(() => {}, 1000);\"], { stdio: 'inherit', detached: true }); c.unref(); setTimeout(() => process.exit(0), 300);");
+  const text = await until(() => { const out = jobs.peek(id, 0)?.text ?? ''; return /GRAND \d+/u.test(out) ? out : undefined; });
+  extra.push(Number(/GRAND (\d+)/u.exec(text)![1]));
+  await new Promise(r => setTimeout(r, 1000));
+  assert.equal(jobs.get(id)!.state, 'running');
+  const began = Date.now();
+  assert.equal(await jobs.stopWhere({ conversationId: 'c1' }), 1);
+  const took = Date.now() - began;
+  assert.ok(took < 4000, `took ${took} ms`);
+  const view = jobs.get(id)!;
+  assert.equal(view.state, 'exited');
+  assert.equal(view.exitCode, 0);
   assert.equal(view.orphaned, true);
+  assert.equal(view.contained, false);
 });
 
 test('read: a key written in two parts with colour codes between is never shown', async t => {
@@ -455,7 +476,8 @@ test('a spawn that throws at once ends as exited with the error and runs onExit 
   let exits = 0;
   const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: ['bad\u0000arg'], env: scrubEnv(), fetched: false, onExit: () => { exits += 1; } });
   assert.ok('id' in result);
-  const view = jobs.get(result.id)!;
+  // Windows: the spawn waits for the job object, so the error comes a moment later
+  const view = await until(() => { const v = jobs.get(result.id)!; return v.state !== 'running' && v; });
   assert.equal(view.state, 'exited');
   assert.ok(view.spawnError);
   assert.equal(exits, 1);
@@ -490,7 +512,7 @@ test('the spawn error is redacted', async t => {
   const { jobs } = setup(t);
   const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: [`${KEY}\u0000`], env: scrubEnv(), fetched: false });
   assert.ok('id' in result);
-  const error = jobs.get(result.id)!.spawnError!;
+  const error = (await until(() => jobs.get(result.id)!.spawnError))!;
   assert.ok(error.length > 0);
   assert.doesNotMatch(error, /BBBBBBBB/u);
 });
