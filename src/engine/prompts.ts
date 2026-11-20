@@ -105,11 +105,18 @@ export function compactRequest(language: Language, retry = false): string {
 
 // 行の区切り。見えない文字を消しても残る \r・行や段落の区切りの文字・縦タブ・改ページも区切る（1 行に見せかけた文が、後で読み直したとき見出しにならないように）
 const LINE_BREAK = /\r\n?|[\n\u2028\u2029\u0085\v\f]/u;
-// 見出しに見える行（# か全角の ＃・小さい ﹟ で始まる・HTML の h1-h6・行まるごとの太字・setext の下線〔前の行が文のときだけ〕・コードの引用の頭「- (message N)」「- (task request)」）。モデルが書いた節の中では、字下げは残してその後ろに \ を入れ、見出しにしない（見出しの行を書くのはコードだけ。名前では見分けない）
-const HEADING_LIKE = new RegExp(`^\\s*(?:[#${String.fromCharCode(0xff03, 0xfe5f)}]|<\\s*h[1-6]\\b|\\*\\*[^*]+\\*\\*:?\\s*$|-\\s*\\((?:message \\d+|task request)\\))`, 'iu');
+// 見出しに見える行（# か全角の ＃・小さい ﹟ で始まる・行のどこかに HTML の h1-h6・行まるごとの太字〔** / *** / __ で始まり同じ印で終わる〕・setext の下線〔前の行が文のときだけ〕）と、
+// 飾り（字下げ・箇条書きの印・# の類・* と _・>・HTML のタグ）を除くとコードが作る名前（持ち主の発言・触ったファイルの節の名前、引用の頭の「(message N」「(task request」）で始まる行。
+// モデルが書いた節の中では、字下げは残してその後ろに \ を入れ、見出しにしない（見出しの行と引用の頭を書くのはコードだけ）
+const ch = String.fromCharCode;
+const HEADING_LIKE = new RegExp(`^\\s*[#${ch(0xff03, 0xfe5f)}]|<\\s*h[1-6]\\b|^\\s*(\\*{2,3}|__).+\\1:?\\s*$`, 'iu');
 const SETEXT = /^\s*(?:=+|-+)\s*$/u;
+const INLINE_MARKUP = /<[^>]*>|[*_]+/gu;
+const LEAD_MARKUP = new RegExp(`^[\\s\\-*+${ch(0x2013, 0x2014, 0x2022)}#${ch(0xff03, 0xfe5f)}>]+`, 'u');
+const CODE_NAME = new RegExp(`^(?:owner['${ch(0x2019)}]s\\s+words|files\\s+touched|\\(\\s*message\\s+\\d|\\(\\s*task\\s+request)`, 'iu');
+const namesCode = (line: string): boolean => CODE_NAME.test(line.replace(INLINE_MARKUP, '').replace(LEAD_MARKUP, ''));
 const neutral = (line: string, i: number, lines: readonly string[]): string =>
-  HEADING_LIKE.test(line) || (SETEXT.test(line) && i > 0 && (lines[i - 1] ?? '').trim() !== '') ? line.replace(/^\s*/u, ws => `${ws}\\`) : line;
+  HEADING_LIKE.test(line) || namesCode(line) || (SETEXT.test(line) && i > 0 && (lines[i - 1] ?? '').trim() !== '') ? line.replace(/^\s*/u, ws => `${ws}\\`) : line;
 
 const norm = (line: string): string => line.replace(/^#{1,6}\s*/u, '').replace(/^\d+[.)]\s*/u, '').replace(/[*_:\uFF1A]/gu, '').replace(/\s+/gu, ' ').trim().toLowerCase();
 
