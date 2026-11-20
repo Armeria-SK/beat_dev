@@ -184,7 +184,12 @@ test('道具の結果の量は、削れない分だけから決まる: 古いや
   long.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
   const result = await (await long.send('一覧を読んで')).done;
   assert.ok(result.ok, JSON.stringify(result));
-  assert.ok(Math.abs(toolText(long).length - toolText(fresh).length) <= 60, `長い会話でも同じ量: ${toolText(long).length} と ${toolText(fresh).length}`);
+  // 新しい会話では、いまの発言が状態の節（BEAT-STATUS、約 65 トークン）を持ち、削れない分がその分だけ多い（長い会話では、その節は削れる最初の発言にある）。
+  // 結果は行の切れ目で切るので、差は 1 行（約 65 字）を超えることもある。確かめるのは「古いやり取りが長くても小さくならない」こと
+  // （古いやり取りを数える誤りなら、数千字小さくなる）と、大きすぎないこと（状態の節の分と行の切れ目で 2 行まで）
+  const line = Math.max(...lines.split('\n').map(l => l.length + 1));
+  const diff = toolText(long).length - toolText(fresh).length;
+  assert.ok(diff >= -line && diff <= 2 * line, `長い会話でもほぼ同じ量: ${toolText(long).length} と ${toolText(fresh).length}`);
   assert.equal(long.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), true, '入りきらない分は、結果を小さくするのでなく古い発言を外して収める');
 });
 
