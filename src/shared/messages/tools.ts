@@ -204,6 +204,7 @@ const en = {
   'task.checkpoint_saved': 'Saved the progress. beat continues in a new run right away. {end}',
   'task.checkpoint_note': 'Tried: {tried} / Result: {result}',
   'task.completed': 'Recorded as done. {end}',
+  'task.bg_running': 'Background commands of this task were still running at the end (beat stops them, including the processes they started):\n{list}',
 
   'calc.result': '{expression} = {value}',
   'calc.error.syntax': 'The expression cannot be read (around character {at})',

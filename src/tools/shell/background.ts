@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { createWriteStream, mkdirSync, unlinkSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { openRunJob, type RunJob } from '../../os/run-job.ts';
 import { isSensitiveName, redactSecrets } from '../../shared/redaction.ts';
 import { OutputRing } from './ring.ts';
 import { killTree, stopTree } from './runner.ts';
@@ -290,6 +291,7 @@ interface Job extends JobOwner {
   tainted?: boolean;
   spawnError?: string;
   child: ChildProcess | undefined;
+  runJob: RunJob | undefined;
   ring: OutputRing;
   decoders: Record<Channel, StringDecoder>;
   gates: Record<Channel, LineGate>;
@@ -320,6 +322,7 @@ export interface BackgroundOptions {
   now?: () => number;
   limits?: Partial<BackgroundLimits>;
   isOpen?: (owner: JobOwner) => boolean;
+  openJob?: () => Promise<RunJob | { failed: string }>;
 }
 
 export class BackgroundJobs {
@@ -329,6 +332,7 @@ export class BackgroundJobs {
   readonly #logDir: string;
   readonly #now: () => number;
   readonly #isOpen: (owner: JobOwner) => boolean;
+  readonly #openJob: () => Promise<RunJob | { failed: string }>;
   readonly #instance = randomBytes(4).toString('hex');
   #seq = 0;
   #finished = 0;
@@ -339,6 +343,7 @@ export class BackgroundJobs {
     this.#now = options.now ?? Date.now;
     this.#limits = { ...BACKGROUND_LIMITS, ...options.limits };
     this.#isOpen = options.isOpen ?? (() => true);
+    this.#openJob = options.openJob ?? openRunJob;
   }
 
   start(input: StartInput): StartResult {
@@ -354,7 +359,7 @@ export class BackgroundJobs {
     const gate = () => new LineGate(this.#limits.partialLineBytes, this.#limits.keyHoldBytes);
     const job: Job = {
       ...owner, id: `bg-${seq}`, command: redactSecrets(input.command), cwd: input.cwd, startedAt: this.#now(), state: 'running', exitCode: null, orphaned: false,
-      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, ring: new OutputRing(),
+      fetched: input.fetched, ...(input.tainted ? { tainted: true } : {}), child: undefined, runJob: undefined, ring: new OutputRing(),
       decoders: { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }, gates: { stdout: gate(), stderr: gate() },
       incoming: { stdout: '', stderr: '' }, flushTimer: undefined, cursor: 0,
       log: undefined, logOpened: false, logQueue: [], logPath: join(this.#logDir, `bg-${input.conversationId}-${seq}-${this.#instance}.log`), logBytes: 0, logCut: false,
@@ -368,6 +373,29 @@ export class BackgroundJobs {
       log.on('error', () => { if (job.log === log) job.log = undefined; });
       job.log = log;
     } catch { job.log = undefined; }
+    const opening = this.#openJob().catch((error: unknown) => ({ failed: (error as Error).message }));
+    if (WINDOWS) {
+      void opening.then(made => {
+        const runJob = 'failed' in made ? undefined : made;
+        if (job.state !== 'running') { void runJob?.close(); return; }
+        job.runJob = runJob;
+        this.#spawn(job, input);
+      });
+      this.#emit(job);
+      return { id: job.id };
+    }
+    if (!this.#spawn(job, input)) return { id: job.id };
+    void opening.then(made => {
+      if ('failed' in made) return;
+      job.runJob = made;
+      if (job.child) made.add(job.child);
+      if (job.state !== 'running') void made.close();
+    });
+    this.#emit(job);
+    return { id: job.id };
+  }
+
+  #spawn(job: Job, input: StartInput): boolean {
     try {
       job.child = spawn(input.file, [...input.args], {
         cwd: input.cwd, env: input.env, windowsHide: true, detached: !WINDOWS, shell: false,
@@ -376,9 +404,10 @@ export class BackgroundJobs {
     } catch (error) {
       job.spawnError = redactSecrets((error as Error).message);
       this.#finish(job);
-      return { id: job.id };
+      return false;
     }
     const child = job.child;
+    job.runJob?.add(child);
     child.stdout?.on('data', (chunk: Buffer) => this.#data(job, 'stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer) => this.#data(job, 'stderr', chunk));
     if (input.stdin !== undefined) {
@@ -398,8 +427,7 @@ export class BackgroundJobs {
       if (code !== null) job.exitCode = code;
       this.#finish(job);
     });
-    this.#emit(job);
-    return { id: job.id };
+    return true;
   }
 
   get(id: string): JobView | undefined {
@@ -568,9 +596,11 @@ export class BackgroundJobs {
     if (job.state !== 'running') return Promise.resolve();
     if (job.halting) return job.halting;
     if (!job.rootExited) job.stoppedBy = by;
-    if (job.child) stopTree(job.child, this.#limits.termGraceMs);
+    if (!job.child) { this.#finish(job); return Promise.resolve(); }
+    stopTree(job.child, this.#limits.termGraceMs);
     job.halting = (async () => {
       await within(job.rootExit.promise, this.#limits.termGraceMs + 1000);
+      if (WINDOWS && job.runJob) await within(job.runJob.close(), this.#limits.stopWaitMs);
       await within(job.done.promise, this.#limits.stopWaitMs);
       if (job.state !== 'running') return;
       if (job.child) {
@@ -591,6 +621,7 @@ export class BackgroundJobs {
     job.endedAt = this.#now();
     job.finishedOrder = ++this.#finished;
     if (!job.logCut) job.log?.end();
+    void job.runJob?.close();
     job.rootExit.resolve();
     job.done.resolve();
     try { job.onExit?.(); } catch { }

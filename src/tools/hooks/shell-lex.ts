@@ -663,7 +663,10 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
 interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][]; split?: true }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
-const PS_HASH_STARTS = new Set([';', '|', '&', '(', '{', ',', '\n']);
+// 引数の位置の @名前 のすぐあとがこの字なら、PowerShell 5.1 の Parser は splatting ではなく 1 つの語（Generic）と読み、@ ごと文字のまま渡す（npm i @types/three）。
+// 空白・; | & ( ) { } , . [ : と終わりは splatting のまま。$ ` " ' < > # も PowerShell は語と読むが、ここでは splatting として断ったままにする
+const PS_AT_LITERAL_NEXT = new Set(['/', '\\', '-', '=', '+', '@', '!', '%', '*', '~', '^']);
+const PS_HASH_STARTS =new Set([';', '|', '&', '(', '{', ',', '\n']);
 const PS_OTHER_CONTROL = new Set([
   'function', 'filter', 'class', 'enum', 'param', 'begin', 'process', 'end', 'trap', 'try', 'catch', 'finally', 'switch', 'do', 'while', 'for', 'until', 'using',
   'return', 'throw', 'break', 'continue', 'exit', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel',
@@ -860,8 +863,12 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
       if (next === '"') return fail('here_string', '@"');
       if (next === '(') { push({ t: 'arr', v: '@(' }); i += 2; parens++; continue; }
       if (next === '{') { push({ t: 'hash', v: '@{' }); i += 2; continue; }
-      const m = /^@([A-Za-z_][A-Za-z0-9_]*)/u.exec(src.slice(i, i + 80));
-      if (m) { push({ t: 'splat', v: m[1]! }); i += m[0].length; continue; }
+      const m = /^@([\p{L}\p{Nd}_?]+)/u.exec(src.slice(i, i + 200));
+      if (m) {
+        const after = src[i + m[0].length];
+        const literal = after !== undefined && PS_AT_LITERAL_NEXT.has(after) && psInArguments(toks, src.slice(i, i + m[0].length + 1));
+        if (!literal) { push({ t: 'splat', v: m[1]! }); i += m[0].length; continue; }
+      }
     }
     if (ch === '$') {
       const next = src[i + 1];

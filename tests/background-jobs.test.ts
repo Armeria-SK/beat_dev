@@ -260,7 +260,9 @@ test('stop waits only up to the cap when a detached grandchild keeps the pipe af
   const view = jobs.get(id)!;
   assert.equal(view.state, 'exited');
   assert.equal(view.exitCode, 0);
-  assert.equal(view.orphaned, true);
+  // Windows: the job object reaches the detached grandchild, so the pipe closes and nothing is left. POSIX: detached = its own session, outside the group
+  assert.equal(view.orphaned, !WINDOWS);
+  if (WINDOWS) assert.equal(await gone([grand]), true, `grandchild ${grand} survived`);
 });
 
 test('read: a key written in two parts with colour codes between is never shown', async t => {
@@ -455,7 +457,8 @@ test('a spawn that throws at once ends as exited with the error and runs onExit 
   let exits = 0;
   const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: ['bad\u0000arg'], env: scrubEnv(), fetched: false, onExit: () => { exits += 1; } });
   assert.ok('id' in result);
-  const view = jobs.get(result.id)!;
+  // Windows: the spawn waits for the job object, so the error comes a moment later
+  const view = await until(() => { const v = jobs.get(result.id)!; return v.state !== 'running' && v; });
   assert.equal(view.state, 'exited');
   assert.ok(view.spawnError);
   assert.equal(exits, 1);
@@ -490,7 +493,7 @@ test('the spawn error is redacted', async t => {
   const { jobs } = setup(t);
   const result = jobs.start({ conversationId: 'c1', projectId: 'p1', command: 'x', cwd: process.cwd(), file: process.execPath, args: [`${KEY}\u0000`], env: scrubEnv(), fetched: false });
   assert.ok('id' in result);
-  const error = jobs.get(result.id)!.spawnError!;
+  const error = (await until(() => jobs.get(result.id)!.spawnError))!;
   assert.ok(error.length > 0);
   assert.doesNotMatch(error, /BBBBBBBB/u);
 });
