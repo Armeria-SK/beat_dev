@@ -144,7 +144,7 @@ test('会話を消しても model_calls の行は残る。列は数字と hash �
   assert.equal(s.app.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?').get(C)!.n, 0, '前提: 発言は消えた');
   assert.deepEqual(callsOf(s.app, runId), before);
   const columns = (s.app.db.prepare('PRAGMA table_info(model_calls)').all() as Array<{ name: string }>).map(c => c.name);
-  assert.deepEqual(columns, ['id', 'run_id', 'seq', 'purpose', 'model', 'input_tokens', 'cache_read_tokens', 'cache_write_tokens', 'output_tokens', 'est_tokens', 'removed', 'tools_hash', 'frozen_hash', 'dynamic_hash', 'started_at', 'duration_ms']);
+  assert.deepEqual(columns, ['id', 'run_id', 'seq', 'purpose', 'model', 'input_tokens', 'cache_read_tokens', 'cache_write_tokens', 'output_tokens', 'est_tokens', 'removed', 'tools_hash', 'frozen_hash', 'dynamic_hash', 'started_at', 'duration_ms', 'summary_chars']);
   const dump = JSON.stringify(s.app.db.prepare('SELECT * FROM model_calls').all());
   assert.ok(!dump.includes('SECRET') && !dump.includes('notes'), dump);
 });

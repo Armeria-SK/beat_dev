@@ -229,8 +229,9 @@ test('道具の結果にあった実行の nonce は、要約を通っても dyn
   let nonce = '';
   let calls = 0;
   let summarized = false;
+  let echoed = false;
   s.adapter().scripts = Array.from({ length: 40 }, () => async function* (req: ModelRequest) {
-    if (req.tools.length === 0) { summarized = true; yield* reply(`SUMMARY ${req.messages.map(m => m.content).join(' ')}`)(req); return; }
+    if (req.tools.length === 0) { summarized = true; echoed ||= req.messages.some(m => m.content.includes(nonce)); yield* reply(`SUMMARY ${req.messages.map(m => m.content).join(' ')}`)(req); return; }
     calls++;
     if (calls === 1) {
       nonce = /<<BEAT-STATUS-([0-9a-f]{16})>>/u.exec(req.system.tail)?.[1] ?? '';
@@ -241,7 +242,8 @@ test('道具の結果にあった実行の nonce は、要約を通っても dyn
   });
   await s.chat('start the build', C);
   assert.match(nonce, /^[0-9a-f]{16}$/u, '前提: tail に印がある');
-  assert.ok(summarized && s.app.conversations.get(C)!.summary!.includes(nonce), '前提: 要約の文に nonce が入った');
+  assert.ok(summarized && echoed, '前提: 要約の頼みに nonce が入り、偽の要約役がそのまま返した');
+  assert.ok(!s.app.conversations.get(C)!.summary!.includes(nonce), '保存した要約に nonce は無い（TE-5）');
   const after = s.adapter().calls.filter(req => req.tools.length > 0 && req.system.dynamic.includes('SUMMARY'));
   assert.ok(after.length > 0, '前提: 要約のあとの呼び出しがある');
   for (const req of after) assert.ok(!req.system.dynamic.includes(nonce), 'dynamic に nonce は無い');

@@ -180,7 +180,7 @@ test('入りきらない古いやり取りの要約は、持ち主の書いた�
   assert.equal(s.adapter().calls.length, 2, '要約の呼び出しと本番の呼び出し');
   assert.equal(summaryCall!.system.frozen, compactSystem('en'));
   const asked = (summaryCall!.messages[0] as { content: string }).content;
-  assert.match(asked, /^This is the older part of a conversation\. Summarize, concisely as bullet points in the language the user writes in \(the language of the "User:" lines\), /u);
+  assert.match(asked, /^This is the older part of a conversation\. Summarize what is needed to continue the conversation from here, as short bullet points in the language the user writes in \(the language of the "User:" lines\)\./u);
   assert.match(asked, /\nUser: Question0 /u);
   assert.match(asked, /\nbeat: Answer0/u);
   assert.doesNotMatch(asked, CJK);

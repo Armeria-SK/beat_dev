@@ -48,7 +48,7 @@ import type { PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
-import { CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_TOOL_RESULTS, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, clearFloor, contextAvailable, raisedOutputFor, toolResultTokens } from './context-budget.ts';
+import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_TOOL_RESULTS, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, clearFloor, compactOutputTokens, contextAvailable, ownerWordsTokens, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
@@ -61,7 +61,7 @@ import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts'
 import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine, stripHidden } from '../shared/plain-text.ts';
-import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
+import { compactPrompt, compactRequest, compactSpeaker, compactSystem, composeSummary, hasSummarySections, quoteOwner, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, buildTail, fenceTail, isFencedTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { ownWords, stripAttachments } from '../uploads/store.ts';
@@ -184,6 +184,9 @@ const MAX_COMPACTIONS_PER_RUN = 5;
 const MAX_PENDING_MESSAGES = 10;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
 const COMPACT_NOTE_CHARS = 300;
+// 要約の「触ったファイル」の数と、1 つのパスの字数の上限（TE-5）
+const FILES_TOUCHED_MAX = 50;
+const FILE_PATH_CHARS = 300;
 const HISTORY_READ = 'history_read';
 // 1 回のモデルの呼び出しで削り（TE-4 の #reduce）をやり直してよい回数
 const MAX_REDUCTIONS_PER_CALL = 10;
@@ -316,6 +319,8 @@ export class ChatEngine {
   #runTail = new Map<string, Set<number>>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
   #sentCalls = new Map<string, ReadonlySet<string>>();
+  // その実行で、提供元が読み（cacheReadTokens > 0）を報告したモデルの ID（TE-5: 要約を前半のあとに頼む形は、読みが効くと分かったモデルだけ）
+  #cacheSeen = new Map<string, Set<string>>();
   // 考えるだけで上限に達したあと、その実行で上げた返事の上限（実行 → モデルの ID → 上限。上げたモデルにだけ、#assemble がそのモデルの許す範囲で使う）
   #outputCap = new Map<string, Map<string, number>>();
   // 止める操作（stop）を受けた実行
@@ -905,6 +910,7 @@ export class ChatEngine {
         this.#runTail.delete(runId);
         this.#loaded.delete(runId);
         this.#sentCalls.delete(runId);
+        this.#cacheSeen.delete(runId);
         this.#outputCap.delete(runId);
         this.#reviewEvidence.delete(runId);
         this.#stopped.delete(runId);
@@ -1469,6 +1475,11 @@ export class ChatEngine {
           }
           break;
         } finally { release?.(); }
+        if ((usage.cacheReadTokens ?? 0) > 0) {
+          const seen = this.#cacheSeen.get(p.runId) ?? new Set<string>();
+          seen.add(model.id);
+          this.#cacheSeen.set(p.runId, seen);
+        }
         const callRecord = { runId: p.runId, model: model.id, usage, estTokens: fitted.estimate.tokens, removed: fitted.removed + trimmed, tools: apiTools, system, startedAt: callStarted };
 
         // 考えるだけで上限に達し、文も呼び出しも無い返事は、続きを頼んでも続ける元が無い（切れた考える部分は保存も送り返しもしない）。
@@ -1542,7 +1553,12 @@ export class ChatEngine {
     const all = d.conversations.messages(p.conversationId);
     const stored = all.filter(m => m.id > Math.max(summaryUpto, trimUpto));
     const trimmed = trimUpto > summaryUpto ? all.filter(m => m.id > summaryUpto && m.id <= trimUpto).length : 0;
-    const summary = summarySection(conversation?.summary ?? '', language);
+    // 印・要約に元を読む口を書くのは、この実行で history_read に届くときだけ（タスクの実行では書かない。自分の会話を読むと「外から読んだ」が付くため）
+    const readable = p.kind !== 'task' && this.#reachable(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen).some(t => t.name === HISTORY_READ);
+    // 要約の頭の行（外した発言の id の範囲・元を読む口）はコードが書く（TE-5）
+    // 範囲の頭は会話の最初の発言（messages は新しい 500 行だけなので、別に数える）
+    const first = conversation?.summary ? (d.conversations.db.prepare('SELECT MIN(id) AS id FROM messages WHERE conversation_id = ?').get(p.conversationId) as { id: number | null } | undefined)?.id ?? 0 : 0;
+    const summary = summarySection(conversation?.summary ?? '', language, { from: first, to: summaryUpto, read: readable ? p.conversationId : undefined });
     const list = readChecklist(d.kv, p.conversationId);
     const jobs = d.background?.list({ conversationId: p.conversationId }) ?? [];
     const checklist = checklistSection(list, language);
@@ -1568,8 +1584,6 @@ export class ChatEngine {
     // 消した・外した会話（TE-4）でも、要約と同じく考える部分を送り返さない。消した位置より前の道具の結果は、nonce を消したあとに印へ替える
     const reduced = Boolean(conversation?.summary) || trimUpto > 0 || clearedUpto > 0;
     let history = stored.map(m => withThinkingFor(clean(forModel(m.message), p.runId ? fence : undefined), reduced ? undefined : { provider: model.provider, model: model.model }));
-    // 印に元を読む口を書くのは、この実行で history_read に届くときだけ（タスクの実行では書かない。自分の会話を読むと「外から読んだ」が付くため）
-    const readable = p.kind !== 'task' && this.#reachable(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen).some(t => t.name === HISTORY_READ);
     const clearedCalls = new Set<string>();
     history = this.#clearResults(history, stored, clearedUpto, { conversationId: p.conversationId, kind: p.kind, readable, fence: p.runId ? fence : undefined, language }, clearedCalls);
     // 発言に保存した tail（TE-1）は、次の実行でも同じ文で同じ場所に送る。実行の中では、いまの会話の印で囲まれたものだけ送る（ほかは外し、載せていた節は送っていないものとして付け直す）。
@@ -1932,9 +1946,23 @@ export class ChatEngine {
     d.kv.setJson(`trim-upto:${c.conversationId}`, until);
     const summaryUpto = d.conversations.get(c.conversationId)?.summary_upto ?? 0;
     const gone = d.conversations.messages(c.conversationId).filter(m => m.id > summaryUpto && m.id <= until);
-    if (!c.compaction.failed && c.compaction.count < MAX_COMPACTIONS_PER_RUN) {
+    // 要約は 1 回の実行で失敗したらその実行のあいだは頼まない（次に超えたとき、外した発言をまとめて要約する）。
+    // 実行をまたいで同じモデルで COMPACT_FAILURE_LIMIT 回続けて失敗した会話では、要約をやめて外すだけにする（kv の compact-failures:<会話> = { n, model }。
+    // 成功で消す。取り消しと、再試行してよい提供元の誤り（混雑・429・通信）は数えない。失敗したのと違うモデルで要約するときは数え直す）
+    const model = c.route.model.id;
+    const stored = d.kv.getJson<{ n?: unknown; model?: unknown }>(`compact-failures:${c.conversationId}`);
+    const failures = stored && stored.model === model && typeof stored.n === 'number' ? stored.n : 0;
+    if (!c.compaction.failed && c.compaction.count < MAX_COMPACTIONS_PER_RUN && failures < COMPACT_FAILURE_LIMIT) {
       c.compaction.count++;
-      if (await this.#compact({ route: c.route, adapter: c.adapter, runId: c.runId, conversationId: c.conversationId, removed: gone, previous: c.previous, capacity: c.capacity, signal: c.signal })) {
+      const outcome = await this.#compact({ route: c.route, adapter: c.adapter, runId: c.runId, conversationId: c.conversationId, kind: c.kind, removed: gone, previous: c.previous, capacity: c.capacity, available: c.available, signal: c.signal,
+        prefix: { system: c.system, history: c.history, apiTools: c.apiTools, factor: c.factor, pending: c.pending } });
+      const summarized = outcome === 'ok';
+      if (summarized) d.kv.delete(`compact-failures:${c.conversationId}`);
+      else if (outcome === 'failed' && !c.signal.aborted) {
+        d.kv.setJson(`compact-failures:${c.conversationId}`, { n: failures + 1, model });
+        if (failures + 1 >= COMPACT_FAILURE_LIMIT) d.log?.(`[WARN] summarizing conversation ${c.conversationId} with model ${model} failed ${failures + 1} times in a row; old messages are only trimmed until another model is used`);
+      }
+      if (summarized) {
         // 要約した会話は、元の文を history_read で読み戻せるよう道具の並びに入れる（TE-4a）
         this.preload(c.conversationId, [HISTORY_READ]);
         this.#loaded.get(c.runId)?.loaded.add(HISTORY_READ);
@@ -1953,35 +1981,119 @@ export class ChatEngine {
     return true;
   }
 
-  async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; removed: StoredMessage[]; previous: string | null; capacity: number; signal: AbortSignal }): Promise<boolean> {
+  // 古いやり取りの要約（TE-5）。2 つの形がある:
+  // - 前半を読み直す形: いま送っている発言（prefix）の後ろに要約の頼みを 1 つ足す。この実行でそのモデルの提供元が読みを報告したときだけ（読めない提供元では入力が写しの何倍にもなる）。
+  //   入りきらない・道具を呼んだ・失敗したら写しの形へ。決まった見出しの無い返事は 1 回だけ頼み直し、それでも無ければ写しの形へ
+  // - 写しの形（今まで）: 外した発言を 1 発言 1,500 字・全体 60,000 字に切った写しから、道具なしで作る
+  // 返事から見えない文字を消し、秘密を伏せ、会話の nonce を消してから、決まった節に組む。持ち主の発言と触ったファイルの節はコードが作る。
+  // 外を読んだ節（Checklist・裏のコマンド）を載せた tail がこの会話にあれば、前半の形は使わない（前半は保存した tail を含むので、要約に写ると dynamic へ移り、tail の taint の数えから外れる）。
+  // 結果: ok = 要約した / failed = 使えない返事・入りきらない・再試行しない誤り（3 回の数えに入る）/ transient = 取り消し・再試行してよい提供元の誤り（数えない）
+  async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; kind: RunKind; removed: StoredMessage[]; previous: string | null; capacity: number; available: number; signal: AbortSignal;
+    prefix?: { system: ModelRequest['system']; history: readonly ChatMessage[]; apiTools: ToolSpec[]; factor: number; pending: string } }): Promise<'ok' | 'failed' | 'transient'> {
     const d = this.#d;
     const language = languageOf(d.config());
-    const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, m.message.role === 'user' && m.message.note !== undefined ? COMPACT_NOTE_CHARS : 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
-    const prompt = compactPrompt({ previous: c.previous, transcript }, language);
-    const maxOutputTokens = Math.min(2000, d.status.limits(c.route.model).maxOutput);
-    if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > c.capacity * CONTEXT_FILL_RATIO) return false;
+    const fence = this.#fence(c.runId, c.conversationId);
+    const scrub = (text: string): string => fence.clean(redactSecrets(stripHidden(text), d.registry.secrets()));
+    const upto = c.removed.at(-1)!.id;
+    const maxOutputTokens = Math.min(compactOutputTokens(c.available), d.status.limits(c.route.model).maxOutput);
+    const room = c.capacity * CONTEXT_FILL_RATIO;
+    const ask = async (req: Pick<ModelRequest, 'system' | 'messages' | 'tools'>, estTokens: number) => {
+      let text = '';
+      let usage: Usage = {};
+      let calls = 0;
+      const startedAt = d.runs.now();
+      for await (const event of c.adapter.stream({ model: c.route.model, ...req, maxOutputTokens, signal: c.signal })) {
+        if (event.type === 'text') text += event.delta;
+        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
+        else if (event.type === 'tool_call') calls++;
+      }
+      return { text, calls, record: { runId: c.runId, purpose: 'compact' as const, model: c.route.model.id, usage, estTokens, removed: c.removed.length, tools: req.tools, system: req.system, startedAt } };
+    };
+    const save = (reply: string): number => {
+      const summary = scrub(composeSummary(scrub(reply), { ...this.#filesTouched(c.conversationId, scrub), owner: this.#ownerWords(c.conversationId, c.kind, upto, ownerWordsTokens(c.available), scrub, language) }, language));
+      d.conversations.setSummary(c.conversationId, summary, upto);
+      return summary.length;
+    };
     let release: (() => void) | undefined;
     try {
       release = await d.limiter.acquire(c.route.provider.id, () => c.route.provider.maxParallel, c.signal);
-      let text = '';
-      let usage: Usage = {};
-      const system = { frozen: compactSystem(language), dynamic: '', tail: '' };
-      const startedAt = d.runs.now();
-      for await (const event of c.adapter.stream({
-        model: c.route.model, system, messages: [{ role: 'user', content: prompt }], tools: [], maxOutputTokens, signal: c.signal,
-      })) {
-        if (event.type === 'text') text += event.delta;
-        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
+      if (c.prefix && this.#cacheSeen.get(c.runId)?.has(c.route.model.id) && !this.#tailTainted(c.conversationId)) {
+        const head = [...closeToolCalls(c.prefix.history, engineText(language, 'tool.not_run_stopped'))];
+        for (const retry of [false, true]) {
+          const messages: ChatMessage[] = [...head, { role: 'user', content: compactRequest(language, retry) }];
+          const estTokens = estimateRequest(systemText(c.prefix.system), messages, c.prefix.apiTools, c.prefix.factor, c.prefix.pending).tokens;
+          if (estTokens + maxOutputTokens > room) break;
+          let got;
+          try { got = await ask({ system: c.prefix.system, messages, tools: c.prefix.apiTools }, estTokens); } catch (error) {
+            if (c.signal.aborted) return 'transient';
+            d.log?.(`[WARN] summarizing conversation ${c.conversationId} after the sent part failed, using the transcript instead: ${redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP)}`);
+            break;
+          }
+          const usable = got.calls === 0 && got.text.trim() !== '' && hasSummarySections(got.text, language);
+          d.runs.recordCall({ ...got.record, ...(usable ? { summaryChars: save(got.text) } : {}) });
+          if (usable) return 'ok';
+          if (got.calls > 0) break;
+        }
       }
-      d.runs.recordCall({ runId: c.runId, purpose: 'compact', model: c.route.model.id, usage, estTokens: estimateTextTokens(prompt), removed: c.removed.length, tools: [], system, startedAt });
-      if (!text.trim()) return false;
-      d.conversations.setSummary(c.conversationId, text.trim(), c.removed.at(-1)!.id);
-      return true;
-    } catch {
-      if (c.signal.aborted) return false;
+      const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, m.message.role === 'user' && m.message.note !== undefined ? COMPACT_NOTE_CHARS : 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
+      const prompt = compactPrompt({ previous: c.previous, transcript }, language);
+      if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > room) return 'failed';
+      const got = await ask({ system: { frozen: compactSystem(language), dynamic: '', tail: '' }, messages: [{ role: 'user', content: prompt }], tools: [] }, estimateTextTokens(prompt));
+      const usable = got.text.trim() !== '';
+      d.runs.recordCall({ ...got.record, ...(usable ? { summaryChars: save(got.text) } : {}) });
+      return usable ? 'ok' : 'failed';
+    } catch (error) {
+      if (c.signal.aborted) return 'transient';
       d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compaction_failed', message: engineText(language, 'warn.compaction_failed') });
-      return false;
+      return error instanceof ProviderError && error.retryable ? 'transient' : 'failed';
     } finally { release?.(); }
+  }
+
+  // 要約に原文で残す持ち主の発言。ctx.ownerText と同じ決まり（9-1b の D-7）: 会話（chat）は upto 以下の、generated でも note でも札の答えでもない user の発言（添付の中身は除く）、
+  // タスクは持ち主の頼み（ownerRequestText）、ほか（振り返り・子の担当）は無し（user の発言はコードが組んだ頼みで、外の文や beat の書いた文を含む）。
+  // 新しい方から、合計 budget（見積もりのトークン）まで。入りきらない発言は頭だけ残して印を付け、そこで止める
+  #ownerWords(conversationId: string, kind: RunKind, upto: number, budget: number, scrub: (text: string) => string, language: Language): string[] {
+    const d = this.#d;
+    let rows: Array<{ id: number | undefined; text: string }> = [];
+    if (kind === 'chat') {
+      rows = d.conversations.messages(conversationId)
+        .filter(({ id, message }) => id <= upto && message.role === 'user' && !message.generated && !message.note && !message.askAnswer)
+        .map(row => ({ id: row.id, text: row.message.role === 'user' ? stripAttachments(row.message.content) : '' }))
+        .reverse();
+    } else if (kind === 'task') {
+      const task = d.tasks?.byConversation(conversationId);
+      const text = task ? d.tasks?.ownerRequestText(task.id) : undefined;
+      if (text) rows = [{ id: undefined, text }];
+    }
+    const picked: string[] = [];
+    let used = 0;
+    for (const row of rows) {
+      const words = scrub(row.text).trim();
+      if (!words) continue;
+      const tokens = estimateTextTokens(words);
+      if (used + tokens <= budget) { picked.push(quoteOwner(row.id, words, false, language)); used += tokens; continue; }
+      const keep = Math.floor((words.length * (budget - used)) / tokens);
+      if (keep > 0) picked.push(quoteOwner(row.id, words.slice(0, keep), true, language));
+      break;
+    }
+    return picked;
+  }
+
+  // 外を読んだ節を載せて保存した tail（tail-state の tainted）が、この会話にまだ 1 つでもあるか（要約の前半の形を使わない。TE-5）
+  #tailTainted(conversationId: string): boolean {
+    const tainted = this.#d.kv.getJson<TailState>(`tail-state:${conversationId}`)?.tainted;
+    return (tainted?.checklist?.length ?? 0) > 0 || (tainted?.background?.length ?? 0) > 0;
+  }
+
+  // 要約の「触ったファイル」: 書き換えの記録（file_changes。recordToolWrite が書く）にある、この会話で作った・変えたファイル。新しい順に FILES_TOUCHED_MAX まで
+  #filesTouched(conversationId: string, scrub: (text: string) => string): { files: string[]; more: number } {
+    try {
+      const rows = this.#d.conversations.db.prepare("SELECT path FROM file_changes WHERE conversation_id = ? AND action IN ('create', 'modify') GROUP BY path ORDER BY MAX(id) DESC").all(conversationId) as Array<{ path: string }>;
+      return { files: rows.slice(0, FILES_TOUCHED_MAX).map(r => plainLine(scrub(r.path), FILE_PATH_CHARS)).filter(Boolean), more: Math.max(0, rows.length - FILES_TOUCHED_MAX) };
+    } catch (error) {
+      this.#d.log?.(`[WARN] could not list the files changed in conversation ${conversationId}: ${(error as Error).message}`);
+      return { files: [], more: 0 };
+    }
   }
 
   #snapshot(conversationId: string, project: ToolContext['project'], scout = false, bare = false): string {

@@ -379,7 +379,7 @@ test('外した発言が 4 つ未満でも、外したなら要約を頼む（�
   s.adapter().scripts = [reply('SUMMARY'), reply('short')];
   await s.chat('now something short', C);
   assert.equal(summaries(s).length, 1, '外した 2 つの発言を要約した');
-  assert.equal(s.app.conversations.get(C)!.summary, 'SUMMARY');
+  assert.match(s.app.conversations.get(C)!.summary!, /^## Request and goal\nSUMMARY\n/u, '見出しの無い返事は最初の節に入る（TE-5）');
   assert.ok(s.events.some(e => e.type === 'compaction'));
 });
 
