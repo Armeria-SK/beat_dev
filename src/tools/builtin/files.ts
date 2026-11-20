@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { createReadStream, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { recordToolWrite } from '../../changes/record.ts';
@@ -57,11 +57,29 @@ function readLog(ctx: ToolContext): FileReadLog {
 }
 
 const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+const UNSEEN = 'unseen:';
 
-function staleWrite(abs: string, current: Buffer, ctx: ToolContext, language: Language): string | undefined {
+async function hashFile(abs: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(abs)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
+async function writeRefusal(abs: string, kind: 'edit' | 'overwrite', ctx: ToolContext, language: Language, current?: Buffer): Promise<string | undefined> {
   const seen = readLog(ctx).get(abs);
-  if (seen === undefined) return toolText(language, 'file.not_read', { path: shown(abs, ctx) });
-  return seen === digest(current) ? undefined : toolText(language, 'file.changed_since_read', { path: shown(abs, ctx) });
+  const path = shown(abs, ctx);
+  if (seen === undefined) return toolText(language, kind === 'edit' ? 'file.not_read' : 'file.not_read_write', { path });
+  const unseen = seen.startsWith(UNSEEN);
+  if (unseen && kind === 'edit') return toolText(language, 'file.unseen_edit', { path });
+  const now = current ? digest(current) : await hashFile(abs).catch(() => undefined);
+  return (unseen ? seen.slice(UNSEEN.length) : seen) === now ? undefined : toolText(language, 'file.changed_since_read', { path });
+}
+
+async function writeCheck(input: string, kind: 'edit' | 'overwrite', ctx: ToolContext): Promise<PreCheck> {
+  const { abs, check } = checkFilePath(input, 'write', ctx);
+  if (check.decision === 'deny' || !statSync(abs, { throwIfNoEntry: false })?.isFile()) return check;
+  const refusal = await writeRefusal(abs, kind, ctx, languageOf(ctx.config));
+  return refusal ? { decision: 'deny', reasons: [refusal], ...(check.paths ? { paths: check.paths } : {}), ...(check.writes ? { writes: check.writes } : {}) } : check;
 }
 
 type Need = 'read' | 'write';
@@ -127,14 +145,17 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
     if (stat.size > MAX_READ_BYTES && !input.limit) return { content: toolText(language, 'file.too_big', { size: stat.size.toLocaleString('en-US') }), isError: true };
     const bytes = readFileSync(abs);
     const text = bytes.toString('utf8');
-    if (text.includes('\u0000')) return { content: toolText(language, 'file.binary'), isError: true };
+    if (text.includes('\u0000')) {
+      readLog(ctx).set(abs, `${UNSEEN}${digest(bytes)}`);
+      return { content: toolText(language, 'file.binary'), isError: true };
+    }
     const lines = text.split(/\r?\n/u);
     if (lines.length > 1 && text.endsWith('\n')) lines.pop();
     const start = (input.offset ?? 1) - 1;
     const end = Math.min(lines.length, start + (input.limit ?? DEFAULT_READ_LINES));
     redactAround(lines, start, end);
     const content = readPage(lines, start, end, language, ctx.outputTokens);
-    readLog(ctx).set(abs, digest(bytes));
+    if (end > start) readLog(ctx).set(abs, digest(bytes));
     return { content };
   },
 };
@@ -182,7 +203,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
   }, { additionalProperties: false }),
   effect: 'write',
   allowedIn: ['chat', 'task', 'agent'],
-  preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
+  preCheck: (input, ctx) => (input.mode === 'append' || input.mode === 'create' ? checkFilePath(input.path, 'write', ctx).check : writeCheck(input.path, 'overwrite', ctx)),
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_write', { path: input.path }), body: input.content.slice(0, 4000) }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);
@@ -190,7 +211,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const exists = existsSync(abs);
     if (input.mode === 'create' && exists) return { content: toolText(language, 'file.exists', { path: shown(abs, ctx) }), isError: true };
     if (exists && statSync(abs).isDirectory()) return { content: toolText(language, 'file.is_dir', { path: shown(abs, ctx) }), isError: true };
-    const stale = exists && input.mode !== 'append' ? staleWrite(abs, readFileSync(abs), ctx, language) : undefined;
+    const stale = exists && input.mode !== 'append' ? await writeRefusal(abs, 'overwrite', ctx, language) : undefined;
     if (stale) return { content: stale, isError: true };
     mkdirSync(dirname(abs), { recursive: true });
     // フォルダを作った後は realpath が実体を指すので、シンボリックリンク経由で外に出ていないかをもう一度確かめる
@@ -198,13 +219,14 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const recheck = checkFilePath(abs, 'write', ctx).check;
     if (recheck.decision === 'deny') return { content: toolText(language, 'file.recheck_failed', { detail: recheck.reasons.join(' / ') }), isError: true };
     const appending = input.mode === 'append' && exists;
-    const current = appending ? readFileSync(abs, 'utf8') : '';
+    const previous = appending ? readFileSync(abs) : undefined;
+    const current = previous?.toString('utf8') ?? '';
     const next = appending ? current + input.content : input.content;
     const before = appending ? null : exists ? previousForDelta(abs) : '';
     const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
     recorded();
-    readLog(ctx).set(abs, digest(readFileSync(abs)));
+    if (!previous || readLog(ctx).get(abs) === digest(previous)) readLog(ctx).set(abs, digest(Buffer.from(next, 'utf8')));
     if (!exists) ctx.noteCreated?.(abs);
     const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
     const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
@@ -219,14 +241,14 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
   allowedIn: ['chat', 'task', 'agent'],
-  preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
+  preCheck: (input, ctx) => writeCheck(input.path, 'edit', ctx),
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_edit', { path: input.path }), body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);
     const language = languageOf(ctx.config);
     if (!existsSync(abs)) return { content: toolText(language, 'file.not_found', { path: shown(abs, ctx) }), isError: true };
     const bytes = readFileSync(abs);
-    const stale = staleWrite(abs, bytes, ctx, language);
+    const stale = await writeRefusal(abs, 'edit', ctx, language, bytes);
     if (stale) return { content: stale, isError: true };
     const text = bytes.toString('utf8');
     const count = text.split(input.old).length - 1;
@@ -236,7 +258,7 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
     const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
     recorded();
-    readLog(ctx).set(abs, digest(readFileSync(abs)));
+    readLog(ctx).set(abs, digest(Buffer.from(next, 'utf8')));
     return { content: toolText(language, 'file.replaced', { count, path: shown(abs, ctx) }) };
   },
 };

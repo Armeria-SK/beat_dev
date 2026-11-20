@@ -40,7 +40,7 @@ export function irreducibleEstimate(input: { system: string; messages: readonly 
 // 送る履歴の道具の呼び出しを結果と組にする: 結果の行が無い呼び出しには、その回の結果の行のあとに「動かしていない」行を足し、
 // 組になる呼び出しの無い結果の行は外す（前の不具合で残った行・道具の途中で閉じたアプリ。提供元は組でない履歴を断る）。何も変えなければ同じ配列を返す。
 // 直した回の tail（外した行の分も）は、その回の最後の結果の行にまとめる（adapter は tail を結果の行のすぐ後ろに置くので、途中にあると結果の並びが切れる）
-export function closeToolCalls(messages: readonly ChatMessage[], notRun: string): readonly ChatMessage[] {
+export function closeToolCalls(messages: readonly ChatMessage[], notRun: string, added?: Set<string>): readonly ChatMessage[] {
   type ToolRow = Extract<ChatMessage, { role: 'tool' }>;
   const join = (a: string | undefined, b: string | undefined): string | undefined => (a === undefined ? b : b === undefined ? a : `${a}\n${b}`);
   const bare = (row: ToolRow): ToolRow => { const { tail: _tail, ...rest } = row; return rest; };
@@ -69,7 +69,7 @@ export function closeToolCalls(messages: readonly ChatMessage[], notRun: string)
         tail = join(tail, row.tail);
         if (open.delete(row.toolCallId)) rows.push(bare(row)); else fixed = true;
       }
-      for (const [toolCallId, name] of open) { rows.push({ role: 'tool', toolCallId, name, content: notRun, isError: true }); fixed = true; }
+      for (const [toolCallId, name] of open) { rows.push({ role: 'tool', toolCallId, name, content: notRun, isError: true }); added?.add(toolCallId); fixed = true; }
       if (!fixed) { out.push(...messages.slice(i - rows.length, i)); continue; }
       changed = true;
       if (tail !== undefined) rows[rows.length - 1] = { ...rows.at(-1)!, tail };

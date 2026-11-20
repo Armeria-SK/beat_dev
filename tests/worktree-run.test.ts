@@ -548,9 +548,9 @@ test('8-2 見直し HIGH 3: 許可フォルダが本体を含んでいても、�
   assert.equal(out.decision, 'deny', out.output.content);
   assert.match(out.output.content, /main folder|product folder|not writable here|working copy/iu);
   assert.equal(existsSync(join(r.product, 'zz-probe.txt')), false);
-  const check = fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.ctx) as { reasonKeys?: string[] };
+  const check = await fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.ctx);
   assert.deepEqual(check.reasonKeys, ['wt.write_main']);
-  const mainOk = fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.mainCtx) as { decision: string };
+  const mainOk = await fileWrite.preCheck!({ path: join(r.product, 'zz-probe.txt'), content: 'x' }, r.mainCtx);
   assert.notEqual(mainOk.decision, 'deny', '本体の会話では今までどおり');
 });
 

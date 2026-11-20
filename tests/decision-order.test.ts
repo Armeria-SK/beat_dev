@@ -14,7 +14,8 @@ import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { ACTION_BODY_LIMIT, buildClassifierPrompt, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeLimits } from '../src/tools/auto-approve.ts';
-import { fileWrite } from '../src/tools/builtin/files.ts';
+import { KV } from '../src/db/kv.ts';
+import { fileRead, fileReadLog, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { agentRun } from '../src/tools/builtin/agent.ts';
 import { browserOpen } from '../src/tools/builtin/browser.ts';
@@ -209,6 +210,8 @@ test('4-3a: 守る場所への書き込み（.git の中・製品の直下の AG
   mkdirSync(join(r.root, '.git', 'hooks'), { recursive: true });
   writeFileSync(join(r.root, 'a'), 'x');
   writeFileSync(join(r.root, 'AGENTS.md'), 'orig');
+  r.ctx.fileReads = fileReadLog(new KV(r.db), r.ctx.conversationId);
+  await fileRead.execute({ path: 'AGENTS.md' }, r.ctx);
   const copy = WIN ? 'Copy-Item a .git/hooks/pre-commit' : 'cp a .git/hooks/pre-commit';
   const append = WIN ? "Add-Content -Path AGENTS.md -Value 'x'" : 'echo x >> AGENTS.md';
   const outcomes = [

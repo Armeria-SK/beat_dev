@@ -552,6 +552,7 @@ test('持ち主が書いた確かめ（tools.shell.ask）は policy、人格の�
   assert.equal(webSeen.decision, 'deny', '秘密の入った URL は断る');
   const persona = await setup(t, { mutate: c => { c.tools.roots = [{ path: 'workspace', mode: 'write' }]; } });
   writeFileSync(join(persona.paths.workspace, 'SOUL.md'), '人格');
+  await persona.call('file_read', { path: 'SOUL.md' });
   const personaSeen = await parked(persona, 'file_write', { path: 'SOUL.md', content: 'x' });
   assert.deepEqual([personaSeen.kind, personaSeen.kinds], ['owner', ['persona']]);
   for (const s of [owner, web, persona]) assert.equal(s.prompts.length, 0);

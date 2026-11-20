@@ -15,7 +15,7 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { replayAction } from '../src/pending/replay.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
-import { fileWrite } from '../src/tools/builtin/files.ts';
+import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -37,7 +37,7 @@ function rig(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => v
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
   const approvals = new ApprovalBroker(db);
-  const registry = new ToolRegistry().register(shellRun).register(fileWrite);
+  const registry = new ToolRegistry().register(shellRun).register(fileRead).register(fileWrite);
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const policy = buildPolicy(config, paths);
   const ctx: ToolContext = {
@@ -85,6 +85,7 @@ test('4-2d: 組み込みの protect-files で .github/workflows/ci.yml を書く
   writeFileSync(target, 'orig');
   r.judge.answer = '{"decision":"allow","reason":"fits the request"}';
 
+  await r.call('file_read', { path: writeArgs.path }, hooked, roots);
   const parked = await r.call('file_write', writeArgs, hooked, roots);
   assert.equal(parked.decidedBy, 'pending', parked.output.content);
   const shell = await r.call('shell_run', { command: 'echo x > .github/workflows/ci.yml' }, hooked, roots);

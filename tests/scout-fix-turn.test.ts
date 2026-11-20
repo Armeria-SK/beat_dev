@@ -271,6 +271,8 @@ test('8-6b: the same proposal is tried once per HEAD; a failed fix leaves one "P
   assert.equal(s.fixRows()[0]!.state, 'discarded');
   const [line] = s.events(proposal.id, 'prefix');
   assert.match(line ?? '', /^Pre-fix not kept: the check command did not pass/u);
+  const edited = s.app.db.prepare("SELECT output_preview AS out FROM tool_calls WHERE tool = 'file_edit'").get() as { out: string };
+  assert.equal(edited.out, 'Replaced 1 occurrence(s): a.txt', 'the edit was written and the check failed on it');
   assert.equal(s.app.tasks.get(proposal.id)!.status, 'inbox', 'the proposal stays as it was');
   const plain = (await s.json(`/api/tasks/${proposal.id}`, 'GET')).body.task;
   assert.deepEqual([plain.worktree, plain.prefix], [null, null], 'a thrown-away fix leaves no worktree or prefix on the open proposal');

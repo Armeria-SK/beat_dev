@@ -228,6 +228,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
     const fetched = (network && !(output.isError && output.noRemoteContent)) || again?.fetched === true || output.fetched === true || egress;
     const kept = deps.conversationExists(row.conversation_id);
+    if (!kept) new KV(deps.db).delete(`file-reads:${row.conversation_id}`);
     if (!kept && output.fullRef && resolve(output.fullRef).startsWith(resolve(join(deps.paths.data, 'tool_outputs')) + sep)) {
       try { rmSync(output.fullRef, { force: true }); } catch { }
     }

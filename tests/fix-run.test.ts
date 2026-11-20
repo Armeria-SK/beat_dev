@@ -275,6 +275,7 @@ test('8-6a: 確かめが落ちた直しは残らない（写しは消え、本�
   assert.ok(result.ok, JSON.stringify([result, s.calls()]));
   assert.equal(result.result.kept, false);
   assert.equal(!result.result.kept && result.result.reason, 'check_failed');
+  assert.equal(s.calls().find(c => c.tool === 'file_edit')?.out, 'Replaced 1 occurrence(s): a.txt', '直しは書けて、確かめで落ちた');
   assert.deepEqual(changedKeys(before, mainContent(s.product)), []);
   assert.equal(branchesOf(s.product).some(b => b.startsWith('refs/heads/beat/')), false);
   const row = s.app.fixes.get(result.row.id)!;

@@ -541,6 +541,8 @@ test('8-4 書き込みに失敗したら記録の行は残さない（控えは�
   t.after(() => { try { chmodSync(join(p.root, 'a.txt'), 0o666); chmodSync(join(p.root, 't.csv'), 0o666); } catch { } });
   await s.run(p.id, [readThen('file_write', { path: 'a.txt', content: 'v2\n' }), call('table_write', { path: 't.csv', rows: [['y']], overwrite: true })]);
   assert.equal(read(p.root, 'a.txt'), 'v1\n', '書き込みは失敗している');
+  const wrote = s.app.db.prepare("SELECT output_preview AS out FROM tool_calls WHERE tool = 'file_write'").get() as { out: string };
+  assert.doesNotMatch(wrote.out, /has not been read|changed after it was last read/u, '失敗の理由は読み取り専用で、読んでいないことではない');
   assert.equal(read(p.root, 't.csv'), 'x\n');
   assert.deepEqual(s.rows(p.id), []);
 });

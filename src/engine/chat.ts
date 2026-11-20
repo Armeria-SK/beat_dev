@@ -1387,8 +1387,9 @@ export class ChatEngine {
             detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
-        const sentCalls = new Set(fitted.messages.flatMap(m => (m.role === 'tool' ? [m.toolCallId] : [])));
-        const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'));
+        const notRun = new Set<string>();
+        const paired = closeToolCalls(fitted.messages, engineText(language, 'tool.not_run_stopped'), notRun);
+        const sentCalls = new Set(paired.flatMap(m => (m.role === 'tool' && !notRun.has(m.toolCallId) ? [m.toolCallId] : [])));
         if (paired !== fitted.messages) fitted = { ...fitted, messages: [...paired], estimate: estimateRequest(systemText(system), paired, apiTools, factor, pending) };
         // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
         // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）

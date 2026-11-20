@@ -11,7 +11,8 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
-import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
+import { KV } from '../src/db/kv.ts';
+import { fileEdit, fileList, fileRead, fileReadLog, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall, type PipelineDeps } from '../src/tools/pipeline.ts';
 import { replayAction } from '../src/pending/replay.ts';
@@ -40,7 +41,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const controller = new AbortController();
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
-    workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
+    workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, fileReads: fileReadLog(new KV(db), 'c1'),
   };
   const judge = { answer: JUDGE_ASK, calls: 0 };
   const deps = (reg: ToolRegistry = registry, store: PendingStore = pending): PipelineDeps => ({
@@ -378,6 +379,7 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
   ];
   if (process.platform === 'win32') cases.push(['proj/.GIT/config', /This is a git folder/u]);
   for (const [path, reason] of cases) {
+    if (existsSync(join(s.paths.workspace, path))) await s.call('file_read', { path });
     const outcome = await s.call('file_write', { path, content: 'x' });
     assert.equal(outcome.decidedBy, 'pending', `${path}: ${outcome.output.content}`);
     const request = latest(s);
@@ -387,6 +389,7 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
     assert.equal(existsSync(join(s.paths.workspace, path)) && readFileSync(join(s.paths.workspace, path), 'utf8') === 'x', false, `${path} に書かれてしまった`);
   }
 
+  await s.call('file_read', { path: 'skills/ok/SKILL.md' });
   assert.equal((await s.call('file_edit', { path: 'skills/ok/SKILL.md', old: 'old', new: 'new' })).decidedBy, 'pending');
   const edit = latest(s);
   assert.match(edit.checks.join(), /This is the skills folder/u);
