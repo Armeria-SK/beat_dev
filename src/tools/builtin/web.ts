@@ -61,10 +61,12 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
   summarize: (input, language) => ({ title: toolText(language, 'summary.web_fetch'), body: input.url }),
   async execute(input, ctx) {
     const language = languageOf(ctx.config);
+    const target = ctx.research ? ctx.research.seenUrl(input.url) : input.url;
+    if (target === undefined) return { content: guardText(language, 'web.research_unseen'), isError: true };
     if (ctx.scoutFetches) ctx.scoutFetches.n += 1;
     if (ctx.research) ctx.research.budget.fetches += 1;
     try {
-      const page = await fetchPublic(input.url, ctx.signal, web(ctx).network);
+      const page = await fetchPublic(target, ctx.signal, web(ctx).network);
       const raw = decodeText(page.body, page.contentType).replace(page.truncated ? /�$/u : /(?!)/u, '');
       const html = /^(text\/html|application\/xhtml\+xml)(;|$)/iu.test(page.contentType);
       const extracted = html ? htmlText(raw, page.url) : undefined;

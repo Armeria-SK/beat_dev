@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
@@ -87,6 +87,7 @@ test('頼みの形（守り 2・L4）: generated でない発言は決まった�
   s.app.conversations.append(uuid(1), { role: 'user', content: 'ZQ-ANSWER picked option', askAnswer: true });
   s.app.conversations.append(uuid(1), { role: 'user', content: 'ZQ-GENERATED text', generated: true });
   s.app.conversations.append(uuid(1), { role: 'assistant', content: 'ZQ-AI reply' });
+  s.app.conversations.append(uuid(1), { role: 'user', content: 'ZQ-NOTE queued', note: 'pending' } as never);
   s.app.conversations.append(uuid(1), { role: 'user', content: `${'x'.repeat(2500)}` });
   await s.settle();
   const part = s.app.research.store.parts(s.records()[0]!.id)[0]!;
@@ -96,7 +97,12 @@ test('頼みの形（守り 2・L4）: generated でない発言は決まった�
   const text = users[0]!.content;
   assert.ok(text.includes('I want a Markdown notes app.'));
   for (const marker of ['ZQ-ANSWER', 'ZQ-GENERATED', 'ZQ-AI']) assert.ok(!text.includes(marker), marker);
-  assert.ok(s.app.research.ownerText(uuid(1)).length <= OWNER_TEXT_MAX);
+  // 印つきの行は頼みを作ったあとに足したので、絞りは ownerText の戻りで確かめる（審査 LOW）
+  const owner = s.app.research.ownerText(uuid(1));
+  assert.ok(owner.startsWith('I want a Markdown notes app.'));
+  for (const marker of ['ZQ-ANSWER', 'ZQ-GENERATED', 'ZQ-AI', 'ZQ-NOTE']) assert.ok(!owner.includes(marker), marker);
+  assert.ok(owner.includes('xxxx'), 'a later owner message is still read');
+  assert.equal(owner.length, OWNER_TEXT_MAX);
 });
 
 test('1 件ずつ（D6・M6）: 窓の小さいモデルでは自動で 1 件ずつ。部分ごとに別の会話、候補の部分は印つきで始まり、候補の名前と URL は generated の発言にだけある。前の部分の機能の名前が渡り、同じ名前は 1 行にまとまって定番になる', async t => {
@@ -345,4 +351,46 @@ test('閉じる（LOW-4）: 記録が返事を待っているあいだに App �
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.deepEqual(rejections.map(r => String(r)), []);
   assert.ok(!s.logs.some(line => line.includes(`research ${id}`)), s.logs.filter(line => line.includes('research')).join('\n'));
+});
+
+test('ボタンの元の会話（審査 LOW-5）: タスクの会話・ほかの製品の会話・無い会話からは始まらない（409）', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.app.conversations.create({ id: uuid(7), kind: 'task', title: 'A task', projectId: s.projectId });
+  mkdirSync(join(s.root, '..', 'Other'), { recursive: true });
+  const other = (await s.json('/api/projects', 'POST', { root: join(s.root, '..', 'Other') })).body.project.id as string;
+  s.app.conversations.create({ id: uuid(8), projectId: other });
+  for (const [label, id] of [['task conversation', uuid(7)], ['other product', uuid(8)], ['missing', uuid(9)]] as const) {
+    const out = await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: id });
+    assert.equal(out.status, 409, `${label}: ${JSON.stringify(out.body)}`);
+  }
+  assert.equal(s.records().length, 0);
+});
+
+test('libraries の段（審査 LOW-5）: いちばん新しい products の記録が確定していなければ、古い記録を確定しても libraries は始まらない', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app.');
+  for (const text of ['first', 'second']) {
+    s.adapter().scripts.push(reply(text));
+    assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+    await s.settle();
+  }
+  const older = s.records().at(-1)!;
+  assert.equal(s.records().length, 2);
+  const out = await s.json(`/api/research/${older.id}/confirm`, 'POST', { shownHash: s.app.research.store.shownHash(older.id), picks: [] });
+  assert.equal(out.status, 200, JSON.stringify(out.body));
+  assert.ok(!out.body.libraries, 'no libraries record in the reply');
+  assert.equal(s.records().filter(r => r.phase === 'libraries').length, 0);
+  assert.ok(s.logs.some(line => line.includes('the libraries research did not start')));
+});
+
+test('確定（審査 LOW-5）: 持ち主の印が無い確定は断る', async t => {
+  const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
+  s.adapter().scripts.push(reply('ok'), reply('part'));
+  await s.send(1, 'I want a notes app.');
+  assert.equal((await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) })).status, 202);
+  await s.settle();
+  const record = s.records()[0]!;
+  assert.throws(() => s.app.research.confirm(record.id, { shownHash: s.app.research.store.shownHash(record.id), picks: [] }, {} as OwnerAct), (error: { code?: string }) => error.code === 'not_owner');
+  assert.equal(s.app.research.store.get(record.id)!.status, 'done');
 });

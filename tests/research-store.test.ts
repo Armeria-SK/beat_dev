@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { ResearchError } from '../src/research/labels.ts';
-import { ResearchStore } from '../src/research/store.ts';
+import { confirmedPicks, ResearchStore } from '../src/research/store.ts';
 import { Value } from '@sinclair/typebox/value';
 import { ResearchConfig } from '../src/config/schema.ts';
 import { parseConfig } from '../src/config/store.ts';
@@ -180,4 +180,24 @@ test('設定（D13）: 調べる設定の既定と、製品ごとの上書きが
 
 test('試験の既定（R3.11 M9）: testConfig は自動で調べない', () => {
   assert.equal(researchSettings(testConfig()).when, 'off');
+});
+
+test('記録の store（審査 LOW-5）: 見せた印は名前の欄を含む（名前が変われば印も変わる）', t => {
+  const { db, store } = setup(t);
+  const run = store.start({ projectId: 'p1', runId: 'r1', phase: 'products', mode: 'batch' });
+  const row = store.addSource(run.id, similar(1));
+  const before = store.shownHash(run.id);
+  db.prepare('UPDATE research_items SET name_or_label = ? WHERE id = ?').run('Product renamed', row.id);
+  assert.notEqual(store.shownHash(run.id), before);
+});
+
+test('記録の store（審査 LOW-5）: confirmedPicks は確定した記録の選びだけを返す（done の記録の選びは数えない）', t => {
+  const { db, store } = setup(t);
+  const run = store.start({ projectId: 'p1', runId: 'r1', phase: 'products', mode: 'batch' });
+  const { row } = store.addFeature(run.id, { label: 'Live preview', evidence: [] });
+  store.finish(run.id, 'done');
+  db.prepare("UPDATE research_items SET decision = 'picked' WHERE id = ?").run(row.id);
+  assert.deepEqual(confirmedPicks(db, 'p1'), []);
+  db.prepare("UPDATE research_runs SET status = 'confirmed' WHERE id = ?").run(run.id);
+  assert.deepEqual(confirmedPicks(db, 'p1').map(p => p.label), ['Live preview']);
 });

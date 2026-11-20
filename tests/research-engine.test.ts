@@ -15,6 +15,7 @@ import { toolCall } from './helpers/task-app.ts';
 // beat R (M2): 調べる実行のエンジンと Web の守り（R3.2 D1〜D7・R3.11 H1・M1・M2・L1・L2・L3）
 
 const LONG = `https://alpha.zqnotes.net/long?q=${'a'.repeat(300)}`;
+const LONG_PATH = `https://alpha.zqnotes.net/${'p'.repeat(300)}?q=1`;
 const html = (body: string) => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from(`<!doctype html><html><head><title>t</title></head><body><main>${body}</main></body></html>`) }) as PageResponse;
 const ddg = (links: readonly string[]) => html(`<div id="links" class="results">${links.map((l, i) => `<div class="result results_links web-result"><div class="result__body"><h2 class="result__title"><a class="result__a" href="${l.replaceAll('&', '&amp;')}">Hit ${i}</a></h2><a class="result__snippet">Snippet ${i}</a></div></div>`).join('')}</div>`);
 
@@ -26,6 +27,7 @@ function fakeWeb() {
       asked.push(url.href);
       if (url.hostname === 'html.duckduckgo.com') {
         const q = url.searchParams.get('q') ?? '';
+        if (q.includes('longpath')) return ddg([LONG_PATH]);
         if (q.includes('bounce')) return { status: 302, location: 'https://third.zqnotes.net/?q=bounce', contentType: 'text/html', body: Buffer.alloc(0) };
         return ddg(['https://alpha.zqnotes.net/notes', 'https://alpha.zqnotes.net/Case/Path', 'https://alpha.zqnotes.net/q?a=1', 'https://short.zqnotes.net/r', LONG]);
       }
@@ -48,9 +50,9 @@ async function setup(t: Parameters<typeof startApp>[0], configure?: (config: App
   const projectId = made.body.project.id as string;
   const store = new ResearchStore(s.app.db);
   let n = 100;
-  const part = (options: { part?: PartKind; oneByOne?: boolean; session?: ResearchSession; tools?: ReadonlySet<string>; followUp?: string; pinned?: string | null } = {}) => {
+  const part = (options: { part?: PartKind; oneByOne?: boolean; session?: ResearchSession; tools?: ReadonlySet<string>; followUp?: string; pinned?: string | null; limits?: Partial<ResearchSession['limits']> } = {}) => {
     const record = options.session ? store.get(options.session.researchId)! : store.start({ projectId, phase: options.part === 'libraries' ? 'libraries' : 'products', mode: options.oneByOne ? 'one_by_one' : 'batch' });
-    const session = options.session ?? new ResearchSession({ researchId: record.id, part: options.part ?? 'first', oneByOne: options.oneByOne ?? false, budget: { fetches: 0, searches: 0, started: Date.now() }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 } });
+    const session = options.session ?? new ResearchSession({ researchId: record.id, part: options.part ?? 'first', oneByOne: options.oneByOne ?? false, budget: { fetches: 0, searches: 0, started: Date.now() }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20, ...options.limits } });
     const task = s.app.tasks.create({ title: 'Research', origin: 'self', projectId, scoutRun: true, actor: 'worker' });
     const conversationId = uuid(n++);
     assert.ok(s.app.tasks.claim(task.id, 60_000, conversationId));
@@ -110,6 +112,29 @@ test('調べる実行（守り 7・R3.11 H1）: 見た URL とまるごと同じ
   assert.ok(run.session.saw('https://alpha.zqnotes.net/docs'), 'a link listed on a read page is seen');
 });
 
+test('調べる実行（守り 7・審査 MEDIUM）: モデルが末尾に足した / と空白は外へ送らず、beat が見た URL の書き方で開く', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes' }), toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/notes/////\u3000\u00a0' }), reply('done'));
+  const run = s.part();
+  await run.done;
+  assert.deepEqual(s.toolResults(run.conversationId).filter(m => m.name === 'web_fetch').map(r => r.isError === true), [false]);
+  const fetched = s.asked.filter(url => url.includes('alpha.zqnotes.net'));
+  assert.deepEqual(fetched, ['https://alpha.zqnotes.net/notes']);
+  assert.ok(!s.asked.some(url => /%E3%80%80|%C2%A0|notes\/\//iu.test(url)), s.asked.join('\n'));
+});
+
+test('調べる実行（守り 7・審査 LOW-4）: 見た URL でも、ホスト + パス + 問い合わせが 300 字を超えれば（問い合わせが短くても）断り、判定役も呼ばない', async t => {
+  const s = await setup(t, c => { c.routing.judge = ['m2']; });
+  s.adapter().scripts.push(toolCall('web_search', { query: 'longpath' }), toolCall('web_fetch', { url: LONG_PATH }), reply('done'));
+  const run = s.part();
+  await run.done;
+  assert.ok(run.session.saw(LONG_PATH));
+  assert.equal(s.toolResults(run.conversationId).find(m => m.name === 'web_fetch')!.isError, true);
+  assert.ok(!s.asked.includes(LONG_PATH));
+  assert.equal(Number((s.app.db.prepare('SELECT COUNT(*) AS n FROM judge_calls').get() as { n: number }).n), 0);
+  assert.equal(Number((s.app.db.prepare('SELECT COUNT(*) AS n FROM pending_actions').get() as { n: number }).n), 0);
+});
+
 test('調べる実行（D7・H1）: リダイレクトのあとの URL は見た URL に入り、開けたページの表にもその URL で入る', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('web_search', { query: 'notes' }), toolCall('web_fetch', { url: 'https://short.zqnotes.net/r' }), toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/landing' }), reply('done'));
@@ -148,18 +173,18 @@ test('調べる実行（R3.11 M1）: ! で始まる語の検索は deny。検索
   assert.ok(s.asked.some(url => url.includes('third.zqnotes.net')), 'a chat search still follows the redirect');
 });
 
-test('調べる実行（R3.11 M2）: 数は記録ごと。続きの部分をまたいで 31 個目の web_fetch と 16 個目の web_search が断られ、時間は記録の始まりから数える', async t => {
+test('調べる実行（R3.11 M2）: 数は記録ごと。本当の呼び出しで数え、続きの部分をまたいで上限を超える web_fetch と web_search が断られ、時間は記録の始まりから数える', async t => {
   const s = await setup(t);
-  s.adapter().scripts.push(toolCall('web_search', { query: 'notes' }), reply('first'));
-  const first = s.part();
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes' }), toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/notes' }), reply('first'));
+  const first = s.part({ limits: { fetches: 2, searches: 2 } });
   await first.done;
-  first.session.budget.fetches = 30;
-  first.session.budget.searches = 15;
   const next = first.session.continued();
-  s.adapter().scripts.push(toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/notes' }), toolCall('web_search', { query: 'more' }), reply('second'));
+  s.adapter().scripts.push(toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/notes' }), toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/notes' }), toolCall('web_search', { query: 'more' }), toolCall('web_search', { query: 'again' }), reply('second'));
   const second = s.part({ session: next });
   await second.done;
-  assert.deepEqual(s.toolResults(second.conversationId).filter(m => m.name !== 'research_record').map(r => [r.name, r.isError === true]), [['web_fetch', true], ['web_search', true]]);
+  assert.deepEqual(s.toolResults(first.conversationId).map(r => [r.name, r.isError === true]), [['web_search', false], ['web_fetch', false]]);
+  assert.deepEqual(s.toolResults(second.conversationId).map(r => [r.name, r.isError === true]), [['web_fetch', false], ['web_fetch', true], ['web_search', false], ['web_search', true]]);
+  assert.deepEqual([next.budget.fetches, next.budget.searches], [2, 2]);
   const late = new ResearchSession({ researchId: s.store.start({ projectId: 'other', phase: 'products', mode: 'batch' }).id, part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() - 21 * 60_000 }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 } });
   assert.equal(late.overTime(), true);
 });
@@ -272,4 +297,16 @@ test('調べる実行（L2）: 調べる部分はやり取りが長くなって�
   const row = s.app.db.prepare('SELECT flags FROM engine_runs WHERE id = ?').get(run.runId) as { flags: string };
   assert.ok(!(JSON.parse(row.flags) as string[]).includes('context_split'), row.flags);
   assert.ok(s.adapter().calls.length >= 4, `the part went on past the third round (${s.adapter().calls.length} calls, ok=${ended.ok} ${JSON.stringify(s.app.db.prepare('SELECT error_kind, flags, iterations FROM engine_runs WHERE id = ?').get(run.runId))})`);
+});
+
+test('調べる実行（審査 LOW-5）: 記録の時間を過ぎた部分では web_search も web_fetch も断られ、外へ出ない', async t => {
+  const s = await setup(t);
+  const record = s.store.start({ projectId: s.projectId, phase: 'products', mode: 'batch' });
+  const late = new ResearchSession({ researchId: record.id, part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() - 21 * 60_000 }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 } });
+  late.see('https://alpha.zqnotes.net/notes');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'notes' }), toolCall('web_fetch', { url: 'https://alpha.zqnotes.net/notes' }), reply('done'));
+  const run = s.part({ session: late });
+  await run.done;
+  assert.deepEqual(s.toolResults(run.conversationId).map(r => [r.name, r.isError === true]), [['web_search', true], ['web_fetch', true]]);
+  assert.deepEqual(s.asked, []);
 });

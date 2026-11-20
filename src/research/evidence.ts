@@ -85,18 +85,18 @@ export class ResearchSession {
   readonly budget: ResearchBudget;
   readonly limits: ResearchLimits;
   readonly pages: OpenedPages;
-  readonly #seen: Set<string>;
+  readonly #seen: Map<string, string>;
   readonly candidates: Candidate[];
   readonly #now: () => number;
 
-  constructor(input: { researchId: string; part: PartKind; oneByOne?: boolean; budget: ResearchBudget; limits: ResearchLimits; pages?: OpenedPages; seen?: Set<string>; candidates?: Candidate[]; now?: () => number }) {
+  constructor(input: { researchId: string; part: PartKind; oneByOne?: boolean; budget: ResearchBudget; limits: ResearchLimits; pages?: OpenedPages; seen?: Map<string, string>; candidates?: Candidate[]; now?: () => number }) {
     this.researchId = input.researchId;
     this.part = input.part;
     this.oneByOne = input.oneByOne ?? false;
     this.budget = input.budget;
     this.limits = input.limits;
     this.pages = input.pages ?? new OpenedPages();
-    this.#seen = input.seen ?? new Set();
+    this.#seen = input.seen ?? new Map();
     this.candidates = input.candidates ?? [];
     this.#now = input.now ?? Date.now;
   }
@@ -107,12 +107,18 @@ export class ResearchSession {
 
   see(url: string): void {
     const key = normalizeUrl(url);
-    if (key !== null) this.#seen.add(key);
+    if (key !== null && !this.#seen.has(key)) this.#seen.set(key, url);
   }
 
   saw(url: string): boolean {
     const key = normalizeUrl(url);
     return key !== null && this.#seen.has(key);
+  }
+
+  // 守り 7: 開けるのは beat が見た URL の書き方だけ（モデルが足した空白や / を外へ送らない）
+  seenUrl(url: string): string | undefined {
+    const key = normalizeUrl(url);
+    return key === null ? undefined : this.#seen.get(key);
   }
 
   get takesCandidates(): boolean { return this.oneByOne && this.part === 'first'; }

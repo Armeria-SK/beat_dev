@@ -352,3 +352,22 @@ test('定番: 漢字・かなだけの名前は 2 字以上のときだけ当て
     { similar: b.id, url: 'https://b.example.com/x', quote: 'The X button saves it all' },
   ] }).row.default_checked, 1);
 });
+
+test('research_record（審査 LOW-5）: 渡された調べる部分が別の記録のものなら断る', async t => {
+  const { db, store } = setup(t, 'run-1');
+  const other = store.start({ projectId: 'p2', runId: 'run-x', phase: 'products', mode: 'batch' });
+  sessionFor(t, other.id, 'run-1').pages.add('https://example.com/a', PAGE_A);
+  const out = await record(db, { kind: 'similar', name: 'Typora', url: 'https://example.com/a' });
+  assert.equal(out.isError, true);
+  assert.match(out.content, /only while a research run/u);
+});
+
+test('調べる部分（審査 LOW-5・守り 7）: 続きの部分は見た URL を引き継ぎ、開けるのは最初に見た書き方', () => {
+  const session = new ResearchSession({ researchId: 'r', part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() }, limits: LIMITS });
+  session.see('https://Example.com/notes/');
+  session.see('https://example.com/notes');
+  const next = session.continued();
+  assert.ok(next.saw('https://example.com/notes'));
+  assert.equal(next.seenUrl('https://EXAMPLE.com/notes/////#x'), 'https://Example.com/notes/');
+  assert.equal(next.seenUrl('https://example.com/other'), undefined);
+});
