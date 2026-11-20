@@ -154,6 +154,28 @@ test('TE-4a: ほかの会話・子の担当の会話の message_id は見つか�
   assert.deepEqual([blank.total, blank.body], [0, ''], '空の発言は offset=0 で読める');
 });
 
+test('TE-4a: 調べる会話（research_runs.parts にある会話）の発言は message_id でも見つからない', async t => {
+  const s = await taskApp(t);
+  const { id } = s.app.conversations.append('research-conv', { role: 'user', content: 'research conversation text' });
+  s.app.db.prepare("INSERT INTO research_runs (id, project_id, phase, mode, status, created_at, parts) VALUES ('rr1', 'proj', 'products', 'batch', 'done', 0, ?)").run(JSON.stringify([{ conversationId: 'research-conv' }]));
+  const out = await direct(s, { conversation_id: 'research-conv', message_id: id });
+  assert.equal(out.isError, true);
+  assert.match(out.content, /message was not found/u);
+  assert.ok(!out.content.includes('research conversation text'));
+});
+
+test('今までの読み方（1,500 字ずつ）も、伏せ字を全文に掛けてから切る（1,500 字の境目をまたぐ秘密が出ない）', async t => {
+  const s = await taskApp(t);
+  const head = filler(1_470);
+  const text = `${head} see https://admin:Hunter2SuperSecretPw@db.example.com/x ${filler(200, 'v')}`;
+  assert.ok(text.indexOf('@') > 1_500 && text.indexOf('Hunter2') < 1_500, '前提: 秘密が 1,500 字の境目をまたぐ');
+  s.app.conversations.append(P, { role: 'user', content: text });
+  const out = await direct(s, { conversation_id: P });
+  assert.ok(!out.isError, out.content);
+  assert.match(out.content, /see /u);
+  assert.ok(!out.content.includes('Hunter2') && !out.content.includes('admin:'), out.content.slice(-120));
+});
+
 test('TE-4a: tail を保存した発言を読んでも tail と合言葉が出ない。今までの読み方にも出ない', async t => {
   const s = await taskApp(t);
   const { id } = s.app.conversations.append(P, { role: 'user', content: 'the owner request' });

@@ -172,7 +172,7 @@ export const historyRead: ToolDef<{ conversation_id: string; around_message_id?:
       const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20 });
       if (!rows.length) return { content: toolText(languageOf(ctx.config), 'history.not_found'), isError: true };
       return {
-        content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n'),
+        content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${redactSecrets(r.text).slice(0, 1500)}`).join('\n\n'),
         ...(conversationSawOutside(services(ctx).db, input.conversation_id) ? { fetched: true } : {}),
       };
     } catch (error) { return fail(error, ctx); }
