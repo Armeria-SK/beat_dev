@@ -13,6 +13,7 @@ import { Loading, SettingsContext, type Ask, type Pending, type SetCtx } from '.
 import { confirmable, escAsksLeave, hasUnsaved, serial } from './flow.ts';
 import { AdvancedPanel, AppearancePanel, PersonaPanel } from './customize.tsx';
 import { McpPanel } from './mcp.tsx';
+import { ResearchPanel } from './research.tsx';
 import { CATEGORIES, categoryById, DEFAULT_CATEGORY, GROUP_LABEL, isCategory, matchCategories, type CategoryId, type GroupId } from './rows.ts';
 
 export interface SettingsProps {
@@ -133,6 +134,7 @@ export function Settings({ section, onClose, held, onReplay, onSaved, onProfile 
       case 'models': body = <ModelsPanel />; break;
       case 'skills': body = <SkillsPanel />; break;
       case 'background': body = <BackgroundPanel />; break;
+      case 'research': body = <ResearchPanel />; break;
       case 'folders': body = <FoldersPanel />; break;
       case 'hooks': body = <HooksPanel />; break;
       case 'browser': body = <BrowserPanel />; break;

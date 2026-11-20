@@ -11,7 +11,7 @@ import { judgeBackups, keyLine, providerReach, rolesOf, setConversation, setFall
 // 新しい画面の Settings（steps/p1-ui.md「Settings」と PR 1-5b）の、画面を持たない決まり。
 
 test('ui/settings rows: 区分はデザインの 10 から Thinking を除き、Persona と Background を足した 11、並びはデザインの順', () => {
-  assert.deepEqual(CATEGORIES.map(c => c.id), ['models', 'skills', 'background', 'folders', 'hooks', 'browser', 'mcp', 'server', 'persona', 'appearance', 'advanced']);
+  assert.deepEqual(CATEGORIES.map(c => c.id), ['models', 'skills', 'background', 'research', 'folders', 'hooks', 'browser', 'mcp', 'server', 'persona', 'appearance', 'advanced']);
   for (const c of CATEGORIES) {
     assert.ok(typeof en[c.label] === 'string', c.label);
     for (const row of c.rows) assert.ok(typeof en[row] === 'string', row);

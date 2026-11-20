@@ -13,6 +13,7 @@ import { canThinkNow, useScout } from '../scout.ts';
 import { reportOpError } from '../task-ops.ts';
 import { GrowthSection } from './GrowthSection.tsx';
 import { CommandItems, FinishedItem, MiniBoard, RunningItems, StatTile, useHomeLoad, useLastLook, useProductCommands, useRunActions } from './home-parts.tsx';
+import { ResearchUsing } from './ProductResearch.tsx';
 
 export interface ProductHomeProps {
   id: string;
@@ -126,6 +127,8 @@ export function ProductHome({ id, project, conversations, drafts, checklists, wo
           </ul>
         )}
       </section>
+
+      <ResearchUsing id={id} revision={revision} />
 
       <GrowthSection key={id} id={id} createdAt={project.created_at} revision={revision} index={7} />
     </div>

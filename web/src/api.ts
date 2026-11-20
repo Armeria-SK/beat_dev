@@ -96,6 +96,7 @@ export type AcceptanceSource =
   | { kind: 'owner_choice'; question: string; answer: string; questionMessageId?: number; answerMessageId?: number; conversationId?: string }
   | { kind: 'ai_added'; claimed?: 'owner_words' | 'owner_choice'; reason?: 'not_found' | 'too_short' | 'not_next_reply' | 'choice_unverified' | 'scan_budget'; quote?: string; question?: string; answer?: string }
   | { kind: 'owner_edit' }
+  | { kind: 'owner_pick'; researchId: string; itemId: number; label: string }
   | { kind: 'owner_answer'; questionId: number; answer: string; picked: 'option' | 'text'; was?: AcceptanceSource };
 export type AcceptanceCheck = { kind: 'command'; command: string } | { kind: 'look' } | { kind: 'read' };
 export interface AcceptanceItem {
@@ -119,11 +120,11 @@ export interface AcceptanceVersionDetail extends AcceptanceVersion { content: un
 export interface AcceptanceEdit { baseVersion: number; baseHash: string | null; ops: OwnerOp[] }
 export interface UnreferencedMessage { message_id: number; conversation_id: string; text: string; created_at: number }
 export interface Coverage {
-  owner_words: number; owner_choice: number; owner_edit: number; ai_added: number; by_hand: number; unreferenced: UnreferencedMessage[]; unreferenced_total: number;
+  owner_words: number; owner_choice: number; owner_edit: number; owner_pick?: number; ai_added: number; by_hand: number; unreferenced: UnreferencedMessage[]; unreferenced_total: number;
 }
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
-export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
+export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode; researchSettings?: ResearchOwn | null }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
@@ -229,6 +230,22 @@ export interface Task {
 export interface Proposal { kind: 'feature' | 'bug'; why: string; area: string[]; size: 'S' | 'M' | 'L'; goal: string | null; evidence: string | null; ledger: string | null }
 export interface PreFix { branch: string; base: string; checks: 'passed'; files: number; added: number; removed: number; diff: string[] }
 export type ScoutMode = 'off' | 'research' | 'fix';
+export type ResearchItemKind = 'similar' | 'feature' | 'choice' | 'library';
+export interface ResearchItem {
+  id: number; kind: ResearchItemKind; name: string; detail: string | null; url: string | null; license: string | null; updated: string | null; language: string | null;
+  products: number[]; options: string[] | null; by: 'code' | 'model' | null; defaultChecked: boolean; defaultReason: 'owner_said' | 'standard' | null; recommended: number | null; decision: string | null; reason: string | null;
+}
+export type ResearchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'skipped' | 'confirmed';
+export interface ResearchRecord {
+  id: string; phase: 'products' | 'libraries'; mode: 'batch' | 'one_by_one'; status: ResearchStatus; partial: boolean; auto: boolean; stopReason: string | null;
+  createdAt: number; finishedAt: number | null; confirmedAt: number | null; shownHash: string; items: ResearchItem[];
+}
+export type ResearchLanguageName = 'TypeScript / JavaScript' | 'Python' | 'Go' | 'Rust' | 'C#' | 'Java / Kotlin' | 'C / C++' | 'Swift' | 'Dart' | 'PHP' | 'Ruby';
+export interface ResearchLimitsView { candidates: number; searches: number; fetches: number; minutes: number }
+export interface ResearchSettingsView { when: 'new' | 'button' | 'off'; mode: 'auto' | 'one_by_one' | 'batch'; limits: ResearchLimitsView; askLanguage: boolean; preferLanguages: ResearchLanguageName[]; avoidLanguages: ResearchLanguageName[] }
+export type ResearchOwn = Partial<Omit<ResearchSettingsView, 'limits'>> & { limits?: Partial<ResearchLimitsView> };
+export interface ResearchView { settings: ResearchSettingsView; own: ResearchOwn | null; products: ResearchRecord | null; libraries: ResearchRecord | null; suggestedCheck: string | null }
+export interface ResearchPick { id: number; decision: string | number; reason?: string; setup?: boolean }
 export interface ScoutState { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null }
 export interface ChatBuild {
   id: string; status: TaskStatus; waiting_kind: 'question' | 'approval' | null; check_state: 'awaiting' | 'checked' | null; project_id: string | null;
@@ -375,6 +392,11 @@ export const api = {
   createProject: (input: NewProject) => call<{ project: Project; notes: ProjectNote[] }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   patchProject: (id: string, patch: ProjectPatch) => call<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   scout: (id: string) => call<ScoutState>(`/api/projects/${encodeURIComponent(id)}/scout`),
+  research: (id: string) => call<ResearchView>(`/api/projects/${encodeURIComponent(id)}/research`),
+  startResearch: (id: string, conversationId: string) => call<{ research: ResearchRecord }>(`/api/projects/${encodeURIComponent(id)}/research`, { method: 'POST', body: JSON.stringify({ conversationId }) }),
+  skipResearch: (researchId: string) => call<{ research: ResearchRecord }>(`/api/research/${encodeURIComponent(researchId)}/skip`, { method: 'POST', body: '{}' }),
+  confirmResearch: (researchId: string, shownHash: string, picks: ResearchPick[]) =>
+    call<{ research: ResearchRecord; replied: boolean; setupTask: string | null; libraries: ResearchRecord | null }>(`/api/research/${encodeURIComponent(researchId)}/confirm`, { method: 'POST', body: JSON.stringify({ shownHash, picks }) }),
   scoutRun: (id: string) => call<unknown>(`/api/projects/${encodeURIComponent(id)}/scout/run`, { method: 'POST', body: '{}' }),
   plan: (id: string, conversationId: string) => call<{ plan: PlanDoc }>(`/api/projects/${encodeURIComponent(id)}/plan?conversationId=${encodeURIComponent(conversationId)}`),
   acceptance: (id: string, conversationId?: string, unreferencedBefore?: number) => {

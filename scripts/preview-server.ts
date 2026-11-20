@@ -179,13 +179,15 @@ function seedProducts(app: App): void {
   const talk = (projectId: string, title: string, lines: string[]) => {
     const c = app.conversations.create({ title, projectId });
     lines.forEach((content, i) => app.conversations.append(c.id, { role: i % 2 === 0 ? 'user' : 'assistant', content }));
+    return c.id;
   };
   const shop = add('shop-site', 'Shop site', 'npm test');
   const notes = add('travel-notes', 'Travel notes', null);
   talk(shop.id, 'Add a cart badge', ['Show the number of items on the cart icon.', 'I will add a badge to the header.']);
   talk(shop.id, 'Fix the price rounding', ['Totals are off by one yen.', 'The tax is rounded per line. I will round once at the end.']);
   talk(shop.id, 'Plan the checkout page', ['What should the checkout page ask for?']);
-  talk(notes.id, 'Outline the Kyoto trip', ['Make an outline for three days in Kyoto.', 'Day 1: east side. Day 2: Arashiyama. Day 3: Fushimi.']);
+  const kyoto = talk(notes.id, 'Outline the Kyoto trip', ['Make an outline for three days in Kyoto.', 'Day 1: east side. Day 2: Arashiyama. Day 3: Fushimi.']);
+  seedResearch(app, notes.id, kyoto);
   const tasks = app.tasks;
   tasks.create({ title: 'Write tests for the cart total', body: 'Proposed for the shop.', origin: 'self', propose: true, actor: 'preview', projectId: shop.id });
   const ask = tasks.create({ title: 'Choose the payment provider', origin: 'user', runAt: now + 86_400_000, actor: 'preview', projectId: shop.id });
@@ -199,6 +201,23 @@ function seedProducts(app: App): void {
   memo.update(shop.id, saved.name, { content: 'Run `npm test` before every pull request.\nRun `npm run lint` too.', summary: 'Added the lint step' }, { actor: 'beat', tainted: false });
   memo.save(shop.id, { title: 'Pull requests', content: 'The owner prefers small pull requests: one change per branch, under about 200 lines.' }, { actor: 'owner', tainted: false });
   memo.save(shop.id, { title: 'Payment provider docs', content: 'Unverified: the provider docs say refunds take 5 to 10 days.', summary: 'Noted from the provider docs' }, { actor: 'beat', tainted: true });
+}
+
+// beat R: a finished research list (products) and a libraries record waiting for the owner, for the Plan pane's first stage
+function seedResearch(app: App, projectId: string, conversationId: string): void {
+  const store = app.research.store;
+  const products = store.start({ projectId, phase: 'products', mode: 'batch', sourceConversationId: conversationId });
+  const trip = store.addSource(products.id, { kind: 'similar', name: 'TripNotes', url: 'https://github.com/example/tripnotes', detail: 'A Markdown trip planner with day plans and maps.', license: 'It is released under the MIT License.', evidence: {} });
+  const atlas = store.addSource(products.id, { kind: 'similar', name: 'Atlas Planner', url: 'https://atlas-planner.example.org/', evidence: {} });
+  store.addFeature(products.id, { label: 'Day by day outline', evidence: [{ similar: trip.id, url: 'https://github.com/example/tripnotes', quote: 'Day by day outline' }, { similar: atlas.id, url: 'https://atlas-planner.example.org/', quote: 'Day by day outline' }] });
+  store.addFeature(products.id, { label: 'Offline maps', evidence: [{ similar: trip.id, url: 'https://github.com/example/tripnotes', quote: 'Offline maps' }] });
+  store.addFeature(products.id, { label: 'Shared packing list', evidence: [{ similar: atlas.id, url: 'https://atlas-planner.example.org/', quote: 'Shared packing list' }] });
+  store.finish(products.id, 'done', { partial: true, stopReason: 'time' });
+  const libraries = store.start({ projectId, phase: 'libraries', mode: 'batch', sourceConversationId: conversationId });
+  store.addChoice(libraries.id, { label: 'Which language for the app?', options: ['TypeScript / JavaScript', 'Go', 'Python'], recommended: 0, what: 'language' });
+  store.addChoice(libraries.id, { label: 'Where should the notes be stored?', options: ['Plain Markdown files', 'SQLite database'], recommended: 1 });
+  store.addSource(libraries.id, { kind: 'library', name: 'marked', url: 'https://github.com/markedjs/marked', evidence: {} });
+  store.finish(libraries.id, 'done');
 }
 
 function seedLibrary(app: App): void {

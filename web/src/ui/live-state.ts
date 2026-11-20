@@ -253,6 +253,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       const build = e.task.project_id && e.task.acceptance_items && old?.status !== e.task.status ? e.task.project_id : null;
       return { state: build ? planBump(next, build) : next, effects: [...refresh('worker'), ...counts(s)] };
     }
+    case 'research.changed':
+      return { state: planBump(s, e.projectId), effects: [] };
     case 'scout.changed':
       return { state: { ...s, taskRevision: s.taskRevision + 1 }, effects: [] };
     case 'task.deleted': {

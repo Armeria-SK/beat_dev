@@ -3,6 +3,7 @@ import { api, ApiError, type Project, type ProjectPatch } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { useT } from '../../i18n/index.ts';
 import { ScoutModeSwitch } from '../ScoutModeSwitch.tsx';
+import { ProductResearch } from './ProductResearch.tsx';
 import { autoLabel, hasDocLanguage, LANGUAGES, languageName, languagePatch, languagePick, OTHER } from '../doc-language.ts';
 import { Button } from '../parts.tsx';
 import { followProduct } from '../product-meta.ts';
@@ -106,6 +107,8 @@ export function ProductSettings({ project, onProject }: { project: Project; onPr
         <div className="bt-section__head"><span className="bt-label">{t('ui.scout.mode')}</span></div>
         <ScoutModeSwitch project={project} onProject={onProject} />
       </section>
+
+      <ProductResearch project={project} />
 
       <section className="bt-section">
         <div className="bt-section__head">
