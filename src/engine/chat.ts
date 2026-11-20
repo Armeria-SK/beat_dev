@@ -60,7 +60,7 @@ import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
-import { plainLine } from '../shared/plain-text.ts';
+import { plainLine, stripHidden } from '../shared/plain-text.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, buildTail, fenceTail, isFencedTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
@@ -105,13 +105,14 @@ const clean = (message: ChatMessage, fence: ReturnType<typeof makeFence> | undef
   (fence && message.role !== 'assistant' && message.content.toLowerCase().includes(fence.nonce.toLowerCase()) ? { ...message, content: fence.clean(message.content) } : message);
 // 消した結果の印に書く入力の要点の長さ（TE-4）
 const CLEARED_INPUT_CHARS = 160;
-// 印の要点に要る分だけ残した入力（長い文字列・多い要素を先に切る。切った先は 1 行の要点に出ない）
+// 印の要点に要る分だけ残した入力（長い文字列・多い要素を先に切る）。文字列は見えない文字を消して空白を詰めた見える長さで切り、鍵の名前も見えない文字を消す
+// （切った所は 1 行の要点の 160 字よりずっと後ろになり、鍵の名前の伏せ字が効く）
 function boundedInput(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return value.slice(0, CLEARED_INPUT_CHARS * 4);
+  if (typeof value === 'string') return plainLine(value, CLEARED_INPUT_CHARS * 4);
   if (value === null || typeof value !== 'object') return value;
   if (depth >= 8) return '…';
   if (Array.isArray(value)) return value.slice(0, 40).map(item => boundedInput(item, depth + 1));
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, boundedInput(item, depth + 1)]));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [stripHidden(key), boundedInput(item, depth + 1)]));
 }
 // 消した結果の印の入力の要点（保存してある呼び出しの入力から作る。伏せ字と印の nonce を消すのは呼ぶ側）
 function inputGist(args: unknown): string {

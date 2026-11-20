@@ -214,6 +214,10 @@ test('入力の要点は JSON のまま伏せてから 1 行にして、もう�
     [{ path: 'a.txt', api_key: 'abc,def-rest' }, 'def-rest'],
     [{ path: 'a.txt', env: { TOKEN: 'tok"en-rest' } }, 'en-rest'],
     [{ path: 'a.txt', content: `use ${token.slice(0, 12)}\u200b${token.slice(12)} now` }, 'C3d4'],
+    [{ path: 'a.txt', content: `${' '.repeat(617)}ghp_${'A1b2C3d4'.repeat(5)} rest` }, 'A1b2C3d4'],
+    [{ path: 'a.txt', content: `${'\u200b'.repeat(620)}ghp_${'A1b2C3d4'.repeat(5)} rest` }, 'A1b2C3d4'],
+    [{ path: 'a.txt', content: `${'\n'.repeat(600)}https://${'Tk9xQ7wZ'.repeat(4)}@example.com/repo.git` }, 'Tk9xQ7wZ'],
+    [{ path: 'a.txt', ['pass\u200bword']: 'hunter2 second-half' }, 'second-half'],
   ];
   const leaked: string[] = [];
   for (const [args, leak] of shapes) {
