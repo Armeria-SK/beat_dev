@@ -546,7 +546,7 @@ export class BrowserSession {
       const browser = await this.#d.driver.launchWork({
         channel: config.channel === 'chrome' ? 'chrome' : undefined,
         executablePath: config.channel === 'path' && config.executablePath ? config.executablePath : undefined,
-        headless: config.headless,
+        headless: true,
         proxy: { server: `http://${proxy.host}:${proxy.port}`, username: made.username, password: made.password },
       });
       if (epoch !== this.#epoch) { await withTimeout(browser.close(), CLOSE_TIMEOUT_MS); throw new BrowserFailure('aborted', 'browser.aborted'); }
