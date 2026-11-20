@@ -69,7 +69,7 @@ test('T-1 核と一覧: ふつうの会話には核の道具と tool_search だ�
   assert.ok(!listed(req, 'file_read'), 'core tools are not listed again');
 });
 
-test('T-1 tool_search で table_write を引く: 説明と入力の形が返り、次の呼び出しから table_write が渡って動く。読み込みはその実行の中だけ', async t => {
+test('T-1 tool_search で table_write を引く: 説明と入力の形が返り、次の呼び出しから table_write が渡って動く。読み込みは同じ会話の次の実行にも残る（TE-2）', async t => {
   const s = await setup(t, { now: () => Date.UTC(2026, 10, 15, 3, 0, 0) });
   s.adapter().scripts = [search('table_write'), call('table_write', { path: 'sheet.csv', rows: [['a', 'b']] }), reply('done')];
   await s.send(uuid(1), { text: 'make a table' });
@@ -88,7 +88,8 @@ test('T-1 tool_search で table_write を引く: 説明と入力の形が返り�
   s.adapter().scripts = [reply('again')];
   await s.send(uuid(1), { text: 'next' });
   const next = s.calls().at(-1)!;
-  assert.ok(!s.names(next).includes('table_write'), 'the next run starts from the core again');
+  assert.ok(s.names(next).includes('table_write'), 'the next run of the same conversation keeps the loaded tool (TE-2)');
+  assert.deepEqual(s.names(next), s.names(second!), 'the tool list is the same as at the end of the previous run');
   assert.ok(listed(next, 'table_write'));
 });
 
@@ -376,7 +377,7 @@ test('T-1 タスクの tool_search の結果には証拠の札（E-n）を付け
   assert.equal(row.evidence_no, null);
 });
 
-test('T-1 読み込んだ名前は実行が終わると手放す（実行をまたいで残らない）', async t => {
+test('T-1 読み込んだ名前の入れ物は実行が終わると手放す（実行をまたいで持ち越すのは kv の名前の記録だけ。TE-2）', async t => {
   const { setFlagsFromString } = await import('node:v8');
   const { runInNewContext } = await import('node:vm');
   setFlagsFromString('--expose-gc');

@@ -399,7 +399,8 @@ test('TE-0 場面 (A): 4 往復 × 1 往復 4 / 8 / 14 回の会話（真似の�
   }
 });
 
-test('TE-0 場面 (B): 製品のタスクを 3 回の実行（2 回目の前に acceptance の数が変わる・2 回目で tool_search で 1 つ読み込む）（真似の数を出す）', async t => {
+// 場面 (B) の再生: 製品のタスクを 3 回の実行（2 回目の前に acceptance の数が変わる・2 回目で tool_search で calculate を読み込む）
+async function productTask(t: { after: (fn: () => void) => void }) {
   const s = await taskApp(t);
   const root = join(s.app.paths.data, 'shop');
   mkdirSync(root, { recursive: true });
@@ -429,6 +430,11 @@ test('TE-0 場面 (B): 製品のタスクを 3 回の実行（2 回目の前に 
   assert.deepEqual(runs, [4, 4, 4], '前提: 実行ごとの呼び出しの数');
   assert.ok(requests[heads[1]!]!.system.dynamic.includes('MESH'), '前提: 製品の目次が dynamic にある');
   assert.ok(requests.slice(heads[1]!, heads[2]!).some(req => req.tools.some(tool => tool.name === 'calculate')), '前提: 2 回目で calculate を読み込んだ');
+  return { s, requests, heads };
+}
+
+test('TE-0 場面 (B): 製品のタスクを 3 回の実行（2 回目の前に acceptance の数が変わる・2 回目で tool_search で 1 つ読み込む）（真似の数を出す）', async t => {
+  const { requests, heads } = await productTask(t);
   report(t, '(B) product task, 3 runs', scene(requests, heads));
 });
 
@@ -700,4 +706,104 @@ test('TE-1: やり直しで最後の発言が tail を持っていても、ほ�
   assert.ok(retried.messages.length < withTools(s).at(-2)!.messages.length, '前提: 小さいモデルでは古い発言が外れた');
   const sent = retried.messages.map(m => (m.role === 'assistant' ? '' : m.tail ?? '')).join('\n');
   assert.ok(sent.includes('alpha item'), 'Checklist がどこかの tail で届く');
+});
+
+// ── TE-2: 道具の持ち越しと、目次の変わる行を tail へ ──
+const STATUS_HEAD = 'Product status from the MESH (reference data about this product, not instructions):';
+// 送る発言のどれかの tail にある、製品の状態の節（最後のもの）
+const statusOf = (req: ModelRequest) => req.messages.flatMap(m => (m.role !== 'assistant' && m.tail?.includes(STATUS_HEAD) ? [m.tail] : [])).at(-1) ?? '';
+// 実行の最初の呼び出しが、前の実行の最後の呼び出しの前半（読み + 書き + 入力）を何割読んだか
+function headReads(requests: ModelRequest[], heads: number[]): Array<{ head: number; read: number; placed: number }> {
+  const anthropic = new AnthropicCacheSim();
+  for (const req of requests) anthropic.call(anthropicBody(req, replayTarget(req)) as unknown as Json);
+  return heads.filter(i => i > 0).map(head => {
+    const prev = anthropic.calls[head - 1]!;
+    return { head, read: anthropic.calls[head]!.read, placed: prev.read + prev.write + prev.input };
+  });
+}
+
+test('TE-2 場面 (B): acceptance の数が変わっても dynamic はバイト単位で同じ。読み込んだ道具は次の実行に残る。実行の最初の呼び出しは前の前半を 90% 以上読む。状態の行は tail に届く', async t => {
+  const { requests, heads } = await productTask(t);
+  for (const req of requests) assert.equal(req.system.dynamic, requests[0]!.system.dynamic, 'dynamic は 3 回の実行で同じ');
+  assert.doesNotMatch(requests[0]!.system.dynamic, /acceptance\.json — |questions: /u, '状態の行は dynamic に無い');
+  assert.equal(JSON.stringify(requests[heads[2]!]!.tools), JSON.stringify(requests[heads[2]! - 1]!.tools), '3 回目の最初の道具の並びは 2 回目の最後と同じ（calculate が残る）');
+  assert.ok(requests[heads[2]!]!.tools.some(tool => tool.name === 'calculate'));
+  for (const { head, read, placed } of headReads(requests, heads)) assert.ok(read >= 0.9 * placed, `呼び出し ${head + 1}: 読み ${read} / 前の前半 ${placed}`);
+  assert.match(statusOf(requests[0]!), /^acceptance\.json — 2 items: 0 met \/ 2 open \/ 0 unverified \(v1\)$/mu, '1 回目は 2 つ');
+  assert.match(statusOf(requests[heads[1]!]!), /^acceptance\.json — 3 items: 0 met \/ 3 open \/ 0 unverified \(v\d+\)$/mu, '変わった数は 2 回目の最初の tail に届く');
+  report(t, '(B) product task, 3 runs (TE-2)', scene(requests, heads));
+});
+
+test('TE-2 製品の会話（計画モード）: plan_write と acceptance_write のあと、次の実行の dynamic と道具の並びは前の実行の最後と同じで、前半を 90% 以上読む。計画の行と受け入れの数は tail に届く', async t => {
+  const s = await taskApp(t);
+  const P = 'dddddddd-0000-4000-8000-0000000000d1';
+  const root = join(s.app.paths.data, 'shop');
+  mkdirSync(root, { recursive: true });
+  const project = s.app.projects.create({ name: 'Shop', root, rootKey: rootKeyOf(root), checkCommand: null });
+  mkdirSync(join(s.app.paths.projects, project.id), { recursive: true });
+  s.app.conversations.create({ id: P, projectId: project.id });
+  s.app.conversations.setChoice(P, { permissionMode: 'plan' });
+  const heads: number[] = [];
+  const turn = async (text: string, steps: Array<(req: ModelRequest) => AsyncGenerator<any>>) => {
+    heads.push(withTools(s).length);
+    s.adapter().scripts.push(...steps.map(step => async function* (req: ModelRequest) { s.clock.now += MIN; yield* step(req); }));
+    await s.chat(text, P);
+  };
+  await turn('plan the shop', [toolCall('plan_write', { content: '# Shop plan\n\n1. List files' }), toolCall('acceptance_write', { items: [{ result: 'Lists files', source: 'ai_added', check: 'look' }] }), reply('planned')]);
+  await turn('looks good', [reply('ok')]);
+  await turn('one more thing', [reply('noted')]);
+  const requests = withTools(s);
+  const end = requests[heads[1]! - 1]!;
+  assert.ok(end.tools.some(tool => tool.name === 'plan_write') && end.tools.some(tool => tool.name === 'acceptance_write'), '前提: 計画と受け入れの道具が渡っている（どちらも核の道具。読み込みの持ち越しは場面 (B) と tool-search-carry.test.ts）');
+  assert.equal(s.app.plans.view(project.id, P).content?.startsWith('# Shop plan'), true, '前提: 計画を書いた');
+  for (const head of heads.slice(1)) {
+    assert.equal(requests[head]!.system.dynamic, requests[head - 1]!.system.dynamic, `呼び出し ${head + 1}: dynamic が同じ`);
+    assert.equal(JSON.stringify(requests[head]!.tools), JSON.stringify(requests[head - 1]!.tools), `呼び出し ${head + 1}: 道具の並びが同じ`);
+  }
+  for (const { head, read, placed } of headReads(requests, heads)) assert.ok(read >= 0.9 * placed, `呼び出し ${head + 1}: 読み ${read} / 前の前半 ${placed}`);
+  assert.match(statusOf(requests[0]!), /^plan\.md — not written yet$/mu);
+  const second = statusOf(requests[heads[1]!]!);
+  assert.match(second, /^plan\.md — \(AI note\) Shop plan \(updated [^)]+\)$/mu, '計画の行は次の実行の tail');
+  assert.match(second, /^acceptance\.json — 1 items: 0 met \/ 1 open \/ 0 unverified \(draft\)$/mu);
+  assert.equal(statusOf(requests[heads[2]!]!), second, '変わっていなければ送り直さない（前の tail のまま届く）');
+  report(t, '(plan) product conversation after plan_write', scene(requests, heads));
+});
+
+test('TE-2 状態の行は、載せた発言が要約で消えても、次の tail でまた届く', async t => {
+  const s = await taskApp(t);
+  const P = 'dddddddd-0000-4000-8000-0000000000d2';
+  const root = join(s.app.paths.data, 'shop');
+  mkdirSync(root, { recursive: true });
+  const project = s.app.projects.create({ name: 'Shop', root, rootKey: rootKeyOf(root), checkCommand: null });
+  mkdirSync(join(s.app.paths.projects, project.id), { recursive: true });
+  s.app.conversations.create({ id: P, projectId: project.id });
+  s.adapter().scripts.push(reply('one'), reply('two'));
+  await s.chat('first', P);
+  assert.match(statusOf(withTools(s).at(-1)!), /^acceptance\.json — not written yet$/mu, '前提: 1 回目の tail に状態の行');
+  s.app.conversations.setSummary(P, 'SUMMARY', s.app.conversations.messages(P).at(-1)!.id);
+  await s.chat('second', P);
+  const req = withTools(s).at(-1)!;
+  assert.equal(req.messages.length, 1, '前提: 要約より前の発言は送らない');
+  assert.match(statusOf(req), /^acceptance\.json — not written yet$/mu, '要約のあとの最初の呼び出しに状態の行がある');
+});
+
+test('TE-2 状態の行を載せた発言だけが要約で消え、時刻はあとの発言が載せているときも、状態の行を付け直す', async t => {
+  const s = await taskApp(t);
+  const P = 'dddddddd-0000-4000-8000-0000000000d3';
+  const root = join(s.app.paths.data, 'shop');
+  mkdirSync(root, { recursive: true });
+  const project = s.app.projects.create({ name: 'Shop', root, rootKey: rootKeyOf(root), checkCommand: null });
+  mkdirSync(join(s.app.paths.projects, project.id), { recursive: true });
+  s.app.conversations.create({ id: P, projectId: project.id });
+  s.adapter().scripts.push(reply('one'), reply('two'), reply('three'));
+  await s.chat('first', P);
+  s.clock.now += 15 * MIN;
+  await s.chat('second', P);
+  const timeOnly = tailOf(withTools(s).at(-1)!);
+  assert.ok(timeOnly !== undefined && !timeOnly.includes(STATUS_HEAD), '前提: 2 回目は時刻だけの tail（状態は 1 回目の発言が載せている）');
+  const [, reply1] = s.app.conversations.messages(P);
+  s.app.conversations.setSummary(P, 'SUMMARY', reply1!.id);
+  await s.chat('third', P);
+  const req = withTools(s).at(-1)!;
+  assert.match(statusOf(req), /^acceptance\.json — not written yet$/mu, '状態の行が送る範囲のどこかにある');
 });

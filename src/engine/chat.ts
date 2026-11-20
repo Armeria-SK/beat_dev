@@ -22,7 +22,7 @@ import { acceptanceAllows, planAllows, reviewAllows, runToolCall, type JudgeLimi
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { PlanStore } from '../projects/plan.ts';
-import { meshIndexLimit, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
+import { meshIndexLimit, meshStatusSection, wrapMeshIndex, type Mesh } from '../mesh/index.ts';
 import { makeFence, newNonce, PLACEHOLDER_NONCE } from '../shared/fence.ts';
 import type { AcceptanceStore } from '../projects/acceptance.ts';
 import type { QuestionStore } from '../questions/store.ts';
@@ -230,7 +230,7 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
 
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
 // tainted: 外から読んだ一覧・裏のコマンドの節を載せた tail の発言の id（その tail は以後も送るので、要約で外れるまで次の実行を「外から読んだ」で始める）
-interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background', number>>; tainted?: Partial<Record<'checklist' | 'background', number[]>> }
+interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background' | 'product', number>>; tainted?: Partial<Record<'checklist' | 'background', number[]>> }
 // 1 回の実行の要約の状態: 要約した回数・失敗したか（失敗したら外すだけ）・要約した発言の合計・「外しました」で最後に知らせた件数
 interface CompactionState { count: number; failed: boolean; summarized: number; trimmedShown: number }
 
@@ -277,7 +277,7 @@ export class ChatEngine {
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
   #runMode = new Map<string, PermissionMode>();
   #runFence = new Map<string, string>();
-  #runIndex = new Map<string, string>();
+  #runIndex = new Map<string, { list: string; status: string[] }>();
   // この実行が tail を付けた発言の id（実行の前から tail を持つ最後の発言に、新しい tail が要るときだけ付け替えるため）
   #runTail = new Map<string, Set<number>>();
   #loaded = new Map<string, { loaded: Set<string>; sent: Set<string> }>();
@@ -952,14 +952,19 @@ export class ChatEngine {
     ctx.toolWindow = () => this.created.open(ctx);
     ctx.reachable = () => this.#reachable(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined || ctx.memoryProject !== undefined, this.#frozen(ctx.project?.id));
     if (this.#defers(kind, forbid, config)) {
-      const loaded = new Set<string>();
+      // 読み込んだ道具は会話ごとに持ち越す（TE-2。kv の loaded-tools:<会話>。並びが前の実行の終わりと同じになり、前半を読める）。使えない道具は #toolsFor が外す
+      const loaded = new Set<string>(this.#carriedTools(conversationId));
       const sent = new Set<string>();
       this.#loaded.set(runId, { loaded, sent });
       ctx.deferred = {
         loaded,
         sent,
         list: () => this.#deferred(kind, forbid, config, this.#modeFor(kind, conversationId, ctx.permissionMode), ctx.project !== undefined || ctx.memoryProject !== undefined, this.#frozen(ctx.project?.id)),
-        load: names => { for (const name of names) loaded.add(name); },
+        load: names => {
+          const added = names.filter(name => !loaded.has(name));
+          for (const name of added) loaded.add(name);
+          if (added.length) this.preload(conversationId, added);
+        },
       };
     }
     if (project?.root && !agent) await this.created.begin(runId, task ? { kind: 'task', id: task.task.id } : { kind: 'conv', id: conversationId }, project.root);
@@ -1424,7 +1429,7 @@ export class ChatEngine {
     const language = languageOf(config);
     const mode = this.#modeFor(p.kind, p.conversationId, p.startedMode);
     const frozen = this.#frozen(p.project?.id);
-    const loaded = p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>() : undefined;
+    const loaded = p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>(this.#carriedTools(p.conversationId)) : undefined;
     const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen, loaded);
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
@@ -1446,13 +1451,13 @@ export class ChatEngine {
     const planMemory = p.kind === 'chat' && mode === 'plan' && row?.archived_at === null && !d.botMemory && d.memoryFiles ? (config.memory.review ? 'review' as const : 'off' as const) : undefined;
     const worktree = p.project?.worktree && p.project.productRoot ? { branch: p.project.worktree.branch, productRoot: p.project.productRoot } : undefined;
     const product = row && p.project?.root ? { name: row.name, root: p.project.root, docLanguage: row.doc_language, memory: planMemory, worktree } : undefined;
-    const mesh = this.#meshIndex(p.runId, p.project, available, p.conversationId);
+    const { index: mesh, status: productStatus } = this.#meshIndex(p.runId, p.project, available, p.conversationId);
     const requirements = p.kind === 'chat' && product && mode === 'plan' ? requirementsText(d.paths, available) : '';
     // dynamic は実行のあいだ変わらない部分だけ（日付まで）。時刻・Checklist・裏のコマンドは tail へ（S1。dynamic が変わると後ろの履歴が全部書き直しになる）
     const now = d.now?.() ?? new Date();
     const fence = this.#fence(p.runId, p.conversationId);
     const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
-    const sections = { checklist, background };
+    const sections = { checklist, background, product: productStatus };
     const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
@@ -1492,7 +1497,7 @@ export class ChatEngine {
       if (due) {
         const carriers: TailState['carriers'] = lost ? {} : { ...state.carriers };
         carriers.time = last.id;
-        for (const key of ['checklist', 'background'] as const) {
+        for (const key of ['product', 'checklist', 'background'] as const) {
           if (lost || (state.sent?.[key] ?? '') !== sections[key]) { if (sections[key]) carriers[key] = last.id; else delete carriers[key]; }
         }
         const upto = conversation?.summary_upto ?? 0;
@@ -1555,17 +1560,17 @@ export class ChatEngine {
     return tokens <= built.available;
   }
 
-  #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number, conversationId: string): string {
+  // 製品の目次: 動かない一覧は MESH の印で囲んで dynamic へ、状態の行は tail の節へ（TE-2。どちらも実行のあいだは同じ）
+  #meshIndex(runId: string | undefined, project: ToolContext['project'], available: number, conversationId: string): { index: string; status: string } {
     const mesh = this.#d.mesh;
-    if (!mesh || !project) return '';
-    let body = runId ? this.#runIndex.get(runId) : undefined;
-    if (body === undefined) {
-      body = '';
-      try { body = mesh.indexBody(project.id, meshIndexLimit(available), conversationId); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
-      if (runId) this.#runIndex.set(runId, body);
+    if (!mesh || !project) return { index: '', status: '' };
+    let parts = runId ? this.#runIndex.get(runId) : undefined;
+    if (parts === undefined) {
+      parts = { list: '', status: [] };
+      try { parts = mesh.indexParts(project.id, meshIndexLimit(available), conversationId); } catch (error) { this.#d.log?.(`[WARN] Could not build the mesh index of product ${project.id}: ${(error as Error).message}`); }
+      if (runId) this.#runIndex.set(runId, parts);
     }
-    if (!body) return '';
-    return wrapMeshIndex(body, this.#fence(runId, conversationId).nonce);
+    return { index: parts.list ? wrapMeshIndex(parts.list, this.#fence(runId, conversationId).nonce) : '', status: meshStatusSection(parts.status) };
   }
 
   // 会話ごとの印（mesh の索引と tail が同じ nonce を使う。kv の fence:<会話>。TE-1: 保存した tail が前の実行の印を持つので、実行をまたいで同じ印を使う）。
@@ -1704,6 +1709,22 @@ export class ChatEngine {
   #modeFor(kind: RunKind, conversationId: string, startedMode: PermissionMode | undefined): PermissionMode {
     const current = this.#modeOf(conversationId);
     return kind === 'chat' || kind === 'agent' ? stricterMode(startedMode ?? current, current) : 'auto';
+  }
+
+  // 会話で読み込んだ道具の名前（TE-2。kv の loaded-tools:<会話>。会話を消すと消える）
+  #carriedTools(conversationId: string): string[] {
+    const saved = this.#d.kv.getJson<unknown>(`loaded-tools:${conversationId}`);
+    return Array.isArray(saved) ? saved.filter((name): name is string => typeof name === 'string') : [];
+  }
+
+  // 道具をこの会話の次の実行から並びに入れておく（TE-2 の先読みの口。tool_search の読み込みもここを通る）。登録に無い名前・核の道具は覚えない。
+  // 実際に渡すかは実行ごとに #toolsFor が決める（止めた道具・計画モード・製品の外などは並びに入らず、パイプラインも断る）
+  preload(conversationId: string, names: readonly string[]): void {
+    const registry = this.#d.tools?.registry;
+    if (!registry) return;
+    const carried = this.#carriedTools(conversationId);
+    const added = names.filter(name => !carried.includes(name) && registry.get(name) !== undefined && !isCore(registry.get(name)!));
+    if (added.length) this.#d.kv.setJson(`loaded-tools:${conversationId}`, [...carried, ...new Set(added)]);
   }
 
   #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined): boolean {
