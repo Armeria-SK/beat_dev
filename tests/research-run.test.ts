@@ -6,6 +6,8 @@ import { builtinTools } from '../src/app.ts';
 import { ownerSpeech } from '../src/db/conversations.ts';
 import { OwnerAct, OWNER_TEXT_MAX } from '../src/research/run.ts';
 import { settled, uuid, waitFor } from './app-setup.ts';
+import { storeText } from '../src/shared/messages/stores.ts';
+import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
 import { reply } from './helpers.ts';
 import { ALPHA, BETA, researchApp } from './helpers/research-app.ts';
 import { toolCall } from './helpers/task-app.ts';
@@ -88,6 +90,7 @@ test('頼みの形（守り 2・L4）: generated でない発言は決まった�
   s.app.conversations.append(uuid(1), { role: 'user', content: 'ZQ-GENERATED text', generated: true });
   s.app.conversations.append(uuid(1), { role: 'assistant', content: 'ZQ-AI reply' });
   s.app.conversations.append(uuid(1), { role: 'user', content: 'ZQ-NOTE queued', note: 'pending' } as never);
+  s.app.conversations.append(uuid(1), { role: 'user', content: `Owner words before the file\n${ATTACHMENT_OPEN}: notes.txt (text)>>>\nZQ-ATTACHED file text\n${storeText('en', 'attachment.close')}` });
   s.app.conversations.append(uuid(1), { role: 'user', content: `${'x'.repeat(2500)}` });
   await s.settle();
   const part = s.app.research.store.parts(s.records()[0]!.id)[0]!;
@@ -100,7 +103,8 @@ test('頼みの形（守り 2・L4）: generated でない発言は決まった�
   // 印つきの行は頼みを作ったあとに足したので、絞りは ownerText の戻りで確かめる（審査 LOW）
   const owner = s.app.research.ownerText(uuid(1));
   assert.ok(owner.startsWith('I want a Markdown notes app.'));
-  for (const marker of ['ZQ-ANSWER', 'ZQ-GENERATED', 'ZQ-AI', 'ZQ-NOTE']) assert.ok(!owner.includes(marker), marker);
+  for (const marker of ['ZQ-ANSWER', 'ZQ-GENERATED', 'ZQ-AI', 'ZQ-NOTE', 'ZQ-ATTACHED']) assert.ok(!owner.includes(marker), marker);
+  assert.ok(owner.includes('Owner words before the file'), 'the owner words next to an attachment are kept');
   assert.ok(owner.includes('xxxx'), 'a later owner message is still read');
   assert.equal(owner.length, OWNER_TEXT_MAX);
 });
