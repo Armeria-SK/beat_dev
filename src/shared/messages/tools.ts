@@ -69,6 +69,8 @@ const en = {
   'file.wrote': '{verb}: {path} ({chars} characters)',
   'file.wrote_lines': '{verb}: {path} ({chars} characters; +{added} -{removed} lines)',
   'file.no_match': 'The text to replace was not found. Check the current content with file_read',
+  'file.not_read': 'Not changed: {path} has not been read in this conversation. Read it with file_read first, then edit it',
+  'file.changed_since_read': 'Not changed: {path} changed after it was last read (by a command, another tool or the owner). Read it again with file_read, then edit it',
   'file.many_matches': 'The text to replace appears in {count} places. Narrow it to one place with the surrounding text, or set all=true',
   'file.replaced': 'Replaced {count} occurrence(s): {path}',
   'file.no_dir': 'The folder does not exist: {path}',

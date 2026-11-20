@@ -10,7 +10,7 @@ import type { RunEvent, StopReason } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { MemoryStore, renderBooks } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
+import { FakeAdapter, readThen, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
 
 function store() {
   const db = openDatabase(':memory:', MIGRATIONS);
@@ -124,7 +124,7 @@ test('会話中に覚えたことは、今の会話の system には入らず、
 
 test('SOUL.md の書き換えは判定役に回さず持ち主（Pending の owner）に聞き、Approve で書いたあと中身が変わったら版を残す', async t => {
   const s = await app(t);
-  s.adapter().scripts.push(toolCall('file_write', { path: 'SOUL.md', content: '# SOUL\n名前は beat。皮肉屋' }), reply('提案しました'));
+  s.adapter().scripts.push(readThen('file_write', { path: 'SOUL.md', content: '# SOUL\n名前は beat。皮肉屋' }), reply('提案しました'));
   await s.send('c1', '性格を変えて');
   const [row] = s.app.pending.list({ status: 'waiting' });
   assert.equal(row?.kind, 'owner');

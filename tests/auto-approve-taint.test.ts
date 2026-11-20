@@ -11,7 +11,7 @@ import { EXFIL_RULE, TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { attachmentBlock } from '../src/uploads/store.ts';
 import { fakeModel, settled, waitFor } from './app-setup.ts';
-import { FakeAdapter, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
+import { FakeAdapter, readThen, tempDir, testConfig, type Script, withLoad } from './helpers.ts';
 
 // 段 4: だます試験。よそから来た文（Web のページ・添付）に「送れ」「消せ」と仕込まれている。
 // 送る・消す操作は、判定役が allow と答える設定でも判定役を呼ばずに Pending（send / delete）に積まれ、動かない。ほかの確かめは判定役に回り（判定役は道具の結果を見ない）、ask なら Pending（judge）に積まれる。
@@ -234,13 +234,13 @@ for (const source of SOURCES) {
 
 // ── 送らず消さない操作（反対側）。よそから来た文を読んだあとでも札は出ない。escalateOnTaint の memory_save だけ判定役が決める ──
 
-interface Positive { name: string; tool: string; args: unknown; shell: Shell; applied: (s: Sandbox) => void; judged?: boolean }
+interface Positive { name: string; tool: string; args: unknown; shell: Shell; applied: (s: Sandbox) => void; judged?: boolean; readFirst?: true }
 
 const text = (s: Sandbox, name: string) => readFileSync(join(s.ws, name), 'utf8');
 const POSITIVES: Positive[] = [
   { name: '新しいファイルの書き込み（file_write）', tool: 'file_write', args: { path: 'new.txt', content: 'hello' }, shell: 'bash', applied: s => assert.equal(text(s, 'new.txt'), 'hello') },
-  { name: '既にあるファイルの上書き（file_write）', tool: 'file_write', args: { path: 'existing.txt', content: 'replaced' }, shell: 'bash', applied: s => assert.equal(text(s, 'existing.txt'), 'replaced') },
-  { name: 'file_edit', tool: 'file_edit', args: { path: 'existing.txt', old: 'old', new: 'edited' }, shell: 'bash', applied: s => assert.equal(text(s, 'existing.txt'), 'edited text') },
+  { name: '既にあるファイルの上書き（file_write）', tool: 'file_write', args: { path: 'existing.txt', content: 'replaced' }, shell: 'bash', readFirst: true, applied: s => assert.equal(text(s, 'existing.txt'), 'replaced') },
+  { name: 'file_edit', tool: 'file_edit', args: { path: 'existing.txt', old: 'old', new: 'edited' }, shell: 'bash', readFirst: true, applied: s => assert.equal(text(s, 'existing.txt'), 'edited text') },
   { name: 'memory_save', tool: 'memory_save', args: { book: 'user', content: '仕込みとは関係のない記憶' }, shell: 'bash', applied: s => assert.equal(s.app.db.prepare('SELECT COUNT(*) AS n FROM memories').get()!.n, 1), judged: true },
   { name: 'ls（bash）', tool: 'shell_run', args: { command: 'ls' }, shell: 'bash', applied: () => undefined },
   { name: 'ls（PowerShell）', tool: 'shell_run', args: { command: 'ls' }, shell: 'powershell', applied: () => undefined },
@@ -251,7 +251,7 @@ for (const source of SOURCES) {
     const how = positive.judged ? '判定役（allow）が決めて札なしで動き、判定役にそう伝わる' : '判定役を呼ばずに札なしで動く';
     test(`だます試験（${source}）: よそから来た文を読んだあとの ${positive.name} は、${how}`, { skip: psSkip(positive.shell) }, async t => {
       const s = await sandbox(t, { shell: positive.shell });
-      const runId = inject(s, source, toolCall(positive.tool, positive.args));
+      const runId = inject(s, source, positive.readFirst ? readThen(positive.tool, positive.args as { path: string }) : toolCall(positive.tool, positive.args));
       await waitFor(() => s.app.runs.get(runId)?.ended_at != null, '実行の終わり', 60_000);
       await s.app.engine.wait(runId);
       assert.equal(cardCount(s), 0, 'Pending に積まない');

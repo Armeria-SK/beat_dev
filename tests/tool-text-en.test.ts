@@ -404,6 +404,7 @@ test('file_write: 4MB を超える既存のファイルの上書きは、前の�
   const s = setup(t);
   const out = async (name: string, args: unknown) => (await s.call(name, args)).output.content;
   writeFileSync(join(s.paths.workspace, 'huge.txt'), 'x\n'.repeat(2 * 1024 * 1024 + 1));
+  await out('file_read', { path: 'huge.txt', limit: 1 });
   assert.equal(await out('file_write', { path: 'huge.txt', content: 'small' }), 'Overwritten: huge.txt (5 characters)');
   assert.equal(await out('file_write', { path: 'huge.txt', content: 'a\nb\n' }), 'Overwritten: huge.txt (4 characters; +2 -1 lines)');
 });

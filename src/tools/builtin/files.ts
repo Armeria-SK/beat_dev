@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
@@ -17,7 +18,8 @@ import { mainWrites, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { askBeforeRegister, growSkills } from '../skills/store.ts';
 import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import { isUnderDownloads } from './downloads-core.ts';
-import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
+import type { KV } from '../../db/kv.ts';
+import type { FileReadLog, PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git', instructions: 'file.instructions' } as const;
 
@@ -27,6 +29,40 @@ const PAGE_NOTE_ROOM = 400;
 const REDACT_WINDOW_LINES = 300;
 const MAX_DELTA_BYTES = 4 * 1024 * 1024;
 const MAX_WRITE_CHARS = 1_000_000;
+const READ_LOG_LIMIT = 200;
+
+export function fileReadLog(kv: KV, conversationId: string): FileReadLog {
+  const key = `file-reads:${conversationId}`;
+  const load = (): Array<[string, string]> => {
+    const saved = kv.getJson<unknown>(key);
+    return Array.isArray(saved) ? saved.filter((e): e is [string, string] => Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'string') : [];
+  };
+  return {
+    get: path => load().find(([p]) => p === path)?.[1],
+    set: (path, hash) => kv.setJson(key, [...load().filter(([p]) => p !== path), [path, hash]].slice(-READ_LOG_LIMIT)),
+  };
+}
+
+const ctxLogs = new WeakMap<ToolContext, FileReadLog>();
+function readLog(ctx: ToolContext): FileReadLog {
+  let log = ctx.fileReads ?? ctxLogs.get(ctx);
+  if (!log) {
+    const seen = new Map<string, string>();
+    log = { get: path => seen.get(path), set: (path, hash) => { seen.set(path, hash); } };
+    ctxLogs.set(ctx, log);
+  }
+  const key = (path: string) => (process.platform === 'win32' ? path.toLowerCase() : path);
+  const store = log;
+  return { get: path => store.get(key(path)), set: (path, hash) => store.set(key(path), hash) };
+}
+
+const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+
+function staleWrite(abs: string, current: Buffer, ctx: ToolContext, language: Language): string | undefined {
+  const seen = readLog(ctx).get(abs);
+  if (seen === undefined) return toolText(language, 'file.not_read', { path: shown(abs, ctx) });
+  return seen === digest(current) ? undefined : toolText(language, 'file.changed_since_read', { path: shown(abs, ctx) });
+}
 
 type Need = 'read' | 'write';
 
@@ -89,14 +125,17 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
     if (!stat) return { content: toolText(language, 'file.not_found', { path: shown(abs, ctx) }), isError: true };
     if (stat.isDirectory()) return { content: toolText(language, 'file.is_dir_use_list', { path: shown(abs, ctx) }), isError: true };
     if (stat.size > MAX_READ_BYTES && !input.limit) return { content: toolText(language, 'file.too_big', { size: stat.size.toLocaleString('en-US') }), isError: true };
-    const text = readFileSync(abs, 'utf8');
+    const bytes = readFileSync(abs);
+    const text = bytes.toString('utf8');
     if (text.includes('\u0000')) return { content: toolText(language, 'file.binary'), isError: true };
     const lines = text.split(/\r?\n/u);
     if (lines.length > 1 && text.endsWith('\n')) lines.pop();
     const start = (input.offset ?? 1) - 1;
     const end = Math.min(lines.length, start + (input.limit ?? DEFAULT_READ_LINES));
     redactAround(lines, start, end);
-    return { content: readPage(lines, start, end, language, ctx.outputTokens) };
+    const content = readPage(lines, start, end, language, ctx.outputTokens);
+    readLog(ctx).set(abs, digest(bytes));
+    return { content };
   },
 };
 
@@ -151,6 +190,8 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const exists = existsSync(abs);
     if (input.mode === 'create' && exists) return { content: toolText(language, 'file.exists', { path: shown(abs, ctx) }), isError: true };
     if (exists && statSync(abs).isDirectory()) return { content: toolText(language, 'file.is_dir', { path: shown(abs, ctx) }), isError: true };
+    const stale = exists && input.mode !== 'append' ? staleWrite(abs, readFileSync(abs), ctx, language) : undefined;
+    if (stale) return { content: stale, isError: true };
     mkdirSync(dirname(abs), { recursive: true });
     // フォルダを作った後は realpath が実体を指すので、シンボリックリンク経由で外に出ていないかをもう一度確かめる
     // （ask は実行前に承認済みなので、ここでは deny だけを止める）
@@ -163,6 +204,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
     recorded();
+    readLog(ctx).set(abs, digest(readFileSync(abs)));
     if (!exists) ctx.noteCreated?.(abs);
     const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
     const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
@@ -183,7 +225,10 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
     const { abs } = checkFilePath(input.path, 'write', ctx);
     const language = languageOf(ctx.config);
     if (!existsSync(abs)) return { content: toolText(language, 'file.not_found', { path: shown(abs, ctx) }), isError: true };
-    const text = readFileSync(abs, 'utf8');
+    const bytes = readFileSync(abs);
+    const stale = staleWrite(abs, bytes, ctx, language);
+    if (stale) return { content: stale, isError: true };
+    const text = bytes.toString('utf8');
     const count = text.split(input.old).length - 1;
     if (count === 0) return { content: toolText(language, 'file.no_match'), isError: true };
     if (count > 1 && !input.all) return { content: toolText(language, 'file.many_matches', { count }), isError: true };
@@ -191,6 +236,7 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
     const recorded = recordToolWrite(ctx, abs, next);
     atomicWriteFile(abs, next);
     recorded();
+    readLog(ctx).set(abs, digest(readFileSync(abs)));
     return { content: toolText(language, 'file.replaced', { count, path: shown(abs, ctx) }) };
   },
 };

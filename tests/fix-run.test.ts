@@ -24,7 +24,7 @@ import { openRunJob } from '../src/os/run-job.ts';
 import type { Task } from '../src/tasks/store.ts';
 import { fixShellRefusal } from '../src/tools/hooks/fix-guard.ts';
 import { cannotJudge, cannotPark, runToolCall } from '../src/tools/pipeline.ts';
-import { isJudgeRequest, JudgeAdapter, judgeTextOf, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { isJudgeRequest, JudgeAdapter, judgeTextOf, readThen, reply, type Script, tempDir, testConfig } from './helpers.ts';
 import { toolCall } from './helpers/task-app.ts';
 
 const WINDOWS = process.platform === 'win32';
@@ -107,7 +107,7 @@ async function fixApp(t: { after: (fn: () => void) => void }, options: { check?:
 }
 
 const sh = (command: string, extra: Record<string, unknown> = {}): Script => toolCall('shell_run', { command, ...extra });
-const editFix = (): Script => toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' });
+const editFix = (): Script => readThen('file_edit', { path: 'a.txt', old: 'bug', new: 'fixed' });
 // ジョブの外でプロセスを作らせる形（WMI・起動役）。直す実行では動く前に断るので、試験の中でも動かない
 const OUTSIDE_JOB = [
   'wmic process call create "node check.js"',
@@ -185,8 +185,8 @@ test('8-6a: 本体は持ち主の取り込みまで変わらない — 本体へ
   const n = 13 + OUTSIDE_JOB.length + PACKAGE_FETCH.length;
   const refused = calls.slice(0, n);
   assert.deepEqual(refused.map(c => c.decision), Array(n).fill('deny'), JSON.stringify(calls));
-  assert.equal(calls[n]!.tool, 'file_edit');
-  assert.equal(calls[n]!.decision, 'allow');
+  assert.equal(calls[n + 1]!.tool, 'file_edit');
+  assert.equal(calls[n + 1]!.decision, 'allow');
   const shellRefused = [...refused.slice(1, 12), ...refused.slice(13)];
   assert.deepEqual(shellRefused.map(c => /fix run in a private copy/u.test(c.out)), Array(shellRefused.length).fill(true), JSON.stringify(refused));
   const launched = refused.slice(13, 13 + OUTSIDE_JOB.length);
@@ -269,7 +269,7 @@ test('8-6a: 判定役が許せば判定役行きの文は動く。判定役を�
 
 test('8-6a: 確かめが落ちた直しは残らない（写しは消え、本体に参照が増えない）', { skip: !gitAvailable }, async t => {
   const s = await fixApp(t);
-  s.model.scripts.push(toolCall('file_edit', { path: 'a.txt', old: 'bug', new: 'still broken' }), reply('done'));
+  s.model.scripts.push(readThen('file_edit', { path: 'a.txt', old: 'bug', new: 'still broken' }), reply('done'));
   const before = mainContent(s.product);
   const result = await s.run();
   assert.ok(result.ok, JSON.stringify([result, s.calls()]));
