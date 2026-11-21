@@ -222,7 +222,7 @@ const NO_VALUE_FLAGS: ReadonlyArray<[RegExp, RegExp]> = [
   [/^(?:python\d*(?:\.\d+)?|py)$/u, /^-[bBdEhiIOqsSuvVx]+$/u],
   [/^(?:bash|sh)$/u, /^(?:-[euxvn]+|--norc|--noprofile|--login)$/u],
   [/^(?:ruby|perl)$/u, /^-[wTW]$/u],
-  [/^(?:deno|bun)$/u, /^(?:-A|--allow-[a-z-]+|--no-check|--quiet|-q)$/u],
+  [/^bun$/u, /^(?:--no-check|--quiet|-q)$/u],
 ];
 const noValueFlag = (program: string, flag: string): boolean => /^--[^=]+=/u.test(flag) || NO_VALUE_FLAGS.some(([who, ok]) => who.test(program) && ok.test(flag));
 
@@ -230,7 +230,6 @@ function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   const program = st.program.toLowerCase().replace(/\.exe$/u, '');
   let words = st.words.slice(1);
   if (program === 'npx' && words[0]?.text === 'tsx') words = words.slice(1);
-  else if (program === 'deno' && words[0]?.text === 'run') words = words.slice(1);
   else if (program === 'pwsh' || program === 'powershell') {
     const at = words.findIndex(w => /^-f(?:ile)?$/iu.test(w.text));
     if (at < 0) return false;
@@ -245,33 +244,48 @@ function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
 }
 
 const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx', 'bunx']);
-// 試験の道具・パッケージの道具の実行には、ファイルを見せない（判定役はコマンドだけを見る。計画より前と同じ。R23）
-function runsTestRunner(sts: readonly StatementFacts[]): boolean {
-  return sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]).some(st => {
-    const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
-    const words = st.words.slice(1).map(w => w.text);
-    if (program === 'npx') return words.find(w => !w.startsWith('-')) !== 'tsx';
-    if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
-    if (runsCode(st) && (words.includes('--test') || (words.includes('-m') && MODULE_RUNNERS.has(words[words.indexOf('-m') + 1] ?? '')))) return true;
-    return RUNNER_PROGRAMS.has(program);
-  });
+
+// 試験の道具・パッケージの道具（--test・-m pytest|unittest は、実行の先より前にあるときだけ）
+function isRunner(st: StatementFacts): boolean {
+  const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
+  const words = st.words.slice(1).map(w => w.text);
+  if (program === 'npx') return words.find(w => !w.startsWith('-')) !== 'tsx';
+  if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
+  if (RUNNER_PROGRAMS.has(program)) return true;
+  if (!runsCode(st)) return false;
+  const target = words.findIndex(w => !w.startsWith('-'));
+  const before = target < 0 ? words : words.slice(0, target);
+  if (before.includes('--test')) return true;
+  const m = words.indexOf('-m');
+  return m >= 0 && (target < 0 || m < target) && MODULE_RUNNERS.has(words[m + 1] ?? '');
 }
 
-function outOfScopeRun(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined): string | undefined {
-  if (!keys.some(key => key === 'code.file_run' || key === 'code.cmd_is_file')) return undefined;
-  if (keys.includes('code.cmd_is_file')) return 'a direct run of a file';
-  const all = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]);
-  if (all.some(st => st.inner === null)) return 'a wrapped command beat could not read';
-  const runs = all.filter(st => runsCode(st) && st.code.length === 0);
-  if (runs.length === 0) return 'a file run beat could not tie to a statement';
-  for (const st of runs) {
-    const words = st.words.map(w => w.text);
-    const module = words[words.indexOf('-m') + 1];
-    if (words.includes('-m') && module !== undefined && MODULE_RUNNERS.has(module)) continue;
-    if (words.includes('--test')) continue;
-    if (!plainFileRun(st, root)) return st.words.map(w => w.text).join(' ') || st.program;
-  }
-  return undefined;
+type FilesScope = { kind: 'files' } | { kind: 'command' } | { kind: 'owner'; why: string };
+
+// 判定役にファイルを見せるのは、コードを動かす文が全体で 1 つだけ、包みの中でなく、決まった実行役で拡張子つきのファイル（製品の中）を動かすときだけ。
+// コードを動かす文が試験・パッケージの道具だけなら、FILES を付けずコマンドだけ（計画より前と同じ）。ほかは持ち主（P2 の範囲、審査の決め）
+export function filesScope(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined): FilesScope {
+  if (keys.includes('code.cmd_is_file')) return { kind: 'owner', why: 'a direct run of a file' };
+  const runs: Array<{ st: StatementFacts; top: boolean }> = [];
+  let unknown = false;
+  const walk = (list: readonly StatementFacts[], top: boolean): boolean => {
+    let any = false;
+    for (const st of list) {
+      if (st.inner === null) unknown = true;
+      const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])], false);
+      if (isRunner(st) || runsCode(st) || inside) { runs.push({ st, top }); any = true; }
+    }
+    return any;
+  };
+  walk(sts, true);
+  if (unknown) return { kind: 'owner', why: 'a wrapped command beat could not read' };
+  if (runs.length === 0) return keys.includes('code.file_run') ? { kind: 'owner', why: 'a file run beat could not tie to a statement' } : { kind: 'command' };
+  if (runs.every(run => isRunner(run.st))) return { kind: 'command' };
+  if (runs.length > 1) return { kind: 'owner', why: 'more than one code run, or a run inside a wrapper' };
+  const [only] = runs;
+  if (!only!.top) return { kind: 'owner', why: 'a run inside a wrapper' };
+  if (only!.st.code.length > 0) return { kind: 'files' };
+  return plainFileRun(only!.st, root) ? { kind: 'files' } : { kind: 'owner', why: only!.st.words.map(w => w.text).join(' ') || only!.st.program };
 }
 
 function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {
@@ -379,8 +393,9 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
+  const scope = filesScope(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace);
   const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
-    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? outOfScopeRun(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
+    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? (scope.kind === 'owner' ? scope.why : undefined), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
   const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
   const peeked = cards;
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
@@ -393,7 +408,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   return {
     decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
     ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
-    ...('problem' in shown.fact || (shown.fact.files.length > 0 && !runsTestRunner(verdict.statements)) ? { judgeFiles: shown.fact } : {}),
+    ...('problem' in shown.fact || (shown.fact.files.length > 0 && scope.kind === 'files') ? { judgeFiles: shown.fact } : {}),
     preview: cards.map(p => p.preview), bind: sha256([...cards.map(p => p.fingerprint), ...shown.read.map(file => file.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }

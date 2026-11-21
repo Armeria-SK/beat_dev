@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { CODE_RULE, FILE_ROUND_TOKENS, PROVENANCE_RULE, UNSHOWN_RULE, buildClassifierPrompt, fileRoundInputs, planFileRounds, type ClassifierInput, type ClassifierPrompt, type JudgeFile } from '../src/tools/auto-approve.ts';
-import { shellPreCheck } from '../src/tools/builtin/shell.ts';
+import { filesScope as filesScopeOf, shellPreCheck } from '../src/tools/builtin/shell.ts';
 import { judgeCacheKey } from '../src/tools/judge-cache.ts';
 import { judgeFilesOf, relativeImports } from '../src/tools/judge-files.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -419,4 +419,32 @@ test('P2 の範囲の確かめ: 試験の道具の実行には FILES を付け�
     assert.equal(r.judge.calls, 1, `${command}: goes to the judge`);
     assert.ok(!r.judge.prompts[0]!.user.includes('FILES') && !r.judge.prompts[0]!.system.includes(CODE_RULE), `${command}: no FILES`);
   }
+});
+
+test('P2 の範囲（1 つの決まり）: コードを動かす文が 2 つ以上・包みの中・道具と混ざる・中を読めない包みは持ち主。道具だけならコマンドだけ。deno は持ち主', async t => {
+  const files = { 'ext.js': EVIL, 'data.json': '{}', 'run.js': "console.log('hi');\n", 'evil.js': EVIL, 'evil.sh': 'echo hi\n', 'evil.py': "print('collect.example')\n", 'package.json': '{}', 'x.ts': 'console.log(1);\n' };
+  const owner: Array<[string, 'bash' | 'powershell']> = [['node run.js; sh -c "env node ext data.json"', 'bash'], ['node run.js && env time node ext data.json', 'bash'], ['node run.js; sh -c "sh -c \'node ext data.json\'"', 'bash'],
+    ['node evil.js; npm -v', 'bash'], ['node evil.js; jest --version', 'bash'], ['bash evil.sh; make -v', 'bash'], ['deno run x.ts', 'bash'], ['node run.js; node evil.js', 'bash'], ['env node run.js', 'bash'], ['time node run.js', 'bash']];
+  for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, files), command);
+  for (const command of ['node evil.js --test', 'python evil.py -m pytest']) {
+    const r = selfRunRig(t, undefined, files);
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.ok(r.judge.calls === 1 && r.judge.prompts[0]!.user.includes('collect.example'), `${command}: a flag after the script does not make it a runner, the script is shown`);
+  }
+  for (const command of ['npm test', 'npx jest x.test.js', 'node --test', 'python -m pytest -q']) {
+    const r = selfRunRig(t, undefined, { ...files, 'x.test.js': '' });
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, command);
+    assert.ok(!r.judge.prompts[0]!.user.includes('FILES'), `${command}: command only`);
+  }
+});
+
+test('P2 の範囲（1 つの決まり）: 中を読めない包み（inner が null）は持ち主', async t => {
+  const r = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, { 'run.js': "console.log('hi');\n" });
+  const statement = { program: 'xargs', programDynamic: false, programOdd: false, words: [], urls: [], env: [], gitGlobal: [], code: [], codeDynamic: false, stdin: false, shapes: [], reasonKeys: [], deletes: false, targets: [], writes: [], cwd: r.ws, inner: null };
+  const run = { ...statement, program: 'node', words: [{ text: 'node', dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' }, { text: 'run.js', dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' }], inner: undefined };
+  assert.equal(filesScopeOf([run as never, statement as never], ['code.file_run'], r.ws).kind, 'owner');
+  assert.equal(filesScopeOf([run as never], ['code.file_run'], r.ws).kind, 'files');
 });
