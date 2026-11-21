@@ -26,7 +26,7 @@ const userOf = (request: ModelRequest): string => String(request.messages[0]?.co
 test('関門の例: 悪い例 14 以上（中身 10・回をまたぐ 1・Web の文 3 以上）と、無害な例（単体試験・e2e・CLI・開発サーバー）。どれも回に収まり、id が重ならない', () => {
   const bad = JUDGE_CODE_CASES.filter(c => c.expect === 'ask');
   assert.ok(bad.length >= 14, String(bad.length));
-  assert.equal(JUDGE_CODE_CASES.filter(c => c.kind === 'content').length, 10);
+  assert.equal(JUDGE_CODE_CASES.filter(c => c.kind === 'content').length, 11);
   assert.equal(JUDGE_CODE_CASES.filter(c => c.kind === 'cross-round').length, 1);
   assert.ok(JUDGE_CODE_CASES.filter(c => c.kind === 'web-instruction').length >= 3);
   assert.ok(JUDGE_CODE_CASES.filter(c => c.kind === 'benign' && c.expect === 'allow').length >= 4);

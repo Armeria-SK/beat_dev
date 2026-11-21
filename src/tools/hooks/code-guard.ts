@@ -187,7 +187,15 @@ function resolveScript(raw: string, ctx: CodeContext): string | undefined {
   const expanded = expandPath(raw, ctx.cwd, process.env, ctx.language);
   return 'path' in expanded ? expanded.path : undefined;
 }
-const resolveAll = (raws: readonly string[], ctx: CodeContext): string[] => [...new Set(raws.flatMap(r => resolveScript(r, ctx) ?? []))].slice(0, 3);
+const resolveAll = (raws: readonly string[], ctx: CodeContext): string[] => [...new Set(raws.flatMap(r => resolveScript(r, ctx) ?? []))].slice(0, 4);
+
+const PRELOAD_FLAG = /^(?:-r|--require|--import|--loader|--experimental-loader|-m)(?:=|$)/u;
+
+export function unshownCodeOf(seg: Segment): string | undefined {
+  if (!INTERPRETER.test(seg.cmd)) return undefined;
+  const flag = seg.args.find(a => PRELOAD_FLAG.test(a));
+  return flag === undefined ? undefined : `${seg.cmd} ${flag}`;
+}
 
 const infoOnly = (args: readonly string[]): boolean => args.length > 0 && args.every(a => INFO_FLAG.test(a));
 

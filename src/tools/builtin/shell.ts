@@ -256,7 +256,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
-  const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace });
+  const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
+    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown });
   const peeked = verdict.scripts.map(file => peek(file, language));
   const cards = [...peeked, ...shown.read.slice(verdict.scripts.length).map(file => peek(file.path, language))];
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
@@ -269,7 +270,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   return {
     decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
     ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
-    judgeFiles: shown.fact,
+    ...('problem' in shown.fact || shown.fact.files.length > 0 ? { judgeFiles: shown.fact } : {}),
     preview: cards.map(p => p.preview), bind: sha256([...cards.map(p => p.fingerprint), ...shown.read.map(file => file.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }
