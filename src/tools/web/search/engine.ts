@@ -118,19 +118,25 @@ export function unwrapRedirect(url: URL): string | undefined {
   return url.href;
 }
 
+const MAX_URL_LENGTH = 4096;
+const SEARCH_SITE_HOSTS = ['duckduckgo.com', 'bing.com', 'search.brave.com', 'startpage.com', 'mojeek.com', 'search.yahoo.com'];
+
 // 結果のリンクを、行き先の公開の http(s) の URL にする。転送を戻せない・http 以外・公開でない名前・検索先自身の頁は undefined
 export function resultUrl(href: string | undefined, base: string, ownHosts: readonly string[]): string | undefined {
-  if (!href) return undefined;
+  if (!href || href.length > MAX_URL_LENGTH) return undefined;
   try {
-    const first = new URL(href, base);
-    const target = unwrapRedirect(first);
-    if (!target) return undefined;
-    const url = new URL(target);
+    let url = new URL(href, base);
+    for (let level = 0; level < 2; level++) {
+      const target = unwrapRedirect(url);
+      if (!target || target.length > MAX_URL_LENGTH) return undefined;
+      if (target === url.href) break;
+      url = new URL(target);
+    }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !publicHostName(url.hostname)) return undefined;
     const host = url.hostname.toLowerCase();
-    if (ownHosts.some(own => host === own || host.endsWith(`.${own}`))) return undefined;
+    if ([...ownHosts, ...SEARCH_SITE_HOSTS].some(own => host === own || host.endsWith(`.${own}`))) return undefined;
     url.hash = '';
-    return url.href;
+    return url.href.length > MAX_URL_LENGTH ? undefined : url.href;
   } catch { return undefined; }
 }
 
@@ -147,7 +153,9 @@ export function normalizeUrl(href: string): string {
     url.hash = '';
     url.hostname = url.hostname.toLowerCase().replace(/^www\./u, '');
     for (const name of [...url.searchParams.keys()]) if (TRACKING.test(name)) url.searchParams.delete(name);
-    const path = url.pathname.replace(/\/+$/u, '') || '/';
+    let end = url.pathname.length;
+    while (end > 0 && url.pathname.charCodeAt(end - 1) === 47) end--;
+    const path = url.pathname.slice(0, end) || '/';
     return `${url.hostname}${path}${url.search}`;
   } catch { return href; }
 }

@@ -210,14 +210,14 @@ test('disguise の先にはブラウザらしい頭の行、正直な先には b
   assert.equal(wiki.accept, 'application/json');
 });
 
-test('調べる実行（onlySearchHosts）では、先の外のホストへの転送を断る', async () => {
+test('検索では（会話でも調べる実行でも）、先の外のホストへの転送を断る', async () => {
   const c = clock();
   const net = fakeNet({ a: { redirect: 'https://elsewhere.example.org/' }, b: ok('https://x.example.org/') });
-  const result = await run([engine('a'), engine('b')], net, new EngineHealth(c.now), c, { onlySearchHosts: true });
+  const result = await run([engine('a'), engine('b')], net, new EngineHealth(c.now), c);
   assert.deepEqual(result.engines, ['B']);
   assert.ok(!net.gets.includes('elsewhere'));
   const free = fakeNet({ a: { redirect: 'https://b.searchsite.net/search?q=x' }, b: ok('https://x.example.org/') });
-  const followed = await run([engine('a'), engine('b')], free, new EngineHealth(c.now), c, { onlySearchHosts: true });
+  const followed = await run([engine('a'), engine('b')], free, new EngineHealth(c.now), c);
   assert.deepEqual(free.gets, ['a', 'b', 'b'], '有効な先のホストへの転送はたどる');
   assert.equal(followed.hits.length, 1);
 });

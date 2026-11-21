@@ -132,3 +132,22 @@ test('地域の読み替え（先ごと）', () => {
   assert.equal(wikipedia.disguise, false);
   assert.match(wikipedia.userAgent!, /^beat\/0\.1 \(personal agent; contact: /u);
 });
+
+test('長すぎる結果の URL（4096 字を超える）は捨てる。/ が大量に続く URL の正規化もすぐ終わる', () => {
+  const long = `https://a.example.org/${'x'.repeat(4097)}`;
+  const page = `<html><body><div class="result"><a class="result__a" href="${long}">long</a></div><div class="result"><a class="result__a" href="https://b.example.org/">ok</a></div></body></html>`;
+  assert.deepEqual(readSafely(duckduckgoHtml, page, 'text/html', 10).hits.map(h => h.url), ['https://b.example.org/']);
+  const slashes = `https://a.example.org/${'/'.repeat(100_000)}x`;
+  const started = performance.now();
+  assert.equal(normalizeUrl(slashes), `a.example.org/${'/'.repeat(100_000)}x`);
+  assert.equal(normalizeUrl('https://a.example.org/b///'), 'a.example.org/b');
+  assert.ok(performance.now() - started < 50, `took ${performance.now() - started} ms`);
+});
+
+test('ほかの検索先の頁・広告・転送のリンクも捨てる。転送の中の転送は 1 段だけ戻す', () => {
+  const ck = (target: string) => `https://www.bing.com/ck/a?!&&p=abc&u=a1${Buffer.from(target).toString('base64url')}&ntb=1`;
+  assert.equal(resultUrl('https://duckduckgo.com/y.js?ad=1', 'https://www.bing.com/', ['bing.com']), undefined, 'Bing の結果の中の DuckDuckGo の広告');
+  assert.equal(resultUrl('https://search.brave.com/search?q=x', 'https://www.bing.com/', ['bing.com']), undefined);
+  assert.equal(resultUrl(`//duckduckgo.com/l/?uddg=${encodeURIComponent(ck('https://target.example.org/a'))}`, 'https://duckduckgo.com/', ['duckduckgo.com']), 'https://target.example.org/a', 'uddg の先が Bing の ck/a');
+  assert.equal(resultUrl(`//duckduckgo.com/l/?uddg=${encodeURIComponent('https://www.bing.com/ck/a?u=zz')}`, 'https://duckduckgo.com/', ['duckduckgo.com']), undefined, '中の転送を戻せない');
+});

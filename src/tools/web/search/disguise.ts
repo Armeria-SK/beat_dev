@@ -14,7 +14,7 @@ const CHROME_AGENTS: readonly string[] = [
 
 const HTML_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
 const SEARCH_TYPES = /^(text\/html|application\/xhtml\+xml|application\/json)(;|$)/iu;
-const SEARCH_MAX_BYTES = 1024 * 1024;
+const SEARCH_MAX_BYTES = 512 * 1024;
 
 export interface SearchRequestHeaders { accept: string; headers: Record<string, string> }
 

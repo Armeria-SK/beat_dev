@@ -24,8 +24,6 @@ export interface MetasearchOptions {
   network?: PageNetwork | undefined;
   // 頭の行から通信を作る（既定は disguise.ts の searchNetworkFor）
   networkFor?: ((request: SearchRequestHeaders) => PageNetwork) | undefined;
-  // 調べる実行の検索: 転送は有効な先のホストの中だけをたどる
-  onlySearchHosts?: boolean | undefined;
   totalMs?: number | undefined;
   sleep?: ((ms: number, signal: AbortSignal) => Promise<void>) | undefined;
 }
@@ -63,7 +61,8 @@ export async function metasearch(options: MetasearchOptions): Promise<Metasearch
   const timer = setTimeout(() => deadline.abort(new Error('search timed out')), options.totalMs ?? TOTAL_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
   const turn = health.nextTurn();
-  const hosts = options.onlySearchHosts ? searchHosts(options.engines, region) : undefined;
+  // 転送は有効な先のホストの中だけをたどる
+  const hosts = searchHosts(options.engines, region);
   const queue = ordered(options.engines, health, turn);
   const attempts: Attempt[] = [];
   const merged = new Map<string, { hit: SearchHit; count: number; group: number; position: number; order: number }>();

@@ -140,7 +140,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       });
       if (ctx.research) ctx.research.budget.searches += 1;
       // 止められた先は休ませて別の先へ移るだけ。captcha を解く・JavaScript の確かめを通る・同じ先へすぐ送り直す、はしない
-      const { hits, engines } = await metasearch({ query: input.query, limit, region: w.region, engines: enginesById(w.engines), health: web(ctx).health, signal: ctx.signal, network: web(ctx).network, onlySearchHosts: ctx.research !== undefined });
+      const { hits, engines } = await metasearch({ query: input.query, limit, region: w.region, engines: enginesById(w.engines), health: web(ctx).health, signal: ctx.signal, network: web(ctx).network });
       ctx.searchBlocks = 0;
       if (ctx.research) ctx.research.budget.answered = (ctx.research.budget.answered ?? 0) + 1;
       if (ctx.research) for (const hit of hits) ctx.research.see(hit.url);
