@@ -232,3 +232,57 @@ test('審査 LOW-7: utf-8 でない coding の宣言のある Python は、判�
   await ok.call('shell_run', { command: 'python run.py' }, chat(ok));
   assert.equal(ok.judge.calls, 1, 'utf-8 is shown to the judge');
 });
+
+const ownerOnly = async (r: ReturnType<typeof selfRunRig>, command: string, want?: string): Promise<void> => {
+  r.judge.answer = ALLOW;
+  const out = await r.call('shell_run', { command }, chat(r));
+  assert.equal(r.judge.calls, 0, `${command}: ${out.decidedBy}: ${out.output.content.slice(0, 160)}`);
+  assert.equal(out.decidedBy, 'pending', command);
+  const kind = r.pending.list({ status: 'waiting' })[0]!.kind;
+  assert.ok(want === undefined ? kind !== 'judge' : kind === want, `${command}: ${kind}`);
+  assert.deepEqual(r.ran, [], command);
+};
+
+test('再審査 HIGH-2: 見せるファイルの親のフォルダへの書き込み、展開・git の移しのあとの実行は、判定役を呼ばずに持ち主', async t => {
+  const commands: Array<[string, 'bash' | 'powershell', string | undefined]> = [
+    ['cp payload.js lib; node lib/payload.js', 'bash', 'judge_failed'], ['tar -xf a.tar; node run.js', 'bash', undefined], ['git stash pop; node run.js', 'bash', undefined],
+    ...(PS ? [['Copy-Item payload.js -Destination lib; node lib/payload.js', 'powershell', 'judge_failed'], ['Expand-Archive a.zip .; node run.js', 'powershell', undefined]] as Array<[string, 'powershell', string]> : []),
+  ];
+  for (const [command, shell, want] of commands) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, { 'run.js': "console.log('hello');\n", 'lib/payload.js': "console.log('old');\n", 'payload.js': EVIL, 'a.tar': '', 'a.zip': '' });
+    await ownerOnly(r, command, want);
+  }
+});
+
+test('再審査 MEDIUM-3: くっつけた・まとめた先読みの旗（python -mX・-Bm・ruby -r./x・node -r./x・perl -M・-I）と、代入の右辺の旗は持ち主', async t => {
+  const commands: Array<[string, 'bash' | 'powershell']> = [['python -mevilmod', 'bash'], ['python -Bm evilmod', 'bash'], ['ruby -r./evil x.rb', 'bash'], ['node -r./pre.js run.js', 'bash'],
+    ['perl -Mevil x.pl', 'bash'], ['perl -I. x.pl', 'bash'], ...(PS ? [['$x = node -r ./pre.js run.js', 'powershell']] as Array<[string, 'powershell']> : [])];
+  for (const [command, shell] of commands) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, { 'evilmod.py': 'import os\n', 'evil.rb': '', 'pre.js': EVIL, 'run.js': "console.log('hi');\n", 'x.rb': 'puts 1\n', 'x.pl': 'print 1;\n', 'evil.pm': '1;\n' });
+    await ownerOnly(r, command, 'judge_failed');
+  }
+});
+
+test('再審査: python -m pytest・-m unittest は、その場に同じ名前のファイルが無ければ判定役（あれば持ち主）。ほかのモジュールは広げない', async t => {
+  for (const command of ['python -m pytest -q', 'python -m unittest']) {
+    const r = selfRunRig(t, undefined, { 'run.js': '' });
+    r.judge.answer = ALLOW;
+    await r.call('shell_run', { command }, chat(r));
+    assert.notEqual(r.pending.list({ status: 'waiting' })[0]?.kind, 'judge_failed', command);
+    for (const local of [`${command.split(' ')[2]}.py`, `${command.split(' ')[2]}/__init__.py`]) await ownerOnly(selfRunRig(t, undefined, { [local]: EVIL }), command, 'judge_failed');
+  }
+  await ownerOnly(selfRunRig(t, undefined, { 'run.js': '' }), 'python -m pip list', 'judge_failed');
+});
+
+test('再審査 LOW-5: 同じ import は 1 回だけ探す。違う名前の import が多すぎれば持ち主', async t => {
+  const started = performance.now();
+  assert.deepEqual(relativeImports(Array.from({ length: 20_000 }, () => 'require("./nope");').join('\n'), process.cwd()), []);
+  assert.ok(performance.now() - started < 1500, `${Math.round(performance.now() - started)} ms`);
+  const r = selfRunRig(t, undefined, { 'run.js': Array.from({ length: 250 }, (_, i) => `require('./nope${i}');`).join('\n') });
+  await ownerOnly(r, 'node run.js', 'judge_failed');
+});
+
+test('再審査 LOW-7: python が動かすファイルは拡張子を問わず coding の宣言を見る', async t => {
+  const r = selfRunRig(t, undefined, { 'payload.txt': '# -*- coding: utf-7 -*-\nprint(1)\n' });
+  await ownerOnly(r, 'python payload.txt', 'judge_failed');
+});

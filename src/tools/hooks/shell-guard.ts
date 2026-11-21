@@ -396,7 +396,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     let cwd = initialCwd;
     const segs = segments(command, { backticks: !windows });
     for (const [i, seg] of segs.entries()) {
-      unshown ??= unshownCodeOf(seg);
+      unshown ??= unshownCodeOf(seg, cwd);
       for (const found of codeFindings(seg, { cwd, language, selfHosts, prev: seg.stdin === 'pipe' ? segs[i - 1] : undefined })) {
         if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
         for (const file of found.scripts) addScript(file);
@@ -409,6 +409,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
     for (const st of assignedStatements) {
       for (const seg of segments(joinWords(st.words, true))) {
+        unshown ??= unshownCodeOf(seg, initialCwd);
         for (const found of codeFindings(seg, { cwd: initialCwd, language, selfHosts })) {
           if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
           for (const file of found.scripts) addScript(file);

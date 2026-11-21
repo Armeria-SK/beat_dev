@@ -189,11 +189,21 @@ function resolveScript(raw: string, ctx: CodeContext): string | undefined {
 }
 const resolveAll = (raws: readonly string[], ctx: CodeContext): string[] => [...new Set(raws.flatMap(r => resolveScript(r, ctx) ?? []))].slice(0, 4);
 
-const PRELOAD_FLAG = /^(?:-r|--require|--import|--loader|--experimental-loader|-m)(?:=|$)/u;
+const PRELOAD_FLAG = /^(?:-r|--require|--import|--loader|--experimental-loader)(?:=|$)|^-r./u;
+const PY_MODULE_FLAG = /^-[bBdEhiIOPqRsSuvVx]*m(.*)$/u;
+const PERL_FLAG = /^-[MmI]/u;
+const LOCAL_ONLY_MODULES = new Set(['pytest', 'unittest']);
 
-export function unshownCodeOf(seg: Segment): string | undefined {
+export function unshownCodeOf(seg: Segment, cwd: string): string | undefined {
   if (!INTERPRETER.test(seg.cmd)) return undefined;
-  const flag = seg.args.find(a => PRELOAD_FLAG.test(a));
+  if (/^(?:python\d*(?:\.\d+)?|py|pypy\d*)$/u.test(seg.cmd)) {
+    const at = seg.args.findIndex(a => PY_MODULE_FLAG.test(a));
+    if (at < 0) return undefined;
+    const module = PY_MODULE_FLAG.exec(seg.args[at]!)![1] || seg.args[at + 1] || '';
+    const local = [`${module}.py`, `${module}/__init__.py`].some(name => existsSync(join(cwd, name)));
+    return LOCAL_ONLY_MODULES.has(module) && !local ? undefined : `${seg.cmd} ${seg.args[at]}`;
+  }
+  const flag = seg.args.find(a => (seg.cmd === 'perl' ? PERL_FLAG : PRELOAD_FLAG).test(a));
   return flag === undefined ? undefined : `${seg.cmd} ${flag}`;
 }
 

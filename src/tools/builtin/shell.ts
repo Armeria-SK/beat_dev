@@ -172,6 +172,12 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
   }
 }
 
+const REWRITE_KEYS = new Set(['list.expand', 'list.git_moves']);
+const rewritesOf = (sts: readonly StatementFacts[]): string | undefined => {
+  const all = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]);
+  return all.find(st => st.reasonKeys.some(key => REWRITE_KEYS.has(key)))?.program;
+};
+
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
   if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
@@ -257,7 +263,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
-    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown });
+    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown, rewrites: rewritesOf(verdict.statements) });
   const peeked = verdict.scripts.map(file => peek(file, language));
   const cards = [...peeked, ...shown.read.slice(verdict.scripts.length).map(file => peek(file.path, language))];
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
