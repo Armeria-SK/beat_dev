@@ -91,7 +91,8 @@ import { QuestionStore, type QuestionChange, type QuestionRow } from './question
 import { Uploads } from './uploads/store.ts';
 import { PendingStore, type PendingChange, type PendingRow } from './pending/store.ts';
 import { pendingNote } from './pending/notes.ts';
-import { parentOf, replayAction } from './pending/replay.ts';
+import { parentOf, replayAction, type ReplayDeps } from './pending/replay.ts';
+import { sweepStale } from './pending/sweep.ts';
 import { pendingText } from './shared/messages/pending.ts';
 import { notifyText } from './shared/messages/notify.ts';
 import { BLOCKING_QUESTION_KEY } from './shared/notification-list.ts';
@@ -305,6 +306,7 @@ export class App {
       notify: input => this.notifications.notify(input),
       browser: this.browser,
       background: this.background,
+      pendingSweep: taskId => sweepStale(taskId, this.#replayDeps()),
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
@@ -601,12 +603,16 @@ export class App {
     try { pendingDecided(this.#wakeDeps(), change); } catch (error) { this.log(`[ERROR] Failed to wake the task of pending item #${change.id}: ${(error as Error).message}`); }
   }
 
-  replayPending(row: PendingRow): void {
-    void replayAction(row, {
+  #replayDeps(): ReplayDeps {
+    return {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
       conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
       services: () => this.engine.toolServices(), places: this.places,
-    }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
+    };
+  }
+
+  replayPending(row: PendingRow): void {
+    void replayAction(row, this.#replayDeps()).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
   }
 
   #backgroundOpen(owner: JobOwner): boolean {

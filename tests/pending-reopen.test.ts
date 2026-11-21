@@ -158,7 +158,7 @@ test('5-P2 done でないタスク（failed・cancelled・時刻つきの実行�
 test('5-P2 開き直したあと（ready）に同じ行の出来事がもう一度来ても、同じタスクの別の行が失敗しても、何もしない（開き直しは 1 回）', async t => {
   const s = await setup(t);
   const id = s.app.tasks.create({ title: 'Two', origin: 'user', actor: 'user' }).id;
-  s.adapter().scripts = [call('fake_park', { text: 'fail' }), call('fake_park', { text: 'fail' }), complete()];
+  s.adapter().scripts = [call('fake_park', { text: 'fail' }), call('fake_park', { text: 'exit1' }), complete()];
   assert.equal(await s.app.worker.tick(), 'ran');
   s.keepDone(id);
   const [a, b] = s.rows(id);

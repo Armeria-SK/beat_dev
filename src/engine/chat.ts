@@ -229,6 +229,8 @@ export interface ChatEngineDeps {
   background?: BackgroundJobs | undefined;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   retriesPerModel?: number;
+  // P5: このタスクの待ちの行のうち古くなったものを閉じる（app.ts の sweepStale）
+  pendingSweep?: ((taskId: string) => Promise<Array<{ id: number; reason: string }>>) | undefined;
 }
 
 
@@ -461,6 +463,20 @@ export class ChatEngine {
   toolServices(): ToolContext['services'] {
     const d = this.#d;
     return d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, memoryFiles: d.memoryFiles, web: d.web, notify: d.notify, browser: d.browser, background: d.background, pending: d.tools?.pending, emit: e => d.bus.publish(e) } : undefined;
+  }
+
+  // 書く・動かす道具が動いたあと、このタスクの待ちの行のうち古くなったものを閉じ、道具の結果の末尾で担当に知らせる（P5）
+  async #sweepAfter<T extends { decision: string; output: ToolOutput }>(taskId: string | undefined, name: string, config: AppConfig, outcome: T): Promise<T> {
+    const tool = this.#d.tools?.registry.get(name);
+    if (!taskId || !this.#d.pendingSweep || outcome.decision !== 'allow' || !tool || !(tool.effect === 'write' || tool.effect === 'exec' || tool.writesFiles)) return outcome;
+    let closed: Array<{ id: number; reason: string }>;
+    try { closed = await this.#d.pendingSweep(taskId); } catch (error) {
+      this.#d.log?.(`[WARN] Could not check the Pending items of task ${taskId}: ${(error as Error).message}`);
+      return outcome;
+    }
+    if (!closed.length) return outcome;
+    const lines = closed.map(c => pendingText(languageOf(config), 'swept', { id: c.id, reason: c.reason }));
+    return { ...outcome, output: { ...outcome.output, content: [outcome.output.content, ...lines].join('\n\n') } };
   }
 
   addNote(conversationId: string, content: string, fetched: boolean): void {
@@ -1084,7 +1100,8 @@ export class ChatEngine {
     };
 
     const tools = d.tools;
-    const callTool = (toolCall: ToolCall, truncated?: { message: string; raw: string }) => runToolCall(toolCall, ctx, {
+    const sweepTask = task?.task.id ?? agent?.parent.task?.id;
+    const callTool = async (toolCall: ToolCall, truncated?: { message: string; raw: string }) => this.#sweepAfter(sweepTask, toolCall.name, config, await runToolCall(toolCall, ctx, {
       registry: tools!.registry, approvals: tools!.approvals, pending: tools!.pending, productRoots: allRoots, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
       permissionMode: () => this.#modeOf(conversationId),
       autoClassify: (prompt, classifierSignal, judgeCall) => this.#autoAsk(lastRoute, prompt, classifierSignal, judgeCall),
@@ -1093,7 +1110,7 @@ export class ChatEngine {
         : this.#lastUserRequest(conversationId)),
       judgeLimits: d.judgeLimits,
       conversationTainted: () => d.conversations.everTainted(conversationId),
-    }, truncated);
+    }, truncated));
     // 実際に動いた道具の呼び出しを「仕事」に数える（結果が誤りでも数える。Pending に預けた・断られた・引数の誤り・task_ / tool_search / question_add は数えない）。
     // そのうち書き換え・実行の仕事（changeDone）に数えるのは、効果が write の道具（結果を問わない）・誤りなく終わった exec の道具・子の担当（agent_run）
     const countDone = (name: string, outcome: { output: { isError?: boolean }; decision: string; invalidArguments?: boolean }) => {
