@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { join } from 'node:path';
 import { selfRunRig, type Route } from './helpers/self-run-rig.ts';
 
 const PS = process.platform === 'win32';
@@ -21,8 +22,15 @@ test('P0 物差し: 試しの 7 つのコマンドの行き先（タスクの実
   const got: string[] = [];
   for (const c of TRIAL_CASES) {
     if (c.ps && !PS) continue;
+    const before = r.judge.prompts.length;
     const { route, pre, detail } = await r.routeOf(c.input);
     if (route !== c.want) got.push(`${c.name}: ${route} (want ${c.want}) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 160)}`);
+    const file = c.input.command.startsWith('npx tsx src/cli.ts') ? 'src/cli.ts' : c.input.command === 'node scripts/poke.ts' ? 'scripts/poke.ts' : undefined;
+    if (file && route === 'judge') {
+      const prompt = r.judge.prompts[before]?.user ?? '';
+      const files = prompt.slice(prompt.indexOf('<<FILES-'), prompt.indexOf('<<END-FILES-'));
+      if (!files.includes(join(r.ws, file)) || !files.includes(file === 'src/cli.ts' ? 'process.argv.slice(2)' : 'fetch(')) got.push(`${c.name}: the judge was not shown ${file}: ${files.slice(0, 160)}`);
+    }
   }
   assert.deepEqual(got, []);
 });
@@ -40,7 +48,7 @@ test('P0 物差し: 外の文を読んだ実行でも、7 つの行き先は同�
   assert.deepEqual(diff, []);
 });
 
-test('P1 V8: 道具の読む env・コードの読まない名前・決まっていない node の旗は、順 4 にならず判定役へ', async t => {
+test('P1 V8: 道具の読む env・コードの読まない名前・決まっていない node の旗は、順 4 にならない（env は判定役、node の旗は判定役に見せずに持ち主）', async t => {
   const r = selfRunRig(t);
   const cases = [
     'node --watch scripts/e2e.ts', 'node --inspect scripts/e2e.ts', 'node --require ./scripts/e2e.ts .tmp/probe.ts',
@@ -50,7 +58,7 @@ test('P1 V8: 道具の読む env・コードの読まない名前・決まって
   const got: string[] = [];
   for (const command of cases) {
     const { route, pre } = await r.routeOf({ command });
-    const want = command.startsWith("$env:PORT='3999'") ? 'step4' : 'judge';
+    const want = command.startsWith("$env:PORT='3999'") ? 'step4' : command.startsWith('node --') ? 'owner' : 'judge';
     if (route !== want) got.push(`${command}: ${route} (want ${want}) keys=${JSON.stringify(pre.reasonKeys)}`);
   }
   assert.deepEqual(got, []);

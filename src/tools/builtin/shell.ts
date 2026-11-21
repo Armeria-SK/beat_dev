@@ -190,7 +190,9 @@ const gitRead = (st: StatementFacts): boolean => {
   return false;
 };
 
-const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0;
+const npxTsx = (st: StatementFacts): boolean => st.program.toLowerCase().replace(/[.](?:exe|cmd)$/u, '') === 'npx' && st.words.slice(1).find(w => !w.text.startsWith('-'))?.text === 'tsx';
+const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => /^-f(?:ile)?$/iu.test(w.text));
+const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0 || npxTsx(st) || pwshFile(st);
 
 // 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
 const literal = (st: StatementFacts): boolean => st.words.every(w => !w.dynamic && !w.glob);
@@ -264,28 +266,27 @@ type FilesScope = { kind: 'files' } | { kind: 'command' } | { kind: 'owner'; why
 
 // 判定役にファイルを見せるのは、コードを動かす文が全体で 1 つだけ、包みの中でなく、決まった実行役で拡張子つきのファイル（製品の中）を動かすときだけ。
 // コードを動かす文が試験・パッケージの道具だけなら、FILES を付けずコマンドだけ（計画より前と同じ）。ほかは持ち主（P2 の範囲、審査の決め）
-export function filesScope(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined): FilesScope {
+export function filesScope(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined, scripts: readonly string[] = []): FilesScope {
   if (keys.includes('code.cmd_is_file')) return { kind: 'owner', why: 'a direct run of a file' };
-  const runs: Array<{ st: StatementFacts; top: boolean }> = [];
+  const runs: StatementFacts[] = [];
   let unknown = false;
-  const walk = (list: readonly StatementFacts[], top: boolean): boolean => {
+  const walk = (list: readonly StatementFacts[]): boolean => {
     let any = false;
     for (const st of list) {
       if (st.inner === null) unknown = true;
-      const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])], false);
-      if (isRunner(st) || runsCode(st) || inside) { runs.push({ st, top }); any = true; }
+      const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])]);
+      if (isRunner(st) || runsCode(st) || inside) { runs.push(st); any = true; }
     }
     return any;
   };
-  walk(sts, true);
+  walk(sts);
   if (unknown) return { kind: 'owner', why: 'a wrapped command beat could not read' };
-  if (runs.length === 0) return keys.includes('code.file_run') ? { kind: 'owner', why: 'a file run beat could not tie to a statement' } : { kind: 'command' };
-  if (runs.every(run => isRunner(run.st))) return { kind: 'command' };
+  if (runs.length === 0) return keys.includes('code.file_run') || scripts.length > 0 ? { kind: 'owner', why: 'a file run beat could not tie to a statement' } : { kind: 'command' };
+  if (runs.every(isRunner)) return { kind: 'command' };
   if (runs.length > 1) return { kind: 'owner', why: 'more than one code run, or a run inside a wrapper' };
   const [only] = runs;
-  if (!only!.top) return { kind: 'owner', why: 'a run inside a wrapper' };
-  if (only!.st.code.length > 0) return { kind: 'files' };
-  return plainFileRun(only!.st, root) ? { kind: 'files' } : { kind: 'owner', why: only!.st.words.map(w => w.text).join(' ') || only!.st.program };
+  if (only!.code.length > 0) return { kind: 'files' };
+  return plainFileRun(only!, root) ? { kind: 'files' } : { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
 }
 
 function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {
@@ -393,7 +394,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
-  const scope = filesScope(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace);
+  const scope = filesScope(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace, verdict.scripts);
   const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
     writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? (scope.kind === 'owner' ? scope.why : undefined), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
   const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));

