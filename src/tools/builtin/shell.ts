@@ -11,7 +11,7 @@ import { redactKeyEcho, redactOpenKey, redactSecrets } from '../../shared/redact
 import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals.ts';
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
-import { selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { isInterpreter, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
@@ -173,10 +173,43 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
 }
 
 const REWRITE_KEYS = new Set(['list.expand', 'list.git_moves']);
-const rewritesOf = (sts: readonly StatementFacts[]): string | undefined => {
-  const all = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]);
-  return all.find(st => st.reasonKeys.some(key => REWRITE_KEYS.has(key)))?.program;
+const READ_PROGRAMS = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location', 'pwd', 'get-location', 'cat', 'type', 'get-content', 'gc', 'less', 'more', 'head', 'tail',
+  'grep', 'egrep', 'fgrep', 'rg', 'select-string', 'sls', 'findstr', 'wc', 'diff', 'cmp', 'sort', 'uniq', 'nl', 'file', 'stat', 'ls', 'dir', 'get-childitem', 'gci', 'tree', 'du', 'df', 'get-item', 'gi',
+  'test-path', 'resolve-path', 'split-path', 'join-path', 'echo', 'write-output', 'write-host', 'printf', 'which', 'where', 'get-command', 'gcm', 'whoami', 'date', 'get-date', 'true', 'false', 'sleep', 'start-sleep']);
+const GIT_READS = new Set(['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'blame', 'describe', 'grep']);
+const ENV_ONLY = new Set(['list.env']);
+
+const gitRead = (st: StatementFacts): boolean => {
+  const words = st.words.slice(1).map(w => w.text);
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] === '-C' || words[i] === '-c') { i++; continue; }
+    if (words[i]!.startsWith('-')) return false;
+    return GIT_READS.has(words[i]!);
+  }
+  return false;
 };
+
+const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0;
+
+// 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
+function rewritesOf(sts: readonly StatementFacts[]): string | undefined {
+  const quiet = (st: StatementFacts): boolean => {
+    if (st.redirected || st.writes.length > 0 || st.reasonKeys.some(key => REWRITE_KEYS.has(key) || key === 'list.write_dynamic')) return false;
+    const program = st.program.toLowerCase().replace(/\.exe$/u, '');
+    if (program === '') return st.words.length === 0 && st.code.length === 0 && st.reasonKeys.every(key => ENV_ONLY.has(key));
+    if (runsCode(st)) return st.inner === undefined || (st.inner !== null && st.inner.every(quiet));
+    return st.reasonKeys.length === 0 && (READ_PROGRAMS.has(program) || (program === 'git' && gitRead(st)));
+  };
+  const moved = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]).find(st => st.reasonKeys.some(key => REWRITE_KEYS.has(key)));
+  if (moved) return moved.program || 'statement';
+  const last = sts.findLastIndex(runsCode);
+  if (last < 0) return undefined;
+  const bad = sts.slice(0, last).find(st => !quiet(st));
+  if (bad) return bad.program || 'statement';
+  const run = sts[last]!;
+  if (run.inner === null) return run.program;
+  return run.inner === undefined ? undefined : rewritesOf(run.inner);
+}
 
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
@@ -262,7 +295,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
-  const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
+  const shown = judgeFilesOf({ scripts: [...verdict.scripts, ...(verdict.runnerFiles ?? []).filter(file => !verdict.scripts.includes(file))], inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
     writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown, rewrites: rewritesOf(verdict.statements) });
   const peeked = verdict.scripts.map(file => peek(file, language));
   const cards = [...peeked, ...shown.read.slice(verdict.scripts.length).map(file => peek(file.path, language))];

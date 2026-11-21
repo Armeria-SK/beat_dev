@@ -34,23 +34,26 @@ export function readForJudge(file: string): ReadFile {
   let bytes: Buffer;
   try { bytes = readFileSync(file); } catch { return { path: file, fingerprint: `${file}\0unreadable`, problem: 'unreadable' }; }
   const fingerprint = `${file}\0${sha256(bytes)}`;
-  if (/\.node$/iu.test(file)) return { path: file, fingerprint, problem: 'native' };
+  if (/\.(?:node|pyd|so)$/iu.test(file)) return { path: file, fingerprint, problem: 'native' };
   if (bytes.subarray(0, 8000).includes(0)) return { path: file, fingerprint, problem: 'binary' };
   const content = bytes.toString('utf8');
   if (content.split('\n', 2).some(line => { const m = PY_COOKIE.exec(line); return m !== null && !UTF8_NAMES.test(m[1]!); })) return { path: file, fingerprint, problem: 'encoding' };
   return { path: file, fingerprint, content };
 }
 
-const JS_SPEC = /(?:\bimport\s*(?:[\w*{}\s,$]+\s*from\s*)?|\bexport\s*[\w*{}\s,$]*\s*from\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)(['"`])(\.{1,2}\/[^'"`\n]*)\1/gu;
+const JS_SPEC = /(?:\bimport\s*(?:[\w*{}\s,$]+\s*from\s*)?|\bexport\s*[\w*{}\s,$]*\s*from\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)(['"`])(\.{1,2}[\\/][^'"`\n]*)\1/gu;
 const PY_SPEC = /^[ \t]*(?:from[ \t]+(\.?[A-Za-z_][\w.]*)[ \t]+import\b|import[ \t]+([A-Za-z_][\w.]*(?:[ \t]*,[ \t]*[A-Za-z_][\w.]*)*))/gmu;
 const JS_TRIES = ['', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.tsx', '.jsx', '.json', '.node', '/index.js', '/index.ts', '/index.mjs', '/index.json', '/index.node'];
 
-function packageMain(dir: string): string | undefined {
+function packageMain(dir: string): string[] {
   try {
     const main = (JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8')) as { main?: unknown }).main;
-    return typeof main === 'string' ? JS_TRIES.map(end => resolve(dir, main) + end).find(isFile) : undefined;
-  } catch { return undefined; }
+    return typeof main === 'string' ? JS_TRIES.map(end => resolve(dir, main) + end).filter(isFile) : [];
+  } catch { return []; }
 }
+
+// node が読むかもしれない候補のうち、あるものを全部（拡張子・フォルダの package.json の main・index）
+export const jsCandidates = (base: string): string[] => [...new Set([...JS_TRIES.map(end => base + end).filter(isFile), ...packageMain(base)])];
 
 const isFile = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 
@@ -67,9 +70,8 @@ export function relativeImports(text: string, fromDir: string, limit = Infinity,
   for (const match of text.matchAll(JS_SPEC)) {
     if (out.size > limit || (specs?.count ?? 0) > FOLLOW_SPECS) break;
     if (!fresh(match[2]!)) continue;
-    const base = resolve(fromDir, match[2]!);
-    const found = JS_TRIES.map(end => base + end).find(isFile) ?? packageMain(base);
-    if (found) out.add(found);
+    const base = resolve(fromDir, match[2]!.replace(/\\+/gu, '/'));
+    for (const found of jsCandidates(base)) out.add(found);
   }
   for (const match of text.matchAll(PY_SPEC)) {
     if (out.size > limit || (specs?.count ?? 0) > FOLLOW_SPECS) break;
@@ -78,8 +80,7 @@ export function relativeImports(text: string, fromDir: string, limit = Infinity,
       if (!fresh(`py:${name}`)) continue;
       const parts = name.replace(/^\./u, '').split('.');
       const base = resolve(fromDir, ...parts);
-      const found = [`${base}.py`, resolve(base, '__init__.py')].find(isFile);
-      if (found) out.add(found);
+      for (const found of [`${base}.py`, resolve(base, '__init__.py'), `${base}.pyd`, `${base}.so`].filter(isFile)) out.add(found);
     }
   }
   return [...out];
@@ -93,12 +94,13 @@ const writesInto = (write: string, file: string): boolean => isInside(write, fil
 
 // 返すのは、見せるファイル（とその読み）と、bind に入れる指紋。名前の出るスクリプトか import されるファイルが読めない・バイナリ・1MB 超なら problem
 export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; read: ReadFile[] } {
-  const named = [...new Set(input.scripts)].map(readForJudge);
+  const named = [...new Set(input.scripts.flatMap(file => isFile(file) ? [file] : [file, ...jsCandidates(file).filter(found => found !== file)]))].map(readForJudge);
   const links: Array<[string, string]> = [];
   const seen = new Set(named.map(file => file.path));
   const imported: ReadFile[] = [];
   let bytes = 0;
   let tooMany: string | undefined;
+  let outside: string | undefined;
   const specs = { count: 0 };
   const follow = (text: string, fromDir: string, from: string | undefined): void => {
     if (!input.root || tooMany !== undefined) return;
@@ -106,7 +108,7 @@ export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; re
     if (specs.count > FOLLOW_SPECS) { tooMany = from ?? fromDir; return; }
     for (const path of found) {
       if (tooMany !== undefined) return;
-      if (!inside(input.root, path)) continue;
+      if (!inside(input.root, path)) { outside ??= path; continue; }
       if (from) links.push([from, path]);
       if (seen.has(path)) continue;
       seen.add(path);
@@ -119,6 +121,7 @@ export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; re
   for (const { code, cwd } of input.inline) follow(code, cwd, undefined);
   const read = [...named, ...imported];
   if (input.unshown !== undefined) return { fact: { problem: 'unshown', path: input.unshown }, read };
+  if (outside !== undefined) return { fact: { problem: 'unshown', path: outside }, read };
   if (tooMany !== undefined) return { fact: { problem: 'too_many', path: tooMany }, read };
   const bad = read.find(file => file.problem !== undefined && file.problem !== 'missing');
   if (bad) return { fact: { problem: bad.problem as JudgeFileProblem, path: bad.path }, read };
