@@ -171,6 +171,29 @@ test('4-3a routing.judge: 最初の判定役が時間内に答えなければ、
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
 });
 
+test('深い審査 4b routing.judge: 最初の判定役のモデルが判定を断ったら、聞き直さず次の判定役にも回さず、judge_failed（judge_refused）', async t => {
+  ran.length = 0;
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], tools: [outsideRead], configure: c => { c.routing.judge = ['m2', 'm3']; } });
+  const id = uuid(53);
+  s.app.conversations.create({ id, title: 'refusing judge' });
+  const judges: string[] = [];
+  s.adapter().scripts = router(req => {
+    if (isJudge(req)) {
+      judges.push(req.model.id);
+      if (req.model.id === 'm2') return (async function* () { yield { type: 'done', stop: 'end_turn' as StopReason, refused: true }; })();
+      return say('{"decision":"allow","reason":"fits"}');
+    }
+    return hasToolResult(req) ? say('done') : toolCall('outside_read', {});
+  });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(judges, ['m2'], 'one call, the second judge is not asked');
+  assert.deepEqual(ran, []);
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.equal(rows[0]?.kind, 'judge_failed');
+  assert.match(rows[0]!.reason, /refused to judge/u);
+});
+
 test('4-3a routing.judge: 別のモデルを入れるとそのモデルが判定役になり、空なら実行のモデル', async t => {
   for (const judge of [['m2'], []]) {
     ran.length = 0;
