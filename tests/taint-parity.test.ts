@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Type } from '@sinclair/typebox';
+import { buildMcpTool } from '../src/mcp/tool.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolDef } from '../src/tools/types.ts';
@@ -42,22 +42,28 @@ test('V29: 短い問い合わせの GET は今までどおり確かめなし、�
 });
 
 test('V29: MCP の書く道具は外を読んだかを問わず判定役、読む道具は外を読んだかを問わず同じ行き先', async t => {
-  const mcp = (name: string, effect: ToolDef['effect']): ToolDef => ({
-    name, description: 'mcp (test)', input: Type.Object({}), effect, allowedIn: ['chat', 'task'], mcp: { server: 's1', tool: name.slice(9) }, execute: async () => ({ content: 'ran' }),
-    // the same pre-check as src/mcp/tool.ts: a write tool asks, a read tool does not
-    preCheck: () => (effect === 'write' ? { decision: 'ask', reasons: ['writes'], askKinds: [], sends: false, removes: false } : { decision: 'allow', reasons: [], sends: false, removes: false }),
-  });
-  for (const [name, effect] of [['mcp__s1__put', 'write'], ['mcp__s1__get', 'network']] as const) {
+  // the real tool from src/mcp/tool.ts (its own pre-check), not a stand-in
+  const mcp = (remote: string, effect: 'write' | 'network'): ToolDef => {
+    const built = buildMcpTool({
+      server: { id: 's1' }, remote: { name: remote, description: 'mcp (test)', inputSchema: { type: 'object', properties: {} } }, entry: { effect, sends: false },
+      language: 'en', limits: { callTimeoutMs: 1000, resultMaxChars: 1000 }, caller: () => ({ callTool: async () => ({ content: [{ type: 'text', text: 'ran' }] }) }),
+    });
+    assert.ok(built.ok, remote);
+    return built.tool;
+  };
+  for (const [remote, effect] of [['put', 'write'], ['get', 'network']] as const) {
     const seen: unknown[] = [];
+    const name = mcp(remote, effect).name;
     for (const dirty of [false, true]) {
       const r = selfRunRig(t);
-      const registry = new ToolRegistry().register(shellRun).register(mcp(name, effect));
+      const registry = new ToolRegistry().register(shellRun).register(mcp(remote, effect));
       const before = r.judge.calls;
-      const out = await r.call(name, {}, { ...(dirty ? r.tainted() : r.ctx), kind: 'chat', task: undefined }, { registry });
+      const out = await r.call(name, {},{ ...(dirty ? r.tainted() : r.ctx), kind: 'chat', task: undefined }, { registry });
       seen.push([out.decision, out.decidedBy, r.judge.calls - before]);
     }
     assert.deepEqual(seen[1], seen[0], `${name}: ${JSON.stringify(seen)}`);
     if (effect === 'write') assert.equal((seen[0] as [string, string, number])[2], 1, 'the write tool goes to the judge');
+    else assert.deepEqual(seen[0], ['allow', 'builtin', 0], 'the read tool runs without the judge');
   }
 });
 
