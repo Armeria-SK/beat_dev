@@ -11,6 +11,7 @@ export const EXPLAIN_KEYS = [
   'access.outside',
   'access.webFetch',
   'access.webSearch',
+  'access.webSearchEngine',
   'access.judgeOff',
   'access.judgeOffTaint',
   'access.judgeOffForm',

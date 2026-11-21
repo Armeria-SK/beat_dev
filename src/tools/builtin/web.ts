@@ -7,16 +7,20 @@ import type { Language } from '../../config/schema.ts';
 import type { PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { htmlText } from '../web/html-text.ts';
 import { clip, decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/public-page.ts';
-import { searchDuckDuckGo, SearchFailure, SearchThrottle } from '../web/search.ts';
+import { SearchFailure, SearchThrottle } from '../web/search.ts';
+import { enginesById } from '../web/search/engines/index.ts';
+import { EngineHealth } from '../web/search/health.ts';
+import { metasearch } from '../web/search/metasearch.ts';
 
 const PAGE_CHARS = 20_000;
 const SEARCH_BLOCK_LIMIT = 2;
 export const SCOUT_FETCH_MAX = 30;
 
 const sharedThrottle = new SearchThrottle();
+const sharedHealth = new EngineHealth();
 
 function web(ctx: ToolContext) {
-  return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, network: ctx.services?.web?.network };
+  return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, health: ctx.services?.web?.health ?? sharedHealth, network: ctx.services?.web?.network };
 }
 
 export function exfiltrationCheck(text: string, language: Language, longQuery = false): PreCheck {
@@ -25,7 +29,7 @@ export function exfiltrationCheck(text: string, language: Language, longQuery = 
   return reasons.length ? { decision: 'ask', reasons, details: [text.slice(0, 500)], askKinds: ['web'], reasonKeys: keys } : { decision: 'allow', reasons: [] };
 }
 
-const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked', 'download.idle', 'download.disk_low']);
+const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.all_unavailable', 'download.idle', 'download.disk_low']);
 
 export function webFailure(error: unknown, language: Language): ToolOutput & { isError: true } {
   if (error instanceof RetrievalFailure || error instanceof SearchFailure) {
@@ -123,7 +127,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const w = ctx.config.tools.web;
     const language = languageOf(ctx.config);
     const limit = input.max_results ?? 5;
-    // 自動アクセスの判定で続けて止められたら、この実行のあいだは通信しない（同じ失敗でステップを使い切らせない）
+    // どの検索先も使えない検索が続けて 2 回あったら、この実行のあいだは通信しない（同じ失敗でステップを使い切らせない）
     if ((ctx.searchBlocks ?? 0) >= SEARCH_BLOCK_LIMIT) {
       if (ctx.research) ctx.research.budget.failed = (ctx.research.budget.failed ?? 0) + 1;
       return { content: toolText(language, 'web.search_unavailable'), isError: true, noRemoteContent: true };
@@ -135,7 +139,8 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
         ctx.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new SearchFailure(toolText('en', 'fetch.aborted'), 'fetch.aborted')); }, { once: true });
       });
       if (ctx.research) ctx.research.budget.searches += 1;
-      const hits = await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network, onlySearchHosts: ctx.research !== undefined });
+      // 止められた先は休ませて別の先へ移るだけ。captcha を解く・JavaScript の確かめを通る・同じ先へすぐ送り直す、はしない
+      const { hits, engines } = await metasearch({ query: input.query, limit, region: w.region, engines: enginesById(w.engines), health: web(ctx).health, signal: ctx.signal, network: web(ctx).network });
       ctx.searchBlocks = 0;
       if (ctx.research) ctx.research.budget.answered = (ctx.research.budget.answered ?? 0) + 1;
       if (ctx.research) for (const hit of hits) ctx.research.see(hit.url);
@@ -143,7 +148,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       return {
         content: [
           toolText(language, 'web.external'),
-          toolText(language, 'web.search_header', { query: input.query, engine: 'DuckDuckGo' }),
+          toolText(language, 'web.search_header', { query: input.query, engine: engines.join(', ') }),
           '<<<',
           ...hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${h.snippet}` : ''}`),
           '>>>',
@@ -151,7 +156,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       };
     } catch (error) {
       if (ctx.research && !ctx.signal.aborted) ctx.research.budget.failed = (ctx.research.budget.failed ?? 0) + 1;
-      if (error instanceof SearchFailure && error.key === 'search.blocked') {
+      if (error instanceof SearchFailure && error.key === 'search.all_unavailable') {
         ctx.searchBlocks = (ctx.searchBlocks ?? 0) + 1;
         if (ctx.searchBlocks === SEARCH_BLOCK_LIMIT) {
           ctx.services?.notify?.({ kind: 'info', title: toolText(language, 'web.search_blocked_title'), body: toolText(language, 'web.search_blocked_body'), link: '#/settings', dedupKey: 'search-blocked' });

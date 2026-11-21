@@ -47,8 +47,11 @@ export function tempDir(t: { after: (fn: () => void | Promise<void>) => void }):
 
 // 初期値（defaultConfig）はモデルを持たないので、モデルが要るテストはこの設定から始める。
 export function testConfig(): AppConfig {
+  const base = defaultConfig();
   return {
-    ...defaultConfig(),
+    ...base,
+    // 試験の偽の Web は DuckDuckGo の html の形だけを返すので、検索先はその 1 つにする（複数の先の試験は tests/search-metasearch.test.ts）
+    tools: { ...base.tools, web: { ...base.tools.web, engines: ['duckduckgo-html'] } },
     providers: [...defaultConfig().providers, { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:11434/v1', server: 'generic', maxParallel: 1, timeoutMs: 600_000 }],
     models: [
       { id: 'claude-sonnet', label: 'Claude Sonnet 5.5', provider: 'anthropic', model: 'claude-sonnet-5-5', maxOutputTokens: 8192, vision: true },

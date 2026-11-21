@@ -12,7 +12,9 @@ import { tempDir } from '../helpers.ts';
 // beat R: 調べる記録の試験の組み立て。偽の Web（DuckDuckGo の形の結果と、ページ）と、新しい製品 1 つ
 
 export const html = (body: string): PageResponse => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from(`<!doctype html><html><head><title>t</title></head><body><main>${body}</main></body></html>`) });
-export const ddg = (links: readonly string[]): PageResponse => html(`<div id="links" class="results">${links.map((l, i) => `<div class="result results_links web-result"><div class="result__body"><h2 class="result__title"><a class="result__a" href="${l}">Hit ${i}</a></h2><a class="result__snippet">Snippet ${i}</a></div></div>`).join('')}</div>`);
+export const ddg = (links: readonly string[]): PageResponse => html(`<div id="links" class="results">${links.length ? links.map((l, i) => `<div class="result results_links web-result"><div class="result__body"><h2 class="result__title"><a class="result__a" href="${l}">Hit ${i}</a></h2><a class="result__snippet">Snippet ${i}</a></div></div>`).join('') : '<div class="no-results">No results.</div>'}</div>`);
+// Bing の形の結果（検索先を 2 つにする試験だけが使う。tools.web.engines に bing を入れたとき）
+export const bingPage = (links: readonly string[]): PageResponse => html(`<ol id="b_results">${links.length ? links.map((l, i) => `<li class="b_algo"><h2><a href="${l}">Bing hit ${i}</a></h2><div class="b_caption"><p>Bing snippet ${i}</p></div></li>`).join('') : '<li class="b_no">No results</li>'}</ol>`);
 
 export const ALPHA = 'https://alpha.zqnotes.net/notes';
 export const BETA = 'https://beta.zqnotes.net/app';
@@ -24,6 +26,11 @@ export function fakeWeb(hold?: { search?: Promise<void> }, blockSearch: boolean 
     resolve: async () => ['93.184.216.34'],
     get: async (url: URL, _address: string, signal: AbortSignal) => {
       asked.push(url.href);
+      if (url.hostname === 'www.bing.com') {
+        searches++;
+        if (blockSearch === true || searches <= Number(blockSearch)) return { status: 429, contentType: 'text/html', body: Buffer.alloc(0) };
+        return bingPage(emptySearch ? [] : [ALPHA, BETA]);
+      }
       if (url.hostname === 'html.duckduckgo.com') {
         searches++;
         if (blockSearch === true || searches <= Number(blockSearch)) return html('<p>Unfortunately, bots use DuckDuckGo too. Please complete the following challenge.</p>');

@@ -8,7 +8,7 @@ import type { ChatMessage } from '../src/engine/types.ts';
 import { ResearchSession, type PartKind } from '../src/research/evidence.ts';
 import { ResearchStore } from '../src/research/store.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
-import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { reply, tempDir } from './helpers.ts';
 import { toolCall } from './helpers/task-app.ts';
 
@@ -158,7 +158,7 @@ test('調べる実行（D2）: 外を読んだあとの「聞く」になる呼�
   assert.equal(Number((s.app.db.prepare('SELECT COUNT(*) AS n FROM judge_calls').get() as { n: number }).n), 0);
 });
 
-test('調べる実行（R3.11 M1）: ! で始まる語の検索は deny。検索の転送は DuckDuckGo の外へたどらない。会話の検索は今のまま転送をたどる', async t => {
+test('調べる実行（R3.11 M1）: ! で始まる語の検索は deny。検索の転送は DuckDuckGo の外へたどらない。会話の検索も外へはたどらない', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('web_search', { query: '!g markdown notes' }), toolCall('web_search', { query: 'bounce me' }), reply('done'));
   const run = s.part();
@@ -169,8 +169,9 @@ test('調べる実行（R3.11 M1）: ! で始まる語の検索は deny。検索
   assert.ok(!s.asked.some(url => decodeURIComponent(url).includes('!g')));
   s.adapter().scripts.push(toolCall('web_search', { query: 'bounce me' }), reply('ok'));
   const sent = await s.json(`/api/conversations/${uuid(2)}/messages`, 'POST', { text: 'search', projectId: s.projectId });
-  await settled(s.app, sent.body.runId);
-  assert.ok(s.asked.some(url => url.includes('third.zqnotes.net')), 'a chat search still follows the redirect');
+  // 同じ検索先へは 4 秒空けて送るので、ふつうより長く待つ
+  await waitFor(() => s.app.runs.get(sent.body.runId)?.ended_at != null, 'chat search ended', 10_000);
+  assert.ok(!s.asked.some(url => url.includes('third.zqnotes.net')), 'a chat search does not follow an off-site redirect either');
 });
 
 test('調べる実行（R3.11 M2）: 数は記録ごと。本当の呼び出しで数え、続きの部分をまたいで上限を超える web_fetch と web_search が断られ、時間は記録の始まりから数える', async t => {

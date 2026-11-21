@@ -9,6 +9,7 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from './skills/store.ts';
 import type { DownloadNetwork, PageNetwork } from './web/public-page.ts';
 import type { SearchThrottle } from './web/search.ts';
+import type { EngineHealth } from './web/search/health.ts';
 import type { BrowserSession } from './browser/session.ts';
 import type { BackgroundJobs } from './shell/background.ts';
 import type { AppPaths } from '../paths.ts';
@@ -141,7 +142,7 @@ export interface ToolContext {
     acceptance?: AcceptanceStore | undefined; projects?: ProjectStore | undefined; questions?: QuestionStore | undefined; memoryFiles?: ProductMemory | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
-    web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined } | undefined;
+    web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; throttle?: SearchThrottle | undefined; health?: EngineHealth | undefined } | undefined;
     // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
     browser?: BrowserSession | undefined;
     background?: BackgroundJobs | undefined;

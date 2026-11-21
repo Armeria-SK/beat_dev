@@ -285,14 +285,14 @@ test('道具の結果（英語）: 日本語が混ざらない（ツールの説
 
 import { Uploads, attachmentBlock, stripAttachments, UploadError, type Upload } from '../src/uploads/store.ts';
 import { fetchPublic, pageUrl, RetrievalFailure, type PageNetwork } from '../src/tools/web/public-page.ts';
-import { parseDuckDuckGo, SearchFailure, SearchThrottle } from '../src/tools/web/search.ts';
+import { searchFailure, SearchFailure, SearchThrottle } from '../src/tools/web/search.ts';
 
 test('Web の取得・検索の失敗: 文は英語で、コードを持つ', async () => {
   const cases: Array<[() => unknown, string]> = [
     [() => pageUrl('x'.repeat(5000)), 'The URL is too long'],
     [() => pageUrl('not a url'), 'Cannot read this as a URL: not a url'],
     [() => pageUrl('ftp://example.com/'), 'Only public http / https pages (standard ports) can be read. Local and LAN destinations are not read'],
-    [() => parseDuckDuckGo('<html><body><form id="challenge-form"></form>anomaly</body></html>', 5), 'DuckDuckGo judged this to be automated access and returned no results. Wait a while and try again'],
+    [() => { throw searchFailure('search.all_unavailable', { details: 'DuckDuckGo: could not connect' }); }, 'No search site could be used right now (DuckDuckGo: could not connect). Wait a while and try again'],
     [() => { const throttle = new SearchThrottle(() => 0); throttle.take(1); throttle.take(1); }, 'Searches are limited to 1 per hour (tools.web.maxSearchesPerHour)'],
   ];
   for (const [run, en] of cases) {
@@ -388,7 +388,7 @@ test('Web の道具: 結果・失敗・事前の確認の文は英語で書く',
   assert.equal(blocked.content, '"private.example.com" is not a public address, so it is not read');
   const search = await webSearch.execute({ query: 'x' }, withNet);
   assert.equal(search.isError, true);
-  assert.equal(search.content, 'DuckDuckGo judged this to be automated access and returned no results. Wait a while and try again');
+  assert.equal(search.content, 'No search site could be used right now (DuckDuckGo: refused as automated access, resting 5 more min). Wait a while and try again');
 
   const long = await webFetch.preCheck!({ url: `https://good.example.com/p?${'a'.repeat(400)}` }, ctx);
   assert.deepEqual(long.reasons, ['The URL has a long query string (check that it is not sending information out)']);

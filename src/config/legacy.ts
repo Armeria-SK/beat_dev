@@ -63,11 +63,13 @@ function rewriteOllama(config: Record<string, unknown>): string[] {
   return rewritten;
 }
 
-function rewriteSearxng(config: Record<string, unknown>): string[] {
+// 今まで選べたのは DuckDuckGo だけだったので、"duckduckgo" は「DuckDuckGo だけ」という選びではなかったと扱い、どちらも auto にする
+function rewriteSearch(config: Record<string, unknown>): string[] {
   const tools = config.tools;
-  if (!isObject(tools) || !isObject(tools.web) || tools.web.search !== 'searxng') return [];
-  tools.web.search = 'duckduckgo';
-  return ['tools.web.search "searxng" → "duckduckgo"'];
+  if (!isObject(tools) || !isObject(tools.web) || (tools.web.search !== 'searxng' && tools.web.search !== 'duckduckgo')) return [];
+  const old = tools.web.search;
+  tools.web.search = 'auto';
+  return [`tools.web.search "${old}" → "auto"`];
 }
 
 function rewriteModelLimits(config: Record<string, unknown>): string[] {
@@ -88,6 +90,6 @@ export function dropLegacy(raw: unknown): { config: unknown; dropped: string[]; 
   if (!isObject(raw)) return { config: raw, dropped: [], rewritten: [] };
   const config = structuredClone(raw);
   const dropped = LEGACY_KEYS.filter(key => dropPath(config, key.path.split('.'))).map(key => key.path);
-  const rewritten = [...rewriteOllama(config), ...rewriteSearxng(config), ...rewriteModelLimits(config)];
+  const rewritten = [...rewriteOllama(config), ...rewriteSearch(config), ...rewriteModelLimits(config)];
   return dropped.length || rewritten.length ? { config, dropped, rewritten } : { config: raw, dropped, rewritten };
 }
