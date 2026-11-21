@@ -340,7 +340,7 @@ test('ui/Conversation（DOM・build-in-chat）: 開いている質問・待っ�
   assert.match(row(queued)!.textContent!, /^Build queued · paused · 1 question recorded/u);
 });
 
-test('ui/Conversation（DOM・build-in-chat）: 終わった（確かめ待ちも）・失敗した Build のまとめは Notice の下、Checklist の上に返事の形で（Markdown。生の HTML は描かない）。外を読んだ印。取り消し・動いている間は出ない', async () => {
+test('ui/Conversation（DOM・build-in-chat）: 終わった（確かめ待ちも）・失敗した Build のまとめは Notice の下、Checklist の上に返事の形で（Markdown。生の HTML は描かない）。外を読んだ印。外を読んだ印の札は出さない（P3）。取り消し・動いている間は出ない', async () => {
   const summary = '# Result\n\n- parser added\n- tests pass\n\n<b>raw</b>';
   const done = (await renderChat([build('done', { summary, summary_tainted: true, checklist: { items: STEPS, tainted: false } })], { buildLive: buildLive([]) })).container;
   const box = row(done)!.nextElementSibling!;
@@ -348,7 +348,8 @@ test('ui/Conversation（DOM・build-in-chat）: 終わった（確かめ待ち�
   assert.equal(box.querySelector('h1')?.textContent, 'Result');
   assert.equal(box.querySelectorAll('li').length, 2);
   assert.equal(box.querySelector('b'), null, 'raw HTML is not rendered');
-  assert.equal(box.querySelector('.bt-meta')?.textContent, 'Written after reading text from elsewhere');
+  assert.equal(box.querySelector('.bt-meta'), null, 'no outside mark (P3)');
+  assert.ok(!box.textContent!.includes('elsewhere'));
   assert.ok(box.nextElementSibling?.matches('.bt-checklist'), 'the checklist follows the summary');
   await cleanup();
   const check = (await renderChat([build('done', { check_state: 'awaiting', summary: 'All good.' })])).container;

@@ -291,8 +291,8 @@ test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown�
   assert.doesNotMatch(source, /href|<a[\s>]|linkify|innerHTML/iu, 'リンクにしない');
   assert.match(source, /<span>\{item\.text\}<\/span>/u, '項目の文は、そのまま文字として 1 か所だけに入れる');
   assert.equal(source.match(/item\.text/gu)?.length, 1);
-  assert.match(source, /tainted && <p className="bt-meta ui-checklist__note">\{t\('ui\.checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
-  const keys = ['ui.checklist', 'ui.checklist.count', 'ui.checklist.done', 'ui.checklist.tainted'] as const;
+  assert.doesNotMatch(source, /tainted/u, '外の内容を読んだあとの札は出さない（P3 の 3b、持ち主の決め「画面の表示だけ消す」）');
+  const keys = ['ui.checklist', 'ui.checklist.count', 'ui.checklist.done'] as const;
   for (const key of keys) {
     assert.ok(key in en, key);
     assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);

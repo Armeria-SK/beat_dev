@@ -281,7 +281,6 @@ const en = {
   'mesh.state_secret': '{field} looks like it contains a secret key or token. Leave it out',
   'mesh.unavailable': 'The mesh folder cannot be used in this run',
   'notify_owner.title': 'From beat: {title}',
-  'notify_owner.title_tainted': 'From beat (after reading text that came from elsewhere): {title}',
   'notify_owner.sent': 'Notified the owner: {title}',
   'notify_owner.duplicate': 'The same notification was sent within 24 hours, so it was not sent again',
   'notify_owner.unavailable': 'The owner cannot be notified in this run',

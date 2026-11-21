@@ -143,8 +143,8 @@ function BuildRow({ build, openPending, alert, wait, live, ownToolRunning }: { b
   const tool = stage === 'running' ? live?.toolOf(build) : undefined;
   const shown = tool && ownToolRunning ? { ...tool, running: undefined } : tool;
   const toolRow = shown && build.conversation_id ? <><ToolGroup rows={[shown]} isNew={NEVER_NEW} /><div className="bt-msg bt-meta ui-build__session"><a className="bt-tool__link" href={routeHash({ view: 'chat', id: build.conversation_id })}>{t('ui.task.openSession')}</a></div></> : null;
-  const summary = (stage === 'done' || stage === 'check' || stage === 'failed') && build.summary ? <div className="bt-msg ui-reply ui-build__summary"><Markdown text={build.summary} />{build.summary_tainted && <p className="bt-meta">{t('ui.checklist.tainted')}</p>}</div> : null;
-  const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} tainted={build.checklist.tainted} live={false} /> : null;
+  const summary = (stage === 'done' || stage === 'check' || stage === 'failed') && build.summary ? <div className="bt-msg ui-reply ui-build__summary"><Markdown text={build.summary} /></div> : null;
+  const list = stage !== 'running' && build.checklist.items.length > 0 ? <Checklist items={build.checklist.items} live={false} /> : null;
   if (stage === 'failed') return <><Notice tone="fail" alert={alert} title={t('ui.build.failed')} text={[t('ui.build.failedText'), note].filter(Boolean).join(' · ')} {...(place ? { action: place, also: openTask } : { action: openTask })} />{summary}{list}</>;
   return <><Notice title={t(BUILD_TEXT[stage])} {...(note ? { text: note } : {})} {...(place ? { action: place, also: openTask } : { action: openTask })} />{toolRow}{summary}{list}</>;
 }
@@ -330,7 +330,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [gone, setGone] = useState(false);
-  const [readList, setReadList] = useState<{ items: ChecklistItem[]; tainted: boolean } | null>(null);
+  const [readList, setReadList] = useState<{ items: ChecklistItem[] } | null>(null);
   const [models, setModels] = useState<ModelView[]>([]);
   const [modelsRead, setModelsRead] = useState(false);
   const [chatOrder, setChatOrder] = useState<string[]>([]);
@@ -378,7 +378,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   useEffect(() => {
     if (!id) return undefined;
     let live = true;
-    void api.checklist(id).then(r => { if (live) setReadList({ items: r.items, tainted: r.tainted }); }).catch(() => undefined);
+    void api.checklist(id).then(r => { if (live) setReadList({ items: r.items }); }).catch(() => undefined);
     return () => { live = false; };
   }, [id, revision]);
   useEffect(() => { void api.models().then(r => { setModels(r.models); setChatOrder(r.routing.chat); setModelsRead(true); }).catch(() => undefined); }, []);
@@ -615,15 +615,15 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
           <EmptyState title={t('ui.empty.title')} text={t('ui.empty.text')} action={<Suggestions busy={sending} onPick={text => void pick(text)} />} />
         )}
         {items.map(render)}
-        {!running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live={false} />}
+        {!running && checklist.length > 0 && <Checklist items={checklist} live={false} />}
         {meter && meter.value >= 90 && <Notice tone="warn" icon="alert" title={t('ui.notice.contextHigh', meter.value)} />}
         {failure && sendFailure(failure)}
         {helper && (
           <Notice title={t('ui.notice.helperSession')} {...(helper.source_conversation_id ? { action: { label: t('ui.notice.openParent'), run: () => { location.hash = routeHash({ view: 'chat', id: helper.source_conversation_id! }); } } } : {})} />
         )}
       </div>
-      {running && checklist.length > 0 && <Checklist items={checklist} tainted={readList?.tainted ?? false} live className="ui-pinned bt-rise" />}
-      {!(running && checklist.length > 0) && runningBuild && <Checklist items={runningBuild.checklist.items} tainted={runningBuild.checklist.tainted} live className="ui-pinned bt-rise" />}
+      {running && checklist.length > 0 && <Checklist items={checklist} live className="ui-pinned bt-rise" />}
+      {!(running && checklist.length > 0) && runningBuild && <Checklist items={runningBuild.checklist.items} live className="ui-pinned bt-rise" />}
       {!running && !gone && !helper && ask && <AskCard key={ask.key} ask={ask} busy={sending} onAnswer={text => void submit('send', text)} />}
       {!gone && !helper && (
         <Composer

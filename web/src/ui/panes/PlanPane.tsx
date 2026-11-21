@@ -182,7 +182,6 @@ function ProposedChange({ acc, change, busy, onDecide }: { acc: Acceptance; chan
         <span className="bt-label">{t('ui.acc.change.title')}</span>
         <span className="bt-meta">{stale ? t('ui.acc.change.stale', change.base_version) : t('ui.acc.change.versions', change.base_version, change.base_version + 1)}</span>
       </div>
-      {change.tainted && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}</p>}
       <DiffList rows={proposalRows(acc, change)} />
       <span className="ui-acc__buttons">
         <Button small disabled={approveDisabled(acc, change, busy)} onClick={() => onDecide('approve')}>{t('ui.acc.change.approve')}</Button>
@@ -340,7 +339,6 @@ function Differs({ data }: { data: Deviations }) {
                 <span className="ui-acc__tags">
                   {row.by === 'task' && row.task ? <a className="bt-chip" href={routeHash({ view: 'task', id: row.task })}>{t('ui.dev.byTask')}</a> : <span className="bt-chip">{t(row.by === 'owner' ? 'ui.dev.byOwner' : 'ui.dev.byTask')}</span>}
                   {row.date && <span className="bt-meta">{row.date}</span>}
-                  {row.external && <span className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.dev.outside')}</span>}
                 </span>
               </div>
             </li>
@@ -724,7 +722,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
       {asking && askFailed && <Notice tone="fail" title={t('ui.acc.ask.failed')} text={askFailed.detail ?? undefined} action={{ label: t('ui.fail.retry'), run: () => void ask() }} />}
       {shown && acc && coverage && <BeforeBuild productId={productId} conversationId={conversationId} acc={acc} coverage={coverage} sectionRef={coverageRef} />}
       {changedAfterBuild(doc) && <p className="bt-meta ui-plan__after">{t('ui.plan.changedAfterBuild')}</p>}
-      {outsideContent(doc, acc) && <p className="bt-meta ui-acc__outside"><Icon name="alert" />{t('ui.acc.outside')}{review !== 'hidden' && <Button small variant="ghost" disabled={review === 'off'} onClick={() => void markReviewed()}>{t(review === 'again' ? 'ui.plan.readNewVersion' : 'ui.plan.markReviewed')}</Button>}</p>}
+      {outsideContent(doc, acc) && review !== 'hidden' && <p className="bt-meta ui-acc__outside"><Button small variant="ghost" disabled={review === 'off'} onClick={() => void markReviewed()}>{t(review === 'again' ? 'ui.plan.readNewVersion' : 'ui.plan.markReviewed')}</Button></p>}
       {review !== 'hidden' && seen.changed && <p className="bt-meta ui-acc__outside" role="status"><Icon name="alert" />{t('ui.plan.changedReadAgain')}</p>}
       {reviewFailed && <Notice tone="fail" title={t('ui.plan.reviewFailed')} text={reviewFailed.detail ?? undefined} />}
       {notice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.changed')} action={{ label: t('ui.plan.reload'), run: () => void reload() }} also={{ label: t('ui.plan.discard'), run: discard }} />}

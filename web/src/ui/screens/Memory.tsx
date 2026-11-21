@@ -184,7 +184,6 @@ function Detail({ projectId, note, archived, revision, now, onChanged, onGone, l
         )}
         {note.tainted && (
           <div className="ui-mem__mark" data-mark="outside">
-            <span className="bt-tag ui-mem__tag">{t('ui.memory.outside')}</span>
             <p className="bt-meta ui-mem__marknote">{t('ui.memory.outsideNote')}</p>
             {!archived && <Button small variant="ghost" icon="check" disabled={busy || !file} onClick={markRead}>{t('ui.memory.markRead')}</Button>}
           </div>
@@ -351,7 +350,6 @@ export function Memory({ productId, projects, projectsLoaded, revision }: { prod
                       {t(stamp.edited ? 'ui.memory.edited' : 'ui.memory.saved', whoText(t, stamp.who), formatRelative(stamp.at, now))}
                     </span>
                   </div>
-                  {note.tainted && <span className="bt-tag ui-mem__tag">{t('ui.memory.outside')}</span>}
                 </li>
               );
             })}

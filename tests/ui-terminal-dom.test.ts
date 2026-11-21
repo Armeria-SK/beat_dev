@@ -139,12 +139,13 @@ test('ui/TerminalPane（DOM）: いちばん下にいれば新しい行は bt-te
   assert.equal(container.querySelector('.ui-term__unseen'), null);
 });
 
-test('ui/TerminalPane（DOM）: コマンドが無ければ空の案内。外を読んだあとに始めたものは meta に印', async () => {
+test('ui/TerminalPane（DOM）: コマンドが無ければ空の案内。外を読んだあとに始めたものにも meta に印は出さない（P3）', async () => {
   const empty = await show({ items: [], outputs: {}, calls: [] });
   assert.ok(byText(empty.container, '.bt-empty__title, h2, h3, p, span', 'No background commands'), empty.container.innerHTML);
   await cleanup();
   const { container } = await show({ items: [job({ tainted: true })], outputs: {}, calls: [] });
-  assert.match(container.querySelector('.ui-term__meta > span')?.textContent ?? '', /started after reading text from elsewhere/u);
+  assert.ok(container.querySelector('.ui-term__meta > span'), 'the meta line is there');
+  assert.doesNotMatch(container.querySelector('.ui-term__meta > span')?.textContent ?? '', /elsewhere/u);
 });
 
 test('ui/TerminalPane（DOM）: focus の番号を選ぶ（道具の行の Open in Terminal から開いたとき）', async () => {
