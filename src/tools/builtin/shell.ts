@@ -17,7 +17,7 @@ import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
-import { productEnvReader } from '../hooks/product-env.ts';
+import { productEnvPath, productEnvReader } from '../hooks/product-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
 import { judgeFilesOf } from '../judge-files.ts';
 import { fixShellRefusal } from '../hooks/fix-guard.ts';
@@ -327,7 +327,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
     gitIsolated,
     which: name => findExecutable(name, childEnv, cwd.cwd, { powershell }),
-    ...(ctx.project?.root ? { productEnv: productEnvReader(ctx.project.root) } : {}),
+    ...(ctx.project?.root ? { productEnv: productEnvReader(ctx.project.root), productEnvPath: productEnvPath({ root: ctx.project.root, dataDir: ctx.paths.data, policy: ctx.policy, protect: ctx.config.tools.hooks.preToolUse.filter(h => 'builtin' in h) }) } : {}),
   });
   const touch = checked.decision === 'deny' ? undefined : protectedTouchOf(input.command, checked.statements, ctx.policy, cwd.cwd);
   const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;

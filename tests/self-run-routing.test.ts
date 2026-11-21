@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { join } from 'node:path';
+import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { selfRunRig, type Route } from './helpers/self-run-rig.ts';
 
 const PS = process.platform === 'win32';
@@ -206,6 +207,58 @@ test('v3 P2: ファイルの中の beat のポート・断るポート・beat �
   for (const [command, want] of commands) {
     const { route, pre, detail } = await r.routeOf({ command });
     if (route !== want) got.push(`${command}: ${route} (want ${want}) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 120)}`);
+  }
+  assert.deepEqual(got, []);
+});
+
+test('v3 P3: #55（後ろで DATA_DIR に製品の隣のフォルダの絶対パス・合言葉・ポートを入れて seed と server）は順 4。製品の中のフォルダの絶対パスも順 4', { skip: !PS && 'PowerShell の $env: の形' }, async t => {
+  const r = selfRunRig(t, () => undefined, V3_FILES);
+  const sibling = join(r.paths.data, '..', 'study-demo-data');
+  const got: string[] = [];
+  const cases: Array<{ command: string; background?: boolean }> = [
+    { command: `$env:DATA_DIR="${join(sibling)}"; $env:ADMIN_PASSPHRASE="demo-pass-2026"; $env:PORT="3100"; node scripts/seed.js; node server.js`, background: true },
+    { command: `$env:DATA_DIR='${join(r.ws, 'data')}'; node scripts/seed.js` },
+  ];
+  for (const input of cases) {
+    const { route, pre, detail } = await r.routeOf(input);
+    if (route !== 'step4') got.push(`${input.command}: ${route} (want step4) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 160)}`);
+  }
+  assert.deepEqual(got, []);
+});
+
+test('v3 P3: env の絶対パスの値が beat のデータのフォルダ・秘密・守る場所・UNC・ドライブの根・.. つき・URL・~ なら、名前が道具の読むものなら、順 4 にならない', { skip: !PS && 'PowerShell の $env: の形' }, async t => {
+  const r = selfRunRig(t, c => { c.tools.hooks.preToolUse = [structuredClone(DEFAULT_PROTECT_FILES)]; }, V3_FILES);
+  const values = [
+    r.paths.data, join(r.paths.data, 'backups'), join(r.ws, '..', 'x'), join(r.ws, '.ssh'), join(r.ws, '.github', 'workflows'), join(r.ws, '.git', 'hooks'), join(r.ws, 'SOUL.md'),
+    '\\\\server\\share\\x', 'C:\\', `${join(r.ws, 'data')}\\..\\..\\x`, 'https://e.example/x', '~/x',
+  ];
+  const got: string[] = [];
+  for (const value of values) {
+    const { route, pre } = await r.routeOf({ command: `$env:DATA_DIR='${value}'; node scripts/seed.js` });
+    if (route === 'step4') got.push(`${value}: step4 keys=${JSON.stringify(pre.reasonKeys)}`);
+  }
+  for (const name of ['NODE_OPTIONS', 'npm_config_userconfig', 'OTHER_DIR']) {
+    const { route } = await r.routeOf({ command: `$env:${name}='${join(r.ws, 'data')}'; node scripts/seed.js` });
+    if (route === 'step4') got.push(`${name}: step4`);
+  }
+  assert.deepEqual(got, []);
+});
+
+test('v3 関門: 承認 #52〜#55 の 4 本の行き先（#52・#53 判定役、#54・#55 順 4）は、外の文を読んだ実行でも同じ', { skip: !PS && 'PowerShell の形' }, async t => {
+  const r = selfRunRig(t, () => undefined, V3_FILES);
+  const sibling = join(r.paths.data, '..', 'study-demo-data');
+  const cases: Array<{ input: { command: string; background?: boolean }; want: Route }> = [
+    { input: { command: 'node -v; npm -v; git log --oneline | head -3' }, want: 'judge' },
+    { input: { command: SQLITE_PROBE }, want: 'judge' },
+    { input: { command: 'node scripts/smoke-test.js' }, want: 'step4' },
+    { input: { command: `$env:DATA_DIR="${sibling}"; $env:ADMIN_PASSPHRASE="demo-pass-2026"; $env:PORT="3100"; node scripts/seed.js; node server.js`, background: true }, want: 'step4' },
+  ];
+  const got: string[] = [];
+  for (const c of cases) {
+    for (const ctx of [r.ctx, r.tainted()]) {
+      const { route, pre } = await r.routeOf(c.input, ctx);
+      if (route !== c.want) got.push(`${c.input.command} (tainted=${ctx.taint.tainted}): ${route} (want ${c.want}) keys=${JSON.stringify(pre.reasonKeys)}`);
+    }
   }
   assert.deepEqual(got, []);
 });

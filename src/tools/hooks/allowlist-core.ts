@@ -56,6 +56,7 @@ export interface MatchCtx {
   beforeStatements?: ((all: readonly Statement[]) => void) | undefined;
   beforeStatement?: ((st: Statement, index: number) => void) | undefined;
   productEnv?: ((name: string) => boolean) | undefined;
+  productEnvPath?: ((value: string) => boolean) | undefined;
 }
 
 // file: 読まれる設定ファイルの場所。unknownCwd: cd の先が分からず、調べられない
@@ -117,13 +118,13 @@ const PRODUCT_ENV = new Set(['PORT', 'HOST', 'NODE_ENV', 'CI', 'DEBUG', 'LOG_LEV
 const TOOL_ENV_PREFIX = /^(?:NPM_|NODE_|YARN_|PNPM_|BUN_|DENO_|TS_NODE_|TSX_|PYTHON|PIP_|UV_|GIT_|LD_|DYLD_|JAVA|JDK_|COR_|CORECLR_|COMPLUS_|DOTNET_|ELECTRON_|BROWSER|PLAYWRIGHT_|PUPPETEER_|LUA_|PHP|MAVEN_|GRADLE_|KUBECONFIG|AWS_|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_)/iu;
 const TOOL_ENV_NAME = /^(?:SSL_CERT_|COREPACK_)|(?:^|_)PROXY$|_CA_BUNDLE$|^(?:SYSTEMROOT|WINDIR|TEMP|TMP|TMPDIR|CC|CXX|LD)$/iu;
 const PRODUCT_ENV_VALUE =/^[A-Za-z0-9_.,:@+=*\\/ -]*$/u;
-export function productEnvOk(name: string, value: Word | null, productReads?: (name: string) => boolean): boolean {
+export function productEnvOk(name: string, value: Word | null, productReads?: (name: string) => boolean, productPath?: (value: string) => boolean): boolean {
   if (value === null || value.dynamic || value.glob || CODE_ENV.test(name)) return false;
   const upper = name.toUpperCase();
   if (!PRODUCT_ENV.has(upper) && (TOOL_ENV_PREFIX.test(name) || TOOL_ENV_NAME.test(name) || productReads?.(upper) !== true)) return false;
   const text = value.text;
-  if (!PRODUCT_ENV_VALUE.test(text) || text.includes('://') || /^[\\/~]|^[A-Za-z]:/u.test(text)) return false;
-  return !text.split(/[\\/]/u).includes('..');
+  if (!PRODUCT_ENV_VALUE.test(text) || text.includes('://') || text.split(/[\\/]/u).includes('..')) return false;
+  return !/^[\\/~]|^[A-Za-z]:/u.test(text) || productPath?.(text) === true;
 }
 // bash のシェルの変数（小文字だけの名前。proxy を含まない）
 export const bashVarOk = (name: string): boolean => /^[a-z][a-z0-9_]*$/u.test(name) && !name.includes('proxy');

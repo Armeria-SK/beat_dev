@@ -1,5 +1,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, parse, resolve } from 'node:path';
+import type { BuiltinHookConfig } from '../../config/schema.ts';
+import { runProtectFiles } from './protect-files.ts';
+import { isInside, placePath, realish, writeApprovalKind, type ScopePolicy } from './scope.ts';
 
 const SOURCE = /\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|py)$/iu;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__']);
@@ -57,4 +60,21 @@ export function productEnvReader(root: string, now: () => number = Date.now): (n
     return fresh;
   };
   return name => (names ??= scan()).has(name.toUpperCase());
+}
+
+export interface EnvPathPlaces { root: string; dataDir: string; policy: ScopePolicy; protect: readonly BuiltinHookConfig[] }
+
+// 製品のコードが読む env に渡す絶対パスの値。製品のコードへのデータなので、beat のデータのフォルダ（製品の中は除く）・秘密・守る場所・ドライブの根でなければ通す
+export function productEnvPath(places: EnvPathPlaces): (value: string) => boolean {
+  return value => {
+    if (!isAbsolute(value)) return false;
+    const abs = resolve(value);
+    if (abs === parse(abs).root || placePath(abs, places.policy).kind === 'deny' || writeApprovalKind(abs, places.policy) !== undefined) return false;
+    const real = realish(abs);
+    const inRoot = isInside(places.root, abs) && isInside(realish(places.root), real);
+    if (!inRoot && (isInside(places.dataDir, abs) || isInside(realish(places.dataDir), real))) return false;
+    return places.protect.every(hook => runProtectFiles(hook, {
+      hook_event_name: 'PreToolUse', tool_name: 'shell_run', tool_input: {}, cwd: places.root, run_id: '', conversation_id: '', paths: [{ path: abs, write: true, dir: true }], project_root: places.root,
+    }).decision === undefined);
+  };
 }
