@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
+import { CODE_ENV } from './decision-order.ts';
 import { segments, STATEMENT_WORDS, stripQuotedContent, type Segment } from './parse-cmd.ts';
 import { expandPath } from './scope.ts';
 import { loopbackHost, selfPortsOf, selfTarget, type SelfServer } from './self-port.ts';
@@ -376,14 +377,6 @@ function scanFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 }
 
 // ── R1.6 の続き: コードを動かせる環境変数 ──
-// どれも、あとで起こすプロセスの起動時に読み込まれ、コードを動かせる（NODE_OPTIONS=--require ./put.js など）。NODE_ENV のような設定だけの値は含めない
-export const CODE_ENV = new RegExp(`^(?:${[
-  'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'PYTHONSTARTUP', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
-  'PERL5OPT', 'PERL5LIB', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_EXTERNAL_DIFF', 'GIT_ASKPASS',
-  'GIT_PAGER', 'GIT_EDITOR', 'GIT_EXEC_PATH', 'GIT_PROXY_COMMAND', 'GIT_TEMPLATE_DIR', 'GIT_CONFIG\\w*', 'PAGER', 'EDITOR', 'VISUAL', 'PROMPT_COMMAND', 'PATH', 'PATHEXT', 'PSMODULEPATH', 'COMSPEC',
-  'SHELL', 'RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER', 'GOFLAGS', 'NPM_CONFIG_SCRIPT_SHELL', 'NPM_CONFIG_NODE_OPTIONS',
-].join('|')})$`, 'iu');
-
 function envFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const names: string[] = [...(seg.envAssign ?? [])];
   const assigned = /^\$env:(\w+)/iu.exec(seg.rawCmd);

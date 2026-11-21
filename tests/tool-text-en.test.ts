@@ -149,7 +149,8 @@ test('コードを動かす確かめ: 理由・beat 自身に触れる目印・�
   assert.equal(check.reasonKeys?.[0], 'code.self_touch');
   assert.equal(request.checks[0], check.reasons[0]);
   assertFilled(request.checks[0]!);
-  assert.ok(request.checks[0]!.endsWith(': /api/, 127.0.0.1 / localhost'), request.checks[0]);
+  assert.ok(request.checks[0]!.endsWith(': 127.0.0.1 / localhost'), request.checks[0]);
+  assert.ok(check.reasons.some(reason => reason.startsWith('The code mentions /api/.')), check.reasons.join(' / '));
   const fileRun = check.reasonKeys!.indexOf('code.file_run');
   assert.ok(fileRun >= 0, check.reasonKeys!.join(', '));
   assert.ok(request.checks.includes(check.reasons[fileRun]!));

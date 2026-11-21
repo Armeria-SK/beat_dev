@@ -2,7 +2,7 @@
 // 表そのもの（コマンドごとのフラグ）は allowlist-tools.ts（bash と外部の道具）・allowlist-git.ts（git）・allowlist-ps.ts（PowerShell のコマンドレット）にある。
 
 import type { GuardMessageKey } from '../../shared/messages/guard.ts';
-import { CODE_ENV } from './code-guard.ts';
+import { CODE_ENV } from './decision-order.ts';
 import type { ShellKind, Statement, Word } from './shell-lex.ts';
 
 export type Level = 'allow' | 'ask' | 'once' | 'deny';

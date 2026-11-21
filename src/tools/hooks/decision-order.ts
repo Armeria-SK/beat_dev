@@ -38,7 +38,7 @@ const JUDGE = [
   'list.protected_write', 'list.expand', 'list.lan', 'list.long_query', 'list.redirect', 'list.header', 'list.send', 'list.read_dynamic', 'list.wild_many', 'list.cwd_unknown',
   'shape.call', 'shape.dot_source', 'shape.splat', 'shape.background', 'shape.function', 'shape.process_out', 'shape.pipe_stderr', 'shape.control', 'shape.control_opaque', 'shape.script_block',
   'shape.static', 'shape.cast', 'shape.method', 'shape.expr', 'shape.replace_block',
-  'code.spawn', 'code.powershell', 'code.launcher', 'code.wrapped_unknown', 'code.unknown_target', 'code.env', 'code.loopback', 'code.self_touch', 'code.limits',
+  'code.spawn', 'code.powershell', 'code.launcher', 'code.wrapped_unknown', 'code.unknown_target', 'code.env', 'code.loopback', 'code.self_touch', 'code.self_hint', 'code.limits',
   'code.preview_missing', 'code.preview_unreadable',
   'ask.package', 'ask.npx', 'ask.system_package', 'ask.curl', 'ask.wget', 'ask.powershell', 'ask.remote', 'ask.git_push', 'ask.git_remote', 'ask.gh', 'ask.container', 'ask.service',
 ] as const;
@@ -81,3 +81,11 @@ export function nodeFileIndex(program: string, args: ReadonlyArray<{ text: strin
   while (at < args.length && NODE_SKIP_FLAG.test(args[at]!.text)) at++;
   return at;
 }
+
+// どれも、あとで起こすプロセスの起動時に読み込まれ、コードを動かせる（NODE_OPTIONS=--require ./put.js など）。NODE_ENV のような設定だけの値は含めない
+export const CODE_ENV = new RegExp(`^(?:${[
+  'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'PYTHONSTARTUP', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  'PERL5OPT', 'PERL5LIB', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_EXTERNAL_DIFF', 'GIT_ASKPASS',
+  'GIT_PAGER', 'GIT_EDITOR', 'GIT_EXEC_PATH', 'GIT_PROXY_COMMAND', 'GIT_TEMPLATE_DIR', 'GIT_CONFIG\\w*', 'PAGER', 'EDITOR', 'VISUAL', 'PROMPT_COMMAND', 'PATH', 'PATHEXT', 'PSMODULEPATH', 'COMSPEC',
+  'SHELL', 'RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER', 'GOFLAGS', 'NPM_CONFIG_SCRIPT_SHELL', 'NPM_CONFIG_NODE_OPTIONS',
+].join('|')})$`, 'iu');
