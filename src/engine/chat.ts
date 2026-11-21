@@ -18,7 +18,7 @@ import { stripsThinkingOnText } from '../providers/anthropic.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ProductMemory } from '../memory/files.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall, type JudgeReply } from '../tools/auto-approve.ts';
+import { JudgeRefused, NoJudge, TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt, type JudgeCall, type JudgeReply } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
 import { acceptanceAllows, planAllows, reviewAllows, runToolCall, type JudgeLimitSet } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
@@ -1322,7 +1322,7 @@ export class ChatEngine {
         if (own?.signal.aborted) throw own.signal.reason;
         return answer;
       } catch (error) {
-        if (signal.aborted || error instanceof TruncatedReply) throw error;
+        if (signal.aborted || error instanceof TruncatedReply || error instanceof JudgeRefused) throw error;
         failure = error;
       } finally {
         clearTimeout(timer);
@@ -1350,6 +1350,7 @@ export class ChatEngine {
         if (event.type === 'text') text += event.delta;
         else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, usage); }
         else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
+        else if (event.type === 'done' && event.refused) throw new JudgeRefused();
       }
       // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
       return { text: redactExact(text, d.registry.secrets()), model: model.id, usage };

@@ -90,6 +90,7 @@ const en = {
   'judge_failed_timeout': 'the judge did not answer in time',
   'judge_failed_slot_timeout': 'the judge could not start in time because its model was busy',
   'judge_failed_unparsable': "the judge's answer could not be read",
+  'judge_failed_judge_refused': 'the judge model refused to judge this action, so it waits for you',
   'judge_failed_error': 'the judge could not be called',
   'judge_failed_no_judge': 'there is no judge model that may be used here',
   'judge_failed_no_request': 'there is no request from the owner to judge it against',

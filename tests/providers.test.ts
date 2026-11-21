@@ -249,6 +249,17 @@ test('Anthropic: effort があれば output_config.effort に入れ、無けれ�
   for (const body of bodies) assert.equal('thinking' in body, false);
 });
 
+test('Anthropic: stop_reason が refusal（安全のための断り）なら done に refused を付ける。ふつうの終わりには付けない', async () => {
+  const sse = (stop: string) => (async () => anthropicSse([
+    { type: 'message_start', message: { id: 'msg', type: 'message', role: 'assistant', model: 'x', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+    { type: 'message_delta', delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 0 } },
+    { type: 'message_stop' },
+  ])) as unknown as typeof fetch;
+  const done = async (stop: string) => (await collect(new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, sse(stop)).stream(request(model())))).find((e: any) => e.type === 'done');
+  assert.deepEqual(await done('refusal'), { type: 'done', stop: 'other', refused: true });
+  assert.deepEqual(await done('end_turn'), { type: 'done', stop: 'end_turn' });
+});
+
 test('Anthropic: probe は capabilities.effort の受ける段だけを弱い順に efforts へ入れ、受けない・知らせないモデルでは入れない', async () => {
   const level = (supported: boolean) => ({ supported });
   const probeWith = async (capabilities: unknown) => {

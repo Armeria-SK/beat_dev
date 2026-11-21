@@ -10,7 +10,7 @@ import { EndpointLimiter } from '../src/providers/limiter.ts';
 import { ProviderRegistry } from '../src/providers/registry.ts';
 import type { ProviderAdapter } from '../src/providers/types.ts';
 import { redactExact, redactSecrets } from '../src/shared/redaction.ts';
-import { autoDecide, CLASSIFIER_TIMEOUT_MS, fileRoundInputs, planFileRounds, TruncatedReply, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeFile } from '../src/tools/auto-approve.ts';
+import { autoDecide, CLASSIFIER_TIMEOUT_MS, JudgeRefused, fileRoundInputs, planFileRounds, TruncatedReply, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeFile } from '../src/tools/auto-approve.ts';
 import { JUDGE_CASES, JUDGE_CONTROLS, JUDGE_EXFIL_CASES, type JudgeCase } from '../tests/fixtures/judge-cases.ts';
 import { JUDGE_CODE_CASES } from '../tests/fixtures/judge-code-cases.ts';
 
@@ -95,6 +95,7 @@ async function classify(options: ProbeOptions, limiter: EndpointLimiter, prompt:
     })) {
       if (event.type === 'text') text += event.delta;
       else if (event.type === 'done' && event.stop === 'max_tokens') { note.truncated = true; note.raw = text; throw new TruncatedReply(); }
+      else if (event.type === 'done' && event.refused) { note.raw = text; throw new JudgeRefused(); }
     }
     note.raw = text;
     return redactExact(text, options.secrets ?? []);

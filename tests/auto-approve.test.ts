@@ -12,7 +12,7 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
+import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, JudgeRefused, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { memoryForget, memorySave } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -71,6 +71,10 @@ test('autoDecide: 判定役の失敗・時間切れ・読めない返事・取�
   assert.equal((await autoDecide(input(), async () => '', signal)).failed, 'unparsable');
   assert.deepEqual(await autoDecide(input(), async () => { throw new TruncatedReply(); }, signal), { decision: 'ask', reason: '', failed: 'unparsable' }, 'max_tokens で切れた返事は、読めない返事と同じに確かめる');
   assert.equal((await autoDecide(input(), async () => undefined as unknown as string, signal)).failed, 'unparsable');
+
+  let refusedCalls = 0;
+  assert.deepEqual(await autoDecide(input(), async () => { refusedCalls++; throw new JudgeRefused(); }, signal), { decision: 'ask', reason: '', failed: 'judge_refused' }, 'モデルの断りは読めない返事と分けて記録し、確かめる');
+  assert.equal(refusedCalls, 1, '断られたら聞き直さない');
   const started = Date.now();
   const hung = await autoDecide(input(), () => new Promise<string>(() => undefined), signal, 40);
   assert.deepEqual([hung.decision, hung.failed], ['ask', 'timeout']);

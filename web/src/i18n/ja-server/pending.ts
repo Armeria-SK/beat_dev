@@ -91,6 +91,7 @@ export const pendingJa = {
   'judge_failed_timeout': "判定役が時間内に答えませんでした",
   'judge_failed_slot_timeout': "判定役のモデルがふさがっていて、時間内に始められませんでした",
   'judge_failed_unparsable': "判定役の答えを読めませんでした",
+  'judge_failed_judge_refused': "判定役のモデルがこの操作の判定を断ったので、持ち主の判断を待ちます",
   'judge_failed_error': "判定役を呼べませんでした",
   'judge_failed_no_judge': "ここで使える判定役のモデルがありません",
   'judge_failed_no_request': "照らし合わせる持ち主の頼みがありません",

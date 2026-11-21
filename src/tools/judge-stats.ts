@@ -18,7 +18,7 @@ export interface JudgeCallInput {
 
 const KEY = /^[a-z][a-z0-9_.-]{0,79}$/u;
 const KEYS_MAX = 32;
-const FAILED: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['error', 'timeout', 'unparsable', 'no_request', 'too_long', 'slot_timeout', 'no_judge']);
+const FAILED: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['error', 'timeout', 'unparsable', 'no_request', 'too_long', 'slot_timeout', 'no_judge', 'judge_refused']);
 export const BEFORE_MODEL: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['no_judge', 'no_request', 'too_long', 'slot_timeout']);
 
 const keysOf = (keys: readonly string[]): string[] => [...new Set(keys.filter(key => KEY.test(key)))].sort().slice(0, KEYS_MAX);
