@@ -41,7 +41,20 @@ export function productEnvNames(root: string): Set<string> {
   return names;
 }
 
-export function productEnvReader(root: string): (name: string) => boolean {
+const CACHE_MS = 30_000;
+const CACHE_ROOTS = 16;
+const cache = new Map<string, { at: number; names: Set<string> }>();
+
+export function productEnvReader(root: string, now: () => number = Date.now): (name: string) => boolean {
   let names: Set<string> | undefined;
-  return name => (names ??= productEnvNames(root)).has(name.toUpperCase());
+  const scan = (): Set<string> => {
+    const hit = cache.get(root);
+    if (hit && now() - hit.at < CACHE_MS) return hit.names;
+    const fresh = productEnvNames(root);
+    cache.delete(root);
+    if (cache.size >= CACHE_ROOTS) cache.delete(cache.keys().next().value!);
+    cache.set(root, { at: now(), names: fresh });
+    return fresh;
+  };
+  return name => (names ??= scan()).has(name.toUpperCase());
 }

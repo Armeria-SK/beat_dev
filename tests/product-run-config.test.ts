@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { productEnvNames, productEnvReader } from '../src/tools/hooks/product-env.ts';
 import { productRunOf } from '../src/tools/hooks/product-run.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
+import { productEnvOk } from '../src/tools/hooks/allowlist-core.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { tempDir } from './helpers.ts';
 
@@ -85,4 +86,25 @@ test('self-run P1 1b: 製品のコードが読む env の名前を拾う（proce
   writeFileSync(join(root, 'node_modules', 'dep', 'i.js'), 'process.env.IN_DEP;\n');
   writeFileSync(join(root, '.git', 'h.js'), 'process.env.IN_GIT;\n');
   assert.deepEqual([...productEnvNames(root)].sort(), ['A_FOUR', 'A_ONE', 'A_THREE', 'A_TWO', 'B_ONE', 'B_TWO']);
+});
+
+test('再審査 P1: 製品のコードが読んでいても、道具・OS の動きを変える名前（*_PROXY・SSL_CERT_*・*_CA_BUNDLE・SystemRoot・windir・TEMP・TMP・COREPACK_*・CC・CXX・LD）は通さない', () => {
+  const word = (text: string) => ({ text, dynamic: false, glob: false, quoted: true, home: false, kind: 'plain' as const });
+  for (const name of ['HTTPS_PROXY', 'http_proxy', 'NO_PROXY', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'COREPACK_HOME', 'CC', 'CXX', 'LD']) {
+    assert.equal(productEnvOk(name, word('x'), () => true), false, name);
+  }
+  assert.equal(productEnvOk('ROOMS_DB', word('x.db'), () => true), true, 'a plain product name still passes');
+});
+
+test('再審査 P1: 製品のコードが読む名前の走査は、同じ製品なら 30 秒は使い回す（あとから足した名前は、その間は通さない）', t => {
+  const root = realish(join(tempDir(t), 'prod'));
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'a.ts'), 'process.env.FIRST_NAME;\n');
+  let clock = 1_000_000;
+  const now = () => clock;
+  assert.equal(productEnvReader(root, now)('FIRST_NAME'), true);
+  writeFileSync(join(root, 'src', 'b.ts'), 'process.env.LATER_NAME;\n');
+  assert.equal(productEnvReader(root, now)('LATER_NAME'), false, 'cached: not scanned again');
+  clock += 31_000;
+  assert.equal(productEnvReader(root, now)('LATER_NAME'), true, 'scanned again after 30 s');
 });
