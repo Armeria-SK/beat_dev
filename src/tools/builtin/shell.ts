@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -192,12 +192,32 @@ const gitRead = (st: StatementFacts): boolean => {
 const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0;
 
 // 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
-function rewritesOf(sts: readonly StatementFacts[]): string | undefined {
+const literal = (st: StatementFacts): boolean => st.words.every(w => !w.dynamic && !w.glob);
+// 作るのはフォルダだけと分かる mkdir（bash・cmd の mkdir・md、PowerShell の mkdir か New-Item -ItemType Directory）。値・リダイレクト・ほかの理由のあるものは外す
+function makesDirOnly(st: StatementFacts, program: string): boolean {
+  if (st.redirected || !literal(st) || st.words.some(w => /^-va/iu.test(w.text)) || !st.reasonKeys.every(key => key === 'list.ps_write')) return false;
+  if (program === 'mkdir' || program === 'md') return st.shell === 'powershell' || st.reasonKeys.length === 0;
+  if (program !== 'new-item') return false;
+  const at = st.words.findIndex(w => /^-itemtype$/iu.test(w.text));
+  return at > 0 && /^directory$/iu.test(st.words[at + 1]?.text ?? '');
+}
+
+// 実行の文のファイル（旗でない最初の語）が、判定役に見せるファイルに入っているか
+function shownRun(st: StatementFacts, shown: ReadonlySet<string>): boolean {
+  if (st.code.length > 0) return true;
+  const target = st.words.slice(1).find(w => !w.text.startsWith('-'));
+  if (!target || !literal(st) || st.cwd === null) return false;
+  return shown.has(resolve(st.cwd, target.text));
+}
+
+function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {
   const quiet = (st: StatementFacts): boolean => {
+    const name = st.program.toLowerCase().replace(/\.exe$/u, '');
+    if (makesDirOnly(st, name)) return true;
     if (st.redirected || st.writes.length > 0 || st.reasonKeys.some(key => REWRITE_KEYS.has(key) || key === 'list.write_dynamic')) return false;
     const program = st.program.toLowerCase().replace(/\.exe$/u, '');
     if (program === '') return st.words.length === 0 && st.code.length === 0 && st.reasonKeys.every(key => ENV_ONLY.has(key));
-    if (runsCode(st)) return st.inner === undefined || (st.inner !== null && st.inner.every(quiet));
+    if (runsCode(st)) return st.inner === undefined ? shownRun(st, shown) : st.inner !== null && st.inner.every(quiet);
     return st.reasonKeys.length === 0 && (READ_PROGRAMS.has(program) || (program === 'git' && gitRead(st)));
   };
   const moved = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]).find(st => st.reasonKeys.some(key => REWRITE_KEYS.has(key)));
@@ -208,7 +228,7 @@ function rewritesOf(sts: readonly StatementFacts[]): string | undefined {
   if (bad) return bad.program || 'statement';
   const run = sts[last]!;
   if (run.inner === null) return run.program;
-  return run.inner === undefined ? undefined : rewritesOf(run.inner);
+  return run.inner === undefined ? undefined : rewritesOf(run.inner, shown);
 }
 
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
@@ -296,9 +316,9 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
   const shown = judgeFilesOf({ scripts: [...verdict.scripts, ...(verdict.runnerFiles ?? []).filter(file => !verdict.scripts.includes(file))], inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
-    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown, rewrites: rewritesOf(verdict.statements) });
-  const peeked = verdict.scripts.map(file => peek(file, language));
-  const cards = [...peeked, ...shown.read.slice(verdict.scripts.length).map(file => peek(file.path, language))];
+    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown, rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
+  const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
+  const peeked = cards;
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
   const found = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx));
   const markers = [...found.strong, ...(peekTouch ? [peekTouch] : [])];

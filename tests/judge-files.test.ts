@@ -363,3 +363,55 @@ test('深い審査 3: node の先読みの旗（--env-file など）は持ち主
   await shownToJudge(selfRunRig(t, undefined, { 'vitest.config.ts': "export default { test: { setupFiles: ['./setup.ts'] } };\n", 'setup.ts': EVIL, 'x.test.js': '', 'package.json': '{}' }), 'npx vitest run x.test.js', 'collect.example');
   await ownerOnly(selfRunRig(t, undefined, { 'vitest.config.ts': 'export default { test: { setupFiles: process.env.S } };\n', 'x.test.js': '', 'package.json': '{}' }), 'npx vitest run x.test.js');
 });
+
+test('再々審査 2: 拡張子も斜線も無い実行の先（node ext・node .・python gen・bash setup）も見せる。見つからなければ持ち主。見せていない実行は書かない文に数えない', async t => {
+  const base = { 'run.js': "console.log('hello');\n", 'payload.js': EVIL };
+  for (const [command, files] of [['node ext; node run.js', { 'ext.js': "require('fs').copyFileSync('payload.js', 'run.js');\n" }], ['node .; node run.js', { 'package.json': '{"main":"boot.js"}', 'boot.js': "require('fs').copyFileSync('payload.js', 'run.js');\n" }],
+    ['python gen; node run.js', { gen: "import shutil\nshutil.copy('payload.js', 'run.js')\n" }], ['bash setup; node run.js', { setup: 'cp payload.js run.js\n' }]] as Array<[string, Record<string, string>]>) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, { ...base, ...files });
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.ok(r.judge.calls > 0 && r.judge.prompts.some(pr => pr.user.includes('payload.js')), `${command}: the judge is shown the first run's file`);
+  }
+  await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, base), 'python nothere; node run.js', 'judge_failed');
+  await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, base), 'X=ext; node $X; node run.js');
+});
+
+test('再々審査 3: package.json の jest・mocha の設定、pytest の ini の addopts・-p・plugins、道具に渡すパス・モジュールの旗は、見せるか持ち主', async t => {
+  await shownToJudge(selfRunRig(t, undefined, { 'package.json': '{"jest":{"setupFiles":["./evil.js"]}}', 'evil.js': EVIL, 'x.test.js': '' }), 'npx jest x.test.js', 'collect.example');
+  await ownerOnly(selfRunRig(t, undefined, { 'package.json': '{"jest":{"setupFiles":["evilpkg"]}}', 'x.test.js': '' }), 'npx jest x.test.js', 'judge_failed');
+  for (const ini of [['pytest.ini', '[pytest]\naddopts = -p evilplug\n'], ['pyproject.toml', '[tool.pytest.ini_options]\naddopts = "-p evilplug"\n'], ['setup.cfg', '[tool:pytest]\nplugins = evilplug\n']]) {
+    await ownerOnly(selfRunRig(t, undefined, { [ini[0]!]: ini[1]!, 'tests/test_x.py': 'def test_x():\n    assert True\n' }), 'pytest tests/test_x.py', 'judge_failed');
+  }
+  for (const command of ['npx jest --setupFiles=./evil.js x.test.js', 'npx vitest run --config=evil.config.ts x.test.js', 'pytest -c evil.ini tests/test_x.py', 'pytest -p evilplug tests/test_x.py']) {
+    await ownerOnly(selfRunRig(t, undefined, { 'evil.js': EVIL, 'x.test.js': '', 'package.json': '{}', 'tests/test_x.py': '' }), command, 'judge_failed');
+  }
+});
+
+test('再々審査: 持ち主のカードには、候補で見せたファイルも重ならずに並ぶ。印の付いた .pyd・.so はネイティブで持ち主', async t => {
+  const r = selfRunRig(t, undefined, { 'ext.js': "console.log('ext');\n", 'run.js': "console.log('run');\n" });
+  r.judge.answer = ASK;
+  await r.call('shell_run', { command: 'node ./ext; node run.js' }, chat(r));
+  const row = r.pending.list({ status: 'waiting' })[0]!;
+  const text = JSON.stringify(row);
+  assert.ok(text.includes("console.log('ext')"), 'ext.js is on the card');
+  assert.equal(text.split("console.log('run')").length - 1, 1, 'run.js is on the card once');
+  for (const name of ['helper.cp312-win_amd64.pyd', 'helper.cpython-312-x86_64-linux-gnu.so']) {
+    const n = selfRunRig(t, undefined, { 'run.py': 'import helper\n' });
+    writeFileSync(join(n.ws, name), Buffer.from([0x4d, 0x5a, 0x90]));
+    await ownerOnly(n, 'python run.py', 'judge_failed');
+  }
+});
+
+test('再々審査: フォルダを作るだけの mkdir は書かない文に数える（見せるファイルの親を作るなら持ち主のまま）。New-Item はフォルダのときだけ', async t => {
+  const files = { 'run.js': "console.log('hello');\n", 'lib/x.js': 'exports.a = 1;\n' };
+  const judged: Array<[string, 'bash' | 'powershell']> = [['mkdir -p out; node run.js', 'bash'], ...(PS ? [['mkdir out; node run.js', 'powershell'], ['New-Item -ItemType Directory -Path out -Force; node run.js', 'powershell']] as Array<[string, 'powershell']> : [])];
+  for (const [command, shell] of judged) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, command);
+  }
+  const owner: Array<[string, 'bash' | 'powershell']> = [['mkdir -p lib; node lib/x.js', 'bash'], ['mkdir $D; node run.js', 'bash'], ...(PS ? [['New-Item -Path run2.js -Value x; node run.js', 'powershell'], ['New-Item -ItemType File -Path out; node run.js', 'powershell']] as Array<[string, 'powershell']> : [])];
+  for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, files), command);
+});

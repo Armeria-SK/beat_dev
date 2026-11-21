@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { FILE_ROUND_TOKENS, FILE_ROUNDS_MAX, type JudgeFile } from './auto-approve.ts';
@@ -57,6 +57,12 @@ export const jsCandidates = (base: string): string[] => [...new Set([...JS_TRIES
 
 const isFile = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 
+// 印の付いた Python のネイティブの部品（helper.cp312-win_amd64.pyd・helper.cpython-312-x86_64-linux-gnu.so）
+function taggedNative(base: string): string[] {
+  const head = `${basename(base)}.`;
+  try { return readdirSync(dirname(base)).filter(name => name.startsWith(head) && /\.(?:pyd|so)$/iu.test(name)).map(name => join(dirname(base), name)); } catch { return []; }
+}
+
 // 文字のまま書かれた相対の import・require・Python の import（この PC にあるファイルだけ）
 export function relativeImports(text: string, fromDir: string, limit = Infinity, specs?: { count: number }): string[] {
   const out = new Set<string>();
@@ -80,7 +86,7 @@ export function relativeImports(text: string, fromDir: string, limit = Infinity,
       if (!fresh(`py:${name}`)) continue;
       const parts = name.replace(/^\./u, '').split('.');
       const base = resolve(fromDir, ...parts);
-      for (const found of [`${base}.py`, resolve(base, '__init__.py'), `${base}.pyd`, `${base}.so`].filter(isFile)) out.add(found);
+      for (const found of [`${base}.py`, resolve(base, '__init__.py'), `${base}.pyd`, `${base}.so`, ...taggedNative(base)].filter(isFile)) out.add(found);
     }
   }
   return [...out];
@@ -94,7 +100,14 @@ const writesInto = (write: string, file: string): boolean => isInside(write, fil
 
 // 返すのは、見せるファイル（とその読み）と、bind に入れる指紋。名前の出るスクリプトか import されるファイルが読めない・バイナリ・1MB 超なら problem
 export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; read: ReadFile[] } {
-  const named = [...new Set(input.scripts.flatMap(file => isFile(file) ? [file] : [file, ...jsCandidates(file).filter(found => found !== file)]))].map(readForJudge);
+  let bare: string | undefined;
+  const named = [...new Set(input.scripts.flatMap(file => {
+    if (isFile(file)) return [file];
+    const more = [...jsCandidates(file), join(file, '__main__.py')].filter(isFile);
+    if (more.length) return more;
+    if (statSync(file, { throwIfNoEntry: false })?.isDirectory() || !/\.[^\\/.]+$/u.test(file)) { bare ??= file; return []; }
+    return [file];
+  }))].map(readForJudge);
   const links: Array<[string, string]> = [];
   const seen = new Set(named.map(file => file.path));
   const imported: ReadFile[] = [];
@@ -121,6 +134,7 @@ export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; re
   for (const { code, cwd } of input.inline) follow(code, cwd, undefined);
   const read = [...named, ...imported];
   if (input.unshown !== undefined) return { fact: { problem: 'unshown', path: input.unshown }, read };
+  if (bare !== undefined) return { fact: { problem: 'unshown', path: bare }, read };
   if (outside !== undefined) return { fact: { problem: 'unshown', path: outside }, read };
   if (tooMany !== undefined) return { fact: { problem: 'too_many', path: tooMany }, read };
   const bad = read.find(file => file.problem !== undefined && file.problem !== 'missing');
