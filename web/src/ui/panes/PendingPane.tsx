@@ -25,6 +25,7 @@ function outcomeText(t: T, outcome: Outcome): string {
     case 'ran': return t('ui.pending.ran', time, outcome.exit);
     case 'failed': return t('ui.pending.failed', time, outcome.detail);
     case 'stale': return t('ui.pending.stale', time);
+    case 'closed': return t('ui.pending.closedByBeat', time);
     case 'rejected': return t('ui.pending.rejected', time, outcome.reason);
     case 'cancelled': return t('ui.pending.cancelled', time);
   }

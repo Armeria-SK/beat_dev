@@ -6,6 +6,7 @@ import { pendingText } from '../../shared/messages/pending.ts';
 import { CHECK_FAIL_LIMIT, CHECK_TEXT, checkSignal, productCheck, runProductCheck } from '../../projects/check-run.ts';
 import { liveList, ownedItems, runGate, type GateItemInput } from '../../projects/gate.ts';
 import { gateText } from '../../shared/messages/gate.ts';
+import { openPendingIds } from '../../tasks/pending-wake.ts';
 import { describeCron, validateCron } from '../../tasks/schedule.ts';
 import { TaskError, type Task, type TaskStore } from '../../tasks/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -194,12 +195,19 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
     if (ctx.task.control.outcome !== 'none') return { content: text.already };
     const taskId = ctx.task.id;
     const tasks = ctx.services?.tasks;
+    const own = tasks?.get(taskId);
+    const gateHeldIds = (): Set<number> => new Set(own?.project_id ? Object.values(ctx.services?.acceptance?.itemStates(own.project_id) ?? {}).flatMap(item => item.evidence.map(e => (e as { pending?: unknown }).pending).filter((id): id is number => typeof id === 'number')) : []);
+    const gateHeld = gateHeldIds();
+    const open = ctx.services?.db ? openPendingIds(ctx.services.db, taskId).filter(id => !gateHeld.has(id)) : [];
+    if (open.length) {
+      ctx.task.control = { outcome: 'await_pending', ids: open };
+      return { content: `${pendingText(language, 'await_pending', { ids: open.map(id => `#${id}`).join(', ') })} ${end}` };
+    }
     const children = tasks?.openChildren(taskId) ?? 0;
     if (children > 0) {
       ctx.task.control = { outcome: 'yield', reason: text.yieldReason(children) };
       return { content: `${text.childrenLeft(children)} ${end}` };
     }
-    const own = tasks?.get(taskId);
     const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id, ctx.place && ctx.project?.root ? { root: ctx.project.root, ceiling: ctx.place.ceiling } : undefined) : undefined;
     if (check === 'invalid') return { content: text.invalid, isError: true };
     const gate = own ? await runGate(ctx, own, input.items, language) : { kind: 'skip' as const };
@@ -224,13 +232,9 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
       tasks.event(taskId, 'check_passed', 'beat', null, ctx.runId);
       passed = text.passed(check.command);
     }
-    const waiting = ctx.services?.db ? (ctx.services.db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(ctx.task.id) as Array<{ id: number }>) : [];
     const running = own?.project_id ? (ctx.services?.background?.list({ projectId: own.project_id }) ?? []).filter(view => view.taskId === taskId && view.state === 'running') : [];
-    const suffix = [
-      waiting.length ? pendingText(language, 'task_waiting', { ids: waiting.map(row => `#${row.id}`).join(', ') }) : '',
-      running.length ? toolText(language, 'task.bg_running', { list: jobLines(running, language) }) : '',
-    ].filter(Boolean).join('\n');
-    ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
+    const suffix = running.length ? toolText(language, 'task.bg_running', { list: jobLines(running, language) }) : '';
+    ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true, held: [...gateHeldIds()] };
     const done = toolText(language, 'task.completed', { end });
     const items = gate.kind === 'pass' ? gate.text : '';
     const state = own?.project_id ? gateText(language, 'state_line') : '';

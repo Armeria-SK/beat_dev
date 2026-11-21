@@ -38,6 +38,7 @@ import { questionAdd, questionList } from './tools/builtin/questions.ts';
 import { askOwner } from './tools/builtin/ask.ts';
 import { deviationAdd } from './tools/builtin/deviations.ts';
 import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
+import { pendingWithdraw } from './tools/builtin/pending.ts';
 import { sdkConnect } from './mcp/connect.ts';
 import { McpManager, type McpConnect } from './mcp/manager.ts';
 import { NotifyChannels } from './notify/channels.ts';
@@ -91,8 +92,9 @@ import { pendingDecided, sweepPendingWaits, type PendingWakeDeps } from './tasks
 import { QuestionStore, type QuestionChange, type QuestionRow } from './questions/store.ts';
 import { Uploads } from './uploads/store.ts';
 import { PendingStore, type PendingChange, type PendingRow } from './pending/store.ts';
-import { pendingNote } from './pending/notes.ts';
-import { parentOf, replayAction } from './pending/replay.ts';
+import { closedEvent, pendingNote } from './pending/notes.ts';
+import { parentOf, replayAction, type ReplayDeps } from './pending/replay.ts';
+import { sweepStale } from './pending/sweep.ts';
 import { pendingText } from './shared/messages/pending.ts';
 import { notifyText } from './shared/messages/notify.ts';
 import { BLOCKING_QUESTION_KEY } from './shared/notification-list.ts';
@@ -109,7 +111,7 @@ export function builtinTools(): ToolDef[] {
     taskComplete, taskCheckpoint, questionAdd, askOwner, toolSearch,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun, shellOutput, shellStop,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
-    taskCreate, taskList, taskUpdate,
+    taskCreate, taskList, taskUpdate, pendingWithdraw,
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
     fileSearch, calculate, dateCalc,
@@ -136,6 +138,8 @@ export interface AppOptions {
   downloadNetwork?: DownloadNetwork;
   // 試験用: 子の担当（agent_run）の時間切れ（ミリ秒）。設定 tools.agent.timeoutSec の最小は 60 秒なので、試験だけがこれで縮める。書かなければ設定の値
   agentTimeoutMs?: number;
+  // 試験用: 承認待ちだけが残った実行が決めを待つ時間（ミリ秒）。書かなければ 4 分
+  pendingWaitMs?: number;
   judgeLimits?: JudgeLimitSet;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
@@ -308,8 +312,10 @@ export class App {
       notify: input => this.notifications.notify(input),
       browser: this.browser,
       background: this.background,
+      pendingSweep: taskId => sweepStale(taskId, this.#replayDeps()),
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
+      ...(options.pendingWaitMs !== undefined ? { pendingWaitMs: options.pendingWaitMs } : {}),
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
     });
     this.worker = new Worker({
@@ -336,6 +342,7 @@ export class App {
       }
       this.worker.poke();
     };
+    this.tasks.closePending = taskId => { this.pending.withdrawTask(taskId, pendingText('en', 'withdrawn_task_finished')); };
     this.tasks.onFinished = task => {
       if (!isScoutRun(task) && this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task);
       if (task.status === 'cancelled' && task.proposal !== null) void this.dropRejectedPrefix(task.id);
@@ -572,6 +579,8 @@ export class App {
         return;
       }
       if (!this.#pendingScopeWaits(scope.key)) this.notifications.settle('approval_needed', { dedupKey: scope.key });
+      const closed = closedEvent(row);
+      if (closed) { if (task) this.tasks.event(task.id, 'pending', 'beat', closed); return; }
       const note = pendingNote(row, view);
       if (!note) return;
       if (task) this.tasks.event(task.id, 'pending', 'owner', note.event);
@@ -603,12 +612,16 @@ export class App {
     try { pendingDecided(this.#wakeDeps(), change); } catch (error) { this.log(`[ERROR] Failed to wake the task of pending item #${change.id}: ${(error as Error).message}`); }
   }
 
-  replayPending(row: PendingRow): void {
-    void replayAction(row, {
+  #replayDeps(): ReplayDeps {
+    return {
       db: this.db, store: this.pending, registry: this.tools, config: () => this.config(), paths: this.paths, projects: this.projects,
       conversationExists: id => this.conversations.get(id) !== undefined, conversationTainted: id => this.conversations.everTainted(id), signal: this.#replayStop.signal, log: this.log,
       services: () => this.engine.toolServices(), places: this.places,
-    }).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
+    };
+  }
+
+  replayPending(row: PendingRow): void {
+    void replayAction(row, this.#replayDeps()).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
   }
 
   #backgroundOpen(owner: JobOwner): boolean {

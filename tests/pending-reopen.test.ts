@@ -43,13 +43,16 @@ async function setup(t: Parameters<typeof startApp>[0], agents = false) {
       if (agents) { c.tools.agent.enabled = true; c.tools.agent.inTasks = true; }
     },
   });
+  // P4 のあと done に残る待ちは、完了の門が積んだ項目のコマンド（keepPending）だけ。その形を作る
+  const keepDone = (id: string) => { s.app.tasks.finish(id, 'done', 'done', 'beat', undefined, undefined, { keepPending: true }); };
   const rows = (taskId: string) => s.app.db.prepare('SELECT id, status FROM pending_actions WHERE task_id = ? ORDER BY id').all(taskId) as Array<{ id: number; status: string }>;
   const finished = (id: number) => waitFor(() => !['waiting', 'running'].includes(s.app.pending.view(id)!.status), `pending #${id} finished`);
   const doneWithRow = async (text: string, title = 'Commit and finish') => {
     const id = s.app.tasks.create({ title, origin: 'user', actor: 'user', ownerRequest: true }).id;
     s.adapter().scripts = [call('fake_park', { text }), complete()];
     assert.equal(await s.app.worker.tick(), 'ran');
-    assert.equal(s.app.tasks.get(id)!.status, 'done');
+    assert.equal(s.app.tasks.get(id)!.waiting_kind, 'approval', 'P4: 待ちのある task_complete は承認待ち');
+    keepDone(id);
     const [row] = rows(id);
     assert.equal(row!.status, 'waiting');
     return { id, row: row!.id };
@@ -61,7 +64,7 @@ async function setup(t: Parameters<typeof startApp>[0], agents = false) {
   };
   const reopened = (id: string) => s.app.tasks.events(id).filter(e => e.kind === 'reopened');
   const deps = () => ({ db: s.app.db, tasks: s.app.tasks, pending: s.app.pending, now: () => clock.now, language: () => languageOf(s.app.config()), log: () => undefined });
-  return { ...s, clock, rows, doneWithRow, approve, reopened, deps };
+  return { ...s, clock, rows, keepDone, doneWithRow, approve, reopened, deps };
 }
 
 test('5-P2 承認した行が failed で終わると、done のタスクが実行待ちに戻り、経過に理由が残る。判定役の頼みは変わらず、知らせは増えない', async t => {
@@ -155,8 +158,9 @@ test('5-P2 done でないタスク（failed・cancelled・時刻つきの実行�
 test('5-P2 開き直したあと（ready）に同じ行の出来事がもう一度来ても、同じタスクの別の行が失敗しても、何もしない（開き直しは 1 回）', async t => {
   const s = await setup(t);
   const id = s.app.tasks.create({ title: 'Two', origin: 'user', actor: 'user' }).id;
-  s.adapter().scripts = [call('fake_park', { text: 'fail' }), call('fake_park', { text: 'fail' }), complete()];
+  s.adapter().scripts = [call('fake_park', { text: 'fail' }), call('fake_park', { text: 'exit1' }), complete()];
   assert.equal(await s.app.worker.tick(), 'ran');
+  s.keepDone(id);
   const [a, b] = s.rows(id);
   await s.approve(a!.id);
   const change = { id: a!.id, status: 'failed' as const, projectId: null, conversationId: s.app.tasks.get(id)!.conversation_id!, taskId: id };
@@ -193,6 +197,7 @@ test('5-P2 予定の実行（parent_id あり）は、同じ予定の別の実�
   const first = s.app.tasks.spawnNow(template)!.id;
   s.adapter().scripts = [call('fake_park', { text: 'fail' }), complete()];
   assert.equal(await s.app.worker.tick(), 'ran');
+  s.keepDone(first);
   assert.equal(s.app.tasks.get(first)!.status, 'done');
   const [row] = s.rows(first);
   const second = s.app.tasks.spawnNow(template)!.id;
@@ -205,6 +210,7 @@ test('5-P2 予定の実行（parent_id あり）は、同じ予定の別の実�
   assert.equal(Number(open.n), 1);
   s.adapter().scripts = [call('fake_park', { text: 'fail' }), complete()];
   assert.equal(await s.app.worker.tick(), 'ran');
+  s.keepDone(second);
   assert.equal(s.app.tasks.get(second)!.status, 'done');
   const [later] = s.rows(second);
   await s.approve(later!.id);
@@ -219,6 +225,7 @@ test('5-P2 子の担当（agent_run）が積んだ行が失敗すると、親の
   assert.equal(await s.app.worker.tick(), 'ran');
   const parked = s.app.db.prepare('SELECT id, run_kind, task_id FROM pending_actions').all() as Array<{ id: number; run_kind: string; task_id: string }>;
   assert.deepEqual(parked.map(r => [r.run_kind, r.task_id]), [['agent', id]]);
+  s.keepDone(id);
   assert.equal(s.app.tasks.get(id)!.status, 'done');
   await s.approve(parked[0]!.id);
   assert.equal(s.app.tasks.get(id)!.status, 'ready');

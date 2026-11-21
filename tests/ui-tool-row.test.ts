@@ -173,6 +173,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   task_create: [{ title: 'Weekly report' }, 'Create task', 'Weekly report'],
   task_list: [{}, 'List tasks', 'open tasks'],
   task_update: [{ id: 'a1b2c3', status: 'done' }, 'Update task', '#a1b2c3'],
+  pending_withdraw: [{ id: 12 }, 'Withdraw pending call', '#12'],
   memory_update: [{ id: 'u7', content: 'Likes green tea' }, 'Update memory', 'Likes green tea'],
   memory_forget: [{ id: 'u7', reason: 'outdated' }, 'Forget memory', '#u7'],
   memory_search: [{ query: 'tea' }, 'Search', 'tea'],

@@ -22,7 +22,7 @@ export function openPendingIds(db: DatabaseSync, taskId: string): number[] {
 
 export function decidedDuring(db: DatabaseSync, taskId: string, runId: string): { id: number; status: string } | undefined {
   return db.prepare(`SELECT p.id, p.status FROM pending_actions p JOIN engine_runs r ON r.id = ?
-    WHERE p.task_id = ? AND p.status NOT IN ('waiting', 'running') AND MAX(COALESCE(p.decided_at, 0), COALESCE(p.ran_at, 0)) >= r.started_at
+    WHERE p.task_id = ? AND p.status NOT IN ('waiting', 'running', 'cancelled') AND MAX(COALESCE(p.decided_at, 0), COALESCE(p.ran_at, 0)) >= r.started_at
     ORDER BY p.id LIMIT 1`).get(runId, taskId) as { id: number; status: string } | undefined;
 }
 

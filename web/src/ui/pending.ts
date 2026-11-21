@@ -119,6 +119,7 @@ export type Outcome =
   | { kind: 'ran'; at: number; exit: number | null }
   | { kind: 'failed'; at: number; detail: string }
   | { kind: 'stale'; at: number }
+  | { kind: 'closed'; at: number }
   | { kind: 'rejected'; at: number; reason: string | null }
   | { kind: 'cancelled'; at: number };
 
@@ -131,7 +132,7 @@ export function outcomeOf(row: PendingAction): Outcome | null {
     case 'running': return { kind: 'running', at };
     case 'ran': return { kind: 'ran', at: row.ran_at ?? at, exit: row.exit_code };
     case 'failed': return { kind: 'failed', at, detail: lastLine(row.output_preview) };
-    case 'stale': return { kind: 'stale', at };
+    case 'stale': return row.reject_reason ? { kind: 'closed', at } : { kind: 'stale', at };
     case 'rejected': return { kind: 'rejected', at, reason: row.reject_reason?.trim() || null };
     case 'cancelled': return { kind: 'cancelled', at };
   }

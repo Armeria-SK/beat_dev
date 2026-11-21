@@ -85,86 +85,113 @@ async function hookRefusal(tool: ToolDef, args: unknown, ctx: ToolContext, facts
   return undefined;
 }
 
+export interface PreparedPending {
+  tool: ToolDef; args: unknown; ctx: ToolContext; state: PendingState; signal: AbortSignal; productRoots: string[];
+  conversationTainted: () => boolean; recheck: () => Promise<PreCheck | undefined>; cwd: string;
+}
+
+type Prepared = { early: { status: ReplayOutcome['status']; output: string } } | { ready: PreparedPending };
+
+const early = (status: ReplayOutcome['status'], output: string): Prepared => ({ early: { status, output } });
+
+// 承認された行を動かす前の、動かさない確かめと道具の場の組み立て（replayAction と、古くなった行の見回り sweep.ts で同じものを使う）
+export async function preparePending(row: PendingRow, deps: ReplayDeps): Promise<Prepared> {
+  const config = deps.config();
+  if (!deps.conversationExists(row.conversation_id)) return early('cancelled', pendingText('en', 'cancelled_conversation'));
+  let project: NonNullable<ToolContext['project']> & { root: string } | undefined;
+  let place: RunPlace | undefined;
+  if (row.project_id) {
+    const found = deps.projects?.get(row.project_id);
+    if (!found || found.archived_at !== null) return early('cancelled', pendingText('en', 'cancelled_project'));
+    if (folderMissing(found)) return early('failed', pendingText('en', 'project_missing'));
+    project = { id: found.id, root: found.root };
+    const placeRoot = deps.places?.placeRoot();
+    const parkedInCopy = placeRoot !== undefined && row.cwd !== null && isInside(placeRoot, row.cwd);
+    const copy = row.task_id ? deps.places?.rowOf(row.task_id) : undefined;
+    if (parkedInCopy || copy?.state === 'active') {
+      if (!copy || copy.state !== 'active' || !copy.path || !row.cwd || !isInside(copy.path, row.cwd) || !statSync(copy.path, { throwIfNoEntry: false })?.isDirectory()) return early('stale', pendingText('en', 'worktree_gone'));
+      project = { id: found.id, root: copy.path, productRoot: found.root, worktree: { branch: copy.branch } };
+      place = { kind: 'worktree', id: copy.id, productRoot: found.root, branch: copy.branch, base: copy.base, ceiling: dirname(dirname(copy.path)) };
+    }
+  }
+  if (!row.cwd || !statSync(row.cwd, { throwIfNoEntry: false })?.isDirectory()) return early('failed', pendingText('en', 'cwd_missing', { path: row.cwd ?? '' }));
+  const state = JSON.parse(row.state ?? '{}') as PendingState;
+  if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return early('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
+  const kind = (RUN_KINDS as readonly string[]).includes(row.run_kind) ? row.run_kind as RunKind : 'task';
+  const tool = deps.registry.get(row.tool);
+  if (!tool || tool.replayable === false || !tool.allowedIn.includes(kind)) return early('failed', pendingText('en', 'tool_missing', { tool: row.tool }));
+  if (effectivePolicy(tool.name, config, config) === 'block') return early('failed', pendingText('en', 'tool_blocked', { tool: row.tool }));
+  if (isBrowserTool(tool.name) && !config.tools.browser.enabled) return early('failed', pendingText('en', 'browser_off'));
+  let args: unknown;
+  try { args = JSON.parse(row.input); } catch { return early('failed', pendingText('en', 'bad_input')); }
+  if (!Value.Check(tool.input, args)) return early('failed', pendingText('en', 'bad_input'));
+
+  const productRoots = [...(deps.projects?.list() ?? []), ...(deps.projects?.list({ archived: true }) ?? [])].map(p => p.root);
+  const policy = buildPolicy(config, deps.paths, project, productRoots);
+  if (placePath(resolve(row.cwd), policy).kind !== 'inside') return early('failed', pendingText('en', 'cwd_outside', { path: row.cwd }));
+  const workspace = state.workspace ?? row.cwd;
+  if (placePath(resolve(workspace), policy).kind !== 'inside') return early('failed', pendingText('en', 'cwd_outside', { path: workspace }));
+  if (!statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) return early('failed', pendingText('en', 'cwd_missing', { path: workspace }));
+  const created = new Map((state.created ?? []).map(c => [c.path, c]));
+  const stillCreated = (path: string): boolean => {
+    const mark = created.get(path);
+    if (!mark || identityOf(path) !== mark.id) return false;
+    if (mark.inside === undefined) return true;
+    const now = boundFacts([path])[0]!;
+    return mark.more !== true && now.more !== true && now.hash === mark.inside;
+  };
+  const timeout = AbortSignal.timeout((config.tools.shell.maxTimeoutSec + EXTRA_SECONDS) * 1000);
+  const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
+  const runId = randomUUID();
+  const conversationTainted = (): boolean => {
+    if (row.tainted === 1) return true;
+    try { return deps.conversationTainted?.(row.conversation_id) ?? false; } catch { return true; }
+  };
+  const parent = parentOf(deps.db, row);
+  const ctx: ToolContext = {
+    runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace,
+    home: defaultWorkspace(buildPolicy(config, deps.paths, undefined, productRoots), deps.paths),
+    ...(project ? { project } : {}),
+    ...(place ? { place } : {}),
+    taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
+    conversationTainted,
+    isCreated: stillCreated,
+    ...(row.task_id ? { task: { id: row.task_id, control: { outcome: 'none' as const } } } : {}),
+    ...(parent ? { parent } : {}),
+    log: deps.log ?? (() => undefined),
+    services: deps.services?.(),
+    fileReads: fileReadLog(new KV(deps.db), row.conversation_id),
+  };
+
+  const recheck = async (): Promise<PreCheck | undefined> => {
+    if (!tool.preCheck) return undefined;
+    try {
+      const checked = tool.preCheck(args as never, ctx);
+      return checked instanceof Promise ? await checked : checked;
+    } catch (error) { return { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
+  };
+  return { ready: { tool, args, ctx, state, signal, productRoots, conversationTainted, recheck, cwd: row.cwd } };
+}
+
+export function sentChanges(state: PendingState, again: PreCheck | undefined): string[] {
+  if (!state.sent?.length) return [];
+  const now = boundFacts(state.sent.map(f => f.path));
+  return state.sent.flatMap((was, i) => {
+    const is = now[i]!;
+    const mark = (fact: typeof was): string => (fact.exists ? `${fact.size ?? fact.type ?? ''} ${(fact.hash ?? '').slice(0, 12)}`.trim() : 'none');
+    return boundChanged(was, is, again?.gitStaging === true) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
+  });
+}
+
 export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<ReplayOutcome> {
   const end = (status: ReplayOutcome['status'], output: string | undefined, extra: Partial<ReplayOutcome> = {}, result: { exitCode?: number | undefined; fullRef?: string | undefined } = {}): ReplayOutcome => {
     deps.store.finish(row.id, { status, output, ...result, ...(extra.fetched !== undefined ? { fetched: extra.fetched } : {}) });
     return { status, ...(output !== undefined ? { output } : {}), ...extra };
   };
   try {
-    const config = deps.config();
-    if (!deps.conversationExists(row.conversation_id)) return end('cancelled', pendingText('en', 'cancelled_conversation'));
-    let project: NonNullable<ToolContext['project']> & { root: string } | undefined;
-    let place: RunPlace | undefined;
-    if (row.project_id) {
-      const found = deps.projects?.get(row.project_id);
-      if (!found || found.archived_at !== null) return end('cancelled', pendingText('en', 'cancelled_project'));
-      if (folderMissing(found)) return end('failed', pendingText('en', 'project_missing'));
-      project = { id: found.id, root: found.root };
-      const placeRoot = deps.places?.placeRoot();
-      const parkedInCopy = placeRoot !== undefined && row.cwd !== null && isInside(placeRoot, row.cwd);
-      const copy = row.task_id ? deps.places?.rowOf(row.task_id) : undefined;
-      if (parkedInCopy || copy?.state === 'active') {
-        if (!copy || copy.state !== 'active' || !copy.path || !row.cwd || !isInside(copy.path, row.cwd) || !statSync(copy.path, { throwIfNoEntry: false })?.isDirectory()) return end('stale', pendingText('en', 'worktree_gone'));
-        project = { id: found.id, root: copy.path, productRoot: found.root, worktree: { branch: copy.branch } };
-        place = { kind: 'worktree', id: copy.id, productRoot: found.root, branch: copy.branch, base: copy.base, ceiling: dirname(dirname(copy.path)) };
-      }
-    }
-    if (!row.cwd || !statSync(row.cwd, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: row.cwd ?? '' }));
-    const state = JSON.parse(row.state ?? '{}') as PendingState;
-    if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
-    const kind = (RUN_KINDS as readonly string[]).includes(row.run_kind) ? row.run_kind as RunKind : 'task';
-    const tool = deps.registry.get(row.tool);
-    if (!tool || tool.replayable === false || !tool.allowedIn.includes(kind)) return end('failed', pendingText('en', 'tool_missing', { tool: row.tool }));
-    if (effectivePolicy(tool.name, config, config) === 'block') return end('failed', pendingText('en', 'tool_blocked', { tool: row.tool }));
-    if (isBrowserTool(tool.name) && !config.tools.browser.enabled) return end('failed', pendingText('en', 'browser_off'));
-    let args: unknown;
-    try { args = JSON.parse(row.input); } catch { return end('failed', pendingText('en', 'bad_input')); }
-    if (!Value.Check(tool.input, args)) return end('failed', pendingText('en', 'bad_input'));
-
-    const productRoots = [...(deps.projects?.list() ?? []), ...(deps.projects?.list({ archived: true }) ?? [])].map(p => p.root);
-    const policy = buildPolicy(config, deps.paths, project, productRoots);
-    if (placePath(resolve(row.cwd), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: row.cwd }));
-    const workspace = state.workspace ?? row.cwd;
-    if (placePath(resolve(workspace), policy).kind !== 'inside') return end('failed', pendingText('en', 'cwd_outside', { path: workspace }));
-    if (!statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) return end('failed', pendingText('en', 'cwd_missing', { path: workspace }));
-    const created = new Map((state.created ?? []).map(c => [c.path, c]));
-    const stillCreated = (path: string): boolean => {
-      const mark = created.get(path);
-      if (!mark || identityOf(path) !== mark.id) return false;
-      if (mark.inside === undefined) return true;
-      const now = boundFacts([path])[0]!;
-      return mark.more !== true && now.more !== true && now.hash === mark.inside;
-    };
-    const timeout = AbortSignal.timeout((config.tools.shell.maxTimeoutSec + EXTRA_SECONDS) * 1000);
-    const signal = deps.signal ? AbortSignal.any([timeout, deps.signal]) : timeout;
-    const runId = randomUUID();
-    const conversationTainted = (): boolean => {
-      if (row.tainted === 1) return true;
-      try { return deps.conversationTainted?.(row.conversation_id) ?? false; } catch { return true; }
-    };
-    const parent = parentOf(deps.db, row);
-    const ctx: ToolContext = {
-      runId, conversationId: row.conversation_id, kind, signal, config, paths: deps.paths, policy, workspace,
-      home: defaultWorkspace(buildPolicy(config, deps.paths, undefined, productRoots), deps.paths),
-      ...(project ? { project } : {}),
-      ...(place ? { place } : {}),
-      taint: row.tainted === 1 ? { tainted: true, sources: [pendingText('en', 'taint_parked')] } : { tainted: false, sources: [] },
-      conversationTainted,
-      isCreated: stillCreated,
-      ...(row.task_id ? { task: { id: row.task_id, control: { outcome: 'none' as const } } } : {}),
-      ...(parent ? { parent } : {}),
-      log: deps.log ?? (() => undefined),
-      services: deps.services?.(),
-      fileReads: fileReadLog(new KV(deps.db), row.conversation_id),
-    };
-
-    const recheck = async (): Promise<PreCheck | undefined> => {
-      if (!tool.preCheck) return undefined;
-      try {
-        const checked = tool.preCheck(args as never, ctx);
-        return checked instanceof Promise ? await checked : checked;
-      } catch (error) { return { decision: 'deny', reasons: [pendingText('en', 'precheck_failed', { detail: (error as Error).message })] }; }
-    };
+    const prepared = await preparePending(row, deps);
+    if ('early' in prepared) return end(prepared.early.status, prepared.early.output);
+    const { tool, args, ctx, state, signal, productRoots, conversationTainted, recheck, cwd } = prepared.ready;
     const forHook = await recheck();
     if (forHook?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: forHook.reasons.join('\n- ') }));
     const refused = await hookRefusal(tool, args, ctx, { check: forHook, tainted: conversationTainted(), productRoots });
@@ -172,17 +199,17 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     let changes: Change[] = [];
     if (row.kind === 'delete') {
       const before = state.snapshot ?? { git: null, paths: [] };
-      changes = compareSnapshot(before, await takeSnapshot(row.cwd, before.paths.map(p => p.path), deps.paths.data));
+      changes = compareSnapshot(before, await takeSnapshot(cwd, before.paths.map(p => p.path), deps.paths.data));
     }
     const pushedNow = state.pushes?.length ? (await pushFacts(state.pushes, deps.paths.data)).fingerprint : undefined;
     const again = await recheck();
     if (again?.decision === 'deny') return end('failed', pendingText('en', 'denied', { reasons: again.reasons.join('\n- ') }));
-    if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(row.cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
+    if (again?.cwd !== undefined && resolve(again.cwd) !== resolve(cwd)) return end('stale', pendingText('en', 'changed_cwd', { path: again.cwd }));
 
     const mask = (text: string): string => (tool.redact ? tool.redact(text) : text);
     const outboundNow = outboundOfCall(tool, again, 'en');
     if (outboundNow?.kind === 'deny') return end('failed', pendingText('en', 'denied', { reasons: outboundNow.reason }));
-    if (state.cwdReal !== undefined && realCwd(row.cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: row.cwd }));
+    if (state.cwdReal !== undefined && realCwd(cwd) !== state.cwdReal) return end('stale', pendingText('en', 'changed_cwd', { path: cwd }));
     if ((again?.bind ?? null) !== row.bind) return end('stale', pendingText('en', 'changed_bind'));
     if (again) {
       const fresh = newChecks(state.recheck, again, mask);
@@ -197,19 +224,12 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       if (now !== before) return end('stale', pendingText('en', 'changed_target', { before, now }));
     }
     if (state.destination !== undefined) {
-      const now = destinationFacts(row.cwd, state.places ?? []);
+      const now = destinationFacts(cwd, state.places ?? []);
       if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
     }
     if (state.filesMore) return end('stale', pendingText('en', 'files_unbound'));
-    if (state.sent?.length) {
-      const now = boundFacts(state.sent.map(f => f.path));
-      const moved = state.sent.flatMap((was, i) => {
-        const is = now[i]!;
-        const mark = (fact: typeof was): string => (fact.exists ? `${fact.size ?? fact.type ?? ''} ${(fact.hash ?? '').slice(0, 12)}`.trim() : 'none');
-        return boundChanged(was, is, again?.gitStaging === true) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
-      });
-      if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
-    }
+    const moved = sentChanges(state, again);
+    if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
     if (changes.length) {
       const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
       return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });

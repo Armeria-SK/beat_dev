@@ -149,6 +149,8 @@ export function cleanReason(text: string | undefined): string | null {
 
 const unique = (items: readonly string[]): string[] => [...new Set(items)].sort();
 
+export const closedByBeat = (row: Pick<PendingRow, 'status' | 'reject_reason'>): boolean => row.status === 'stale' && row.reject_reason !== null;
+
 // J-5: the row offers "don't ask again in this product" only when a code-built shape was stored at park time, the run had a product, and it is still waiting.
 // Whether the run had read outside text does not matter (AP-1, Q1): a rule applies the same either way
 export function rememberable(row: Pick<PendingRow, 'project_id' | 'status' | 'tool' | 'run_kind'>, state: Pick<PendingState, 'rule' | 'held'>): boolean {
@@ -375,6 +377,11 @@ export class PendingStore {
     if (!tool) throw new PendingError('unknown_tool', { tool: input.tool });
     if (tool.replayable === false) throw new PendingError('not_replayable', { tool: input.tool });
     if (tool.preCheck && !input.check) throw new PendingError('check_required', { tool: input.tool });
+    if (input.taskId) {
+      const same = this.#db.prepare(`SELECT * FROM pending_actions WHERE task_id = ? AND status = 'waiting' AND tool = ? AND input = ? AND cwd = ? AND bind IS ? ORDER BY id LIMIT 1`)
+        .get(input.taskId, input.tool, JSON.stringify(input.input), input.cwd, input.bind ?? input.check?.bind ?? null) as PendingRow | undefined;
+      if (same) return this.#view(same);
+    }
     const toolMask = (text: string): string => (tool.redact ? tool.redact(text) : text);
     const heldNow = this.#held(tool);
     const { title, shown, raw, parts } = render(tool, input.input, heldNow.map(h => h.value).filter(v => v.trim().length >= HELD_MIN));
@@ -578,6 +585,33 @@ export class PendingStore {
       }
     }
     return count;
+  }
+
+  withdraw(id: number, reason: string): boolean {
+    const row = this.row(id);
+    if (!row || row.status !== 'waiting') return false;
+    const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
+      .run(cleanReason(reason), this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
+    if (Number(changed.changes) !== 1) return false;
+    this.#changed(this.row(id)!);
+    return true;
+  }
+
+  closeStale(id: number, reason: string): boolean {
+    const row = this.row(id);
+    if (!row || row.status !== 'waiting') return false;
+    const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'stale', output_preview = ?, reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
+      .run(outputTail(reason), cleanReason(reason) ?? 'stale', this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
+    if (Number(changed.changes) !== 1) return false;
+    this.#changed(this.row(id)!);
+    return true;
+  }
+
+  withdrawTask(taskId: string, reason: string): number {
+    const rows = this.#db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(taskId) as Array<{ id: number }>;
+    return rows.filter(row => this.withdraw(Number(row.id), reason)).length;
   }
 
   closeInterrupted(): number {

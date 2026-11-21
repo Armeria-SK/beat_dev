@@ -257,6 +257,7 @@ const EN_TASK_HOW = [
   '- To leave a record of your progress at a milestone, call task_checkpoint (what you tried, the result, the next step); beat continues in a new run right away. If something has to be checked later, create a task for that time with task_create (when), then end this run with task_complete (it waits until the tasks you created finish) or task_checkpoint. While tasks you created are open, this task runs again only after they finish',
   '- If something is unclear, record it with question_add and keep going with the option you assume. Set blocking only when no assumption is safe',
   '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
+  '- While a call of this task waits in Pending, task_complete does not finish the task: the task waits for the owner to decide, then continues. Withdraw a waiting call you no longer need with pending_withdraw',
   "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
 ];
 const EN_REVIEW_POLICY = [

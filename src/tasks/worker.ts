@@ -141,6 +141,7 @@ const TASK_TEXT: Record<Language, TaskText> = {
       '- To leave a record of your progress at a milestone, call task_checkpoint (what you tried, the result, the next step); beat continues in a new run right away. If something has to be checked later, create a task for that time with task_create (when), then end this run with task_complete (it waits until the tasks you created finish) or task_checkpoint. While tasks you created are open, this task runs again only after they finish',
       '- If something is unclear, record it with question_add and keep going with the option you assume. Set blocking only when no assumption is safe',
       '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
+      '- While a call of this task waits in Pending, task_complete does not finish the task: the task waits for the owner to decide, then continues. Withdraw a waiting call you no longer need with pending_withdraw',
       "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
     ],
     repliedOnly: '- The previous run ended with a reply only, without task_complete or task_checkpoint. A run that ends that way counts as no progress, and the task is stopped after a few of them in a row',
@@ -1201,7 +1202,7 @@ export class Worker {
       return;
     }
     // 割り込みは、やり直しと同じに数える（区切りの数を消しも増やしもしない）
-    if (this.#d.engine.wasPreempted(runId) && control.outcome !== 'complete' && control.outcome !== 'failed') {
+    if (this.#d.engine.wasPreempted(runId) && control.outcome !== 'complete' && control.outcome !== 'failed' && control.outcome !== 'await_pending') {
       tasks.setReady(task.id, { runAt: now + 2 * 60_000, reason: taskText(language, 'reason.preempted') });
       return;
     }
@@ -1212,12 +1213,19 @@ export class Worker {
     const onlyWaits = (): boolean => tasks.openChildren(task.id) > 0 && !createdChild();
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
+      const late = openPendingIds(this.#d.db, task.id).filter(id => !(control.held ?? []).includes(id));
+      if (late.length) {
+        this.#d.kv.delete(splitKey(task.id));
+        tasks.update(task.id, { appendNote: control.summary }, 'beat', runId);
+        tasks.setWaiting(task.id, 'approval', late.map(id => `#${id}`).join(', '), runId);
+        return;
+      }
       if (answered) {
         tasks.update(task.id, { appendNote: control.summary }, 'beat', runId);
         tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.answered') });
         return;
       }
-      tasks.finish(task.id, 'done', control.summary, 'beat', runId);
+      tasks.finish(task.id, 'done', control.summary, 'beat', runId, undefined, { keepPending: true });
       if (itemSummary(this.#d.db, task)?.remaining.length) tasks.setCheckState(task.id, 'awaiting');
       if (control.notify) notifications.notify({ kind: 'task_done', title: taskText(language, 'notify.task_done', { title: task.title }), body: control.summary, link, projectId });
       return;
@@ -1247,6 +1255,18 @@ export class Worker {
     }
     if (control.outcome === 'question') {
       tasks.setWaiting(task.id, 'question', control.question, runId);
+      return;
+    }
+    if (control.outcome === 'await_pending') {
+      this.#d.kv.delete(idleKey);
+      this.#d.kv.delete(splitKey(task.id));
+      const open = openPendingIds(this.#d.db, task.id);
+      if (!open.length) {
+        const decided = decidedDuring(this.#d.db, task.id, runId);
+        tasks.setReady(task.id, { runAt: now, reason: decided ? taskText(language, 'reason.pending_decided', { id: decided.id, status: decided.status }) : taskText(language, 'reason.pending_closed') });
+        return;
+      }
+      tasks.setWaiting(task.id, 'approval', open.map(id => `#${id}`).join(', '), runId);
       return;
     }
     if (control.outcome === 'checkpoint') {

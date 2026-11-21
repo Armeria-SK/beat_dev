@@ -25,6 +25,7 @@ import type { AcceptanceStore } from '../projects/acceptance.ts';
 import type { ProjectStore } from '../projects/store.ts';
 import type { Mesh } from '../mesh/index.ts';
 import type { QuestionStore } from '../questions/store.ts';
+import type { PendingStore } from '../pending/store.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -147,6 +148,7 @@ export interface ToolContext {
     // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
     browser?: BrowserSession | undefined;
     background?: BackgroundJobs | undefined;
+    pending?: Pick<PendingStore, 'row' | 'withdraw'> | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。
@@ -193,11 +195,12 @@ export interface AgentRunInput { task: string; tools?: string[] | undefined; tit
 
 export type TaskControl =
   | { outcome: 'none' }
-  | { outcome: 'complete'; summary: string; notify: boolean }
+  | { outcome: 'complete'; summary: string; notify: boolean; held?: number[] }
   | { outcome: 'checkpoint'; note: string; nextAction: string }
   | { outcome: 'question'; question: string }
   | { outcome: 'yield'; reason: string }
-  | { outcome: 'failed'; reason: string };
+  | { outcome: 'failed'; reason: string }
+  | { outcome: 'await_pending'; ids: number[] };
 
 // 説明を変える実行の場（beat 8-6b: 製品が Research and pre-fix か）
 export interface DescribeScope { fixProduct?: boolean }

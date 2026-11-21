@@ -71,6 +71,7 @@ test('ui/pending: 決めたものの文は「実行した」を実行のあと�
   assert.deepEqual(outcomeOf(row({ status: 'ran', exit_code: null, decided_at: 10, ran_at: null })), { kind: 'ran', at: 10, exit: null });
   assert.deepEqual(outcomeOf(row({ status: 'failed', decided_at: 10, output_preview: 'line 1\nnot allowed now\n' })), { kind: 'failed', at: 10, detail: 'not allowed now' });
   assert.deepEqual(outcomeOf(row({ status: 'stale', decided_at: 10 })), { kind: 'stale', at: 10 });
+  assert.deepEqual(outcomeOf(row({ status: 'stale', decided_at: 10, reject_reason: 'changed' })), { kind: 'closed', at: 10 }, 'beat が閉じた行は承認と言わない');
   assert.deepEqual(outcomeOf(row({ status: 'rejected', decided_at: 10, reject_reason: 'leave the cache' })), { kind: 'rejected', at: 10, reason: 'leave the cache' });
   assert.deepEqual(outcomeOf(row({ status: 'rejected', decided_at: 10, reject_reason: null })), { kind: 'rejected', at: 10, reason: null });
   assert.deepEqual(outcomeOf(row({ status: 'cancelled', decided_at: null, created_at: 7 })), { kind: 'cancelled', at: 7 });
