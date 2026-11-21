@@ -9,8 +9,8 @@ interface Case { name: string; input: { command: string; background?: boolean; t
 export const TRIAL_CASES: readonly Case[] = [
   { name: '#46 probe', input: { command: 'node --disable-warning=ExperimentalWarning .tmp/probe.ts' }, want: 'step4' },
   { name: '#48 e2e', input: { command: 'node --disable-warning=ExperimentalWarning scripts/e2e.ts 2>&1 | Select-Object -Last 60' }, want: 'judge', ps: true },
-  { name: '#50 start (background)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', background: true }, want: 'judge', ps: true },
-  { name: '#51 start (6 s)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', timeoutSec: 6 }, want: 'judge', ps: true },
+  { name: '#50 start (background)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', background: true }, want: 'step4', ps: true },
+  { name: '#51 start (6 s)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', timeoutSec: 6 }, want: 'step4', ps: true },
   { name: 'v1 #43 cli', input: { command: 'npx tsx src/cli.ts samples/sample.csv' }, want: 'judge' },
   { name: 'v1 #44 cli --month', input: { command: 'npx tsx src/cli.ts samples/sample.csv --month 2026-11' }, want: 'judge' },
   { name: 'strong mark: POST to beat', input: { command: 'node scripts/poke.ts' }, want: 'judge' },
@@ -38,4 +38,20 @@ test('P0 物差し: 外の文を読んだ実行でも、7 つの行き先は同�
     if (a.route !== b.route) diff.push(`${c.name}: ${a.route} -> ${b.route} (${b.detail.slice(0, 120)})`);
   }
   assert.deepEqual(diff, []);
+});
+
+test('P1 V8: 道具の読む env・コードの読まない名前・決まっていない node の旗は、順 4 にならず判定役へ', async t => {
+  const r = selfRunRig(t);
+  const cases = [
+    'node --watch scripts/e2e.ts', 'node --inspect scripts/e2e.ts', 'node --require ./scripts/e2e.ts .tmp/probe.ts',
+    ...(PS ? ["$env:npm_config_userconfig='x'; npm start", "$env:BROWSER='x'; npm start", "$env:COR_PROFILER='x'; npm start", "$env:NODE_OPTIONS='--require ./x.js'; npm start",
+      "$env:LUA_INIT='x'; npm start", "$env:KUBECONFIG='x'; npm start", "$env:OTHER_DB='x.db'; npm start", "$env:PORT='3999'; npm start"] : []),
+  ];
+  const got: string[] = [];
+  for (const command of cases) {
+    const { route, pre } = await r.routeOf({ command });
+    const want = command.startsWith("$env:PORT='3999'") ? 'step4' : 'judge';
+    if (route !== want) got.push(`${command}: ${route} (want ${want}) keys=${JSON.stringify(pre.reasonKeys)}`);
+  }
+  assert.deepEqual(got, []);
 });

@@ -934,4 +934,23 @@ test('self-run P1 1a: node の決まった旗（--disable-warning=名前・--no-
     assert.notEqual(levelOf(c), 'allow', c);
   }
 });
-
+
+test('self-run P1 1b: $env:名前 = 引用した文字 は、通してよい名前か製品のコードが読む名前（道具の頭で始まらない）なら一覧で許す。それ以外は今までどおり list.env', () => {
+  const reads = (...names: string[]) => ({ productEnv: (name: string) => names.includes(name.toUpperCase()) });
+  for (const c of ["$env:PORT='3999'", '$env:PORT="3999"', '$env:port = "3999"', "$env:NODE_ENV='test'", "$env:DEBUG='app:*'", "$env:HOST='127.0.0.1'", "$env:CI='1'", "$env:LOG_LEVEL='debug'", "$env:TZ='UTC'"]) {
+    assert.deepEqual(keysOf(c, 'powershell'), [], c);
+  }
+  assert.deepEqual(keysOf('$env:ROOMS_DB=".tmp/start-check.db"', 'powershell'), ['once:list.env'], 'コードが読んでいなければ今までどおり');
+  assert.deepEqual(keysOf('$env:ROOMS_DB=".tmp/start-check.db"', 'powershell', reads('ROOMS_DB')), [], '製品のコードが読む名前');
+  assert.deepEqual(keysOf("$env:ROOMS_DB='.tmp\\start-check.db'", 'powershell', reads('ROOMS_DB')), []);
+  const all = { productEnv: () => true };
+  for (const name of ['npm_config_userconfig', 'BROWSER', 'COR_PROFILER', 'TSX_TSCONFIG_PATH', 'PLAYWRIGHT_BROWSERS_PATH', 'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'LUA_INIT', 'KUBECONFIG', 'PATH', 'ENV',
+    'PYTHONSTARTUP', 'GIT_DIR', 'JAVA_TOOL_OPTIONS', 'DOTNET_STARTUP_HOOKS', 'ELECTRON_RUN_AS_NODE', 'AWS_PROFILE', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'PHPRC', 'LD_PRELOAD']) {
+    assert.deepEqual(keysOf(`$env:${name}='x'`, 'powershell', all), ['once:list.env'], name);
+  }
+  for (const c of ['$env:PORT="$x"', '$env:PORT="a$($x)"', "$env:PORT='http://evil.example/'", "$env:PORT='\\\\srv\\share'", "$env:PORT='//srv/share'", "$env:PORT='/etc/x'", "$env:PORT='C:\\x'",
+    "$env:PORT='../x'", "$env:PORT='a/../../b'", "$env:PORT='~/x'", "$env:PORT='a;b'", "$env:PORT = 'a' + 'b'", "$env:PORT += '1'", '$env:PORT = (Get-Date)', '$env:PORT = 3999', '$env:PORT = $null']) {
+    assert.ok(keysOf(c, 'powershell', all).includes('once:list.env'), `${c}: ${keysOf(c, 'powershell', all).join(' ')}`);
+  }
+  assert.deepEqual(keysOf("$env:PORT='3999'; npm start", 'powershell'), ['once:list.form'],'代入は許し、npm start はいつもの確かめ');
+});

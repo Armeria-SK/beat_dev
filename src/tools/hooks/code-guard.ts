@@ -325,7 +325,7 @@ function unknownTargetFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const nested: CodeFinding[] = [];
   if (assignment) {
     const rhs = seg.raw.slice(firstUnquotedEq(seg.raw) + 1).trim();
-    if (rhs && (ctx.depth ?? 0) < 3) {
+    if (rhs && !/^(?:'[^']*'|"[^"$\x60]*")$/u.test(rhs) && (ctx.depth ?? 0) < 3) {
       for (const inner of segments(rhs)) nested.push(...codeFindings(inner, { ...ctx, prev: undefined, depth: (ctx.depth ?? 0) + 1 }));
     }
   }
@@ -362,7 +362,7 @@ function scanFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 
 // ── R1.6 の続き: コードを動かせる環境変数 ──
 // どれも、あとで起こすプロセスの起動時に読み込まれ、コードを動かせる（NODE_OPTIONS=--require ./put.js など）。NODE_ENV のような設定だけの値は含めない
-const CODE_ENV = new RegExp(`^(?:${[
+export const CODE_ENV = new RegExp(`^(?:${[
   'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'PYTHONSTARTUP', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
   'PERL5OPT', 'PERL5LIB', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_EXTERNAL_DIFF', 'GIT_ASKPASS',
   'GIT_PAGER', 'GIT_EDITOR', 'GIT_EXEC_PATH', 'GIT_PROXY_COMMAND', 'GIT_TEMPLATE_DIR', 'GIT_CONFIG\\w*', 'PAGER', 'EDITOR', 'VISUAL', 'PROMPT_COMMAND', 'PATH', 'PATHEXT', 'PSMODULEPATH', 'COMSPEC',

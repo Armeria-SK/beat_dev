@@ -1,7 +1,7 @@
 // 許可の一覧で、文 1 つを判定する（security-self-api.md §11.1 の 5）。結果は 許す / ふつうの確かめ / 今回だけ / 止める と、理由と、調べるパス。
 // 表は allowlist-tools.ts（bash・外部の道具）・allowlist-git.ts・allowlist-ps.ts（コマンドレット）。ここは、名前の決まり（C1）・外部の実体（C2）・代入（C8）・リダイレクト・形の印をまとめる。
 
-import { Acc, PS_CD_SHORTCUTS, PS_QUALIFIED_CD, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
+import { Acc, PS_CD_SHORTCUTS, PS_QUALIFIED_CD, bashVarOk, envAssignOk, productEnvOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
 import { runGit } from './allowlist-git.ts';
 import { pipeBound } from './allowlist-pipe.ts';
 import { cmdHostArgs, parsePs, psArgs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
@@ -55,11 +55,12 @@ function redirects(st: Statement, acc: Acc, ps: boolean): void {
   }
 }
 
-function assignments(st: Statement, ps: boolean, acc: Acc): void {
+function assignments(st: Statement, ps: boolean, acc: Acc, ctx: MatchCtx): void {
   for (const a of st.assigns) {
     const bareStatement = st.words.length === 0;
     if (ps) {
-      if (/^env:/iu.test(a.name) || !psVarOk(a.name)) acc.add('once', 'list.env', { name: a.name }, false);
+      const env = /^env:(.*)$/isu.exec(a.name);
+      if (env ? !productEnvOk(env[1]!, a.value, ctx.productEnv) : !psVarOk(a.name)) acc.add('once', 'list.env', { name: a.name }, false);
     } else if (bareStatement) {
       if (!bashVarOk(a.name)) acc.add('once', 'list.env', { name: a.name }, false);
     } else if (!envAssignOk(a.name, a.value)) acc.add('once', 'list.env', { name: a.name }, false);
@@ -164,7 +165,7 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
     if (st.header === 'switch') for (const w of st.words.slice(1)) acc.read(w);
     return acc.result();
   }
-  assignments(st, ps, acc);
+  assignments(st, ps, acc, ctx);
   if (st.kind === 'assign' || st.kind === 'expr' || st.words.length === 0) return acc.result();
 
   const name = st.words[0]!;

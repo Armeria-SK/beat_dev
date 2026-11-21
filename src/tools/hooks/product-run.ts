@@ -34,8 +34,11 @@ function programPath(st: StatementFacts, which: ProductRunInput['which']): strin
   return which(word, st.cwd);
 }
 
+const productEnvOnly = (st: StatementFacts): boolean => st.words.length === 0 && st.env.every(name => /^env:/iu.test(name))
+  && !st.reasonKeys.some(key => key === 'list.env' || key === 'code.env');
+
 function plainStatement(st: StatementFacts, root: string): boolean {
-  return st.inner === undefined && !st.programDynamic && !st.programOdd && st.code.length === 0 && !st.codeDynamic && st.env.length === 0
+  return st.inner === undefined && !st.programDynamic && !st.programOdd && st.code.length === 0 && !st.codeDynamic && (st.env.length === 0 || productEnvOnly(st))
     && !definesCommand(st) && !SERVICE_PROGRAMS.has(st.program) && st.cwd !== null && inside(root, st.cwd);
 }
 

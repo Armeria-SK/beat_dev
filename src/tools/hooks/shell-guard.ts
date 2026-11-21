@@ -45,6 +45,7 @@ export interface ShellGuardOptions {
   fetchedBefore?: boolean;
   // 包むコマンドの中を調べるとき、外の文が今いられるフォルダ
   cwdState?: CwdState;
+  productEnv?: (name: string) => boolean;
 }
 
 // now: 次の文が動きうるフォルダ。all: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか（変数・ワイルドカード・決められない先、また動く本体の中の cd で false）。
@@ -515,7 +516,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (!seen.known && !parsePath(path).root) return false;
     return seen.now.every(base => { const full = resolve(base, path); return exists(full) && !isDirectory(full); });
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement, beforeStatements, beforeStatement };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement, beforeStatements, beforeStatement, productEnv: opts.productEnv };
   const classified = classifyStatements(command, ctx);
   if (isPowerShell(shell)) assignedStatements = classified.statements.filter(st => st.assigned && st.kind === 'command' && st.words.length > 0);
   if (classified.lex) {
