@@ -11,6 +11,7 @@ import { redactKeyEcho, redactOpenKey, redactSecrets } from '../../shared/redact
 import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals.ts';
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
+import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
 import { isInterpreter, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
@@ -215,6 +216,16 @@ const MODULE_RUNNERS = new Set(['pytest', 'unittest']);
 
 // 判定役にファイルを見せるのは、最後のコードの実行が決まった実行役で、最初の引数が製品の中にある拡張子つきのファイルのときだけ。
 // ほかのファイルの実行（拡張子の無い先・./x・-m・.・-- のあと）は、実行役のファイルの選び方を真似しきれないので持ち主（P2 の範囲、4 回の審査の決め）
+// 値を取らない旗（これより前の語は、旗の値をファイルと読み違えないよう、=つきか、この一覧だけ）
+const NO_VALUE_FLAGS: ReadonlyArray<[RegExp, RegExp]> = [
+  [/^(?:node|nodejs|tsx|npx)$/u, NODE_SKIP_FLAG],
+  [/^(?:python\d*(?:\.\d+)?|py)$/u, /^-[bBdEhiIOqsSuvVx]+$/u],
+  [/^(?:bash|sh)$/u, /^(?:-[euxvn]+|--norc|--noprofile|--login)$/u],
+  [/^(?:ruby|perl)$/u, /^-[wTW]$/u],
+  [/^(?:deno|bun)$/u, /^(?:-A|--allow-[a-z-]+|--no-check|--quiet|-q)$/u],
+];
+const noValueFlag = (program: string, flag: string): boolean => /^--[^=]+=/u.test(flag) || NO_VALUE_FLAGS.some(([who, ok]) => who.test(program) && ok.test(flag));
+
 function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   const program = st.program.toLowerCase().replace(/\.exe$/u, '');
   let words = st.words.slice(1);
@@ -226,17 +237,33 @@ function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
     words = words.slice(at + 1);
   } else if (!PLAIN_RUNNERS.test(program)) return false;
   const at = words.findIndex(w => !w.text.startsWith('-'));
-  if (at < 0 || words.slice(0, at).some(w => w.text === '--' || w.dynamic)) return false;
+  if (at < 0 || words.slice(0, at).some(w => w.text === '--' || w.dynamic || !noValueFlag(program, w.text))) return false;
   const target = words[at]!;
   if (target.dynamic || target.glob || !/\.[A-Za-z0-9]+$/u.test(target.text) || st.cwd === null || !root) return false;
   const path = resolve(st.cwd, target.text);
   return isInside(root, path) && statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 }
 
+const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx', 'bunx']);
+// 試験の道具・パッケージの道具の実行には、ファイルを見せない（判定役はコマンドだけを見る。計画より前と同じ。R23）
+function runsTestRunner(sts: readonly StatementFacts[]): boolean {
+  return sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]).some(st => {
+    const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
+    const words = st.words.slice(1).map(w => w.text);
+    if (program === 'npx') return words.find(w => !w.startsWith('-')) !== 'tsx';
+    if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
+    if (runsCode(st) && (words.includes('--test') || (words.includes('-m') && MODULE_RUNNERS.has(words[words.indexOf('-m') + 1] ?? '')))) return true;
+    return RUNNER_PROGRAMS.has(program);
+  });
+}
+
 function outOfScopeRun(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined): string | undefined {
   if (!keys.some(key => key === 'code.file_run' || key === 'code.cmd_is_file')) return undefined;
   if (keys.includes('code.cmd_is_file')) return 'a direct run of a file';
-  const runs = sts.filter(st => runsCode(st) && st.code.length === 0);
+  const all = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]);
+  if (all.some(st => st.inner === null)) return 'a wrapped command beat could not read';
+  const runs = all.filter(st => runsCode(st) && st.code.length === 0);
+  if (runs.length === 0) return 'a file run beat could not tie to a statement';
   for (const st of runs) {
     const words = st.words.map(w => w.text);
     const module = words[words.indexOf('-m') + 1];
@@ -366,7 +393,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   return {
     decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
     ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
-    ...('problem' in shown.fact || shown.fact.files.length > 0 ? { judgeFiles: shown.fact } : {}),
+    ...('problem' in shown.fact || (shown.fact.files.length > 0 && !runsTestRunner(verdict.statements)) ? { judgeFiles: shown.fact } : {}),
     preview: cards.map(p => p.preview), bind: sha256([...cards.map(p => p.fingerprint), ...shown.read.map(file => file.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }

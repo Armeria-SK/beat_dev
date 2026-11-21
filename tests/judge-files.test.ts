@@ -399,3 +399,24 @@ test('再々審査: フォルダを作るだけの mkdir は書かない文に�
   const owner: Array<[string, 'bash' | 'powershell']> = [['mkdir -p lib; node lib/x.js', 'bash'], ['mkdir $D; node run.js', 'bash'], ['md out; node run.js', 'bash'], ...(PS ? [['mkdir $env:TEMP/x; node run.js', 'powershell'], ['mkdir out*; node run.js', 'powershell']] as Array<[string, 'powershell']> : []), ...(PS ? [['New-Item -Path run2.js -Value x; node run.js', 'powershell'], ['New-Item -ItemType File -Path out; node run.js', 'powershell']] as Array<[string, 'powershell']> : [])];
   for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, files), command);
 });
+
+test('P2 の範囲の確かめ: 包んだ実行（env・time・nohup・command・exec・sh -c・cmd /c）の中の実行も同じ決まり。旗の値をファイルと読まない', async t => {
+  const files = { 'ext.js': EVIL, 'data.json': '{}', 'run.js': "console.log('hi');\n", 'run.py': 'print(1)\n', 'run.sh': 'echo hi\n', gen: 'print(1)\n', setup: 'echo hi\n' };
+  const owner: Array<[string, 'bash' | 'powershell']> = [['env VAR=x node ext data.json', 'bash'], ['time node ext data.json', 'bash'], ['nohup node ext data.json', 'bash'], ['command node ext data.json', 'bash'],
+    ['exec node ext data.json', 'bash'], ['sh -c "node ext data.json"', 'bash'], ['bash -c "node ext"', 'bash'], ['node --title run.js ext', 'bash'], ['python -W run.py gen', 'bash'], ['bash --rcfile run.sh setup', 'bash'], ['node run.js; sh -c "node ext data.json"', 'bash'], ['source run.sh', 'bash'],
+    ...(PS ? [['cmd /c "node ext data.json"', 'powershell']] as Array<[string, 'powershell']> : [])];
+  for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, files), command);
+  const outside = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files);
+  writeFileSync(join(outside.ws, '..', 'out-run.js'), "console.log('hi');\n");
+  await ownerOnly(outside, 'node ../out-run.js');
+});
+
+test('P2 の範囲の確かめ: 試験の道具の実行には FILES を付けない（判定役はコマンドだけ）。node --test の行き先も今までどおり', async t => {
+  for (const command of ['npx jest x.test.js', 'pytest tests/test_x.py', 'node --test', 'node --test tests/a.test.js']) {
+    const r = selfRunRig(t, undefined, { 'x.test.js': "test('a', () => {});\n", 'tests/test_x.py': 'def test_x():\n    assert True\n', 'tests/a.test.js': '', 'package.json': '{}' });
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, `${command}: goes to the judge`);
+    assert.ok(!r.judge.prompts[0]!.user.includes('FILES') && !r.judge.prompts[0]!.system.includes(CODE_RULE), `${command}: no FILES`);
+  }
+});
