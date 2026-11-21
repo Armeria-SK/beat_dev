@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { impersonatedFor } from '../src/tools/builtin/web.ts';
 import { fetchPublic, RetrievalFailure, type PageNetwork } from '../src/tools/web/public-page.ts';
 import type { EngineState, SearchEngine } from '../src/tools/web/search/engine.ts';
 import { EngineHealth } from '../src/tools/web/search/health.ts';
@@ -192,3 +193,10 @@ test('metasearch sends only disguise: true engines through the impersonated netw
   assert.deepEqual(used.sort(), ['impit:bing:other', 'plain:wiki:beat']);
 });
 
+test('tools.web.impersonate off passes no impersonated network, so impit is never loaded', async () => {
+  const s = setup(() => respond(200, '<html></html>'));
+  assert.equal(impersonatedFor({ impersonate: 'off' }, s.impersonation), undefined);
+  assert.equal(impersonatedFor({ impersonate: 'auto' }, s.impersonation), s.impersonation.networkFor);
+  assert.equal(impersonatedFor({ impersonate: 'auto' }, undefined), undefined);
+  assert.equal(s.loads(), 0);
+});

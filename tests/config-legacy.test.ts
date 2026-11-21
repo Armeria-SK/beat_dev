@@ -419,7 +419,7 @@ const BOOT_LOG_ROWS: Array<{ name: string; raw: () => Record<string, any>; check
   {
     name: '持ち主の形（tools.maxIterations: 0 と SearXNG の tools.web）が読め、region は jp-jp のまま。起動のログは決まった 2 行で、ファイルは書き換えない',
     raw: () => { const raw = ownerShapedConfig(); raw.tools.maxIterations = 0; raw.tools.web = { ...OWNER_WEB }; return raw; },
-    check: raw => assert.deepEqual(parseConfig(raw).tools.web, { fetch: true, search: 'auto', engines: [...DEFAULT_SEARCH_ENGINES], region: 'jp-jp', maxSearchesPerHour: 30 }),
+    check: raw => assert.deepEqual(parseConfig(raw).tools.web, { fetch: true, search: 'auto', engines: [...DEFAULT_SEARCH_ENGINES], region: 'jp-jp', maxSearchesPerHour: 30, impersonate: 'auto' }),
     logs: [
       '[INFO] Ignored settings that are no longer used: models[].toolMode, language, tools.maxIterations, tools.web.searxngUrl, worker.autonomy',
       '[INFO] Read old settings in their new form: tools.web.search "searxng" → "auto"',
@@ -500,6 +500,13 @@ test('古い tools.web.search: "duckduckgo" も auto に読み替える（今ま
   const config = parseConfig(raw);
   assert.equal(config.tools.web.search, 'auto');
   assert.deepEqual(config.tools.web.engines, [...DEFAULT_SEARCH_ENGINES]);
+});
+
+test('tools.web.impersonate: 既定は auto。off にもでき、それ以外の値は断る', () => {
+  const withMode = (mode?: unknown) => { const raw = withSearxng({ search: 'auto' }); delete raw.tools.web.searxngUrl; if (mode !== undefined) raw.tools.web.impersonate = mode; return raw; };
+  assert.equal(parseConfig(withMode()).tools.web.impersonate, 'auto');
+  assert.equal(parseConfig(withMode('off')).tools.web.impersonate, 'off');
+  for (const bad of ['on', true, 'chrome']) assert.throws(() => parseConfig(withMode(bad)), Error, JSON.stringify(bad));
 });
 
 test('tools.web.engines: 知っている先の id だけ・重なりなし・1 個以上。DuckDuckGo だけにもできる', () => {

@@ -70,6 +70,7 @@ import { DEFAULT_PROTECT_FILES, hasProtectFiles, PROTECT_FILES_OFFERED } from '.
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { EngineHealth } from './tools/web/search/health.ts';
+import { SearchImpersonation } from './tools/web/search/impersonate.ts';
 import { askBeforeRegister, growSkills, SkillStore } from './tools/skills/store.ts';
 import { isScoutRun, TaskStore } from './tasks/store.ts';
 import { maskedTaskView } from './web/task-view.ts';
@@ -175,6 +176,7 @@ export class App {
   readonly fixes: FixCopies;
   // 取り消した提案の Pre-fix のブランチの片付け（提案ごとに 1 本。画面の Reject はこれを待ってから返す）
   readonly #prefixDrops = new Map<string, Promise<void>>();
+  readonly #impersonation: SearchImpersonation;
   readonly mergeWatch: MergeWatch;
   readonly #mergeTimer: ReturnType<typeof setInterval> | undefined;
   readonly plans: PlanStore;
@@ -209,6 +211,7 @@ export class App {
     this.fetch = options.fetch ?? fetch;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
     this.#gitNoticeOff = setGitNotice(this.log);
+    this.#impersonation = new SearchImpersonation({ log: this.log });
     this.configStore = new ConfigStore(this.paths.config, { judgeOffAllowed: !dataHoldsInstall(this.paths) });
     const config = this.configStore.load();
     this.#reportDropped();
@@ -301,7 +304,7 @@ export class App {
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals, pending: this.pending }, memory: this.memory, memoryFiles: this.memoryFiles, botMemory: this.botMemory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, projects: this.projects, places: this.places, plans: this.plans, acceptance: this.acceptance, mesh: this.mesh, questions: this.questions, log: this.log,
-      web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now), health: new EngineHealth(now, this.log) },
+      web: { network: options.webNetwork, download: options.downloadNetwork, throttle: new SearchThrottle(now), health: new EngineHealth(now, this.log), impersonation: this.#impersonation },
       notify: input => this.notifications.notify(input),
       browser: this.browser,
       background: this.background,
@@ -646,6 +649,7 @@ export class App {
     this.background.closeAll();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);
+    void this.#impersonation.close().catch(() => undefined);
     this.folderDialog.stop();
     this.worker.stop();
     this.engine.saveQueued();

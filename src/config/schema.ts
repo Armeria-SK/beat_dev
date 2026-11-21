@@ -124,6 +124,8 @@ export function ToolsConfig() {
       engines: Type.Array(Type.Union(SEARCH_ENGINE_IDS.map(id => Type.Literal(id))), { minItems: 1, maxItems: SEARCH_ENGINE_IDS.length, uniqueItems: true, default: [...DEFAULT_SEARCH_ENGINES] }),
       region: Type.String({ default: 'jp-jp', maxLength: 10 }),
       maxSearchesPerHour: Type.Integer({ minimum: 1, maximum: 600, default: 30 }),
+      // auto: 検索の頼みを TLS まで Chrome に似せる（impit。読めなければ頭の行だけ）。off: impit を読み込まない
+      impersonate: Type.Union([Type.Literal('auto'), Type.Literal('off')], { default: 'auto' }),
     }, { additionalProperties: false, default: {} }),
     // 道具ごとの方針（道具の名前 → allow / ask / block）。今の判定に厳しさを足すだけで、緩める道は無い。書かない道具は allow（src/tools/tool-policy.ts）
     policies: Type.Record(Type.String(), Type.Union([Type.Literal('allow'), Type.Literal('ask'), Type.Literal('block')]), { default: {} }),
