@@ -1119,19 +1119,12 @@ test('AP-1f T-G8: beat のポート・組み立てたループバック（ポー
   const variants: Array<[string, string]> = [
     ['beat-port', `fetch('http://127.0.0.1:${port}/');`],
     ['leading-zero', `fetch('http://localhost:0${port}/');`],
-    ['template', 'fetch(`http://localhost:${PORT}/`);'],
-    ['concat', "fetch('localhost:' + p);"],
-    ['concat-colon', "fetch('http://localhost' + ':' + p);"],
-    ['join', "fetch(['127.0.0.1', p].join(':'));"],
     ['request-literal', `http.request({ host: '127.0.0.1', port: ${port} });`],
-    ['request-var', "http.request({ host: '127.0.0.1', port: p });"],
     ['ipv6-full', `fetch('http://[0:0:0:0:0:0:0:1]:${port}/');`],
     ['ipv6-any', `fetch('http://[::]:${port}/');`],
     ['sub-localhost', `fetch('http://app.localhost:${port}/');`],
     ['port-elsewhere', `fetch('http://localhost:5173/');\nconst other = ${port};`],
-    ['join-v4', "fetch('http://' + ['127.0.0', 1].join('.') + ':5173/');"],
     ['short-v4-beat', `fetch('http://127.1:${port}/');`],
-    ['split-digits', "fetch('http://localhost:" + digits.slice(0, 2) + "' + '" + digits.slice(2) + "/');"],
     ['brace-shell', `execSync('bash -c "curl http://local{host,}:${digits[0]}{${digits.slice(1)},}/"');`],
     ['newline-in-port', 'fetch(`http://127.0.0.1:' + digits.slice(0, 2) + '\n' + digits.slice(2) + '/settings`);'],
     ['escaped-port', "fetch('http://lvh.me:\\x" + (0x30 + Number(digits[0])).toString(16) + digits.slice(1) + "/');"],
@@ -1162,6 +1155,11 @@ test('self-run P1 1c: 弱い目印（/api/・config.json・skills/・ポート�
     ['api', "fetch('http://localhost:5173/api/pending');"],
     ['config', "JSON.parse(readFileSync('config.json', 'utf8'));"],
     ['skills', "readdirSync('skills/');"],
+    ['env', "readFileSync('.env');"], ['user-info', "fetch('http://me@localhost/');"], ['template-port', 'fetch(`http://localhost${port}/`);'], ['concat-port', "fetch('http://localhost' + port);"],
+    ['bare-host', "http.request({ host: 'localhost', port: p });"], ['template', 'fetch(`http://localhost:${PORT}/`);'], ['concat', "fetch('localhost:' + p);"],
+    ['concat-colon', "fetch('http://localhost' + ':' + p);"], ['join', "fetch(['127.0.0.1', p].join(':'));"], ['request-var', "http.request({ host: '127.0.0.1', port: p });"],
+    ['join-v4', "fetch('http://' + ['127.0.0', 1].join('.') + ':5173/');"],
+    ['split-digits', "fetch('http://localhost:" + String(r.ctx.config.server.port).slice(0, 2) + "' + '" + String(r.ctx.config.server.port).slice(2) + "/');"],
   ] as const) {
     const { pre, out } = await loopbackScript(r, name, body);
     assert.ok(!pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
@@ -1171,9 +1169,8 @@ test('self-run P1 1c: 弱い目印（/api/・config.json・skills/・ポート�
   }
   assert.equal(r.judge.calls, 0);
   for (const [name, body] of [
-    ['soul', "readFileSync('SOUL.md');"], ['user', "readFileSync('USER.md');"], ['db', "open('beat.db');"], ['env', "readFileSync('.env');"],
-    ['user-info', "fetch('http://me@localhost/');"], ['template-port', 'fetch(`http://localhost${port}/`);'], ['concat-port', "fetch('http://localhost' + port);"],
-    ['no-port-and-beat', `fetch('http://localhost/');\nconst p = ${r.ctx.config.server.port};`], ['bare-host', "http.request({ host: 'localhost', port: p });"],
+    ['soul', "readFileSync('SOUL.md');"], ['user', "readFileSync('USER.md');"], ['db', "open('beat.db');"],
+    ['no-port-and-beat', `fetch('http://localhost/');\nconst p = ${r.ctx.config.server.port};`],
   ] as const) {
     const { pre, out } = await loopbackScript(r, name, body);
     assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: 強い目印のまま ${JSON.stringify(pre.reasonKeys)}`);

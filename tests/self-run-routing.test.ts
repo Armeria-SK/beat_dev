@@ -167,3 +167,45 @@ test('P1 1c: 弱い目印（config.json）は beat 自身に触る印になら�
   assert.ok(!pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(pre.reasonKeys));
   assert.match(r.judge.prompts.at(-1)!.user, /why it needs approval: .*The code mentions config\.json/u);
 });
+
+test('v3 P2: #54 node scripts/smoke-test.js と、自分の .env を読む node server.js は順 4。ファイルの中のポートの無い loopback は判定役の文の手がかりにだけなる', async t => {
+  const r = selfRunRig(t, () => undefined, V3_FILES);
+  const got: string[] = [];
+  for (const command of ['node scripts/smoke-test.js', 'node server.js']) {
+    const { route, pre, detail } = await r.routeOf({ command });
+    if (route !== 'step4') got.push(`${command}: ${route} (want step4) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 160)}`);
+    if (pre.reasonKeys?.includes('code.self_touch')) got.push(`${command}: code.self_touch`);
+    if (!pre.reasons?.some(reason => reason.includes('127.0.0.1 / localhost'))) got.push(`${command}: the weak loopback hint is missing: ${JSON.stringify(pre.reasons)}`);
+  }
+  assert.deepEqual(got, []);
+});
+
+test('v3 P2: ファイルの中の beat のポート・断るポート・beat の origin・beat.db・SOUL.md は強い目印のまま。コマンドの文の loopback・.env は今のまま', async t => {
+  const strong: Record<string, string> = {
+    'scripts/a.js': "fetch('http://127.0.0.1:4777/x');\n",
+    'scripts/b.js': "const base = 'http://localhost:' + 4777;\n",
+    'scripts/c.js': "const base = 'http://localhost:11434/v1';\n",
+    'scripts/d.js': "const db = 'beat.db';\n",
+    'scripts/e.js': "const soul = 'SOUL.md';\n",
+    'scripts/f.js': "const s = 'http://localhost:\\x34777/';\n",
+  };
+  const r = selfRunRig(t, () => undefined, { ...V3_FILES, ...strong });
+  const got: string[] = [];
+  for (const name of Object.keys(strong)) {
+    const { pre } = await r.routeOf({ command: `node ${name}` });
+    if (!pre.reasonKeys?.includes('code.self_touch')) got.push(`${name}: no code.self_touch ${JSON.stringify(pre.reasonKeys)}`);
+  }
+  const origin = selfRunRig(t, c => { c.server.origins = ['https://beat.example.ts.net']; }, { ...V3_FILES, 'scripts/g.js': "fetch('https://beat.example.ts.net/api/x');\n" });
+  const g = await origin.routeOf({ command: 'node scripts/g.js' });
+  if (!g.pre.reasonKeys?.includes('code.self_touch')) got.push(`origin: no code.self_touch ${JSON.stringify(g.pre.reasonKeys)}`);
+  const commands: Array<[string, Route]> = [
+    ["node -e \"fetch('http://localhost:3000')\"", 'owner'],
+    ...(PS ? [['Get-Content .env', 'deny'] as [string, Route]] : []),
+    ['node server.js .env', 'deny'],
+  ];
+  for (const [command, want] of commands) {
+    const { route, pre, detail } = await r.routeOf({ command });
+    if (route !== want) got.push(`${command}: ${route} (want ${want}) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 120)}`);
+  }
+  assert.deepEqual(got, []);
+});

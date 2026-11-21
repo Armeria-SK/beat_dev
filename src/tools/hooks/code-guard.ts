@@ -93,6 +93,7 @@ const SELF_HINTS: ReadonlyArray<[string, RegExp]> = [
   ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['skills/', /skills[\\/]/iu],
 ];
 const LOOPBACK_MARKER = '127.0.0.1 / localhost';
+const DOTENV_MARKER = '.env';
 const LOOPBACK_ALL = new RegExp(LOOPBACK.source, 'giu');
 const HOST_WORD = /\[[^[\]\s]*\]|[\w%-]+(?:\.[\w%-]+)*/gu;
 const HOST_HINT = /localhost|ip6-|[\d:%]/iu;
@@ -119,7 +120,7 @@ export interface BeatPorts { own: ReadonlySet<number>; denied: ReadonlySet<numbe
 const URL_HEAD = /(?:https?|wss?):\/\/$/iu;
 const URL_END = /^(?:$|[\s/?#)\]}>,;&|]|(['"`])(?!\s*[+.[]))/u;
 
-function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts): 'strong' | 'weak' | undefined {
+function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts, inFile: boolean): 'strong' | 'weak' | undefined {
   const own = new Set([...selfPortsOf(server).ports, ...beatPorts.own]);
   const ports = new Set([...own, ...beatPorts.denied]);
   const named = [...own].filter(port => port >= NUMBER_SCAN_FROM);
@@ -131,7 +132,7 @@ function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts)
   const marks = (start: number, end: number): boolean => {
     const port = PLAIN_PORT.exec(text.slice(end, end + 64));
     if (port) return ports.has(Number(port[1]));
-    if (URL_HEAD.test(text.slice(Math.max(0, start - 8), start)) && URL_END.test(text.slice(end, end + 64))) { weak = true; return false; }
+    if (inFile || (URL_HEAD.test(text.slice(Math.max(0, start - 8), start)) && URL_END.test(text.slice(end, end + 64)))) { weak = true; return false; }
     return true;
   };
   for (const match of text.matchAll(LOOPBACK_ALL)) {
@@ -143,15 +144,24 @@ function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts)
   return weak ? 'weak' : undefined;
 }
 
-export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts): { strong: string[]; weak: string[] } {
-  const strong = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
-  const weak = SELF_HINTS.filter(([, re]) => re.test(text)).map(([label]) => label);
-  const loopback = touchesLoopback(text, server, beatPorts);
+function markersOf(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts, inFile: boolean): { strong: string[]; weak: string[] } {
+  const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  const strong = inFile ? found.filter(label => label !== DOTENV_MARKER) : found;
+  const weak = [...(inFile && found.includes(DOTENV_MARKER) ? [DOTENV_MARKER] : []), ...SELF_HINTS.filter(([, re]) => re.test(text)).map(([label]) => label)];
+  const loopback = touchesLoopback(text, server, beatPorts, inFile);
   if (loopback === 'strong') strong.push(LOOPBACK_MARKER);
   else if (loopback === 'weak') weak.push(LOOPBACK_MARKER);
   const lower = text.toLowerCase();
   for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !strong.includes(host)) strong.push(host);
   return { strong, weak };
+}
+
+export function selfTouchMarkers(command: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts, files: readonly string[] = []): { strong: string[]; weak: string[] } {
+  const said = markersOf(command, selfHosts, server, beatPorts, false);
+  if (!files.length) return said;
+  const read = markersOf(files.join('\n'), selfHosts, server, beatPorts, true);
+  const strong = [...new Set([...said.strong, ...read.strong])];
+  return { strong, weak: [...new Set([...said.weak, ...read.weak])].filter(label => !strong.includes(label)) };
 }
 
 const text = (language: Language, key: GuardMessageKey, params?: Record<string, string | number>) => guardText(language, key, params);

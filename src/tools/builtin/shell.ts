@@ -402,7 +402,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
   const peeked = cards;
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
-  const found = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx));
+  const found = selfTouchMarkers(input.command, selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx), peeked.flatMap(p => p.content ?? []));
   const markers = [...found.strong, ...(peekTouch ? [peekTouch] : [])];
   const limited = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
   const base = found.weak.length ? [...limited, guardText(language, 'code.self_hint', { markers: found.weak.join(', ') })] : limited;

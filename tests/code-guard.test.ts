@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand, type Decision, type ShellGuardOptions } from '../src/tools/hooks/shell-guard.ts';
-import { codeFindings } from '../src/tools/hooks/code-guard.ts';
+import { codeFindings, selfTouchMarkers } from '../src/tools/hooks/code-guard.ts';
 import { segments } from '../src/tools/hooks/parse-cmd.ts';
 import { tempDir } from './helpers.ts';
 
@@ -497,4 +497,27 @@ test('self-run P1 1b: $env:名前 = 引用した文字 1 つの右辺はコマ�
   assert.ok(keys('$env:X = "$(node put.js)"').length > 0, '置換の入った右辺');
   assert.ok(keys('$env:X = node put.js').includes('code.file_run'), 'コマンドの右辺');
   assert.deepEqual(keys('$env:NODE_OPTIONS = "--require ./put.js"'), ['code.env'], 'CODE_ENV は今までどおり');
+});
+
+test('v3 P2 selfTouchMarkers: コマンドの文の loopback・.env は強い。製品のファイルの中身ではポートの無い・数字でない・ほかのポートの loopback と .env は弱く、beat のポート・断るポート・beat の origin・beat.db は強い', () => {
+  const server = { port: 4777, origins: ['https://beat.example.ts.net'] };
+  const ports = { own: new Set([4777]), denied: new Set([4777, 11434]) };
+  const hosts = ['beat.example.ts.net'];
+  const of = (command: string, files: string[] = []) => selfTouchMarkers(command, hosts, server, ports, files);
+  assert.deepEqual(of('curl localhost').strong, ['127.0.0.1 / localhost']);
+  assert.deepEqual(of('curl http://localhost/x'), { strong: [], weak: ['127.0.0.1 / localhost'] });
+  assert.deepEqual(of('Get-Content .env').strong, ['.env']);
+  assert.ok(of("node -e \"require('net').connect(0, '127.0.0.1')\"").strong.includes('127.0.0.1 / localhost'));
+  for (const file of ["server.listen(0, '127.0.0.1', r);", "const base = 'http://127.0.0.1:' + server.address().port;", "String(req.headers.host || 'localhost')", 'console.log(`http://localhost:${port}/`)', "fetch('http://localhost:3000/api')"]) {
+    const found = of('node x.js', [file]);
+    assert.deepEqual(found.strong, [], file);
+  }
+  assert.deepEqual(of('node x.js', ["server.listen(0, '127.0.0.1', r);"]).weak, ['127.0.0.1 / localhost']);
+  const dotenv = of('node server.js', ["loadDotEnv(path.join(__dirname, '.env'));"]);
+  assert.deepEqual(dotenv, { strong: [], weak: ['.env'] });
+  for (const [file, label] of [["fetch('http://127.0.0.1:4777/x')", '127.0.0.1 / localhost'], ["'http://localhost:' + 4777", '127.0.0.1 / localhost'], ["'http://localhost:11434/v1'", '127.0.0.1 / localhost'],
+    ["fetch('https://beat.example.ts.net/api/x')", 'beat.example.ts.net'], ["const db = 'beat.db';", 'beat.db'], ["read('SOUL.md')", 'SOUL.md'], ["read('USER.md')", 'USER.md']] as const) {
+    assert.ok(of('node x.js', [file]).strong.includes(label), `${file}: ${JSON.stringify(of('node x.js', [file]))}`);
+  }
+  assert.deepEqual(of('node x.js .env', ["String(req.headers.host || 'localhost')"]), { strong: ['.env'], weak: ['127.0.0.1 / localhost'] });
 });
