@@ -24,6 +24,8 @@ export interface MetasearchOptions {
   network?: PageNetwork | undefined;
   // 頭の行から通信を作る（既定は disguise.ts の searchNetworkFor）
   networkFor?: ((request: SearchRequestHeaders) => PageNetwork) | undefined;
+  // disguise: true の先だけに使う、TLS まで似せる通信（impersonate.ts）。無ければ networkFor
+  impersonatedFor?: ((request: SearchRequestHeaders) => PageNetwork) | undefined;
   totalMs?: number | undefined;
   sleep?: ((ms: number, signal: AbortSignal) => Promise<void>) | undefined;
 }
@@ -73,7 +75,8 @@ export async function metasearch(options: MetasearchOptions): Promise<Metasearch
       if (wait) await sleep(wait, signal);
       signal.throwIfAborted();
     } catch { return { engine, outcome: signal.aborted && !options.signal?.aborted ? 'timeout' : 'aborted', hits: [] }; }
-    const transport = options.network ?? (options.networkFor ?? searchNetworkFor)(searchHeaders(engine, region, turn));
+    const makeNetwork = (engine.disguise ? options.impersonatedFor : undefined) ?? options.networkFor ?? searchNetworkFor;
+    const transport = options.network ?? makeNetwork(searchHeaders(engine, region, turn));
     try {
       const page = await fetchPublic(engine.request(options.query, region).href, signal, transport, REQUEST_MS, undefined, hosts);
       const read = readSafely(engine, decodeText(page.body, page.contentType), page.contentType, limit, page.url);
