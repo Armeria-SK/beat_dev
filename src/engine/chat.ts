@@ -58,6 +58,7 @@ import { estimateMessageTokens, estimateRequest, estimateTextTokens, prefixLengt
 import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
+import { openPendingIds } from '../tasks/pending-wake.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine, stripHidden } from '../shared/plain-text.ts';
@@ -75,6 +76,7 @@ const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
 export const MAX_CONTINUATIONS = 3;
+const PENDING_WAIT_MS = 4 * 60_000;
 const RESUME_WORD_MAX = 40;
 
 export function resumePoint(text: string): string {
@@ -231,6 +233,8 @@ export interface ChatEngineDeps {
   retriesPerModel?: number;
   // P5: このタスクの待ちの行のうち古くなったものを閉じる（app.ts の sweepStale）
   pendingSweep?: ((taskId: string) => Promise<Array<{ id: number; reason: string }>>) | undefined;
+  // P6: 承認待ちだけが残った実行が、決めを待つ時間（ミリ秒）。試験で短くするためだけの上書き。ふつうは 4 分
+  pendingWaitMs?: number | undefined;
 }
 
 
@@ -335,6 +339,7 @@ export class ChatEngine {
   // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
   #pending = new Map<string, PendingMessage[]>();
   #notes = new Map<string, Array<{ content: string; fetched: boolean }>>();
+  #noteWaiters = new Map<string, () => void>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
@@ -485,9 +490,28 @@ export class ChatEngine {
       const queue = this.#notes.get(conversationId) ?? [];
       queue.push({ content, fetched });
       this.#notes.set(conversationId, queue);
+      this.#noteWaiters.get(conversationId)?.();
       return;
     }
     this.#saveNote(conversationId, { content, fetched });
+  }
+
+  #waitForNote(conversationId: string, ms: number, signal: AbortSignal): Promise<boolean> {
+    if (this.#notes.get(conversationId)?.length) return Promise.resolve(true);
+    if (signal.aborted) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const done = (woke: boolean) => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', stop);
+        if (this.#noteWaiters.get(conversationId) === wake) this.#noteWaiters.delete(conversationId);
+        resolve(woke);
+      };
+      const wake = () => done(true);
+      const stop = () => done(false);
+      const timer = setTimeout(stop, ms);
+      signal.addEventListener('abort', stop, { once: true });
+      this.#noteWaiters.set(conversationId, wake);
+    });
   }
 
   #saveNote(conversationId: string, note: { content: string; fetched: boolean }, runId?: string): void {
@@ -1140,6 +1164,20 @@ export class ChatEngine {
     // 長さの区切りは、この実行の中でやり取りが育ったときだけ。始めから超えていた実行は区切らず、縮める・あふれるの今の道に任せる（区切っても同じ始まりを繰り返すだけ）。
     // 見るのは 3 往復目の頭から（モデルは、最初の道具の結果を見たあと必ず 1 回は動ける）
     const splits = Boolean(task) && kind === 'task' && !scout && !fix && !research;
+    // P6: 承認待ちだけが残ったら、実行を終える前に決めを待つ（1 回の実行で合わせて上限まで）。決まれば同じ実行のまま続ける
+    const waitLimit = d.pendingWaitMs ?? PENDING_WAIT_MS;
+    let waited = 0;
+    let holdStopped = false;
+    let holds = 0;
+    const holdForPending = async (): Promise<boolean> => {
+      const left = waitLimit - waited;
+      if (!splits || !task || left <= 0 || !openPendingIds(d.conversations.db, task.task.id).length) return false;
+      holds++;
+      const minutes = Math.ceil(left / 60_000);
+      d.bus.publish({ type: 'warning', runId, conversationId, code: 'pending_wait', message: engineText(languageOf(config), 'warn.pending_wait', { minutes }), params: { minutes } });
+      const began = Date.now();
+      try { return await this.#waitForNote(conversationId, left, signal); } finally { waited += Date.now() - began; holdStopped = signal.aborted; }
+    };
     let startedOver = false;
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmed: 0 };
     for (counters.iterations = 1; counters.iterations <= ceiling; counters.iterations++) {
@@ -1216,6 +1254,11 @@ export class ChatEngine {
         } else if (call.truncated) {
           d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_continue_limit', message: engineText(language, 'warn.output_continue_limit', { count: MAX_CONTINUATIONS }), params: { count: MAX_CONTINUATIONS } });
         }
+        const heldBefore = holds;
+        if (!call.truncated && !cutTexts.length && await holdForPending()) continue;
+        if (holdStopped) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
+        const left = task && holds > heldBefore ? openPendingIds(d.conversations.db, task.task.id) : [];
+        if (task && left.length) task.control.value = { outcome: 'await_pending', ids: left };
         return finishOk(cutTexts.join('') + call.text, call.stop);
       }
       cutTexts.length = 0;
@@ -1258,6 +1301,11 @@ export class ChatEngine {
         throw error;
       }
       if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
+      if (task && task.control.value.outcome === 'await_pending' && await holdForPending()) {
+        task.control.value = { outcome: 'none' };
+        continue;
+      }
+      if (holdStopped) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '', flags);
       // タスクの終え方（完了・途中経過・質問）が決まったら、モデルを呼び直さずに終える
       if (task && task.control.value.outcome !== 'none') return finishOk(call.text, 'end_turn');
       if (kind === 'chat' && askedOwner) {

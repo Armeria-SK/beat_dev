@@ -19,7 +19,7 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean; folderDialog?: FolderDialogOptions } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; pendingWaitMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean; folderDialog?: FolderDialogOptions } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
   let stop = async (): Promise<void> => undefined;
   t.after(async () => { await stop(); await removeDir(dir); });
@@ -40,6 +40,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     adapterOverride: provider => { const made = options.judge === undefined ? new FakeAdapter(provider) : Object.assign(new JudgeAdapter(provider), { judgeAnswer: options.judge }); adapters.set(provider.id, made); return made; },
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
+    pendingWaitMs: options.pendingWaitMs ?? 0,
     ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.mcpConnect ? { mcpConnect: options.mcpConnect } : {}),

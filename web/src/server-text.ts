@@ -67,7 +67,7 @@ export function errorBodyText(body: unknown, language: Lang): string | null {
 
 const WARNING_KEY: Record<string, string> = {
   max_iterations: 'warn.max_iterations', output_truncated: 'warn.output_truncated', output_continued: 'warn.output_continued', output_continue_limit: 'warn.output_continue_limit', output_continue_no_room: 'warn.output_continue_no_room', output_continue_empty: 'warn.output_continue_empty', output_thinking_only: 'warn.output_thinking_only',agent_output_truncated: 'warn.agent_output_truncated', context_trimmed: 'warn.context_trimmed', partial_discarded: 'warn.partial_discarded', retrying: 'warn.retrying',
-  compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', queued_saved: 'warn.queued_saved', queued_not_started: 'warn.queued_not_started', server_truncation_suspected: 'warn.server_truncation',
+  compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', queued_saved: 'warn.queued_saved', queued_not_started: 'warn.queued_not_started', server_truncation_suspected: 'warn.server_truncation', pending_wait: 'warn.pending_wait',
 };
 
 // 返事の途中の警告（SSE の warning）。再試行の理由は、理由のコードがあれば画面の言語に、無ければサーバーの詳しい文のまま。

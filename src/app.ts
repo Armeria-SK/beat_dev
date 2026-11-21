@@ -136,6 +136,8 @@ export interface AppOptions {
   downloadNetwork?: DownloadNetwork;
   // 試験用: 子の担当（agent_run）の時間切れ（ミリ秒）。設定 tools.agent.timeoutSec の最小は 60 秒なので、試験だけがこれで縮める。書かなければ設定の値
   agentTimeoutMs?: number;
+  // 試験用: 承認待ちだけが残った実行が決めを待つ時間（ミリ秒）。書かなければ 4 分
+  pendingWaitMs?: number;
   judgeLimits?: JudgeLimitSet;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
@@ -309,6 +311,7 @@ export class App {
       pendingSweep: taskId => sweepStale(taskId, this.#replayDeps()),
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
+      ...(options.pendingWaitMs !== undefined ? { pendingWaitMs: options.pendingWaitMs } : {}),
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
     });
     this.worker = new Worker({

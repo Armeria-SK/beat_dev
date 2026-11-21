@@ -34,6 +34,7 @@ export const engineJa = {
   'warn.output_truncated': "返事が出力の上限で切れたので、その道具の呼び出しは動かさず、モデルに小さく分けて書くよう頼みました",
   'warn.output_continued': "返事が出力の上限に達したので、モデルに止まった所から続けるよう頼みました",
   'warn.output_continue_limit': "続きを {count} 回頼んでも、返事はまだ切れていました。もっと短いものを頼むか、Settings › Models › Advanced の Longest reply を上げてください",
+  'warn.pending_wait': "承認を待っています（あと {minutes} 分）",
   'warn.output_continue_empty': "返事が出力の上限で切れ、続きを頼んでもモデルは何も返しませんでした。もう一度続きを頼むか、もっと短いものを頼んでください",
   'warn.output_thinking_only': "モデルが出力の上限をすべて考えることに使い、返事を書きませんでした。もっと小さな一歩を頼むか、Settings › Models › Advanced の Longest reply を上げてください",
   'warn.output_continue_no_room': "返事が出力の上限で切れ、続きを頼む余地が context に残っていません。もっと短いものを頼むか、新しいセッションを始めてください",

@@ -33,6 +33,7 @@ const en = {
   'warn.output_truncated': 'The reply was cut off at the output limit, so its tool call was not run and the model was asked to write it in smaller pieces',
   'warn.output_continued': 'The reply reached the output limit, so the model was asked to continue where it stopped',
   'warn.output_continue_limit': 'The reply was still cut off after asking for the rest {count} times. Ask for something shorter, or raise Longest reply in Settings › Models › Advanced',
+  'warn.pending_wait': 'Waiting for the owner to decide on Pending (up to {minutes} more min) before ending this run',
   'warn.output_continue_empty': 'The reply was cut off at the output limit, and the model returned nothing when asked for the rest. Ask for the rest again, or ask for something shorter',
   'warn.output_thinking_only': 'The model spent the whole output limit on thinking and wrote no reply. Ask for a smaller step, or raise Longest reply in Settings › Models › Advanced',
   'warn.output_continue_no_room':'The reply was cut off at the output limit, and the context has no room left to ask for the rest. Ask for something shorter, or start a new session',
