@@ -52,7 +52,9 @@ SOFTWARE.
 | webpki-root-certs 1.0 | CDLA-Permissive-2.0 | Mozilla root certificate data |
 | h2 0.4 (Apify fork, https://github.com/apify/h2) | MIT | |
 | hyper 1.9, hyper-util 0.1 (Apify fork), http, httparse, tower, tower-http (Apify fork) | MIT | |
-| reqwest 0.13 | MIT OR Apache-2.0 | |
+| h3 0.0.8, h3-quinn 0.0.10 (HTTP/3; compiled in, switched off in beat) | MIT | |
+| quinn 0.11, quinn-proto, quinn-udp (QUIC) | MIT OR Apache-2.0 | |
+| reqwest 0.13 (git checkout of https://github.com/seanmonstar/reqwest at rev 2230ed3, not a crates.io release) | MIT OR Apache-2.0 | |
 | tokio 1.50, mio, bytes, tracing | MIT | |
 | hickory-proto / hickory-resolver 0.26 | MIT OR Apache-2.0 | |
 | brotli 8.0, brotli-decompressor 5.0 | BSD-3-Clause AND MIT | |

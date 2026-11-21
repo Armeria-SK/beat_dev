@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { connect, createServer, Socket, type Server } from 'node:net';
 import { test } from 'node:test';
-import { startPinProxy, type PinProxyOptions } from '../src/tools/web/search/pin-proxy.ts';
+import { MAX_CONNECTIONS, startPinProxy, type PinProxyOptions } from '../src/tools/web/search/pin-proxy.ts';
 
 // 上流は試験の中の偽のサーバ（TLS でない、受けた行をそのまま返す）。中継の connect を差し替え、本当の 443 へは出ない
 async function echoServer(): Promise<{ server: Server; port: number; sockets: Socket[] }> {
@@ -172,6 +172,24 @@ test('close cuts open tunnels', { timeout: 5000 }, async () => {
   await s.proxy.close();
   await closed(ok.socket);
   await s.done();
+});
+
+test('connections beyond the cap are dropped at once, while waiting for the secret', { timeout: 10_000 }, async () => {
+  const s = await setup();
+  const held: Socket[] = [];
+  try {
+    for (let i = 0; i < MAX_CONNECTIONS; i++) {
+      const socket = connect(s.proxy.port, '127.0.0.1');
+      socket.on('error', () => undefined);
+      await once(socket, 'connect');
+      held.push(socket);
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const extra = connect(s.proxy.port, '127.0.0.1');
+    extra.on('error', () => undefined);
+    await closed(extra);
+    assert.ok(held.every(socket => !socket.destroyed), 'the held connections stay open');
+  } finally { for (const socket of held) socket.destroy(); await s.done(); }
 });
 
 test('after close the port is free again', async () => {

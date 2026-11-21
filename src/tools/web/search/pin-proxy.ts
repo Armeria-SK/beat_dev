@@ -9,6 +9,8 @@ const HEAD_MAX_BYTES = 8 * 1024;
 const HEAD_MS = 10_000;
 const CONNECT_MS = 10_000;
 const IDLE_MS = 30_000;
+// 同時の接続の上限（検索が同時に開く数よりずっと多い。合言葉を送らない接続を溜めて検索を止める手を狭める）
+export const MAX_CONNECTIONS = 64;
 
 export interface PinProxyOptions {
   // つなぐ関数（試験が差し替える）。既定は node:net の connect
@@ -105,6 +107,7 @@ export async function startPinProxy(options: PinProxyOptions = {}): Promise<PinP
   };
 
   const server: Server = createServer(handle);
+  server.maxConnections = MAX_CONNECTIONS;
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => { server.off('error', reject); resolve(); });
