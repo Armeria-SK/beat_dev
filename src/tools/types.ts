@@ -16,6 +16,7 @@ import type { Decision } from './hooks/shell-guard.ts';
 import type { Outbound } from './hooks/outbound.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
+import type { JudgeFilesFact } from './judge-files.ts';
 import type { ShellRuleShape } from './approval-rules.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { PlanStore } from '../projects/plan.ts';
@@ -67,6 +68,8 @@ export interface PreCheck {
   preview?: PreviewFile[];
   // 見せたファイルの中身の指紋。承認のあと実行の前にもう一度判定して、変わっていたら実行しない
   bind?: string;
+  // 判定役に見せる、動かすファイルの伏せた写し（P2）。読めないなどで見せられなければ problem
+  judgeFiles?: JudgeFilesFact;
   // シェル: コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所。許されたときだけ、git のフックをここに向ける
   ownHooksDir?: string;
   // 事前の判定: この呼び出しが外の中身を持ち込む（シェルの取得・doc_read・downloads/ の下を読む道具など。シェルは git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）

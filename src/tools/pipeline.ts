@@ -15,7 +15,7 @@ import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import type { ApprovalBroker } from './approvals.ts';
 import { matchRule, ruleCandidate, type RuleCandidate, type RuleHit } from './approval-rules.ts';
-import { judgeOnce, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
+import { FILE_ROUNDS_MAX, fileRoundInputs, judgeOnce, planFileRounds, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
 import { forgetAllow, involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
 import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf, SHELL_FETCH_TO_JUDGE } from './hooks/decision-order.ts';
@@ -467,6 +467,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         const judgeInput: ClassifierInput = {
           userRequest: judgeRequestOf(ctx, deps), tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons: [...reasons], paths: first?.paths ?? [], tainted, trusted: trustedOf(ctx),
         };
+        const judgeFiles = first?.judgeFiles;
         const cwdNow = callCwd();
         const snapshotNow = () => {
           const read = readFilesOf(first);
@@ -477,6 +478,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         const cacheKey = ruled || noJudge || judgeModel === undefined ? undefined : judgeCacheKey(ctx, {
           judgeInput, input: args, workspace: ctx.workspace, cwd: cwdNow, taintSources: ctx.taint.sources.length,
           reasonKeys: judgeKeys, askKinds: [...askKinds], bind: first?.bind ?? null, judge: judgeModel,
+          files: judgeFiles && 'files' in judgeFiles ? judgeFiles.files.map(f => [f.path, f.sha256]) : judgeFiles ? [judgeFiles.path, judgeFiles.problem] : null,
         });
         const known = cacheKey === undefined ? undefined : rememberedAllow(ctx, cacheKey);
         const reused = known && known.snapshot === await snapshotNow() ? known : undefined;
@@ -486,10 +488,21 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         else if (reused) verdict = { decision: 'allow', reason: reused.reason };
         else if (!classify) { noteJudge('failed', 'no_judge', { ms: 0 }); return park('judge_failed', pendingText('en', 'judge_failed_no_judge'), outbound, true); }
         else {
+          // P2: the judge reads the files the call runs, in up to FILE_ROUNDS_MAX rounds; a file it cannot be shown goes to the owner, never to the judge without its content
+          const plan = judgeFiles && 'files' in judgeFiles ? planFileRounds(judgeFiles.files, judgeFiles.links) : undefined;
+          const unshown = judgeFiles && 'problem' in judgeFiles ? pendingText('en', 'judge_failed_files', { path: judgeFiles.path, problem: judgeFiles.problem })
+            : plan && 'problem' in plan ? (plan.problem === 'file_too_big' ? pendingText('en', 'judge_failed_file_big', { path: plan.path ?? '' }) : pendingText('en', 'judge_failed_rounds', { max: FILE_ROUNDS_MAX }))
+            : undefined;
+          if (unshown !== undefined) { noteJudge('failed', 'too_long', { ms: 0 }); return park('judge_failed', unshown, outbound, true); }
+          const rounds = judgeFiles && 'files' in judgeFiles && plan && 'rounds' in plan ? fileRoundInputs(judgeInput, judgeFiles.files, plan.rounds) : [judgeInput];
           autoEvent('checking');
-          const judged = await judgeOnce(judgeInput, classify, ctx.signal, judgeLimitsFor(ctx, deps));
-          verdict = judged.verdict;
-          noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend);
+          verdict = { decision: 'ask', reason: '' };
+          for (const roundInput of rounds) {
+            const judged = await judgeOnce(roundInput, classify, ctx.signal, judgeLimitsFor(ctx, deps));
+            verdict = judged.verdict;
+            noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend);
+            if (verdict.decision !== 'allow' || verdict.failed || ctx.signal.aborted) break;
+          }
         }
         const freshAllow = !reused && cacheKey !== undefined && verdict.decision === 'allow' && !verdict.failed;
         if (known && !reused && !freshAllow && cacheKey !== undefined) forgetAllow(ctx, cacheKey);

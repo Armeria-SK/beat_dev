@@ -71,7 +71,7 @@ export function selfRunRig(t: { after: (fn: () => void) => void }, mutate: (c: A
     const judged = judge.calls > before;
     if (out.decidedBy === 'product-code' || out.decidedBy === 'product-git') return { route: 'step4', pre, detail: out.decidedBy };
     if (out.decidedBy === 'pending') {
-      const row = pending.list({ status: 'waiting' }).at(-1)!;
+      const row = pending.list({ status: 'waiting' })[0]!;
       return { route: row.kind === 'judge' || row.kind === 'judge_failed' || judged ? 'judge' : 'owner', pre, detail: `${row.kind}: ${row.reason}` };
     }
     if (out.decision === 'deny') return { route: 'deny', pre, detail: out.output.content };
