@@ -149,6 +149,8 @@ export function cleanReason(text: string | undefined): string | null {
 
 const unique = (items: readonly string[]): string[] => [...new Set(items)].sort();
 
+export const closedByBeat = (row: Pick<PendingRow, 'status' | 'reject_reason'>): boolean => row.status === 'stale' && row.reject_reason !== null;
+
 // J-5: the row offers "don't ask again in this product" only when a code-built shape was stored at park time, the run had a product, and it is still waiting.
 // Whether the run had read outside text does not matter (AP-1, Q1): a rule applies the same either way
 export function rememberable(row: Pick<PendingRow, 'project_id' | 'status' | 'tool' | 'run_kind'>, state: Pick<PendingState, 'rule' | 'held'>): boolean {
@@ -600,8 +602,8 @@ export class PendingStore {
     const row = this.row(id);
     if (!row || row.status !== 'waiting') return false;
     const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'stale', output_preview = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
-      .run(outputTail(reason), this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'stale', output_preview = ?, reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
+      .run(outputTail(reason), cleanReason(reason) ?? 'stale', this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
     if (Number(changed.changes) !== 1) return false;
     this.#changed(this.row(id)!);
     return true;

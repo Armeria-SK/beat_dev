@@ -122,6 +122,8 @@ function inputGist(args: unknown): string {
   if (typeof args !== 'object' || Array.isArray(args)) return JSON.stringify(args);
   return Object.entries(args).map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`).join(', ');
 }
+const withdrawOnly = (store: PendingStore | undefined): Pick<PendingStore, 'row' | 'withdraw'> | undefined =>
+  store ? { row: id => store.row(id), withdraw: (id, reason) => store.withdraw(id, reason) } : undefined;
 // 道具の結果が書いている全文のファイルの場所。道具・パイプラインの注記は結果の最後に付くので最後の 1 つを見て、tool_outputs の中に留まるときだけ（replay.ts と同じ確かめ）
 function fullRefIn(content: string, dir: string): string | undefined {
   const at = content.lastIndexOf(dir);
@@ -467,7 +469,7 @@ export class ChatEngine {
   // 道具に渡す店の一式。実行の中と、Pending の承認のあとの実行（app.ts の replayPending）で同じものを使う
   toolServices(): ToolContext['services'] {
     const d = this.#d;
-    return d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, memoryFiles: d.memoryFiles, web: d.web, notify: d.notify, browser: d.browser, background: d.background, pending: d.tools?.pending, emit: e => d.bus.publish(e) } : undefined;
+    return d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, memoryFiles: d.memoryFiles, web: d.web, notify: d.notify, browser: d.browser, background: d.background, pending: withdrawOnly(d.tools?.pending), emit: e => d.bus.publish(e) } : undefined;
   }
 
   // 書く・動かす道具が動いたあと、このタスクの待ちの行のうち古くなったものを閉じ、道具の結果の末尾で担当に知らせる（P5）
@@ -1135,10 +1137,10 @@ export class ChatEngine {
       judgeLimits: d.judgeLimits,
       conversationTainted: () => d.conversations.everTainted(conversationId),
     }, truncated));
-    // 実際に動いた道具の呼び出しを「仕事」に数える（結果が誤りでも数える。Pending に預けた・断られた・引数の誤り・task_ / tool_search / question_add は数えない）。
+    // 実際に動いた道具の呼び出しを「仕事」に数える（結果が誤りでも数える。Pending に預けた・断られた・引数の誤り・task_ / tool_search / question_add / pending_withdraw は数えない）。
     // そのうち書き換え・実行の仕事（changeDone）に数えるのは、効果が write の道具（結果を問わない）・誤りなく終わった exec の道具・子の担当（agent_run）
     const countDone = (name: string, outcome: { output: { isError?: boolean }; decision: string; invalidArguments?: boolean }) => {
-      if (outcome.decision !== 'allow' || outcome.invalidArguments || name.startsWith('task_') || name === 'tool_search' || name === 'question_add') return;
+      if (outcome.decision !== 'allow' || outcome.invalidArguments || name.startsWith('task_') || name === 'tool_search' || name === 'question_add' || name === 'pending_withdraw') return;
       counters.workDone++;
       const effect = tools?.registry.get(name)?.effect;
       if (effect === 'write' || (effect === 'exec' && !outcome.output.isError) || name === 'agent_run') counters.changeDone++;

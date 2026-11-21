@@ -18,6 +18,13 @@ const call = (name: string, args: unknown): Script => async function* (req) {
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
 const complete = () => call('task_complete', { summary: 'done', notify: false });
+const together = (...pairs: Array<[string, unknown]>): Script => async function* (req) {
+  for (const [name, args] of pairs) {
+    const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
+    for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
+  }
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
 
 function fakeTools(runs: string[]): ToolDef[] {
   const park: ToolDef<{ text: string }> = {
@@ -129,5 +136,35 @@ test('P4: 持ち主が承認待ちのタスクを取り消すと、待ちも can
   }
   assert.equal(s.app.tasks.get(ids[2]!)!.status, 'done', '取り下げはタスクを開き直さない');
   assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0);
+  assert.deepEqual(s.runs, []);
+});
+
+test('P4: 同じ回で task_complete のあとに積んだ待ちがあれば done にせず、持ち主の決めを待つ', async t => {
+  const s = await setup(t);
+  const id = s.app.tasks.create({ title: 'Build', origin: 'user', actor: 'user' }).id;
+  s.adapter().scripts = [together(['task_complete', { summary: 'done', notify: false }], ['fake_park', { text: 'late' }])];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const [row] = s.rows(id);
+  assert.equal(row!.status, 'waiting', '待ちは取り下げない');
+  const task = s.app.tasks.get(id)!;
+  assert.deepEqual([task.status, task.waiting_kind, task.waiting_text], ['waiting', 'approval', `#${row!.id}`]);
+  assert.deepEqual(s.runs, []);
+});
+
+test('P4: 積んで自分で取り下げるだけの回は仕事にも決めにも数えず、進展なしで止まる', async t => {
+  const s = await setup(t);
+  const id = s.app.tasks.create({ title: 'Loop', origin: 'user', actor: 'user' }).id;
+  const withdrawLatest: Script = async function* (req) {
+    const latest = s.rows(id).filter(r => r.status === 'waiting').at(-1)!;
+    yield* call('pending_withdraw', { id: latest.id })(req);
+  };
+  const checkpoint = () => call('task_checkpoint', { tried: 'tried', result: 'result', next_action: 'next' });
+  for (let run = 0; run < 6 && s.app.tasks.get(id)!.status !== 'failed'; run++) {
+    s.adapter().scripts = [call('fake_park', { text: `p${run}` }), withdrawLatest, checkpoint()];
+    s.app.tasks.setReady(id, { runAt: START });
+    assert.equal(await s.app.worker.tick(), 'ran');
+  }
+  assert.equal(s.app.tasks.get(id)!.status, 'failed');
+  assert.equal(s.rows(id).length, 3, '3 回で止まる');
   assert.deepEqual(s.runs, []);
 });

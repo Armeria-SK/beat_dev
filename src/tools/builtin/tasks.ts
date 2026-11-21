@@ -196,7 +196,8 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
     const taskId = ctx.task.id;
     const tasks = ctx.services?.tasks;
     const own = tasks?.get(taskId);
-    const gateHeld = new Set(own?.project_id ? Object.values(ctx.services?.acceptance?.itemStates(own.project_id) ?? {}).flatMap(item => item.evidence.map(e => (e as { pending?: unknown }).pending).filter((id): id is number => typeof id === 'number')) : []);
+    const gateHeldIds = (): Set<number> => new Set(own?.project_id ? Object.values(ctx.services?.acceptance?.itemStates(own.project_id) ?? {}).flatMap(item => item.evidence.map(e => (e as { pending?: unknown }).pending).filter((id): id is number => typeof id === 'number')) : []);
+    const gateHeld = gateHeldIds();
     const open = ctx.services?.db ? openPendingIds(ctx.services.db, taskId).filter(id => !gateHeld.has(id)) : [];
     if (open.length) {
       ctx.task.control = { outcome: 'await_pending', ids: open };
@@ -233,7 +234,7 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
     }
     const running = own?.project_id ? (ctx.services?.background?.list({ projectId: own.project_id }) ?? []).filter(view => view.taskId === taskId && view.state === 'running') : [];
     const suffix = running.length ? toolText(language, 'task.bg_running', { list: jobLines(running, language) }) : '';
-    ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true };
+    ctx.task.control = { outcome: 'complete', summary: suffix ? `${input.summary}\n\n${suffix}` : input.summary, notify: input.notify ?? true, held: [...gateHeldIds()] };
     const done = toolText(language, 'task.completed', { end });
     const items = gate.kind === 'pass' ? gate.text : '';
     const state = own?.project_id ? gateText(language, 'state_line') : '';

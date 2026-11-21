@@ -64,6 +64,10 @@ test('P5: bind のファイルを書くと待ちの行が stale で閉じ、担�
   const written = s.toolTexts(id).find(text => text.includes('target.txt') && text.includes('Closed Pending item'));
   assert.ok(written, JSON.stringify(s.toolTexts(id)));
   assert.match(written!, new RegExp(`Closed Pending item #${row!.id} without running it, because you changed what it would run`, 'u'));
+  const pendingEvents = s.app.tasks.events(id).filter(e => e.kind === 'pending');
+  assert.deepEqual(pendingEvents.map(e => e.actor), ['beat'], '持ち主の承認として記録しない');
+  assert.match(pendingEvents[0]!.content!, new RegExp(`#${row!.id} closed by beat`, 'u'));
+  assert.doesNotMatch(JSON.stringify(s.adapter().calls.map(c => c.messages)), /owner approved Pending/u, '承認の知らせをモデルに送らない');
   assert.ok(hooksAtPark >= 1, '積むときにはフックが走る（前提）');
   assert.equal(s.hookCalls(), hooksAtPark, 'sweep ではフックを走らせない');
   assert.deepEqual(s.runs, []);

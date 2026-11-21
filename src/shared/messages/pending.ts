@@ -77,6 +77,7 @@ const en = {
   'event_ran': '#{id} approved and ran (exit code {code}): {tool}',
   'event_failed': '#{id} approved, but it failed or did not run: {tool}',
   'event_stale': '#{id} approved, but not run because things changed: {tool}',
+  'event_closed': '#{id} closed by beat without running, because it changed after it was parked: {tool}',
   'event_rejected': '#{id} rejected: {tool}',
   'event_rejected_reason': '#{id} rejected: {tool} (reason: {reason})',
   'notify_title_task': 'Waiting in Pending: {title}',

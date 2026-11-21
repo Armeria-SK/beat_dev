@@ -146,7 +146,7 @@ export interface ToolContext {
     // ブラウザの道具（browser_*）が使う、全会話で 1 つのブラウザ。無ければ道具は「ブラウザが無い」で失敗する
     browser?: BrowserSession | undefined;
     background?: BackgroundJobs | undefined;
-    pending?: PendingStore | undefined;
+    pending?: Pick<PendingStore, 'row' | 'withdraw'> | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。
@@ -193,7 +193,7 @@ export interface AgentRunInput { task: string; tools?: string[] | undefined; tit
 
 export type TaskControl =
   | { outcome: 'none' }
-  | { outcome: 'complete'; summary: string; notify: boolean }
+  | { outcome: 'complete'; summary: string; notify: boolean; held?: number[] }
   | { outcome: 'checkpoint'; note: string; nextAction: string }
   | { outcome: 'question'; question: string }
   | { outcome: 'yield'; reason: string }

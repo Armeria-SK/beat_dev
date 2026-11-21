@@ -78,6 +78,7 @@ export const pendingJa = {
   'event_ran': "#{id} を承認し、動きました（終了コード {code}）: {tool}",
   'event_failed': "#{id} を承認しましたが、失敗したか、動きませんでした: {tool}",
   'event_stale': "#{id} を承認しましたが、変わったものがあったので動かしていません: {tool}",
+  'event_closed': "#{id} は置いたあとに変わったので、beat が動かさずに閉じました: {tool}",
   'event_rejected': "#{id} を却下しました: {tool}",
   'event_rejected_reason': "#{id} を却下しました: {tool}（理由: {reason}）",
   'notify_title_task': "Pending で待っています: {title}",

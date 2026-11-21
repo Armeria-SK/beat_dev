@@ -1213,6 +1213,13 @@ export class Worker {
     const onlyWaits = (): boolean => tasks.openChildren(task.id) > 0 && !createdChild();
     if (control.outcome === 'complete') {
       this.#d.kv.delete(idleKey);
+      const late = openPendingIds(this.#d.db, task.id).filter(id => !(control.held ?? []).includes(id));
+      if (late.length) {
+        this.#d.kv.delete(splitKey(task.id));
+        tasks.update(task.id, { appendNote: control.summary }, 'beat', runId);
+        tasks.setWaiting(task.id, 'approval', late.map(id => `#${id}`).join(', '), runId);
+        return;
+      }
       if (answered) {
         tasks.update(task.id, { appendNote: control.summary }, 'beat', runId);
         tasks.setReady(task.id, { runAt: now, reason: taskText(language, 'reason.answered') });

@@ -1692,6 +1692,7 @@ export const en = {
   'ui.pending.ran': (time: string, exit: number | null) => (exit === null ? `approved · ran ${time}` : `approved · ran ${time} · exit ${exit}`),
   'ui.pending.failed': (time: string, detail: string) => (detail ? `approved · failed ${time} · ${detail}` : `approved · failed ${time}`),
   'ui.pending.stale': (time: string) => `approved · not run: it changed after it was parked · ${time}`,
+  'ui.pending.closedByBeat': (time: string) => `closed by beat · not run: it changed after it was parked · ${time}`,
   'ui.pending.rejected': (time: string, reason: string | null) => (reason ? `rejected · “${reason}” · ${time}` : `rejected · ${time}`),
   'ui.pending.cancelled': (time: string) => `cancelled · ${time}`,
   'ui.pending.noneDecided': 'nothing decided today',

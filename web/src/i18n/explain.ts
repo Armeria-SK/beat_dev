@@ -476,6 +476,7 @@ export const EXPLAIN_KEYS = [
   'ui.pending.oldPreview',
   'ui.pending.literalMark',
   'ui.pending.stale',
+  'ui.pending.closedByBeat',
   'ui.pending.noneDecided',
   'ui.pending.erased',
   'ui.pending.noEarlier',

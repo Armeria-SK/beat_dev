@@ -90,7 +90,7 @@ import { pendingDecided, sweepPendingWaits, type PendingWakeDeps } from './tasks
 import { QuestionStore, type QuestionChange, type QuestionRow } from './questions/store.ts';
 import { Uploads } from './uploads/store.ts';
 import { PendingStore, type PendingChange, type PendingRow } from './pending/store.ts';
-import { pendingNote } from './pending/notes.ts';
+import { closedEvent, pendingNote } from './pending/notes.ts';
 import { parentOf, replayAction, type ReplayDeps } from './pending/replay.ts';
 import { sweepStale } from './pending/sweep.ts';
 import { pendingText } from './shared/messages/pending.ts';
@@ -575,6 +575,8 @@ export class App {
         return;
       }
       if (!this.#pendingScopeWaits(scope.key)) this.notifications.settle('approval_needed', { dedupKey: scope.key });
+      const closed = closedEvent(row);
+      if (closed) { if (task) this.tasks.event(task.id, 'pending', 'beat', closed); return; }
       const note = pendingNote(row, view);
       if (!note) return;
       if (task) this.tasks.event(task.id, 'pending', 'owner', note.event);

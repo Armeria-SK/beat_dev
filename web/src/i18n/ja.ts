@@ -477,6 +477,7 @@ export const ja = {
   'ui.pending.literalMark': 'この文には、コマンドそのものに書かれた「[BEAT-SECRET…]」があります。ここでは beat は何も置き換えていません。',
   'ui.pending.heldKey': (n: number, names: string) => `beat が保存している値を ${n} か所で置き換えて出しています: ${names}。[BEAT-SECRET: 名前] の所には、実行のときに本当の値が入ります。`,
   'ui.pending.stale': (time: string) => `approved · not run: 待たせたあとに変わりました · ${time}`,
+  'ui.pending.closedByBeat': (time: string) => `beat が動かさずに閉じました: 待たせたあとに変わりました · ${time}`,
   'ui.pending.noneDecided': '今日決めたものはありません',
   'ui.pending.erased': '詳しい内容は会話と一緒に消えました',
   'ui.pending.noEarlier': 'それより前のものはありません',
