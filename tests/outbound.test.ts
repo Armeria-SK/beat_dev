@@ -535,3 +535,20 @@ test('systemTarFirst: PATH で最初に見つかる tar が System32 のもの�
   assert.equal(systemTarFirst(env(empty)), false);
   assert.equal(systemTarFirst({ Path: system }), false);
 });
+
+test('v3 P1b: その場のコードのメソッドの .exec( / .spawn( / .system( は送信に数えない。別のプログラムを起こす入口は名指しで send のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    `node -e "const { DatabaseSync } = require('node:sqlite'); const d = new DatabaseSync(':memory:'); d.exec('create table t(a)')"`,
+    `node -e "const re = /a/; console.log(re.exec('a'))"`, `node -e "db.spawn; obj.system(1)"`,
+  ]);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `node -e "require('child_process').exec('x')"`, `node -e "const {exec}=require('child_process'); exec('x')"`, `node -e "const cp=require('node:child_process'); cp.spawn('x')"`,
+    `node -e "exec('x')"`, `node -e "spawn('x')"`, `perl -e 'system("x")'`, `php -r 'exec("x");'`, `python -c "exec('1')"`,
+    `node -e "process.binding('spawn_sync').spawn({})"`, `node -e "globalThis.process.binding('x')"`, `node -e "internalBinding('x')"`, `node -e "process.dlopen(m, 'x.node')"`,
+    `node -e "process['binding']('spawn_sync')"`,
+    `python -c "import os; os.popen('x')"`, `python -c "import os; os.system('x')"`, `python -c "import pty; pty.spawn('x')"`, `python -c "import subprocess"`,
+    `ruby -e "Kernel.exec('x')"`, `ruby -e "Kernel.system('x')"`, `ruby -e "Kernel.spawn('x')"`, `ruby -e "Process.spawn('x')"`, `ruby -e "IO.popen('x')"`,
+    `node -e "Bun.spawn(['x'])"`, `node -e "new Deno.Command('x')"`,
+  ]);
+});

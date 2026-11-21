@@ -41,7 +41,7 @@ const SECRET_CHECKED = new Set([...ALWAYS_SEND, ...WEB_PROGRAMS, ...LOOKUP, 'gh'
 const DELETE_PROGRAMS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'srm', 'del', 'erase', 'rd', 'remove-item', 'ri', 'clear-content', 'clc']);
 const INTERPRETERS = /^(?:node|nodejs|bun|deno|python[\d.]*|py|perl|ruby|php|awk|gawk|mawk|nawk)$/u;
 const NET_API = /\b(?:fetch|https?|net\.connect|tls\.connect|dgram|XMLHttpRequest|WebSocket|requests|urllib\d?|http\.client|socket|Net\.WebClient|HttpClient|Invoke-WebRequest|Invoke-RestMethod|undici|axios|curl|wget|smtplib|ftplib|file_get_contents|fsockopen|stream_socket_client|curl_\w+|Net::HTTP|open-uri|TCPSocket|IO::Socket|LWP|HTTP::Tiny|telnetlib|createConnection|http2)\b|\/inet\/|require\(\s*['"](?:node:)?(?:net|dns|tls|dgram|http2?|https)['"]|from\s+['"](?:node:)?(?:net|dns|tls|dgram|http2?|https)['"]/iu;
-const PROCESS_API = /\b(?:child_process|execSync|spawnSync|execFile\w*|spawn|exec|subprocess|os\.system|popen|Start-Process|Deno\.Command|Bun\.spawn|system|shell_exec|passthru|proc_open|getline)\b|`|\|\s*"/u;
+const PROCESS_API = /\b(?:child_process|execSync|spawnSync|execFile\w*|subprocess|os\.system|popen|Start-Process|Deno\.Command|Bun\.spawn|shell_exec|passthru|proc_open|getline|process\.binding|internalBinding|spawn_sync|process\.dlopen|Kernel\.(?:system|exec|spawn)|Process\.spawn|IO\.popen|pty\.spawn)\b|(?<![.\w$])(?:spawn|exec|system)\b|`|\|\s*"/u;
 const DELETE_API = /\b(?:rmSync|rmdirSync|unlinkSync|unlink|rmdir|rm|rmtree|os\.remove|removedirs|remove_tree|rm_rf|Remove-Item|Clear-Content|truncate)\b/u;
 const READ_METHODS = /^(?:get|head)$/iu;
 

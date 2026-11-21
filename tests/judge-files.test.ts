@@ -441,9 +441,9 @@ test('P2 の範囲の確かめ: 試験の道具の実行には FILES を付け�
 test('P2 の範囲（1 つの決まり）: コードを動かす文が 2 つ以上・包みの中・道具と混ざる・中を読めない包みは持ち主。道具だけならコマンドだけ。deno は持ち主', async t => {
   const files = { 'ext.js': EVIL, 'data.json': '{}', 'run.js': "console.log('hi');\n", 'evil.js': EVIL, 'evil.sh': 'echo hi\n', 'evil.py': "print('collect.example')\n", 'package.json': '{}', 'x.ts': 'console.log(1);\n' };
   const owner: Array<[string, 'bash' | 'powershell']> = [['node run.js; sh -c "env node ext data.json"', 'bash'], ['node run.js && env time node ext data.json', 'bash'], ['node run.js; sh -c "sh -c \'node ext data.json\'"', 'bash'],
-    ['node evil.js; npm -v', 'bash'], ['node evil.js; jest --version', 'bash'], ['bash evil.sh; make -v', 'bash'], ['deno run x.ts', 'bash'], ['node run.js; node evil.js', 'bash'], ['env node run.js', 'bash'], ['time node run.js', 'bash']];
+    ['node evil.js; npm test', 'bash'], ['node evil.js; jest --version', 'bash'], ['bash evil.sh; make -v', 'bash'], ['deno run x.ts', 'bash'], ['node run.js; node evil.js', 'bash'], ['env node run.js', 'bash'], ['time node run.js', 'bash']];
   for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, files), command);
-  for (const command of ['node evil.js --test', 'python evil.py -m pytest']) {
+  for (const command of ['node evil.js --test', 'python evil.py -m pytest', 'node evil.js; npm -v']) {
     const r = selfRunRig(t, undefined, files);
     r.judge.answer = ASK;
     await r.call('shell_run', { command }, chat(r));

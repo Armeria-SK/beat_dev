@@ -268,11 +268,15 @@ export function filesScope(sts: readonly StatementFacts[], keys: readonly string
   if (keys.includes('code.cmd_is_file')) return { kind: 'owner', why: 'a direct run of a file' };
   const runs: StatementFacts[] = [];
   let unknown = false;
+  const envSet = keys.includes('code.env') || keys.includes('list.env');
+  const listedPlain = (st: StatementFacts): boolean => !envSet && st.inner === undefined && st.code.length === 0 && !st.codeDynamic && !st.programDynamic && st.reasonKeys.length === 0 && st.env.length === 0
+    && (isRunner(st) || st.words.slice(1).every(w => w.text.startsWith('-')));
   const walk = (list: readonly StatementFacts[]): boolean => {
     let any = false;
     for (const st of list) {
       if (st.inner === null) unknown = true;
       const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])]);
+      if (listedPlain(st)) continue;
       if (isRunner(st) || runsCode(st) || inside) { runs.push(st); any = true; }
     }
     return any;
