@@ -195,7 +195,9 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
     if (ctx.task.control.outcome !== 'none') return { content: text.already };
     const taskId = ctx.task.id;
     const tasks = ctx.services?.tasks;
-    const open = ctx.services?.db ? openPendingIds(ctx.services.db, taskId) : [];
+    const own = tasks?.get(taskId);
+    const gateHeld = new Set(own?.project_id ? Object.values(ctx.services?.acceptance?.itemStates(own.project_id) ?? {}).flatMap(item => item.evidence.map(e => (e as { pending?: unknown }).pending).filter((id): id is number => typeof id === 'number')) : []);
+    const open = ctx.services?.db ? openPendingIds(ctx.services.db, taskId).filter(id => !gateHeld.has(id)) : [];
     if (open.length) {
       ctx.task.control = { outcome: 'await_pending', ids: open };
       return { content: `${pendingText(language, 'await_pending', { ids: open.map(id => `#${id}`).join(', ') })} ${end}` };
@@ -205,7 +207,6 @@ export const taskComplete: ToolDef<{ summary: string; notify?: boolean; items?: 
       ctx.task.control = { outcome: 'yield', reason: text.yieldReason(children) };
       return { content: `${text.childrenLeft(children)} ${end}` };
     }
-    const own = tasks?.get(taskId);
     const check = tasks && own && own.spawned_by === null ? productCheck(ctx.services?.projects, own.project_id, ctx.place && ctx.project?.root ? { root: ctx.project.root, ceiling: ctx.place.ceiling } : undefined) : undefined;
     if (check === 'invalid') return { content: text.invalid, isError: true };
     const gate = own ? await runGate(ctx, own, input.items, language) : { kind: 'skip' as const };
