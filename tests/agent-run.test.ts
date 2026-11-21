@@ -285,7 +285,7 @@ test('T-27 子の聞く道具も、親の会話と同じく判定役に回る（
 
 test('T-27b 親がタスク（自動承認）のとき、親の聞く道具も子の聞く道具も判定役に回る', async t => {
   const ALLOW = '{"decision":"allow","reason":"依頼どおりです"}';
-  const taintStub: ToolDef<{ key: string }> = { ...askStub, preCheck: () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['taint'], sends: false, removes: false }) };
+  const taintStub: ToolDef<{ key: string }> = { ...askStub, preCheck: () => ({ decision: 'ask', reasons: ['確かめ'], askKinds: ['code'], sends: false, removes: false }) };
   const options = withAsk(c => { c.tools.agent.inTasks = true; });
   const s = await startApp(t, { ...options, tools: options.tools.map(tool => (tool.name === 'ask_stub' ? taintStub : tool)), judge: ALLOW });
   s.adapter().scripts = [call('ask_stub', { key: 'p' }), call('agent_run', { task: '任せる' }), call('ask_stub', { key: 'c' }), reply('子の答え'), reply('タスクの返事')];

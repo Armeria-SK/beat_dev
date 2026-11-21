@@ -28,13 +28,13 @@ import type { QuestionStore } from '../questions/store.ts';
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
 // 確かめ（ask）になった理由の種類。パイプラインは、順 4（製品の中で動かす）と、人のいない実行の外を読んだあとの持ち主行きを、これで見分ける。
-// precheck: 道具の事前の判定で、細かい種類が付いていない理由 / code: コードを動かす / taint: 外から読んだ内容のあと / policy: 道具ごとの方針の ask / hook: 実行前フック。
+// precheck: 道具の事前の判定で、細かい種類が付いていない理由 / code: コードを動かす / policy: 道具ごとの方針の ask / hook: 実行前フック。
 // 事前の判定が付ける細かい種類 — outside_read: 許可フォルダの外を読む / outside_write: 外に書く / risky_command: サービスの操作・リモートの設定 /
 // egress: 外とやり取りする・外のコードを入れる・外を読んだあとの送信 / git_write: git が書く / opaque: 中身や行き先が判定できない / persona: 人格・スキルの書き込み /
 // owner: 持ち主が書いた確かめ / web: Web の道具の事前の確かめ。
 // 種類の付かない理由・知らない種類は、自動では通さない（新しい確かめを足したときに、黙って自動になることを防ぐ）
 export type AskKind =
-  | 'precheck' | 'code' | 'taint' | 'policy' | 'hook'
+  | 'precheck' | 'code' | 'policy' | 'hook'
   | 'outside_read' | 'outside_write' | 'risky_command' | 'egress' | 'git_write' | 'opaque' | 'persona' | 'owner' | 'web';
 
 // agent: 親の担当から任された子の担当の実行（agent_run が始める。深さ 1）
@@ -214,8 +214,8 @@ export interface ToolDef<I = any> {
   effect: ToolEffect;
   allowedIn: readonly RunKind[];
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
-  // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
-  escalateOnTaint?: boolean;
+  // 振り返りの実行が外から読んだ内容（Web・添付）のあとなら断る道具（記憶・スキルの書き込み。振り返りには承認する人がいない）。ほかの実行では、外を読んだことで聞き方を変えない
+  denyInReviewAfterOutside?: boolean;
   // 効果は network のまま、ファイルも書く道具（web_download）。計画モードでは書き込みと同じに断り（planAllows）、振り返りでも断り（reviewAllows。効果が何でも）、外から読んだ内容のあとは書き込みと同じに確かめる
   writesFiles?: true;
   // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす

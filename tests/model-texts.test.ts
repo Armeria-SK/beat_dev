@@ -413,7 +413,7 @@ test('英語の固定文: 振り返りの指示の全文（日本語の記録は
   assert.equal(reviewLabel('en', 'memory', 'idle'), 'Memory review · The conversation went quiet');
   assert.equal(reviewPrompt({ trigger: 'heavy_run', forgotten: [], kind: 'skill', skillsAutoRegister: true }), [
     enSkillIntro('Many tools were used'),
-    ...enSkillPolicy("- If you find a procedure that looks reusable, use skill_draft (it is registered right away without the user's review unless the record read outside content or is about a task, in which case it waits for the user's approval; the user can undo it from the skill's History). Prefer fixing an existing skill over creating a new one"),
+    ...enSkillPolicy("- If you find a procedure that looks reusable, use skill_draft (it is registered right away without the user's review unless the record is about a task, in which case it waits for the user's approval; after a record that read outside content it is refused; the user can undo it from the skill's History). Prefer fixing an existing skill over creating a new one"),
   ].join('\n'));
   assert.doesNotMatch(reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'memory', skillsAutoRegister: true }), /skill_draft/u, 'a memory review has no skill line');
   const skillWindow = [

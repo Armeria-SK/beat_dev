@@ -35,7 +35,7 @@ const JUDGE = [
   'list.flag', 'list.form', 'list.arith', 'list.dynamic', 'list.shape', 'list.env', 'list.install', 'list.git_unreadable', 'list.tool_rc', 'list.tool_rc_cwd',
   'list.git_moves', 'list.npm_rc', 'list.npm_rc_unknown', 'list.git_remote', 'list.git_old', 'list.git_hooks', 'list.git_remote_local', 'list.git_hooks_path', 'list.git_net',
   'list.git_write', 'list.git_push', 'list.cmd_syntax', 'list.ps_write', 'list.ps_pipe', 'list.download', 'list.url_glob', 'list.file_list', 'list.pipe_read', 'list.write_dynamic',
-  'list.protected_write', 'list.expand', 'list.lan', 'list.redirect', 'list.header', 'list.send', 'list.read_dynamic', 'list.wild_many', 'list.cwd_unknown',
+  'list.protected_write', 'list.expand', 'list.lan', 'list.long_query', 'list.redirect', 'list.header', 'list.send', 'list.read_dynamic', 'list.wild_many', 'list.cwd_unknown',
   'shape.call', 'shape.dot_source', 'shape.splat', 'shape.background', 'shape.function', 'shape.process_out', 'shape.pipe_stderr', 'shape.control', 'shape.control_opaque', 'shape.script_block',
   'shape.static', 'shape.cast', 'shape.method', 'shape.expr', 'shape.replace_block',
   'code.spawn', 'code.powershell', 'code.launcher', 'code.wrapped_unknown', 'code.unknown_target', 'code.env', 'code.loopback', 'code.self_touch', 'code.limits',
@@ -64,8 +64,6 @@ export const SERVICE_PROGRAMS: ReadonlySet<string> = new Set([
 ]);
 
 export const DEV_RUNNERS: ReadonlySet<string> = new Set(['make', 'gmake', 'nmake', 'just', 'rake', 'ninja', 'pytest', 'jest', 'vitest', 'mocha', 'tox', 'nox']);
-
-export const SHELL_FETCH_TO_JUDGE: { readonly on: boolean } = { on: true };
 
 export function ownerKeysOf(keys: Iterable<string>): string[] {
   return [...new Set([...keys].filter(key => OWNER_KEYS.has(key)))];

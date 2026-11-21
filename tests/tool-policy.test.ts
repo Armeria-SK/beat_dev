@@ -198,9 +198,9 @@ test('スキルのフォルダへの書き込みの確かめの文は、聞か�
   assert.ok(OWNER_KEYS.has('file.skill_off'), 'only the owner decides a skills-folder write while Grow skills is Off, never the judge');
 });
 
-test('振り返りでは、外から読んだ内容のあとの書き込みの確かめ（ask）も拒否にする（承認する人がいないので待たない）。会話では今までどおり承認を求める', async t => {
+test('振り返りでは、外から読んだ内容のあとの記憶の書き込み（denyInReviewAfterOutside の道具）を拒否にする（承認する人がいないので待たない）。会話では外を読んだあとでも確かめない（P3）', async t => {
   const s = setup(t);
-  s.registry.register({ ...stub('memory_forget', ['chat', 'review'], s.ran), escalateOnTaint: true });
+  s.registry.register({ ...stub('memory_forget', ['chat', 'review'], s.ran), denyInReviewAfterOutside: true });
   const taint = { tainted: true, sources: ['history_read: c9'] };
   const started = Date.now();
   const review = await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint });
@@ -213,15 +213,11 @@ test('振り返りでは、外から読んだ内容のあとの書き込みの�
   assert.equal((await s.call('memory_forget', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv' })).decision, 'allow', '外を読んでいない振り返りは今までどおり使える');
   assert.equal((await s.call('memory_save', {}, { ...s.ctx, kind: 'review', conversationId: 'review-conv', taint })).decision, 'allow', '外を読んだあとでも、確かめの対象でない道具は変わらない');
 
-  // escalateOnTaint: 4-3b-2 後も判定役
   const chat = await s.call('memory_forget', {}, { ...s.ctx, taint });
-  assert.equal(chat.decidedBy, 'pending');
-  assert.deepEqual(s.ran, ['memory_forget', 'memory_save'], '判定役が確かめると答えたら動かない');
-  assert.deepEqual(s.waiting().map(r => r.kind), ['judge']);
-  assert.match(s.waiting()[0]!.checks.join(' '), /history_read: c9/u);
-  s.judge.answer = '{"decision":"allow","reason":"fits the request"}';
-  assert.equal((await s.call('memory_forget', {}, { ...s.ctx, taint })).decidedBy, 'auto-mode');
+  assert.equal(chat.decidedBy, 'builtin', chat.output.content);
   assert.deepEqual(s.ran, ['memory_forget', 'memory_save', 'memory_forget']);
+  assert.equal(s.waiting().length, 0);
+  assert.equal(s.judge.calls.length, 0);
 });
 
 test('A3: タスクの実行で ask になったら、札を待たずに Pending に積み、すぐ戻る', async t => {
@@ -277,16 +273,12 @@ test('A3: ask の理由には種類が付く（外を読む outside_read・外�
   writeFileSync(join(plain.paths.workspace, 'put.js'), "console.log('x');\n");
   assert.ok((await kindsOf(plain, 'node put.js')).includes('code'), 'コードを動かす');
   const readOutside = { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
-  plain.registry.register({ ...stub('t_escalate', ['chat'], plain.ran), escalateOnTaint: true });
-  const taintedCall = await plain.call('t_escalate', {}, readOutside);
-  assert.equal(taintedCall.decidedBy, 'pending');
-  assert.equal(plain.judge.calls.length, 1, '外から読んだあとの escalateOnTaint の道具は判定役に回る');
-  assert.ok(plain.judge.calls[0]!.user.includes(TAINTED_NOTE));
-  assert.deepEqual(plain.waiting().map(r => [r.kind, r.tainted]), [['judge', true]]);
-  assert.match(plain.waiting()[0]!.checks.join(' '), /web_fetch/u);
-  plain.pending.reject(plain.waiting()[0]!.id);
+  plain.registry.register(stub('t_meta', ['chat'], plain.ran));
+  const taintedCall = await plain.call('t_meta', {}, readOutside);
+  assert.equal(taintedCall.decidedBy, 'builtin', '外から読んだあとでも、メタの道具は確かめない（P3）');
+  assert.equal(plain.waiting().length, 0);
   assert.equal((await plain.call('file_write', { path: 'a.md', content: 'x' }, readOutside)).decidedBy, 'builtin', '外から読んだあとの書き込みは確かめない（R19）');
-  assert.equal(plain.judge.calls.length, 1);
+  assert.equal(plain.judge.calls.length, 0);
   assert.equal(existsSync(join(plain.paths.workspace, 'a.md')), true);
 
   const parkedKind = async (s: ReturnType<typeof setup>, c: ToolContext = s.ctx) => {

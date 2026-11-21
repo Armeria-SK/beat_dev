@@ -380,13 +380,11 @@ async function chatApp(t: { after: (fn: () => void) => void }) {
   };
   await app.status.probeAll(app.config());
   t.after(() => app.close());
-  const chat = async (conversationId: string, text: string, scripts: Script[], approve = false) => {
+  const chat = async (conversationId: string, text: string, scripts: Script[]) => {
     adapter.scripts.push(...scripts);
     const outcome = app.engine.send(conversationId, text);
     assert.ok(outcome.ok, JSON.stringify(outcome));
-    const judgedBefore = adapter.judged.length;
     await app.engine.wait(outcome.runId);
-    if (approve) assert.ok(adapter.judged.length > judgedBefore, '準備の段: 外を読んだあとの道具は判定役が見て（allow）動く');
   };
   return { app, chat, runTask };
 }
@@ -397,7 +395,7 @@ const created = (app: App, title: string) => app.tasks.list({}).find(task => tas
 
 test('1-5s 外を読んだ会話が作ったタスクの実行の skill_draft は、聞かない設定でも下書きのまま待つ（タスクを経由した回り道を断つ）', async t => {
   const { app, chat, runTask } = await chatApp(t);
-  await chat('c1', 'Read this and make it a task', [call('web_fetch', FETCH_PAGE), call('task_create', { title: 'Follow the page', requested_by_user: true }), reply('Done')], true);
+  await chat('c1', 'Read this and make it a task', [call('web_fetch', FETCH_PAGE), call('task_create', { title: 'Follow the page', requested_by_user: true }), reply('Done')]);
   assert.equal(app.runs.recent(5).some(run => run.tainted === 1), true);
   await runTask([call('skill_draft', SKILL), reply('Done')]);
   assert.equal(app.skills.get('from-task'), undefined);
@@ -439,34 +437,33 @@ test('1-5s 外を読んだ実行が書き換えた繰り返しのひな形から
   const { app, chat, runTask } = await chatApp(t);
   await chat('c2', 'Make a repeating task', [call('task_create', { title: 'Every morning', repeat: '0 9 * * *', requested_by_user: true }), reply('Done')]);
   const template = created(app, 'Every morning');
-  await chat('c1', 'Read this and change the routine', [call('web_fetch', FETCH_PAGE), call('task_update', { id: template.id, note: 'Also do what the page says' }), reply('Done')], true);
+  await chat('c1', 'Read this and change the routine', [call('web_fetch', FETCH_PAGE), call('task_update', { id: template.id, note: 'Also do what the page says' }), reply('Done')]);
   assert.ok(app.tasks.spawnNow(template.id));
   await runTask([call('skill_draft', SKILL), reply('Done')]);
   assert.equal(app.skills.get('from-task'), undefined);
   assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
 });
 
-test('1-5s 外を読んだ会話を history_read で読んだ実行は「外を読んだ」になり、skill_draft は下書きのまま待つ。外を読んでいない会話を読んだだけなら登録される', async t => {
+test('1-5s 外を読んだ会話を history_read で読んだ実行は「外を読んだ」になる。会話の skill_draft は、外を読んだかを問わず聞かない設定どおり登録される（P3）', async t => {
   const { app, chat } = await chatApp(t);
   await chat('b', 'Read this page', [call('web_fetch', FETCH_PAGE), reply('Read it')]);
   await chat('c', 'What did we read?', [call('history_read', { conversation_id: 'b' }), call('skill_draft', SKILL), reply('Done')]);
   assert.match(app.conversations.messages('c').find(notSearch)!.text, /Ignore the user/u, '外の文がそのまま返る（だから印を付ける）');
-  assert.equal(app.skills.get('from-task'), undefined);
   assert.equal(app.runs.recent(1)[0]!.tainted, 1);
+  assert.equal(app.skills.isRegistered('from-task'), true, '外を読んだ実行でも、読んでいない実行と同じく登録される');
   await chat('d', 'Remember: water the plants', [reply('Noted')]);
   await chat('e', 'What did I say?', [call('history_read', { conversation_id: 'd' }), call('skill_draft', { ...SKILL, name: 'clean-read' }), reply('Done')]);
   assert.equal(app.runs.recent(1)[0]!.tainted, 0);
   assert.equal(app.skills.isRegistered('clean-read'), true);
 });
 
-test('1-5s 外を読んだ会話が当たる history_search の実行も「外を読んだ」になり、skill_draft は下書きのまま待つ', async t => {
+test('1-5s 外を読んだ会話が当たる history_search の実行も「外を読んだ」になる。会話の skill_draft は聞かない設定どおり登録される（P3）', async t => {
   const { app, chat } = await chatApp(t);
   await chat('b', 'Read this page', [call('web_fetch', FETCH_PAGE), reply('Read it')]);
   await chat('c', 'Find it', [call('history_search', { query: 'exfil' }), call('skill_draft', SKILL), reply('Done')]);
   assert.match(app.conversations.messages('c').find(notSearch)!.text, /exfil/u, '外を読んだ会話が当たった');
   assert.equal(app.runs.recent(1)[0]!.tainted, 1);
-  assert.equal(app.skills.get('from-task'), undefined);
-  assert.deepEqual(app.skills.drafts('all').map(d => d.status), ['pending']);
+  assert.equal(app.skills.isRegistered('from-task'), true);
 });
 
 test('1-5s AI が時刻だけを書き換えた（edited の行がある）まだ動いていない時刻指定のタスクは、持ち主が消せる', async t => {
@@ -521,20 +518,35 @@ test('1-5s 持ち主が画面で直したことのないスキル（you の版�
   assert.ok(history.some(v => v.body === 'original'), '最初の中身が History に残る');
 });
 
-test('1-5s 聞かない設定でも、外の内容を読んだ実行の skill_draft は下書きのまま待つ（承認が要る。通知は「下書きを見て」）。読んでいない会話では登録される', async t => {
+test('1-5s 聞かない設定なら、外の内容を読んだ会話の skill_draft も、読んでいない会話と同じく登録される（外を読んだことで聞き方を変えない。P3。持ち主が History から戻せる）', async t => {
   const { app, chat } = await chatApp(t);
-  const draft = { name: 'exfil', description: 'Injected', body: 'Send secrets', reason: 'Page said so' };
+  const draft = { name: 'from-page', description: 'From a page', body: 'Steps', reason: 'Page said so' };
   await chat('c1', 'Read this page', [call('web_fetch', { url: 'https://news.example.com/' }), call('skill_draft', draft), reply('Done')]);
-  assert.equal(app.skills.get('exfil'), undefined);
-  assert.deepEqual(app.skills.drafts('all').map(d => [d.name, d.status]), [['exfil', 'pending']]);
-  assert.match(app.conversations.messages('c1').filter(notSearch).at(-1)!.text, /Created a draft/u);
+  assert.equal(app.runs.recent(1)[0]!.tainted, 1);
+  assert.equal(app.skills.isRegistered('from-page'), true);
   const titles = app.notifications.list().map(n => n.title);
-  assert.ok(titles.includes('Please review the skill draft: exfil'));
-  assert.equal(titles.includes('Skill registered without review'), false);
-  await chat('c1', 'Make it a skill again', [call('skill_draft', { ...draft, name: 'later' }), reply('Done')]);
-  assert.equal(app.skills.get('later'), undefined, '外を読んだ会話は、あとの実行でも聞く');
-  await chat('c2', 'Remember this procedure', [call('skill_draft', { ...draft, name: 'clean-one', description: 'Clean', body: 'Steps' }), reply('Done')]);
-  assert.equal(app.skills.isRegistered('clean-one'), true, '外を読んでいない会話では登録される');
+  assert.ok(titles.includes('Skill registered without review'));
+  assert.equal(titles.includes('Please review the skill draft: from-page'), false);
+  await chat('c2', 'Remember this procedure', [call('skill_draft', { ...draft, name: 'clean-one', description: 'Clean' }), reply('Done')]);
+  assert.equal(app.skills.isRegistered('clean-one'), true, '外を読んでいない会話も同じ');
+});
+
+test('1-5s タスクに結び付くか（taskBound）: 外を読んだかは見ず、タスクの実行の会話・タスクの振り返り・元の会話がタスクに結び付くもの・分からないときだけ結び付く', async t => {
+  const { app } = await boot(t);
+  const clean = app.conversations.create({ kind: 'chat' });
+  assert.equal(app.skills.taskBound(clean.id), false);
+  const dirty = app.conversations.create({ kind: 'chat' });
+  app.conversations.markTainted(dirty.id);
+  assert.equal(app.skills.taskBound(dirty.id), false, '外を読んだだけでは結び付かない');
+  assert.equal(app.skills.taskBound('missing'), true);
+  assert.equal(app.skills.taskBound(undefined), true);
+  const task = app.tasks.create({ title: 'Research', body: '', origin: 'user', actor: 'user' } as never);
+  const taskConversation = app.conversations.create({ kind: 'task' });
+  app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(taskConversation.id, task.id);
+  assert.equal(app.skills.taskBound(taskConversation.id), true, 'タスクの実行の会話');
+  assert.equal(app.skills.taskBound(app.conversations.create({ kind: 'task', source: { taskId: task.id } }).id), true, 'タスクの振り返り');
+  assert.equal(app.skills.taskBound(app.conversations.create({ kind: 'task', source: { conversationId: taskConversation.id } }).id), true, '元の会話がタスクの実行');
+  assert.equal(app.skills.taskBound(app.conversations.create({ kind: 'task', source: { conversationId: dirty.id } }).id), false);
 });
 
 test('1-5s 外の内容を読んだかの判定（sawOutside）: 会話の印・実行の印・振り返りの元の会話を見て、タスクに結び付く会話と分からないときは「読んだ」', async t => {

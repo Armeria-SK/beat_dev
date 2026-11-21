@@ -174,6 +174,8 @@ export function checkUrl(word: Word, acc: Acc, ctx: MatchCtx, cmd: string): void
   let url: URL;
   try { url = new URL(word.text); } catch { acc.add('once', 'list.form', { cmd, detail: word.text }, true); return; }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') { acc.add('once', 'list.form', { cmd, detail: word.text }, true); return; }
+  // web_fetch と同じ長い問い合わせの見張り（どの実行でも）。秘密に見える文字は outbound.ts が断る
+  if (url.search.length > 300) acc.add('ask', 'list.long_query', { cmd }, false);
   const host = hostOf(word.text) ?? '';
   if (isLoopbackHost(host, ctx.selfHosts)) acc.add('once', 'code.loopback', { host }, false);
   else if (LAN_HOST.test(host) || LAN_HOST.test(v4Of(host)) || /\.(?:local|lan|internal)$/u.test(host) || host.endsWith('.home.arpa')) acc.add('ask', 'list.lan', { host });

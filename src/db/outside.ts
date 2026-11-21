@@ -12,3 +12,14 @@ export function conversationSawOutside(db: DatabaseSync, conversationId: string 
   if (db.prepare('SELECT 1 FROM tasks WHERE conversation_id = ? LIMIT 1').get(conversationId) !== undefined) return true;
   return row.source_conversation_id !== null && conversationSawOutside(db, row.source_conversation_id, seen);
 }
+
+// 会話がタスクに結び付くか（タスクの実行の会話・タスクの振り返り。分からないときも結び付く扱い）。外の内容を読んだかは見ない
+export function conversationTaskBound(db: DatabaseSync, conversationId: string | null | undefined, seen: Set<string> = new Set()): boolean {
+  if (!conversationId) return true;
+  if (seen.has(conversationId)) return false;
+  seen.add(conversationId);
+  const row = db.prepare('SELECT source_conversation_id, source_task_id FROM conversations WHERE id = ?').get(conversationId) as { source_conversation_id: string | null; source_task_id: string | null } | undefined;
+  if (!row || row.source_task_id) return true;
+  if (db.prepare('SELECT 1 FROM tasks WHERE conversation_id = ? LIMIT 1').get(conversationId) !== undefined) return true;
+  return row.source_conversation_id !== null && conversationTaskBound(db, row.source_conversation_id, seen);
+}

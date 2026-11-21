@@ -18,7 +18,6 @@ import { memoryForget, memorySave } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { webFetch } from '../src/tools/builtin/web.ts';
 import { ASK_REASON_KINDS } from '../src/tools/hooks/ask-kinds.ts';
-import { SHELL_FETCH_TO_JUDGE } from '../src/tools/hooks/decision-order.ts';
 import { effectiveMode, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -377,7 +376,7 @@ test('自動承認のモードでは判定役が決める。計画のモード�
   assert.equal(effectiveMode({ ...probe.ctx, kind: 'review', permissionMode: 'plan' }, { permissionMode: () => 'plan' } as never), 'auto', '振り返りには効かない');
 });
 
-test('タスクの実行: よそから来た文を読んだあとでも、許可フォルダの中を読むコマンドと書く道具は確かめなしに動く（判定役が無くても）。外読みは判定役が決め（ask なら judge の Pending）、escalateOnTaint の道具も AP-1c（Q2）で判定役（ask なら judge の Pending）', async t => {
+test('タスクの実行: よそから来た文を読んだあとでも、許可フォルダの中を読むコマンドと書く道具は確かめなしに動く（判定役が無くても）。外読みは判定役が決め（ask なら judge の Pending）。記憶の道具は外を読んだあとも確かめなし（P3）', async t => {
   const taskCtx = (s: Setup): ToolContext => ({ ...s.ctx, kind: 'task', conversationId: 'task-conv', permissionMode: 'auto', taint: { tainted: true, sources: ['web_fetch'] } });
   const inRoot = (s: Setup) => {
     const path = join(s.paths.workspace, 'weather.json');
@@ -393,7 +392,6 @@ test('タスクの実行: よそから来た文を読んだあとでも、許可
 
   for (const [label, name, args, extra, kind, prompts] of [
     ['外読み', 'shell_run', (x: Setup) => ({ command: x.readOutside }), {}, 'judge', 1],
-    ['escalateOnTaint', 'memory_save', () => ({ book: 'user', content: '覚えて' }), {}, 'judge', 1],
   ] as const) {
     const x = await setup(t, { tools: [memorySave], classify: ASK('タスクの依頼にない') });
     const row = await parked(x, name, args(x), taskCtx(x), extra);
@@ -583,7 +581,7 @@ const FETCH_COMMANDS = process.platform === 'win32'
   ? ['curl.exe -s https://beat-test.invalid/SECRET', 'Invoke-WebRequest -Uri https://beat-test.invalid/SECRET -MaximumRedirection 0', 'irm https://beat-test.invalid/SECRET -MaximumRedirection 0']
   : ['curl -s https://beat-test.invalid/SECRET'];
 
-test('外のファイルを読むのを自動承認で許しても（外から読んだ印は付かない）、その実行のシェルのコマンドは確かめなしに動く: 許可の一覧にある取得（curl・Invoke-WebRequest・irm）も、ふつうのコマンドも。取得で印が付いたあとの取得は判定役に回る（5-J2）', async t => {
+test('外のファイルを読むのを自動承認で許しても（外から読んだ印は付かない）、その実行のシェルのコマンドは確かめなしに動く: 許可の一覧にある取得（curl・Invoke-WebRequest・irm）も、ふつうのコマンドも。取得で印が付いたあとの取得も同じ（P3）', async t => {
   const s = await setup(t);
   assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'auto-mode');
   assert.equal(s.ctx.taint.tainted, false);
@@ -595,10 +593,10 @@ test('外のファイルを読むのを自動承認で許しても（外から�
   assert.equal(cards(s), 0);
   assert.equal(s.prompts.length, 1, '外読みのあとのシェルは、判定役に回らない');
   for (const command of FETCH_COMMANDS) {
-    const row = await parked(s, 'shell_run', { command }, { ...s.ctx, taint: { tainted: true, sources: ['shell_run'] } });
-    assert.equal(row.kind, 'judge', command);
+    const outcome = await s.call('shell_run', { command }, { ...s.ctx, taint: { tainted: true, sources: ['shell_run'] } });
+    assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], command);
   }
-  assert.equal(s.prompts.length, 1 + FETCH_COMMANDS.length);
+  assert.equal(s.prompts.length, 1);
 });
 
 test('シェルで外から取得したら、web_fetch と同じに「外から読んだ」印が付く。失敗した取得にも付く。取得でないコマンド・札で断った取得には付かない', async t => {
@@ -651,7 +649,7 @@ test('持ち主が Pending で許した egress の確かめは、動かしたら
   }
 });
 
-test('シェルで取得したあとの外読みは判定役が決める（判定役には taint の 1 行が付く）。取得したあとの取得も判定役に回る（5-J2）', async t => {
+test('シェルで取得したあとの外読みは判定役が決める（判定役には taint の 1 行が付く）。取得したあとの取得は確かめなし（P3）', async t => {
   const s = await setup(t);
   await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
   assert.equal(s.ctx.taint.tainted, true, '前提: 取得で印が付いた');
@@ -660,35 +658,19 @@ test('シェルで取得したあとの外読みは判定役が決める（判�
   assert.equal(s.prompts.length, 1);
   assert.ok(s.prompts[0]!.user.includes(TAINTED_NOTE));
   s.state.classify = ASK('外へ出ます');
-  const again = await parked(s, 'shell_run', { command: FETCH_COMMANDS[0]! });
-  assert.equal(again.kind, 'judge');
-  assert.equal(s.prompts.length, 2);
+  assert.equal((await s.call('shell_run', { command: FETCH_COMMANDS[0]! })).decidedBy, 'builtin');
+  assert.equal(s.prompts.length, 1);
 });
 
-test('Q-W1-15（5-J2）: シェルの取得（許可の一覧にある GET）は、よそから来た文を読む前は確かめなしに動き、読んだあとは判定役に回り、ask なら judge の Pending に積まれて動かない。切り替えを切ると、読んだあとも確かめなしに戻る', async t => {
-  assert.equal(SHELL_FETCH_TO_JUDGE.on, true);
+test('Q-W1-15（P3 で反転）: シェルの取得（許可の一覧にある GET）は、よそから来た文を読む前もあとも確かめなしに動く（外を読んだことで聞き方を変えない。持ち主の決め 2026-11-21）', async t => {
   const s = await setup(t, { classify: ASK('外へ出ます') });
   const before = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
   assert.deepEqual([before.decision, before.decidedBy], ['allow', 'builtin'], '読む前の取得');
-  assert.equal(s.prompts.length, 0);
   assert.equal(s.ctx.taint.tainted, true);
-  const tainted = await parked(s, 'shell_run', { command: FETCH_COMMANDS[0]! });
-  assert.equal(tainted.kind, 'judge', '読んだあとの取得は判定役に回る');
-  assert.equal(tainted.tainted, true);
-  assert.ok(tainted.checks.some(r => /fetches something from outside/u.test(r)));
-  assert.equal(s.prompts.length, 1);
-  assert.ok(s.prompts[0]!.user.includes(TAINTED_NOTE));
-  assert.equal((await s.call('shell_run', { command: 'echo hello' })).decidedBy, 'builtin', '読んだあとも、取得でないコマンドは確かめなし');
-
-  const flag = SHELL_FETCH_TO_JUDGE as { on: boolean };
-  flag.on = false;
-  try {
-    const after = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
-    assert.deepEqual([after.decision, after.decidedBy], ['allow', 'builtin'], '切り替えを切ると、読んだあとの取得も確かめなし');
-    assert.equal(s.prompts.length, 1);
-  } finally {
-    flag.on = true;
-  }
+  const after = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
+  assert.deepEqual([after.decision, after.decidedBy], ['allow', 'builtin'], '読んだあとの取得も同じ');
+  assert.equal(s.prompts.length, 0);
+  assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
 });
 
@@ -749,7 +731,7 @@ function fake(name: string, effect: ToolDef['effect'], over: Partial<ToolDef> = 
 const said = (what: { sends?: boolean; removes?: boolean }, askKinds?: AskKind[]) => (): PreCheck =>
   askKinds ? { decision: 'ask', reasons: ['確かめ'], askKinds, ...what } : { decision: 'allow', reasons: [], ...what };
 
-test('よそから来た文を読んだあと: escalateOnTaint の道具は判定役に回り、ask なら judge の Pending に、外を読んだ印と理由つきで積まれ、動かない。書く・実行の道具は、MCP でない道具の sends・removes を言っても確かめなしに動く（R19）', async t => {
+test('よそから来た文を読んだあと（P3 で反転）: メタの道具・記憶を消す道具も、書く・実行の道具（MCP でない道具の sends・removes を言っても。R19）も、確かめなしに動く', async t => {
   const s = await setup(t, {
     classify: ASK('送るか消すかもしれません'),
     tools: [
@@ -760,26 +742,20 @@ test('よそから来た文を読んだあと: escalateOnTaint の道具は判�
       fake('t_silent_removes_exec', 'exec', { preCheck: said({ sends: false }) }),
       fake('t_no_precheck_exec', 'exec'),
       fake('t_net_writer', 'network', { writesFiles: true, preCheck: said({ sends: false, removes: false }) }),
-      fake('t_net_call', 'read', { escalateOnTaint: true, networkCall: () => true }),
-      fake('t_meta', 'meta', { escalateOnTaint: true }),
+      fake('t_net_call', 'read', { networkCall: () => true }),
+      fake('t_meta', 'meta'),
       memoryForget,
     ],
   });
   const tainted = taintedOf(s);
-  for (const name of ['t_sends', 't_removes', 't_silent_write', 't_no_precheck_exec', 't_silent_removes_write', 't_silent_removes_exec', 't_net_writer']) {
+  for (const name of ['t_sends', 't_removes', 't_silent_write', 't_no_precheck_exec', 't_silent_removes_write', 't_silent_removes_exec', 't_net_writer', 't_net_call', 't_meta']) {
     const outcome = await s.call(name, {}, tainted);
     assert.deepEqual([outcome.decision, outcome.decidedBy, outcome.output.content], ['allow', 'builtin', `ran ${name}`], name);
   }
+  const forgot = await s.call('memory_forget', { id: 1, reason: 'x' }, tainted);
+  assert.deepEqual([forgot.decision, forgot.decidedBy], ['allow', 'builtin'], forgot.output.content);
   assert.equal(s.prompts.length, 0);
-  const rows: Array<[string, unknown]> = [['t_net_call', {}], ['t_meta', {}], ['memory_forget', { id: 1, reason: 'x' }]];
-  for (const [name, args] of rows) {
-    const seen = await parked(s, name, args, tainted);
-    assert.equal(seen.kind, 'judge', name);
-    assert.equal(seen.tainted, true, name);
-    assert.ok(seen.checks.some(r => /text that came from somewhere else/u.test(r)), `${name}: ${seen.checks.join(' / ')}`);
-  }
-  assert.equal(s.prompts.length, rows.length, 'どれも判定役に回る');
-  assert.ok(s.prompts.every(p => p.user.includes(TAINTED_NOTE)), '判定役に、よそから来た文を読んだ会話だと伝える');
+  assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
   assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
 });
 
@@ -806,12 +782,12 @@ test('外を読む確かめ（outside_read）に送る・消すと言う道具�
   assert.equal(s.prompts.length, names.length + 1);
 });
 
-test('よそから来た文を読んだあとでも、送らず消さないと言う道具・ファイルの道具・送らないシェルのコマンドは確かめなしに動き、escalateOnTaint のメタの道具は判定役が決める。判定役の allow は同じ実行の中だけ使い回し（J-3）、別の実行では次も判定役に回る', async t => {
+test('よそから来た文を読んだあとでも、送らず消さないと言う道具・ファイルの道具・送らないシェルのコマンドは確かめなしに動き。メタの道具も確かめなし（P3 で反転）', async t => {
   const s = await setup(t, {
     tools: [
       fake('c_clean_write', 'write', { preCheck: said({ sends: false, removes: false }) }),
       fake('c_clean_exec', 'exec', { preCheck: said({ sends: false, removes: false }) }),
-      fake('c_meta', 'meta', { escalateOnTaint: true }),
+      fake('c_meta', 'meta'),
     ],
   });
   const tainted = taintedOf(s);
@@ -822,14 +798,9 @@ test('よそから来た文を読んだあとでも、送らず消さないと�
     const outcome = await s.call(name, args, tainted);
     assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], name);
   }
+  assert.equal((await s.call('c_meta', {}, tainted)).decidedBy, 'builtin');
   assert.equal(s.prompts.length, 0);
-  assert.deepEqual([(await s.call('c_meta', {}, tainted)).decidedBy, s.prompts.length], ['auto-mode', 1]);
   assert.equal(cards(s), 0);
-  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 1);
-  assert.equal((await s.call('c_meta', {}, tainted)).decidedBy, 'judge-reuse');
-  assert.equal(s.prompts.length, 1);
-  assert.equal((await s.call('c_meta', {}, { ...tainted, runId: 'r2' })).decidedBy, 'auto-mode');
-  assert.equal(s.prompts.length, 2);
 });
 
 
@@ -977,18 +948,14 @@ test('shell_run を通して: コマンドに秘密鍵の BEGIN の印があり�
   assert.ok(!outcome.output.content.includes('PRIVATE KEY'), outcome.output.content);
 });
 
-// escalateOnTaint: 4-3b-2 後も判定役
-test('メモリの道具（Q-C）: memory_save は判定役が決める。memory_forget も、よそから来た文を読んだあとは判定役が決め、ask なら judge の Pending', async t => {
-  const s = await setup(t, { tools: [memoryForget, memorySave] });
+test('メモリの道具（Q-C、P3 で反転）: memory_save も memory_forget も、よそから来た文を読んだあとでも確かめなしに動く', async t => {
+  const s = await setup(t, { tools: [memoryForget, memorySave], classify: ASK('記憶を消します') });
   const tainted = taintedOf(s);
   const saved = await s.call('memory_save', { book: 'user', content: 'x' }, tainted);
-  assert.deepEqual([saved.decision, saved.decidedBy], ['allow', 'auto-mode'], 'memory_save は、よそから来た文を読んだあとも判定役が決める');
-  assert.equal(s.prompts.length, 1);
-  s.state.classify = ASK('記憶を消します');
-  const seen = await parked(s, 'memory_forget', { id: 1, reason: 'x' }, tainted);
-  assert.equal(seen.kind, 'judge');
-  assert.equal(seen.tainted, true);
-  assert.equal(s.prompts.length, 2);
+  assert.deepEqual([saved.decision, saved.decidedBy], ['allow', 'builtin'], saved.output.content);
+  const forgot = await s.call('memory_forget', { id: 1, reason: 'x' }, tainted);
+  assert.equal(forgot.decidedBy, 'builtin', forgot.output.content);
+  assert.equal(s.prompts.length, 0);
   const idle = await setup(t, { tools: [memoryForget], mutate: c => { c.tools.policies = { memory_forget: 'ask' }; } });
   assert.equal((await idle.call('memory_forget', { id: 1, reason: 'x' })).decidedBy, 'pending', '比べる基準: 方針の ask は判定役に回らず Pending');
   assert.equal(idle.prompts.length, 0);

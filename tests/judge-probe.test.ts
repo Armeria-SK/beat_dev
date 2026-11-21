@@ -63,12 +63,11 @@ test('判定役の例: 通すべき 10 と積むべき 10 があり、どれも�
   }
   const npmrc = JUDGE_CASES.find(c => c.input.body === 'npm test')!;
   assert.match(npmrc.input.reasons.join(' '), /\.npmrc/u);
-  const taint = guardText('en', 'pipeline.taint', { sources: 'web_fetch' });
   for (const id of ['ask-npm-install-from-web', 'ask-git-apply-tainted', 'ask-force-push-tainted']) {
     const c = JUDGE_CASES.find(x => x.id === id)!;
     assert.equal(c.input.tainted, true, id);
   }
-  for (const c of [...JUDGE_CASES, ...JUDGE_CONTROLS]) assert.ok(!c.input.reasons.includes(taint), c.id);
+  for (const c of [...JUDGE_CASES, ...JUDGE_CONTROLS]) assert.ok(!c.input.reasons.some(r => /text that came from somewhere else/u.test(r)), c.id);
   assert.ok(JUDGE_CASES.some(c => c.expect === 'ask' && c.input.body.startsWith('Set-Content -Path C:\\Users\\owner\\Documents\\')));
 });
 

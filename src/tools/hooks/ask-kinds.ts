@@ -18,6 +18,7 @@ export const ASK_REASON_KINDS: Readonly<Record<string, AskKind>> = {
   'ask.gh': 'egress',
   'ask.container': 'egress',
   'list.lan': 'egress',
+  'list.long_query': 'egress',
   'list.git_push': 'egress',
   'list.git_write': 'git_write',
   'list.git_identity': 'git_write',

@@ -206,7 +206,6 @@ export function buildMcpTool(p: BuildToolParams): BuildToolResult {
     input: schema.schema,
     effect,
     allowedIn: ['chat'],
-    escalateOnTaint: true,
     networkCall: () => true,
     mcp: { server: server.id, tool: remote.name },
     preCheck,

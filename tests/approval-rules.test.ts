@@ -90,7 +90,7 @@ function candidateOf(r: Rig, command: string, kind: string, c: Partial<ToolConte
   return ruleCandidate({ tool: shellRun, args: { command }, ctx, parkKind: kind, check, outbound: check.outbound, askKinds: extra.askKinds ?? check.askKinds ?? [], policyAsk: extra.policyAsk ?? false });
 }
 
-const ALL_ASK: AskKind[] = ['precheck', 'code', 'taint', 'policy', 'hook', 'outside_read', 'outside_write', 'risky_command', 'egress', 'git_write', 'opaque', 'persona', 'owner', 'web'];
+const ALL_ASK: AskKind[] = ['precheck', 'code', 'policy', 'hook', 'outside_read', 'outside_write', 'risky_command', 'egress', 'git_write', 'opaque', 'persona', 'owner', 'web'];
 // A rule whose key set covers every ask kind (and the extra keys), so only the pipeline's overlap blockers can stop it. Test-only: no product code widens a rule
 function widen(r: Rig, id: number, extra: string[] = []): void {
   const row = r.db.prepare('SELECT keys FROM approval_rules WHERE id = ?').get(id) as { keys: string };
@@ -241,12 +241,10 @@ test('J-5 形: 製品が無い・偵察・Q1 の道具（タスクの実行）�
   assert.equal(candidateOf(r, 'npm install a', 'judge', { project: undefined }), undefined);
   assert.equal(candidateOf(r, 'npm install a', 'judge', { scout: true }), undefined);
   const check = shellPreCheck({ command: 'npm install a' }, r.ctx);
-  const of = (askKinds: AskKind[], fetchEgress?: boolean) => ruleCandidate({ tool: shellRun, args: {}, ctx: r.ctx, parkKind: 'judge', check, outbound: undefined, askKinds, policyAsk: false, ...(fetchEgress !== undefined ? { fetchEgress } : {}) });
+  const of = (askKinds: AskKind[]) => ruleCandidate({ tool: shellRun, args: {}, ctx: r.ctx, parkKind: 'judge', check, outbound: undefined, askKinds, policyAsk: false });
   const clean = of(['code']);
   assert.ok(clean, 'control');
-  assert.deepEqual(of(['code', 'taint']), clean, 'the taint kind is not a key');
-  assert.deepEqual(of(['code', 'egress'], true), clean, 'the egress only the fetch-after-taint added is not a key');
-  assert.ok(of(['code', 'egress'], false)?.keys.includes('ask:egress'), 'an egress the pre-check gave stays a key');
+  assert.ok(of(['code', 'egress'])?.keys.includes('ask:egress'), 'an egress the pre-check gave stays a key');
   const q1 = { name: 'task_create' } as ToolDef;
   assert.equal(ruleCandidate({ tool: q1, args: {}, ctx: { ...r.ctx, kind: 'task' }, parkKind: 'policy', check: undefined, outbound: undefined, askKinds: [], policyAsk: true }), undefined);
   assert.equal(ruleCandidate({ tool: q1, args: {}, ctx: { ...r.ctx, kind: 'agent', parent: { runId: 'x', conversationId: 'c', kind: 'task', title: 't' } }, parkKind: 'policy', check: undefined, outbound: undefined, askKinds: [], policyAsk: true }), undefined);
@@ -531,7 +529,7 @@ test('J-5 重なり（積む前）: キーを広げた決まりがあっても�
 test('J-5 重なり（人の見ていない実行）: AP-1（Q2・Q7・N9）で反転: よそを読んだタスクの実行の escalateOnTaint の道具も、きれいな実行で作った方針の決まり（keys は policy.tool だけ）に当たり、積まない。決まりが無ければ policy の行で選び方を出す', async t => {
   const r = rig(t, c => { c.tools.policies = { memory_like: 'ask' }; });
   const { db } = r;
-  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], escalateOnTaint: true, execute: async () => ({ content: 'ok' }) };
+  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], execute: async () => ({ content: 'ok' }) };
   const registry = new ToolRegistry().register(memoryLike);
   const pending = new PendingStore(db, { tools: registry, dataDir: r.paths.data });
   const task: ToolContext = { ...r.ctx, kind: 'task', task: { id: 't1', control: { outcome: 'none' } }, taint: { tainted: true, sources: ['web_fetch'] } };
@@ -1297,7 +1295,7 @@ test('AP-1b N7（push）: 外を読んだ実行でも push の決まりに当た
 });
 
 test('AP-1b N9: きれいな実行で作った方針の決まり（memory_save 似の道具）・会話の task_create の決まりは、外を読んだ実行（ask:taint 付き）でも当たる。npm install の決まりは、取得のあとの判定役行き（fetchToJudge）の実行でも当たる', async t => {
-  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], escalateOnTaint: true, execute: async () => ({ content: 'ok' }) };
+  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], execute: async () => ({ content: 'ok' }) };
   const r = rig(t, c => { c.tools.policies = { memory_like: 'ask', task_create: 'ask' }; }, [memoryLike]);
   for (const name of ['memory_like', 'task_create']) {
     await r.call(name, { title: 'clean' }, { ...r.ctx, taint: { tainted: false, sources: [] } });

@@ -39,7 +39,7 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
   input: Type.Object({ book: BookArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
-  escalateOnTaint: true,
+  denyInReviewAfterOutside: true,
   summarize: (input, language) => ({ title: toolText(language, 'summary.memory_save', { label: BOOK_LABELS[language][input.book] }), body: input.content }),
   async execute(input, ctx) {
     try {
@@ -59,7 +59,7 @@ export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
   input: Type.Object({ id: IdArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
-  escalateOnTaint: true,
+  denyInReviewAfterOutside: true,
   async execute(input, ctx) {
     try {
       const s = services(ctx);
@@ -76,7 +76,7 @@ export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
   input: Type.Object({ id: IdArg, reason: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
-  escalateOnTaint: true,
+  denyInReviewAfterOutside: true,
   async execute(input, ctx) {
     try {
       const s = services(ctx);

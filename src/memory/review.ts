@@ -253,7 +253,7 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
       { tag: 'format', text: '- At the end, report what you did in one or two sentences' },
       { tag: 'language', text: "- Write memories, skill drafts and your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English" },
     ],
-    skillAuto: "- If you find a procedure that looks reusable, use skill_draft (it is registered right away without the user's review unless the record read outside content or is about a task, in which case it waits for the user's approval; the user can undo it from the skill's History). Prefer fixing an existing skill over creating a new one",
+    skillAuto: "- If you find a procedure that looks reusable, use skill_draft (it is registered right away without the user's review unless the record is about a task, in which case it waits for the user's approval; after a record that read outside content it is refused; the user can undo it from the skill's History). Prefer fixing an existing skill over creating a new one",
     fileMemoryLanguage: "- Write the product's memory notes (title and content) in English, quoting the user's words as they are. Write your final reply in the language the user writes in: the language of the [User] lines in the record below (if there are none, the language of the user's own words in the task's title and notes). Only the reply \"No changes\" stays in English",
     tidyPolicy: [
       '- The purpose this time is to propose how to tidy up memory. Do not learn anything new (memory_save is not available)',

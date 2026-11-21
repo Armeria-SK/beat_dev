@@ -201,14 +201,14 @@ test('S-1a R5: the first start copies the old reading places once, and deleting 
   assert.equal(s.app.kv.get('review:skill-upto:c1'), undefined);
 });
 
-test('S-1a R4: a conversation that read outside content is still reviewed, and its draft waits for approval even with Ask before registering off', async t => {
+test('S-1a R4: a conversation that read outside content is still reviewed, but its skill_draft is refused (a review has nobody to approve it, P3)', async t => {
   const s = await setup(t, { edit: c => { c.skills = { askBeforeRegister: false }; } });
   await s.chat('c1', 'work', Array.from({ length: 10 }, calc));
   s.app.conversations.markTainted('c1');
   s.adapter().scripts.push(call('skill_draft', { name: 'from-web', description: 'd', body: 'b', reason: 'r' }), reply('drafted'));
   assert.equal(await s.app.worker.tick(), 'ran');
-  assert.deepEqual(s.app.skills.drafts('all').map(d => [d.name, d.status]), [['from-web', 'pending']]);
-  assert.equal(s.app.db.prepare("SELECT outside FROM skill_drafts WHERE name = 'from-web'").get()!.outside, 1);
+  assert.deepEqual(s.app.skills.drafts('all'), []);
+  assert.deepEqual((s.app.db.prepare("SELECT decision FROM tool_calls WHERE tool = 'skill_draft'").all() as Array<{ decision: string }>).map(r => r.decision), ['deny']);
 });
 
 test('S-1b: a skill review gets exactly skill_view, skill_draft, history_read and history_search; other tools are refused, even one registered after it started', async t => {
