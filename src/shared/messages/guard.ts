@@ -141,7 +141,8 @@ const en = {
   'code.loopback': 'It connects to a server on this PC, which includes beat itself ({host})',
   'code.git_config': 'It rewrites git settings ({cmd}). Settings can run commands, so it is checked with you every time',
   'code.self_touch': 'This code contains text that touches beat itself (its settings, persona, approvals or memory): {markers}',
-  'code.preview_missing': 'This file does not exist yet (the command creates it). Its contents cannot be shown',
+  'code.self_hint': 'The code mentions {markers}. A product often has its own of these, but beat uses the same names (its API, config.json, skills folder, a local server)',
+  'code.preview_missing':'This file does not exist yet (the command creates it). Its contents cannot be shown',
   'code.preview_unreadable': 'The contents cannot be shown',
   'code.limits': 'This command also runs code from files it loads and from parts it installs, beyond the files shown. Only the files shown were checked',
 

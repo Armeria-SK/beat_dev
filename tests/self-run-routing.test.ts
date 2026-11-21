@@ -8,7 +8,7 @@ const PS = process.platform === 'win32';
 interface Case { name: string; input: { command: string; background?: boolean; timeoutSec?: number }; want: Route; ps?: boolean }
 export const TRIAL_CASES: readonly Case[] = [
   { name: '#46 probe', input: { command: 'node --disable-warning=ExperimentalWarning .tmp/probe.ts' }, want: 'step4' },
-  { name: '#48 e2e', input: { command: 'node --disable-warning=ExperimentalWarning scripts/e2e.ts 2>&1 | Select-Object -Last 60' }, want: 'judge', ps: true },
+  { name: '#48 e2e', input: { command: 'node --disable-warning=ExperimentalWarning scripts/e2e.ts 2>&1 | Select-Object -Last 60' }, want: 'step4', ps: true },
   { name: '#50 start (background)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', background: true }, want: 'step4', ps: true },
   { name: '#51 start (6 s)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', timeoutSec: 6 }, want: 'step4', ps: true },
   { name: 'v1 #43 cli', input: { command: 'npx tsx src/cli.ts samples/sample.csv' }, want: 'judge' },
@@ -54,4 +54,12 @@ test('P1 V8: 道具の読む env・コードの読まない名前・決まって
     if (route !== want) got.push(`${command}: ${route} (want ${want}) keys=${JSON.stringify(pre.reasonKeys)}`);
   }
   assert.deepEqual(got, []);
+});
+
+test('P1 1c: 弱い目印（config.json）は beat 自身に触る印にならず、判定役の文に手がかりとして載る', async t => {
+  const r = selfRunRig(t);
+  const { route, pre } = await r.routeOf({ command: 'npx tsx src/cli.ts samples/sample.csv' });
+  assert.equal(route, 'judge');
+  assert.ok(!pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(pre.reasonKeys));
+  assert.match(r.judge.prompts.at(-1)!.user, /why it needs approval: .*The code mentions config\.json/u);
 });

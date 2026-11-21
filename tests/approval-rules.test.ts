@@ -1112,7 +1112,7 @@ test('AP-1f N8: 製品のポート（beat のポートでない）だけを loca
   assert.equal(r.judge.calls, 0);
 });
 
-test('AP-1f T-G8: beat のポート・ポートの無いループバック・組み立てたループバックは今までどおり beat 自身に触る印が付き、決まりにも順 4 にもならない', async t => {
+test('AP-1f T-G8: beat のポート・組み立てたループバック（ポートを後から足す形も）は今までどおり beat 自身に触る印が付き、決まりにも順 4 にもならない', async t => {
   const r = rig(t);
   const port = r.ctx.config.server.port;
   const digits = String(port);
@@ -1128,17 +1128,11 @@ test('AP-1f T-G8: beat のポート・ポートの無いループバック・組
     ['ipv6-full', `fetch('http://[0:0:0:0:0:0:0:1]:${port}/');`],
     ['ipv6-any', `fetch('http://[::]:${port}/');`],
     ['sub-localhost', `fetch('http://app.localhost:${port}/');`],
-    ['no-port', "fetch('http://localhost/');"],
     ['port-elsewhere', `fetch('http://localhost:5173/');\nconst other = ${port};`],
     ['join-v4', "fetch('http://' + ['127.0.0', 1].join('.') + ':5173/');"],
-    ['short-v4', "fetch('http://127.1/');"],
     ['short-v4-beat', `fetch('http://127.1:${port}/');`],
-    ['ipv6-full-no-port', "fetch('http://[0:0:0:0:0:0:0:1]/');"],
-    ['sub-localhost-no-port', "fetch('http://app.localhost/');"],
-    ['ipv6-any-no-port', "fetch('http://[::]/');"],
     ['split-digits', "fetch('http://localhost:" + digits.slice(0, 2) + "' + '" + digits.slice(2) + "/');"],
     ['brace-shell', `execSync('bash -c "curl http://local{host,}:${digits[0]}{${digits.slice(1)},}/"');`],
-    ['api', "fetch('http://localhost:5173/api/pending');"],
     ['newline-in-port', 'fetch(`http://127.0.0.1:' + digits.slice(0, 2) + '\n' + digits.slice(2) + '/settings`);'],
     ['escaped-port', "fetch('http://lvh.me:\\x" + (0x30 + Number(digits[0])).toString(16) + digits.slice(1) + "/');"],
     ['newline-in-host', 'fetch(`http://local\nhost:' + digits + '/`);'],
@@ -1154,6 +1148,46 @@ test('AP-1f T-G8: beat のポート・ポートの無いループバック・組
     assert.equal(r.waiting().at(-1)!.rule ?? null, null, `${name}: 決まりの候補にならない（NEVER_KEYS）`);
   }
   assert.deepEqual(r.ran, []);
+});
+
+test('self-run P1 1c: 弱い目印（/api/・config.json・skills/・ポートの無いループバックの URL）は beat 自身に触る印にせず順 4。判定役への文の手がかりにだけ載る', async t => {
+  const r = rig(t);
+  for (const [name, body] of [
+    ['no-port', "fetch('http://localhost/');"],
+    ['short-v4', "fetch('http://127.1/');"],
+    ['ipv6-full-no-port', "fetch('http://[0:0:0:0:0:0:0:1]/');"],
+    ['sub-localhost-no-port', "fetch('http://app.localhost/');"],
+    ['ipv6-any-no-port', "fetch('http://[::]/');"],
+    ['https-no-port', "fetch('https://localhost/x', {});"],
+    ['api', "fetch('http://localhost:5173/api/pending');"],
+    ['config', "JSON.parse(readFileSync('config.json', 'utf8'));"],
+    ['skills', "readdirSync('skills/');"],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(!pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.ok(pre.reasons.some(reason => reason.startsWith('The code mentions')), `${name}: 手がかりの文 ${JSON.stringify(pre.reasons)}`);
+    assert.ok(pre.productRun !== undefined, `${name}: 順 4 に乗る`);
+    assert.equal(out.decidedBy, pre.productRun, `${name}: ${out.output.content}`);
+  }
+  assert.equal(r.judge.calls, 0);
+  for (const [name, body] of [
+    ['soul', "readFileSync('SOUL.md');"], ['user', "readFileSync('USER.md');"], ['db', "open('beat.db');"], ['env', "readFileSync('.env');"],
+    ['user-info', "fetch('http://me@localhost/');"], ['template-port', 'fetch(`http://localhost${port}/`);'], ['concat-port', "fetch('http://localhost' + port);"],
+    ['no-port-and-beat', `fetch('http://localhost/');\nconst p = ${r.ctx.config.server.port};`], ['bare-host', "http.request({ host: 'localhost', port: p });"],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: 強い目印のまま ${JSON.stringify(pre.reasonKeys)}`);
+    assert.equal(out.decidedBy, 'pending', name);
+  }
+});
+
+test('self-run P1 1c: beat のポートが 80 なら、ポートの無い http://localhost/ は強い目印のまま', async t => {
+  const r = rig(t, c => { c.server.port = 80; });
+  const { pre, out } = await loopbackScript(r, 'port80', "fetch('http://localhost/');");
+  assert.ok(pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(pre.reasonKeys));
+  assert.equal(out.decidedBy, 'pending');
+  const tls = await loopbackScript(r, 'port443', "fetch('https://localhost/');");
+  assert.ok(!tls.pre.reasonKeys?.includes('code.self_touch'), `https は 443: ${JSON.stringify(tls.pre.reasonKeys)}`);
 });
 
 test('AP-1f T-G8（審査で反転: 既定の 4777 はいつも beat のポート）: beat のポートを設定で変えると新しいポートで印が付き、既定の 4777 にも付いたまま', async t => {

@@ -85,8 +85,10 @@ const LOOPBACK = /(?:^|[^\w.])(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.
 
 // beat 自身の設定・人格・承認・記憶に触れる文字（人への目印。判定には使わない）
 const SELF_MARKERS: ReadonlyArray<[string, RegExp]> = [
-  ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['beat.db', /beat\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
-  ['skills/', /skills[\\/]/iu],
+  ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['beat.db', /beat\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
+];
+const SELF_HINTS: ReadonlyArray<[string, RegExp]> = [
+  ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['skills/', /skills[\\/]/iu],
 ];
 const LOOPBACK_MARKER = '127.0.0.1 / localhost';
 const LOOPBACK_ALL = new RegExp(LOOPBACK.source, 'giu');
@@ -112,29 +114,42 @@ const decodedCopy = (text: string): string => text
 
 export interface BeatPorts { own: ReadonlySet<number>; denied: ReadonlySet<number> }
 
-function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts): boolean {
+const URL_HEAD = /(?:https?|wss?):\/\/$/iu;
+const URL_END = /^(?:$|[\s/?#)\]}>,;&|]|(['"`])(?!\s*[+.[]))/u;
+
+function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts): 'strong' | 'weak' | undefined {
   const own = new Set([...selfPortsOf(server).ports, ...beatPorts.own]);
   const ports = new Set([...own, ...beatPorts.denied]);
   const named = [...own].filter(port => port >= NUMBER_SCAN_FROM);
   if (named.length) {
     const number = new RegExp(String.raw`\b0*(?:${named.join('|')})\b`, 'u');
-    if (number.test(text) || number.test(decodedCopy(text))) return true;
+    if (number.test(text) || number.test(decodedCopy(text))) return 'strong';
   }
-  const marks = (end: number): boolean => {
+  let weak = false;
+  const marks = (start: number, end: number): boolean => {
     const port = PLAIN_PORT.exec(text.slice(end, end + 64));
-    return !port || ports.has(Number(port[1]));
+    if (port) return ports.has(Number(port[1]));
+    if (URL_HEAD.test(text.slice(Math.max(0, start - 8), start)) && URL_END.test(text.slice(end, end + 64))) { weak = true; return false; }
+    return true;
   };
-  for (const match of text.matchAll(LOOPBACK_ALL)) if (marks(match.index + match[0].length)) return true;
-  for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index + match[0].length)) return true;
-  return selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined;
+  for (const match of text.matchAll(LOOPBACK_ALL)) {
+    const end = match.index + match[0].length;
+    if (marks(end - match[0].replace(/^[^\w[:]/u, '').length, end)) return 'strong';
+  }
+  for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index, match.index + match[0].length)) return 'strong';
+  if (selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined) return 'strong';
+  return weak ? 'weak' : undefined;
 }
 
-export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts): string[] {
-  const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
-  if (touchesLoopback(text, server, beatPorts)) found.push(LOOPBACK_MARKER);
+export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts): { strong: string[]; weak: string[] } {
+  const strong = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  const weak = SELF_HINTS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  const loopback = touchesLoopback(text, server, beatPorts);
+  if (loopback === 'strong') strong.push(LOOPBACK_MARKER);
+  else if (loopback === 'weak') weak.push(LOOPBACK_MARKER);
   const lower = text.toLowerCase();
-  for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !found.includes(host)) found.push(host);
-  return found;
+  for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !strong.includes(host)) strong.push(host);
+  return { strong, weak };
 }
 
 const text = (language: Language, key: GuardMessageKey, params?: Record<string, string | number>) => guardText(language, key, params);
