@@ -6,7 +6,7 @@ import type { EngineState, SearchEngine } from '../src/tools/web/search/engine.t
 import { EngineHealth } from '../src/tools/web/search/health.ts';
 import { SearchImpersonation, type ImpitInit, type ImpitModuleLike, type ImpitOptionsLike, type ImpitResponseLike } from '../src/tools/web/search/impersonate.ts';
 import { metasearch } from '../src/tools/web/search/metasearch.ts';
-import { SEARCH_MAX_BYTES, type SearchRequestHeaders } from '../src/tools/web/search/disguise.ts';
+import { CHROME_AGENTS, SEARCH_MAX_BYTES, type SearchRequestHeaders } from '../src/tools/web/search/disguise.ts';
 import type { PinProxy } from '../src/tools/web/search/pin-proxy.ts';
 
 // 偽の impit・偽の中継・偽の名前引きだけ。本当の通信はしない
@@ -81,18 +81,43 @@ test('a name that resolves to a LAN or loopback address never reaches impit', as
   }
 });
 
-test('impit gets chrome151, the relay, manual redirects, no cookies, no header overrides; the host is pinned only while the request runs', async () => {
+test('impit gets chrome151, the relay, manual redirects, no cookies, only the identity override; the host is pinned only while the request runs', async () => {
   const s = setup(() => respond(200, '<html>ok</html>', { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'br' }));
   const page = await fetchPublic('https://www.bing.com/search?q=x', undefined, s.network);
   assert.equal(page.body.toString(), '<html>ok</html>');
-  assert.deepEqual(s.impit.options, [{ browser: 'chrome151', proxyUrl: 'http://beat:secret@127.0.0.1:1', timeout: 15_000, followRedirects: false, vanillaFallback: false, http3: false }]);
+  const headers = s.impit.options[0]?.headers;
+  assert.deepEqual(s.impit.options, [{ browser: 'chrome151', headers, proxyUrl: 'http://beat:secret@127.0.0.1:1', timeout: 15_000, followRedirects: false, vanillaFallback: false, http3: false }]);
   assert.equal(s.impit.calls.length, 1);
   const call = s.impit.calls[0]!;
   assert.equal(call.init.redirect, 'manual');
   assert.ok(call.init.signal instanceof AbortSignal);
-  assert.equal('headers' in call.init, false, 'impit keeps its own Chrome headers (no beat or CHROME_AGENTS user-agent)');
+  assert.equal('headers' in call.init, false, 'no per-request headers (the request\'s rotated user-agent is not passed)');
   assert.equal(call.pinned, '93.184.216.34', 'registered before the fetch, with the verified address');
   assert.equal(s.proxy.live.size, 0, 'released afterwards');
+});
+
+test('impit names the same current Chrome as the header-only path, not its own 151 profile (Bing answers 151 with off-topic results)', async () => {
+  const proxy = fakeProxy();
+  // 偽の Bing: 151 の名乗り（impit の型のまま）には検索語と関係のない結果を返す（2026-11-21 の実測の形）
+  const module: ImpitModuleLike = {
+    Impit: class {
+      readonly #agent: string;
+      constructor(o: ImpitOptionsLike) { this.#agent = o.headers['user-agent'] ?? 'Chrome/151.0.0.0'; }
+      async fetch() { return respond(200, /Chrome\/151\./u.test(this.#agent) ? 'decoy' : 'on topic'); }
+    },
+  };
+  const impersonation = new SearchImpersonation({ load: async () => module, startProxy: async () => proxy.proxy, fallback: fakeFallback().fallback });
+  const base = impersonation.networkFor({ accept: 'text/html', headers: { 'user-agent': 'Chrome/148 test' } });
+  const page = await fetchPublic('https://www.bing.com/search?q=sqlite', undefined, { resolve: async () => ['93.184.216.34'], get: base.get });
+  assert.equal(page.body.toString(), 'on topic');
+
+  const s = setup(() => respond(200, '<html></html>'));
+  await fetchPublic('https://www.bing.com/search?q=x', undefined, s.network);
+  const headers = s.impit.options[0]!.headers;
+  assert.ok(CHROME_AGENTS.includes(headers['user-agent']!), 'a user-agent from the header-only list');
+  const major = /Chrome\/(\d+)\./u.exec(headers['user-agent']!)![1];
+  assert.match(headers['user-agent']!, /Windows NT/u, 'matches impit\'s sec-ch-ua-platform "Windows"');
+  assert.equal(headers['sec-ch-ua'], `"Not=A?Brand";v="99", "Google Chrome";v="${major}", "Chromium";v="${major}"`);
 });
 
 test('a 3xx comes back with its location; followPublic follows inside the search hosts and refuses the rest', async () => {

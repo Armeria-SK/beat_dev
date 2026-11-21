@@ -1,19 +1,23 @@
 import { mediaTypeOf, RetrievalFailure, type PageNetwork, type PageResponse } from '../public-page.ts';
 import { toolText } from '../../../shared/messages/tools.ts';
-import { SEARCH_MAX_BYTES, SEARCH_TYPES, searchNetworkFor, type SearchRequestHeaders } from './disguise.ts';
+import { CHROME_AGENTS, SEARCH_MAX_BYTES, SEARCH_TYPES, searchNetworkFor, type SearchRequestHeaders } from './disguise.ts';
 import { startPinProxy, type PinProxy } from './pin-proxy.ts';
 
 // 検索の頼みを TLS・HTTP/2 の段まで Chrome に似せる通信（impit）。disguise: true の先だけが通る（metasearch.ts）。
 // 名前引き・公開アドレスの確かめ・転送のたどりは今の道（public-page.ts の followPublic）のまま。impit は pin-proxy.ts の中継を通り、
 // 確かめ済みのアドレスへだけつなぐ。impit が読めない（部品が無い platform など）・中継が立たないときは、頭の行だけの道に戻る
 
-// 0.14.9 の表で最新の Chrome（'chrome' は Chrome 124 の型）。頭の行は impit の Chrome の形のまま（上書きしない）
+// 0.14.9 の表で最新の Chrome（'chrome' は Chrome 124 の型）の TLS・HTTP/2 の形
 const BROWSER = 'chrome151';
+// 名乗り（User-Agent・sec-ch-ua の版）は頭の行だけの道と同じ今の Chrome（Windows）。151 のままの名乗りだと Bing は検索語と関係のない結果を返す
+const AGENT = CHROME_AGENTS[0]!;
+const AGENT_MAJOR = /Chrome\/(\d+)\./u.exec(AGENT)![1]!;
+const IDENTITY = { 'user-agent': AGENT, 'sec-ch-ua': `"Not=A?Brand";v="99", "Google Chrome";v="${AGENT_MAJOR}", "Chromium";v="${AGENT_MAJOR}"` };
 const IMPIT_TIMEOUT_MS = 15_000;
 
 export interface ImpitResponseLike { status: number; headers: Headers; body: ReadableStream<Uint8Array> | null }
 export interface ImpitInit { redirect: 'manual'; signal: AbortSignal; timeout: number }
-export interface ImpitOptionsLike { browser: typeof BROWSER; proxyUrl: string; timeout: number; followRedirects: false; vanillaFallback: false; http3: false }
+export interface ImpitOptionsLike { browser: typeof BROWSER; headers: Record<string, string>; proxyUrl: string; timeout: number; followRedirects: false; vanillaFallback: false; http3: false }
 export interface ImpitModuleLike { Impit: new (options: ImpitOptionsLike) => { fetch(url: string, init: ImpitInit): Promise<ImpitResponseLike> } }
 
 export interface ImpersonationDeps {
@@ -66,7 +70,7 @@ async function readCapped(body: ReadableStream<Uint8Array> | null, signal: Abort
 async function impersonatedGet(backend: Backend, url: URL, address: string, signal: AbortSignal): Promise<PageResponse> {
   const release = backend.proxy.register(url.hostname, address);
   try {
-    const client = new backend.impit.Impit({ browser: BROWSER, proxyUrl: backend.proxy.url, timeout: IMPIT_TIMEOUT_MS, followRedirects: false, vanillaFallback: false, http3: false });
+    const client = new backend.impit.Impit({ browser: BROWSER, headers: IDENTITY, proxyUrl: backend.proxy.url, timeout: IMPIT_TIMEOUT_MS, followRedirects: false, vanillaFallback: false, http3: false });
     const response = await client.fetch(url.href, { redirect: 'manual', signal, timeout: IMPIT_TIMEOUT_MS });
     const status = response.status;
     const contentType = response.headers.get('content-type') ?? '';

@@ -5,7 +5,7 @@ import { regionParts, type SearchEngine } from './engine.ts';
 // 止められた同じ先へ頭の行を変えてすぐ送り直す、はしない）。web_fetch・ブラウザ・ダウンロードの名乗りは beat/0.1 のまま。
 // Accept-Encoding は送らない（圧縮された返事は今の取得の決まりどおり断る）
 
-const CHROME_AGENTS: readonly string[] = [
+export const CHROME_AGENTS: readonly string[] = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
