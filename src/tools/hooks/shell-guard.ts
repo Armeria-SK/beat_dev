@@ -6,7 +6,7 @@ import type { AskKind } from '../types.ts';
 import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
 import { classifyStatements, matchStatement, noRepo, type CdUse, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
-import { codeFindings, runnerFilesOf, unshownCodeOf } from './code-guard.ts';
+import { codeFindings, unshownCodeOf } from './code-guard.ts';
 import { gitGlobalOf, inlineCode, innerSource, joinWords, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
 import { isCdHead } from './allowlist-core.ts';
 import { gitSubcommand } from './allowlist-git.ts';
@@ -66,7 +66,6 @@ export interface ShellVerdict {
   onceOnly: boolean;
   // 確かめで中身を見せるファイルの絶対パス（3 つまで）
   scripts: string[];
-  runnerFiles?: string[];
   unshown?: string;
   // ふつうの確かめ・今回だけの確かめになった理由の種類（理由ごとに付く。自動承認が判定役に回すかの材料）
   askKinds: AskKind[];
@@ -354,7 +353,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const paths: CheckedPath[] = [];
   const scripts: string[] = [];
   let unshown: string | undefined;
-  const runnerFiles: string[] = [];
   const addScript = (file: string): void => {
     if (scripts.includes(file)) return;
     if (scripts.length < 3) scripts.push(file);
@@ -388,7 +386,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
     return {
-      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, ...(runnerFiles.length ? { runnerFiles } : {}), ...(unshown !== undefined ? { unshown } : {}), askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled, downloaded: fetched,
+      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, ...(unshown !== undefined ? { unshown } : {}), askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled, downloaded: fetched,
       statements, writes, reasonKeys,
     };
   };
@@ -399,8 +397,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const segs = segments(command, { backticks: !windows });
     for (const [i, seg] of segs.entries()) {
       unshown ??= unshownCodeOf(seg, cwd);
-      const runner = runnerFilesOf(seg, cwd);
-      if (runner) { unshown ??= runner.unshown; for (const file of runner.files) if (!runnerFiles.includes(file)) runnerFiles.push(file); }
       for (const found of codeFindings(seg, { cwd, language, selfHosts, prev: seg.stdin === 'pipe' ? segs[i - 1] : undefined })) {
         if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
         for (const file of found.scripts) addScript(file);

@@ -460,21 +460,18 @@ test('4-3a 順 4 の否定: 開発の実行役が製品の外のフォルダ・�
     'pytest --pyargs requests', 'jest --rootDir ..', 'vitest --root=..', 'mocha ../test', 'tox -c ../tox.ini', 'ninja -C ..', 'just --justfile ../justfile',
     'rake -f ../Rakefile', 'pytest --rootdir=.. x', 'make ~/x',
   ];
-  let owner = 0;
   for (const command of commands) {
-    const before = r.judge.calls.length;
     const outcome = await r.shell(command);
     assert.notEqual(outcome.decidedBy, 'product-code', `${command}: ${outcome.output.content}`);
-    if (r.judge.calls.length === before) { assert.match(command, /^pytest (?:\.\.|C:|\/|--rootdir)/u, `${command}: only a pytest aimed outside the folder or given a path flag skips the judge (its conftest.py cannot be shown)`); assert.equal(outcome.decidedBy, 'pending', command); owner++; }
   }
-  assert.equal(r.judge.calls.length + owner, commands.length, '全部判定役が見る（製品の外を指す pytest は持ち主）');
+  assert.equal(r.judge.calls.length, commands.length, '全部判定役が見る');
   const sub = join(r.root, 'sub');
   mkdirSync(sub, { recursive: true });
   for (const command of ['npm test', 'npm start', 'make', 'just', 'rake', 'pytest']) {
     const outcome = await r.call('shell_run', { command, cwd: sub });
     assert.notEqual(outcome.decidedBy, 'product-code', `sub: ${command}: ${outcome.output.content}`);
   }
-  assert.equal(r.judge.calls.length, commands.length + 6 - owner, '設定の無いフォルダからは上へ上らせない');
+  assert.equal(r.judge.calls.length, commands.length + 6, '設定の無いフォルダからは上へ上らせない');
   for (const command of ['make', 'make -j4 test', 'pytest -q tests', 'npm test']) assert.equal((await r.shell(command)).decidedBy, 'product-code', `製品の中で閉じる形は今までどおり: ${command}`);
 });
 
@@ -495,20 +492,15 @@ test('4-3a 順 4 の許可の一覧: 開発の実行役は、決まった害の�
   ];
   const leaked: string[] = [];
   const refused: string[] = [];
-  const owner: string[] = [];
   for (const command of judged) {
-    const before = r.judge.calls.length;
     const outcome = await r.shell(command);
-    if (outcome.decidedBy === 'pending' && r.judge.calls.length === before) owner.push(command);
     if (outcome.decidedBy === 'product-code') leaked.push(command);
     if (outcome.decision === 'deny' && outcome.decidedBy === 'builtin') refused.push(command);
   }
   assert.deepEqual(leaked, [], '判定役を飛ばした形');
   const drive = process.platform === 'win32' && isInside(APP_ROOT, resolve('D:other'));
   assert.deepEqual(refused, drive ? ['pytest D:other'] : [], 'D:other は、走らせている場所が beat の置き場なら、その中を指すので順 1 で断る');
-  assert.deepEqual(owner, ['pytest tests\\..\\..\\other', 'pytest tests/../../other', 'pytest -p plugin', 'vitest --config x.ts', 'jest -t --testRunner evilpkg', 'jest -t --globalSetup setup.js', 'vitest -t --config vite.config.ts', 'pytest -k -p evil'],
-    'a test runner aimed outside the folder or given a path or module flag goes to the owner instead (the code it loads cannot be shown)');
-  assert.equal(r.judge.calls.length + refused.length + owner.length, judged.length, '全部判定役が見る（順 1 で断ったもの・製品の外を指す pytest 以外）');
+  assert.equal(r.judge.calls.length + refused.length, judged.length, '全部判定役が見る（順 1 で断ったもの以外）');
   for (const command of ['make', 'make -j4 test', 'make -j 4 -k all', 'pytest -q tests', 'pytest -k "fast and not slow" tests', 'npm test', 'vitest --run', 'jest --watch=false -t name', 'mocha --reporter spec src', 'tox -e py311', 'just build', 'ninja -j 2', 'vitest run', 'mocha --reporter=dot', 'jest -t render']) {
     assert.equal((await r.shell(command)).decidedBy, 'product-code', `許可の一覧の形は判定役を飛ばす: ${command}`);
   }

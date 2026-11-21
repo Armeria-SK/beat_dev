@@ -210,6 +210,43 @@ function shownRun(st: StatementFacts, shown: ReadonlySet<string>): boolean {
   return shown.has(resolve(st.cwd, target.text));
 }
 
+const PLAIN_RUNNERS = /^(?:node|nodejs|tsx|bun|python\d*(?:\.\d+)?|py|ruby|perl|bash|sh)$/u;
+const MODULE_RUNNERS = new Set(['pytest', 'unittest']);
+
+// 判定役にファイルを見せるのは、最後のコードの実行が決まった実行役で、最初の引数が製品の中にある拡張子つきのファイルのときだけ。
+// ほかのファイルの実行（拡張子の無い先・./x・-m・.・-- のあと）は、実行役のファイルの選び方を真似しきれないので持ち主（P2 の範囲、4 回の審査の決め）
+function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
+  const program = st.program.toLowerCase().replace(/\.exe$/u, '');
+  let words = st.words.slice(1);
+  if (program === 'npx' && words[0]?.text === 'tsx') words = words.slice(1);
+  else if (program === 'deno' && words[0]?.text === 'run') words = words.slice(1);
+  else if (program === 'pwsh' || program === 'powershell') {
+    const at = words.findIndex(w => /^-f(?:ile)?$/iu.test(w.text));
+    if (at < 0) return false;
+    words = words.slice(at + 1);
+  } else if (!PLAIN_RUNNERS.test(program)) return false;
+  const at = words.findIndex(w => !w.text.startsWith('-'));
+  if (at < 0 || words.slice(0, at).some(w => w.text === '--' || w.dynamic)) return false;
+  const target = words[at]!;
+  if (target.dynamic || target.glob || !/\.[A-Za-z0-9]+$/u.test(target.text) || st.cwd === null || !root) return false;
+  const path = resolve(st.cwd, target.text);
+  return isInside(root, path) && statSync(path, { throwIfNoEntry: false })?.isFile() === true;
+}
+
+function outOfScopeRun(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined): string | undefined {
+  if (!keys.some(key => key === 'code.file_run' || key === 'code.cmd_is_file')) return undefined;
+  if (keys.includes('code.cmd_is_file')) return 'a direct run of a file';
+  const runs = sts.filter(st => runsCode(st) && st.code.length === 0);
+  for (const st of runs) {
+    const words = st.words.map(w => w.text);
+    const module = words[words.indexOf('-m') + 1];
+    if (words.includes('-m') && module !== undefined && MODULE_RUNNERS.has(module)) continue;
+    if (words.includes('--test')) continue;
+    if (!plainFileRun(st, root)) return st.words.map(w => w.text).join(' ') || st.program;
+  }
+  return undefined;
+}
+
 function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {
   const quiet = (st: StatementFacts): boolean => {
     const name = st.program.toLowerCase().replace(/\.exe$/u, '');
@@ -315,8 +352,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
-  const shown = judgeFilesOf({ scripts: [...verdict.scripts, ...(verdict.runnerFiles ?? []).filter(file => !verdict.scripts.includes(file))], inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
-    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown, rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
+  const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
+    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? outOfScopeRun(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
   const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
   const peeked = cards;
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));

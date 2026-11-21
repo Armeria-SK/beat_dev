@@ -100,14 +100,7 @@ const writesInto = (write: string, file: string): boolean => isInside(write, fil
 
 // 返すのは、見せるファイル（とその読み）と、bind に入れる指紋。名前の出るスクリプトか import されるファイルが読めない・バイナリ・1MB 超なら problem
 export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; read: ReadFile[] } {
-  let bare: string | undefined;
-  const named = [...new Set(input.scripts.flatMap(file => {
-    if (isFile(file)) return [file];
-    const more = [...jsCandidates(file), join(file, '__main__.py')].filter(isFile);
-    if (more.length) return more;
-    if (statSync(file, { throwIfNoEntry: false })?.isDirectory() || !/\.[^\\/.]+$/u.test(file)) { bare ??= file; return []; }
-    return [file];
-  }))].map(readForJudge);
+  const named = [...new Set(input.scripts)].map(readForJudge);
   const links: Array<[string, string]> = [];
   const seen = new Set(named.map(file => file.path));
   const imported: ReadFile[] = [];
@@ -134,7 +127,6 @@ export function judgeFilesOf(input: JudgeFilesInput): { fact: JudgeFilesFact; re
   for (const { code, cwd } of input.inline) follow(code, cwd, undefined);
   const read = [...named, ...imported];
   if (input.unshown !== undefined) return { fact: { problem: 'unshown', path: input.unshown }, read };
-  if (bare !== undefined) return { fact: { problem: 'unshown', path: bare }, read };
   if (outside !== undefined) return { fact: { problem: 'unshown', path: outside }, read };
   if (tooMany !== undefined) return { fact: { problem: 'too_many', path: tooMany }, read };
   const bad = read.find(file => file.problem !== undefined && file.problem !== 'missing');

@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { CODE_ENV } from './decision-order.ts';
@@ -231,8 +231,7 @@ function interpreterFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   if (positional.length || runFlag) {
     const named = files[0] ?? positional.find(a => a !== '-') ?? runFlag ?? '-';
     const stdinCode = !files.length && positional.every(a => a === '-') && !runFlag && Boolean(seg.stdin);
-    const bareTarget = !files.length && !runFlag && named !== '-' ? [named] : [];
-    return [stdinCode ? finding(lang, 'code.stdin_run', { cmd: seg.cmd }, true, stdinScripts(seg, ctx)) : finding(lang, 'code.file_run', { path: named }, true, resolveAll([...files, ...bareTarget], ctx))];
+    return [stdinCode ? finding(lang, 'code.stdin_run', { cmd: seg.cmd }, true, stdinScripts(seg, ctx)) : finding(lang, 'code.file_run', { path: named }, true, resolveAll(files, ctx))];
   }
   return seg.stdin ? [finding(lang, 'code.stdin_run', { cmd: seg.cmd }, true, stdinScripts(seg, ctx))] : [];
 }
@@ -450,143 +449,3 @@ export function codeFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   ];
 }
 
-// ── 試験の道具が決まりで読み込むコード（pytest の conftest.py、vitest・jest・mocha の設定と setup のファイル）。見せるか、見せきれなければ unshown ──
-const RUNNER_CONFIGS: Record<string, string[]> = {
-  vitest: ['vitest.config', 'vitest.workspace', 'vite.config'].flatMap(base => ['.ts', '.js', '.mts', '.mjs', '.cts', '.cjs'].map(end => base + end)),
-  jest: ['.ts', '.js', '.mjs', '.cjs', '.json'].map(end => `jest.config${end}`),
-  mocha: ['.mocharc.js', '.mocharc.cjs', '.mocharc.json', '.mocharc.jsonc', '.mocharc.yml', '.mocharc.yaml'],
-};
-const SETUP_KEY = /\b(setupFiles|setupFilesAfterEnv|globalSetup|globalTeardown|setupFilesAfterEach|require|testEnvironment|preset|transform|projects|workspace)\b["']?\s*:\s*/gu;
-const STRING_LIST = /^(?:\[\s*(?:(['"])[^'"\n]*\1\s*,?\s*)*\]|(['"])[^'"\n]*\2)/u;
-const RUNNER_FILES_MAX = 20;
-const PY_ROOT_FILES = ['pytest.ini', '.pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini'];
-const SKIP_WALK = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', '.tox']);
-
-function runnerOf(seg: Segment): { name: string; args: string[] } | undefined {
-  const args = plainArgs(seg);
-  if (seg.cmd === 'pytest' || seg.cmd === 'vitest' || seg.cmd === 'jest' || seg.cmd === 'mocha') return { name: seg.cmd, args };
-  if (NPX_TOOLS.has(seg.cmd)) {
-    const at = args.findIndex(a => !a.startsWith('-'));
-    const name = at < 0 ? '' : args[at]!.replace(/@[^/]*$/u, '');
-    return ['vitest', 'jest', 'mocha', 'pytest'].includes(name) ? { name, args: args.slice(at + 1) } : undefined;
-  }
-  if (/^(?:python\d*(?:\.\d+)?|py|pypy\d*)$/u.test(seg.cmd)) {
-    const at = args.findIndex(a => a === '-m');
-    return at >= 0 && args[at + 1] === 'pytest' ? { name: 'pytest', args: args.slice(at + 2) } : undefined;
-  }
-  return undefined;
-}
-
-function conftests(cwd: string, args: readonly string[]): string[] {
-  const out = new Set<string>();
-  for (let dir = cwd, depth = 0; depth < 8; depth++) {
-    const file = join(dir, 'conftest.py');
-    if (existsSync(file)) out.add(file);
-    if (PY_ROOT_FILES.some(name => existsSync(join(dir, name)))) break;
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  let dirs = 0;
-  const walk = (dir: string, depth: number): void => {
-    if (depth > 8 || ++dirs > 500) return;
-    let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      if (entry.isDirectory() && !SKIP_WALK.has(entry.name)) walk(join(dir, entry.name), depth + 1);
-      else if (entry.isFile() && entry.name === 'conftest.py') out.add(join(dir, entry.name));
-    }
-  };
-  const targets = args.filter(a => !a.startsWith('-')).map(a => resolve(cwd, a.split('::')[0]!));
-  for (const target of targets.length ? targets : [cwd]) {
-    if (relative(cwd, target).startsWith('..') || isAbsolute(relative(cwd, target))) { out.add('\0too-many'); continue; }
-    if (statSync(target, { throwIfNoEntry: false })?.isDirectory()) walk(target, 0);
-    else {
-      out.add(target);
-      for (let dir = dirname(target); dir.length >= cwd.length && dir !== dirname(dir); dir = dirname(dir)) {
-        const file = join(dir, 'conftest.py');
-        if (existsSync(file)) out.add(file);
-        if (dir === cwd) break;
-      }
-    }
-  }
-  if (dirs > 500) out.add('\0too-many');
-  return [...out].filter(file => file === '\0too-many' || existsSync(file));
-}
-
-const RUNNER_PATH_FLAG = /^(?:--setupFiles\w*|--config|--globalSetup|--globalTeardown|--require|--import|--loader|--preset|--testRunner|--testEnvironment|--environment|--plugins?|--rootdir|--confcutdir|--setup-files)(?:=|$)|^-[cp]/u;
-const PYTEST_INI = ['pytest.ini', '.pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini'];
-const PYTEST_LOADS = /^[ \t]*(?:addopts|plugins|required_plugins|pythonpath|python_files|confcutdir)[ \t]*=|-p[ \t]|\bpytest_plugins\b/mu;
-
-function pytestIni(cwd: string): { files: string[]; unshown?: string } {
-  const files: string[] = [];
-  for (let dir = cwd, depth = 0; depth < 8; depth++) {
-    const found = PYTEST_INI.map(name => join(dir, name)).filter(file => existsSync(file));
-    for (const file of found) {
-      let text: string;
-      try { text = readFileSync(file, 'utf8'); } catch { return { files, unshown: file }; }
-      if (PYTEST_LOADS.test(text)) return { files, unshown: `${file}: plugins or addopts` };
-      files.push(file);
-    }
-    if (found.length) break;
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  return { files };
-}
-
-function setupOf(text: string, config: string, cwd: string, files: string[]): string | undefined {
-  for (const match of text.matchAll(SETUP_KEY)) {
-    const rest = text.slice(match.index + match[0].length);
-    const literal = STRING_LIST.exec(rest);
-    if (!literal) return `${config}: ${match[1]}`;
-    for (const value of literal[0].matchAll(/(['"])([^'"\n]*)\1/gu)) {
-      if (/^\.{1,2}[\\/]/u.test(value[2]!)) files.push(resolve(cwd, value[2]!));
-      else if (match[1] !== 'testEnvironment' && match[1] !== 'require') return `${config}: ${match[1]}`;
-    }
-  }
-  return undefined;
-}
-
-function jsRunnerFiles(name: string, cwd: string, args: readonly string[]): { files: string[]; unshown?: string } {
-  const files: string[] = [];
-  const pkg = join(cwd, 'package.json');
-  if ((name === 'jest' || name === 'mocha') && existsSync(pkg)) {
-    let section: unknown;
-    try { section = (JSON.parse(readFileSync(pkg, 'utf8')) as Record<string, unknown>)[name]; } catch { return { files, unshown: pkg }; }
-    if (section !== undefined) {
-      files.push(pkg);
-      const problem = setupOf(JSON.stringify(section), pkg, cwd, files);
-      if (problem) return { files, unshown: problem };
-    }
-  }
-  for (const config of (RUNNER_CONFIGS[name] ?? []).map(file => join(cwd, file)).filter(file => existsSync(file))) {
-    files.push(config);
-    let text: string;
-    try { text = readFileSync(config, 'utf8'); } catch { return { files, unshown: config }; }
-    for (const match of text.matchAll(SETUP_KEY)) {
-      const rest = text.slice(match.index + match[0].length);
-      const literal = STRING_LIST.exec(rest);
-      if (!literal) return { files, unshown: `${config}: ${match[1]}` };
-      for (const value of literal[0].matchAll(/(['"])([^'"\n]*)\1/gu)) {
-        if (/^\.{1,2}[\\/]/u.test(value[2]!)) files.push(resolve(cwd, value[2]!));
-        else if (match[1] !== 'testEnvironment' && match[1] !== 'require') return { files, unshown: `${config}: ${match[1]}` };
-      }
-    }
-  }
-  for (const arg of args) if (!arg.startsWith('-') && /\.[cm]?[jt]sx?$/u.test(arg)) files.push(resolve(cwd, arg));
-  return { files };
-}
-
-export function runnerFilesOf(seg: Segment, cwd: string): { files: string[]; unshown?: string } | undefined {
-  const runner = runnerOf(seg);
-  if (!runner) return undefined;
-  const flag = runner.args.find(a => RUNNER_PATH_FLAG.test(a) || (runner.name === 'mocha' && /^-r/u.test(a)));
-  if (flag) return { files: [], unshown: `${seg.cmd} ${flag}` };
-  const ini = runner.name === 'pytest' ? pytestIni(cwd) : { files: [] as string[] };
-  if (ini.unshown) return { files: [], unshown: ini.unshown };
-  const got = runner.name === 'pytest' ? { files: [...ini.files, ...conftests(cwd, runner.args)] } as { files: string[]; unshown?: string } : jsRunnerFiles(runner.name, cwd, runner.args);
-  if (got.files.includes('\0too-many') || got.files.length > RUNNER_FILES_MAX) return { files: [], unshown: `${seg.cmd}: too many files` };
-  return got;
-}
