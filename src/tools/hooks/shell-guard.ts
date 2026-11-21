@@ -6,7 +6,7 @@ import type { AskKind } from '../types.ts';
 import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
 import { classifyStatements, matchStatement, noRepo, type CdUse, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
-import { codeFindings } from './code-guard.ts';
+import { codeFindings, unshownCodeOf } from './code-guard.ts';
 import { gitGlobalOf, inlineCode, innerSource, joinWords, programOdd, type DeleteTarget, type StatementFacts } from './shell-facts.ts';
 import { isCdHead } from './allowlist-core.ts';
 import { gitSubcommand } from './allowlist-git.ts';
@@ -45,6 +45,7 @@ export interface ShellGuardOptions {
   fetchedBefore?: boolean;
   // 包むコマンドの中を調べるとき、外の文が今いられるフォルダ
   cwdState?: CwdState;
+  productEnv?: (name: string) => boolean;
 }
 
 // now: 次の文が動きうるフォルダ。all: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか（変数・ワイルドカード・決められない先、また動く本体の中の cd で false）。
@@ -65,6 +66,7 @@ export interface ShellVerdict {
   onceOnly: boolean;
   // 確かめで中身を見せるファイルの絶対パス（3 つまで）
   scripts: string[];
+  unshown?: string;
   // ふつうの確かめ・今回だけの確かめになった理由の種類（理由ごとに付く。自動承認が判定役に回すかの材料）
   askKinds: AskKind[];
   // 見せたファイルのほかに、読み込まれるファイルや入れた部品のコードも動く（札に限界の文を添える）
@@ -350,6 +352,12 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   let current: StatementFacts | undefined;
   const paths: CheckedPath[] = [];
   const scripts: string[] = [];
+  let unshown: string | undefined;
+  const addScript = (file: string): void => {
+    if (scripts.includes(file)) return;
+    if (scripts.length < 3) scripts.push(file);
+    else unshown ??= file;
+  };
   const askKinds: AskKind[] = [];
   const selfHosts = opts.selfHosts ?? [];
   const env: Env = opts.env ?? process.env;
@@ -378,7 +386,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
     return {
-      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled, downloaded: fetched,
+      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, ...(unshown !== undefined ? { unshown } : {}), askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled, downloaded: fetched,
       statements, writes, reasonKeys,
     };
   };
@@ -388,9 +396,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     let cwd = initialCwd;
     const segs = segments(command, { backticks: !windows });
     for (const [i, seg] of segs.entries()) {
+      unshown ??= unshownCodeOf(seg, cwd);
       for (const found of codeFindings(seg, { cwd, language, selfHosts, prev: seg.stdin === 'pipe' ? segs[i - 1] : undefined })) {
         if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
-        for (const file of found.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
+        for (const file of found.scripts) addScript(file);
       }
       if (CWD_CMDS.has(seg.cmd)) {
         const target = seg.args.find(a => !a.startsWith('-'));
@@ -400,9 +409,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
     for (const st of assignedStatements) {
       for (const seg of segments(joinWords(st.words, true))) {
+        unshown ??= unshownCodeOf(seg, initialCwd);
         for (const found of codeFindings(seg, { cwd: initialCwd, language, selfHosts })) {
           if (!reasons.includes(found.reason)) { reasons.push(found.reason); reasonKeys.push(found.key); }
-          for (const file of found.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
+          for (const file of found.scripts) addScript(file);
         }
       }
     }
@@ -515,7 +525,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (!seen.known && !parsePath(path).root) return false;
     return seen.now.every(base => { const full = resolve(base, path); return exists(full) && !isDirectory(full); });
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement, beforeStatements, beforeStatement };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, fileExists, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement, beforeStatements, beforeStatement, productEnv: opts.productEnv };
   const classified = classifyStatements(command, ctx);
   if (isPowerShell(shell)) assignedStatements = classified.statements.filter(st => st.assigned && st.kind === 'command' && st.words.length > 0);
   if (classified.lex) {
@@ -815,7 +825,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         for (const kind of wrapped.askKinds) if (!askKinds.includes(kind)) askKinds.push(kind);
         paths.push(...wrapped.paths);
         writes.push(...wrapped.writes);
-        for (const file of wrapped.scripts) if (!scripts.includes(file) && scripts.length < 3) scripts.push(file);
+        for (const file of wrapped.scripts) addScript(file);
+        unshown ??= wrapped.unshown;
         limits ||= wrapped.limits;
       } else {
         if (allowedByConfig) addCode(say('code.wrapped_unknown', { cmd: name }));

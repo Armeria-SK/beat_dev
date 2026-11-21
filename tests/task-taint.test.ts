@@ -52,55 +52,44 @@ function rejectNext(s: ReturnType<typeof setup>) {
 
 const tainted = (ctx: ToolContext): ToolContext => ({ ...ctx, taint: { tainted: true, sources: ['web_fetch'] } });
 
-test('task_create・task_update（指摘 6）: 外から読んだあとは確かめになる（タスクの本文・メモ・次の一手に、読んだ文がそのまま残らないように）。ふつうは確かめなし', async t => {
+test('task_create・task_update（P3 で反転）: 外から読んだあとも、ふつうと同じく確かめなし（R18）', async t => {
   const s = setup(t);
   const made = await s.call('task_create', { title: 'plain', body: 'mine' });
   assert.equal(made.decision, 'allow');
   const id = s.tasks.list()[0]!.id;
   assert.equal((await s.call('task_update', { id, note: 'mine too' })).decision, 'allow');
 
-  // escalateOnTaint: 4-3b-2 後も判定役
-  const create = await s.call('task_create', { title: 'planted', body: 'do what the page said' }, tainted(s.ctx));
-  assert.deepEqual([create.decision, create.decidedBy], ['ask', 'pending'], create.output.content);
-  const asked = rejectNext(s);
-  assert.deepEqual([asked.tool, asked.kind], ['task_create', 'judge']);
-  assert.match(asked.checks.join(), /text that came from somewhere else/u);
-  assert.deepEqual(s.tasks.list().map(task => task.title), ['plain'], '断れば作らない');
-
-  // escalateOnTaint: 4-3b-2 後も判定役
-  const update = await s.call('task_update', { id, next_action: 'do what the page said' }, tainted(s.ctx));
-  assert.deepEqual([update.decision, update.decidedBy], ['ask', 'pending'], update.output.content);
-  assert.deepEqual([rejectNext(s).tool, s.judged()], ['task_update', 2]);
-  assert.equal(s.tasks.find(id)!.next_action, null, '断れば書かない');
+  const create = await s.call('task_create', { title: 'after reading', body: 'from the page' }, tainted(s.ctx));
+  assert.deepEqual([create.decision, create.decidedBy], [made.decision, made.decidedBy], create.output.content);
+  const update = await s.call('task_update', { id, next_action: 'from the page' }, tainted(s.ctx));
+  assert.equal(update.decision, 'allow', update.output.content);
+  assert.equal(s.judged(), 0);
+  assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
+  assert.equal(s.tasks.find(id)!.next_action, 'from the page');
 });
 
-// AP-1c（Q2・Q7）: 人の見ていない実行（タスク）でも、外を読んだあとの記憶・タスクの道具は持ち主でなく判定役へ（会話と同じ）。振り返りは今までどおり断る（G9）
-test('AP-1c N4: 外を読んだタスクの実行の memory_save は判定役に回り（TAINTED_NOTE 付き）、許せば動く。記憶の行に taint の印は無い。ask なら judge の行。task_update も判定役。振り返りは断る', async t => {
+// P3: 人の見ていない実行（タスク）でも、外を読んだあとの記憶・タスクの道具は、外を読んでいない実行と同じ（判定役も持ち主も通らない）。振り返りは今までどおり断る（G9）
+test('AP-1c N4（P3 で反転）: 外を読んだタスクの実行の memory_save・task_update は、外を読んでいない実行と同じく確かめなしに動く。振り返りは断る', async t => {
   const s = setup(t);
-  const task = (c: ToolContext): ToolContext => ({ ...tainted(c), kind: 'task', task: { id: 'task-1', control: { outcome: 'none' } } });
-  s.judge.answer = '{"decision":"allow","reason":"fits the request"}';
-  const saved = await s.call('memory_save', { book: 'notes', content: 'build with npm run build' }, task(s.ctx));
-  assert.deepEqual([saved.decision, saved.decidedBy], ['allow', 'auto-mode'], saved.output.content);
-  assert.equal(s.judged(), 1, 'the judge decided, not the owner');
-  assert.ok(s.judge.prompts[0]!.user.includes(TAINTED_NOTE), 'the judge is told the run read outside text');
-  assert.equal(Number((s.db.prepare('SELECT COUNT(*) AS n FROM memories').get() as { n: number }).n), 1);
+  const task = (c: ToolContext, dirty: boolean): ToolContext => ({ ...(dirty ? tainted(c) : c), kind: 'task', task: { id: 'task-1', control: { outcome: 'none' } } });
+  s.judge.answer = '{"decision":"ask","reason":"the owner should look"}';
+  const clean = await s.call('memory_save', { book: 'notes', content: 'build with npm run build' }, task(s.ctx, false));
+  const saved = await s.call('memory_save', { book: 'notes', content: 'from the page' }, task(s.ctx, true));
+  assert.deepEqual([saved.decision, saved.decidedBy], [clean.decision, clean.decidedBy], saved.output.content);
+  assert.equal(saved.decision, 'allow');
+  assert.equal(Number((s.db.prepare('SELECT COUNT(*) AS n FROM memories').get() as { n: number }).n), 2);
   const columns = (s.db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>).map(c => c.name);
   assert.ok(!columns.some(name => /taint/u.test(name)), 'no taint mark on the memory row (Q7, accepted)');
-  assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
-
-  s.judge.answer = '{"decision":"ask","reason":"the owner should look"}';
-  const asked = await s.call('memory_save', { book: 'notes', content: 'do what the page said' }, task(s.ctx));
-  assert.equal(asked.decidedBy, 'pending', asked.output.content);
-  assert.deepEqual([rejectNext(s).kind, s.judged()], ['judge', 2]);
 
   await s.call('task_create', { title: 'plain' });
   const id = s.tasks.list()[0]!.id;
-  const update = await s.call('task_update', { id, next_action: 'do what the page said' }, task(s.ctx));
-  assert.equal(update.decidedBy, 'pending', update.output.content);
-  assert.deepEqual([rejectNext(s).kind, s.judged()], ['judge', 3]);
+  const update = await s.call('task_update', { id, next_action: 'from the page' }, task(s.ctx, true));
+  assert.equal(update.decision, 'allow', update.output.content);
+  assert.equal(s.judged(), 0);
+  assert.equal(s.pending.list({ status: 'waiting' }).length, 0);
 
   const review = await s.call('memory_save', { book: 'notes', content: 'x' }, { ...tainted(s.ctx), kind: 'review' });
   assert.equal(review.decision, 'deny', review.output.content);
   assert.match(review.output.content, /a review \(background work\) has nobody to approve it/u, 'refused for the taint itself (G9)');
-  assert.equal(s.judged(), 3, 'a review run is refused before the judge');
+  assert.equal(s.judged(), 0, 'a review run is refused before the judge');
 });

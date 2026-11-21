@@ -17,6 +17,8 @@ export interface JudgeKeyParts {
   askKinds: readonly string[];
   bind: string | null;
   judge: unknown;
+  // 判定役に見せたファイル（パスと中身の sha256）。中身が 1 文字でも変われば鍵が変わる
+  files?: unknown;
 }
 
 export interface InvolvedFiles {
@@ -76,7 +78,7 @@ export async function involvedSnapshot(cwd: string, involved: InvolvedFiles, sig
 export function judgeCacheKey(ctx: ToolContext, parts: JudgeKeyParts): string | undefined {
   const fields: unknown[] = [
     ctx.runId, parts.judgeInput, parts.input, parts.workspace, parts.cwd, parts.taintSources,
-    [...parts.reasonKeys].sort(), [...parts.askKinds].sort(), parts.bind, parts.judge,
+    [...parts.reasonKeys].sort(), [...parts.askKinds].sort(), parts.bind, parts.judge, parts.files ?? null,
   ];
   let text: string;
   try { text = JSON.stringify(fields); } catch { return undefined; }

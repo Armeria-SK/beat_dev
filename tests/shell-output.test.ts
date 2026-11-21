@@ -157,8 +157,9 @@ function assertNoTokenPiece(content: string): void {
 // 空白も改行も無い 1 行の JSON。tok の値（TOKEN）が始まる位置を tokenAt バイト目にする
 function writeJsonLine(dir: string, tokenAt: number, suffixPad: number, lead = ''): void {
   const pad = tokenAt - lead.length - '{"pad":"'.length - '","tok":"'.length;
-  const line = `${lead}{"pad":"${'a'.repeat(pad)}","tok":"${TOKEN}","more":"${'b'.repeat(suffixPad)}"}`;
-  writeFileSync(join(dir, 'tok.js'), `process.stdout.write(${JSON.stringify(line)});`);
+  const z = /^z*/u.exec(lead)![0].length;
+  // The long runs are built when the script runs, so the script itself stays short enough for the judge to read (P2)
+  writeFileSync(join(dir, 'tok.js'), `process.stdout.write('z'.repeat(${z}) + ${JSON.stringify(lead.slice(z))} + '{"pad":"' + 'a'.repeat(${pad}) + ${JSON.stringify(`","tok":"${TOKEN}","more":"`)} + 'b'.repeat(${suffixPad}) + '"}');`);
 }
 
 test('TE-3 審査: 尻の始まりが秘密の 8 バイトあとに来ても（改行の無い JSON）、秘密のかけらは出ない', async t => {
@@ -197,10 +198,8 @@ function assertNoValuePiece(content: string, value: string): void {
 // 改行のある行のあとに 1 行の JSON '{"cookie":"<値>","note":"VISIBLE-REST..."}'。尻（4096 バイト）は値の into バイト目から始まる
 function writeCookieLine(dir: string, valueLength: number, into: number): string {
   const value = valueOf(valueLength);
-  const lead = `${'z'.repeat(30_000)}\n{"cookie":"`;
   const after = 4096 - (valueLength - into) - '","note":"'.length - '"}'.length;
-  const line = `${lead}${value}","note":"VISIBLE-REST${'r'.repeat(after - 'VISIBLE-REST'.length)}"}`;
-  writeFileSync(join(dir, 'cookie.js'), `process.stdout.write(${JSON.stringify(line)});`);
+  writeFileSync(join(dir, 'cookie.js'), `process.stdout.write('z'.repeat(30000) + '\\n{"cookie":"' + ${JSON.stringify(value)} + '","note":"VISIBLE-REST' + 'r'.repeat(${after - 'VISIBLE-REST'.length}) + '"}');`);
   return value;
 }
 

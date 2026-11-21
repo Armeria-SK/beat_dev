@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../../config/schema.ts';
 import { atomicWriteFile } from '../../config/store.ts';
-import { conversationSawOutside } from '../../db/outside.ts';
+import { conversationSawOutside, conversationTaskBound } from '../../db/outside.ts';
 import { estimateTextTokens } from '../../engine/tokens.ts';
 import { LocalizedError, type MessageParams } from '../../shared/messages/define.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
@@ -286,6 +286,10 @@ export class SkillStore {
 
   sawOutside(conversationId: string | undefined): boolean {
     return conversationSawOutside(this.#db, conversationId);
+  }
+
+  taskBound(conversationId: string | undefined): boolean {
+    return conversationTaskBound(this.#db, conversationId);
   }
 
   #autoQuotaLeft(now: number): boolean {

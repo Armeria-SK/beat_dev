@@ -11,7 +11,7 @@ import { isInside, realish, writeApprovalKind } from '../src/tools/hooks/scope.t
 import { tempDir } from './helpers.ts';
 
 const WIN = process.platform === 'win32';
-const hook = (over: Partial<Record<string, unknown>> = {}) => ({ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'], ...over }) as HookConfig;
+const hook = (over: Partial<Record<string, unknown>> = {}) => ({ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**', 'package.json'], ...over }) as HookConfig;
 
 function product(t: { after: (fn: () => void) => void }, name = 'prod'): string {
   const root = join(tempDir(t), name);
@@ -45,7 +45,7 @@ test('ハードリンク: 守るファイルとつながったファイルへの
   linkSync(join(root, 'package.json'), join(root, 'notes.txt'));
   linkSync(join(root, '.github', 'workflows', 'ci.yml'), join(root, 'src', 'x.yml'));
   assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'notes.txt'))], tainted: true }))).decision, 'ask');
-  assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'notes.txt'))], tainted: false }))).decision, undefined, 'package.json は外を読んだあとだけ');
+  assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'notes.txt'))], tainted: false }))).decision, 'ask', '外を読んだかを問わない（P3c で afterOutside を外した）');
   assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'src', 'x.yml'))] }))).decision, 'ask');
   writeFileSync(join(root, 'src', 'plain.txt'), 'x');
   assert.equal((await run(hook(), payload({ root, paths: [w(join(root, 'src', 'plain.txt'))], tainted: true }))).decision, undefined);
@@ -86,14 +86,14 @@ test('照らし方: ワイルドカードの無い一覧はその中すべて。
 
 test('ドライブだけの一覧（X:/**）は、そのドライブの根から', { skip: !WIN }, async () => {
   const drive = parse(process.cwd()).root.slice(0, 2);
-  const result = await run(hook({ always: [`${drive}/**`], afterOutside: [] }), payload({ paths: [w(`${drive}\\zz-not-here\\x.yml`)] }));
+  const result = await run(hook({ always: [`${drive}/**`] }), payload({ paths: [w(`${drive}\\zz-not-here\\x.yml`)] }));
   assert.equal(result.decision, 'ask');
 });
 
 test('** が続いても固まらない', async t => {
   const root = product(t);
   const start = performance.now();
-  const many = hook({ always: [`q/${'**/a/'.repeat(12)}b`], afterOutside: [] });
+  const many = hook({ always: [`q/${'**/a/'.repeat(12)}b`] });
   const result = await run(many, payload({ root, paths: [w(join(root, 'q', ...Array.from({ length: 40 }, () => 'a'), 'c'))] }));
   assert.equal(result.decision, undefined);
   assert.ok(performance.now() - start < 500, `${performance.now() - start} ms`);
@@ -117,7 +117,7 @@ test('設定の誤り: フックの行の誤りは、行の形に合わせて項
   const command = issues({ matcher: '', command: ['x'] });
   assert.deepEqual(command.map(i => i.path), ['tools.hooks.preToolUse.0.matcher']);
   assert.notEqual(command[0]!.code, 'config.type.union');
-  const builtin = issues({ matcher: 'a', builtin: 'protect-files', always: [''], afterOutside: [] });
+  const builtin = issues({ matcher: 'a', builtin: 'protect-files', always: [''] });
   assert.deepEqual(builtin.map(i => i.path), ['tools.hooks.preToolUse.0.always.0']);
   assert.deepEqual(issues({ matcher: 'a', command: ['x'], timeoutMs: 5 }).map(i => i.path), ['tools.hooks.preToolUse.0.timeoutMs']);
 });
@@ -131,7 +131,7 @@ test('Reset: 戻したあとの設定にも、既定の protect-files の行が�
 test('ワイルドカードの一覧がフォルダに当たれば、その中のファイルも守る', async t => {
   const root = product(t);
   mkdirSync(join(root, 'src', 'tools', 'hooks'), { recursive: true });
-  const ask = async (pattern: string, path: string) => (await run(hook({ always: [pattern], afterOutside: [] }), payload({ root, paths: [w(path)] }))).decision;
+  const ask = async (pattern: string, path: string) => (await run(hook({ always: [pattern] }), payload({ root, paths: [w(path)] }))).decision;
   assert.equal(await ask('**/hooks', join(root, 'src', 'tools', 'hooks', 'scope.ts')), 'ask');
   assert.equal(await ask('s*', join(root, 'src', 'app.ts')), 'ask');
   assert.equal(await ask('**/hooks', join(root, 'src', 'tools', 'other.ts')), undefined);
@@ -164,7 +164,7 @@ test('先の無いリンクが深すぎる・解けないときは、閉じる�
 
 test('UNC の一覧は UNC のまま（今のドライブに読み替えない）', { skip: !WIN }, async () => {
   const drive = parse(process.cwd()).root.slice(0, 2);
-  const unc = hook({ always: ['//server/share/**'], afterOutside: [] });
+  const unc = hook({ always: ['//server/share/**'] });
   assert.equal((await run(unc, payload({ paths: [w('\\\\server\\share\\x.yml')] }))).decision, 'ask');
   assert.equal((await run(unc, payload({ paths: [w(`${drive}\\server\\share\\x.yml`)] }))).decision, undefined);
 });

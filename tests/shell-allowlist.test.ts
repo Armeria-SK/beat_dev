@@ -919,3 +919,38 @@ test('p4-build-judge P2-7（一覧の段）: git -c user.name / user.email の c
   assert.deepEqual(keysOf('git -c user.name=a commit -m x', 'bash', { repo: repo({ hooksFiles: true }) }), ['ask:list.git_identity', 'once:list.git_hooks']);
   assert.deepEqual(keysOf('git commit -m x', 'bash', found), ['ask:list.git_write'], 'ふつうのコミットは今までどおり');
 });
+
+const idsOf = (command: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}): string[] => classify(command, shell, over).results.flatMap(r => r.reasons.map(x => x.id ?? x.key));
+
+test('self-run P1 1a: node の決まった旗（--disable-warning=名前・--no-warnings・--enable-source-maps・--experimental-strip-types / transform-types）は飛ばして、その次のファイルを見る', () => {
+  for (const c of ['node --disable-warning=ExperimentalWarning .tmp/probe.ts', 'node --no-warnings scripts/e2e.ts', 'node --enable-source-maps --experimental-strip-types a.ts x y',
+    'node --experimental-transform-types a.mts', 'nodejs --no-warnings a.js']) {
+    assert.deepEqual(idsOf(c), ['list.lang_run'], c);
+  }
+  for (const c of ['node --watch a.ts', 'node --watch-path=src a.ts', 'node --inspect a.ts', 'node --inspect-brk=0 a.ts', 'node --require ./x.js a.ts', 'node -r ./x.js a.ts', 'node --import ./x.mjs a.ts',
+    'node --loader ./x.mjs a.ts', 'node --experimental-loader ./x.mjs a.ts', 'node --env-file=.env a.ts', 'node --env-file-if-exists=.env a.ts', 'node -e 1', 'node -p 1', 'node --eval 1',
+    'node --disable-warning ExperimentalWarning a.ts', 'node --disable-warning=$(x) a.ts', 'node --no-warnings', 'node --no-warnings --require ./x.js a.ts', 'python --no-warnings a.py']) {
+    assert.ok(!idsOf(c).includes('list.lang_run'), `${c}: ${idsOf(c).join(' ')}`);
+    assert.notEqual(levelOf(c), 'allow', c);
+  }
+});
+
+test('self-run P1 1b: $env:名前 = 引用した文字 は、通してよい名前か製品のコードが読む名前（道具の頭で始まらない）なら一覧で許す。それ以外は今までどおり list.env', () => {
+  const reads = (...names: string[]) => ({ productEnv: (name: string) => names.includes(name.toUpperCase()) });
+  for (const c of ["$env:PORT='3999'", '$env:PORT="3999"', '$env:port = "3999"', "$env:NODE_ENV='test'", "$env:DEBUG='app:*'", "$env:HOST='127.0.0.1'", "$env:CI='1'", "$env:LOG_LEVEL='debug'", "$env:TZ='UTC'"]) {
+    assert.deepEqual(keysOf(c, 'powershell'), [], c);
+  }
+  assert.deepEqual(keysOf('$env:ROOMS_DB=".tmp/start-check.db"', 'powershell'), ['once:list.env'], 'コードが読んでいなければ今までどおり');
+  assert.deepEqual(keysOf('$env:ROOMS_DB=".tmp/start-check.db"', 'powershell', reads('ROOMS_DB')), [], '製品のコードが読む名前');
+  assert.deepEqual(keysOf("$env:ROOMS_DB='.tmp\\start-check.db'", 'powershell', reads('ROOMS_DB')), []);
+  const all = { productEnv: () => true };
+  for (const name of ['npm_config_userconfig', 'BROWSER', 'COR_PROFILER', 'TSX_TSCONFIG_PATH', 'PLAYWRIGHT_BROWSERS_PATH', 'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'LUA_INIT', 'KUBECONFIG', 'PATH', 'ENV',
+    'PYTHONSTARTUP', 'GIT_DIR', 'JAVA_TOOL_OPTIONS', 'DOTNET_STARTUP_HOOKS', 'ELECTRON_RUN_AS_NODE', 'AWS_PROFILE', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'PHPRC', 'LD_PRELOAD']) {
+    assert.deepEqual(keysOf(`$env:${name}='x'`, 'powershell', all), ['once:list.env'], name);
+  }
+  for (const c of ['$env:PORT="$x"', '$env:PORT="a$($x)"', "$env:PORT='http://evil.example/'", "$env:PORT='\\\\srv\\share'", "$env:PORT='//srv/share'", "$env:PORT='/etc/x'", "$env:PORT='C:\\x'",
+    "$env:PORT='../x'", "$env:PORT='a/../../b'", "$env:PORT='~/x'", "$env:PORT='a;b'", "$env:PORT = 'a' + 'b'", "$env:PORT += '1'", '$env:PORT = (Get-Date)', '$env:PORT = 3999', '$env:PORT = $null']) {
+    assert.ok(keysOf(c, 'powershell', all).includes('once:list.env'), `${c}: ${keysOf(c, 'powershell', all).join(' ')}`);
+  }
+  assert.deepEqual(keysOf("$env:PORT='3999'; npm start", 'powershell'), ['once:list.form'],'代入は許し、npm start はいつもの確かめ');
+});

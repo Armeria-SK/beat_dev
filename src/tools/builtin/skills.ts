@@ -44,7 +44,7 @@ const DRAFT_HOW = [
   'When fixing one, change is required: 1-3 short lines, "before → now" (e.g. "3-day forecast only → use a 10-day page").',
 ];
 const DRAFT_ASK = ['Write a reusable procedure as a draft skill (a procedure). It does not take effect until the user approves it.', ...DRAFT_HOW].join(' ');
-const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this run or this conversation read outside content or this is a task's run (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
+const DRAFT_AUTO = ["Write a reusable procedure as a skill (a procedure). It is registered right away without the user's review, unless this is a task's run (then it waits for the user's approval), and the user can undo it from the skill's History.", ...DRAFT_HOW].join(' ');
 
 export const skillDraft: ToolDef<{ name: string; description: string; body: string; reason: string; change?: string | null }> = {
   name: 'skill_draft',
@@ -59,6 +59,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
   }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
+  denyInReviewAfterOutside: true,
   async execute(input, ctx) {
     if (!growSkills(ctx.config) || ctx.services?.skills?.growing === false) return { content: toolText(languageOf(ctx.config), 'skill.growth_off'), isError: true };
     try {
@@ -66,7 +67,7 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
       const existing = s.getRegistered(input.name);
       const change = input.change?.trim() ?? '';
       if (existing && !change) return { content: toolText(languageOf(ctx.config), 'skill.change_missing', { name: input.name }), isError: true };
-      const autoOk = !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId);
+      const autoOk = ctx.kind === 'review' ? !ctx.taint?.tainted && !s.sawOutside(ctx.conversationId) : !s.taskBound(ctx.conversationId);
       const draft = s.draft({ name: input.name, description: input.description, body: input.body, reason: input.reason, ...(existing ? { change } : {}), conversationId: ctx.conversationId, runId: ctx.runId, autoOk, fromReview: ctx.kind === 'review' });
       const language = languageOf(ctx.config);
       if (draft.status === 'approved') return { content: toolText(language, existing ? 'skill.registered_auto_edit' : 'skill.registered_auto_new', { name: draft.name, id: draft.id }) };

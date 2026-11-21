@@ -271,7 +271,6 @@ export interface CandidateInput {
   outbound: Outbound | undefined;
   askKinds: Iterable<AskKind>;
   policyAsk: boolean;
-  fetchEgress?: boolean | undefined;
 }
 
 // Every path the pre-check names (read or written), through links, must be inside the product the run belongs to. Words the pre-check does not read as paths (a git remote name,
@@ -289,10 +288,7 @@ function pathsInside(check: PreCheck | undefined, root: string | undefined): boo
 
 function keysOf(input: CandidateInput): string[] {
   const out = new Set<string>([...(input.check?.reasonKeys ?? []), ...(input.outbound?.keys ?? [])]);
-  for (const kind of input.askKinds) {
-    if (kind === 'taint' || (kind === 'egress' && input.fetchEgress === true)) continue;
-    out.add(kind === 'policy' ? 'policy.tool' : `ask:${kind}`);
-  }
+  for (const kind of input.askKinds) out.add(kind === 'policy' ? 'policy.tool' : `ask:${kind}`);
   if (input.policyAsk) out.add('policy.tool');
   return [...out].sort();
 }

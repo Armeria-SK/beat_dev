@@ -25,7 +25,7 @@ export type StreamEvent =
   | { type: 'usage'; usage: Usage }
   // 送り返した考える部分が断られ、外して送り直した（実行の印 thinking_replay_rejected）
   | { type: 'replay_rejected' }
-  | { type: 'done'; stop: StopReason };
+  | { type: 'done'; stop: StopReason; refused?: true };
 
 export type ProbeStatus =
   | 'ok'

@@ -5,7 +5,7 @@ import { checklistShape } from './thread.ts';
 
 const CHECK = <svg viewBox="0 0 10 10" aria-hidden="true"><path pathLength="1" d="M2 5.2l2 2 4-4.4" /></svg>;
 
-export function Checklist({ items, tainted, live, className }: { items: ChecklistItem[]; tainted: boolean; live: boolean; className?: string }) {
+export function Checklist({ items, live, className }: { items: ChecklistItem[]; live: boolean; className?: string }) {
   const t = useT();
   const shape = checklistShape(items);
   const percent = shape.total ? Math.round((shape.done / shape.total) * 100) : 0;
@@ -23,7 +23,6 @@ export function Checklist({ items, tainted, live, className }: { items: Checklis
           </li>
         ))}
       </ul>
-      {tainted && <p className="bt-meta ui-checklist__note">{t('ui.checklist.tainted')}</p>}
     </section>
   );
 }

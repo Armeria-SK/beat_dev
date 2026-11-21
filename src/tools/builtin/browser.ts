@@ -155,12 +155,10 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
     const given = input.tab === undefined ? undefined : ctx.services?.browser?.tabKind(ctx.conversationId, input.tab);
     if (given !== undefined && given !== tabKindFor(grant, kind)) return deny(guardText(language, 'browser.tab_kind', { tab: input.tab ?? '' }));
     const base = exfiltrationCheck(input.url, language, url.search.length > 300);
-    // 操作の一覧のサイトは、ログイン済みのことがある。開くだけの GET（クエリ付き・よそから来た文を読んだあとに決めた行き先）が操作になりうるので、
-    // 押す承認を迂回させない: 送るに数える（outbound の send。パイプラインが判定役に回さず Pending の send に積む）。一覧外のサイトは読むだけなので今までどおり
-    // 「よそから来た文を読んだあと」は、この実行だけでなく会話ぜんぶで見る（前の実行で読んだ文が決めた行き先も、確かめの対象）。会話の印が読めないときは「ある」側に倒す
-    let tainted = ctx.taint.tainted;
-    if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
-    if (!siteAllows(ctx.config.tools.browser.sites, url) || (!tainted && url.search === '')) return base;
+    // 操作の一覧のサイトは、ログイン済みのことがある。開くだけの GET でもクエリ付きなら操作になりうるので、
+    // 押す承認を迂回させない: 送るに数える（outbound の send。パイプラインが判定役に回さず Pending の send に積む）。一覧外のサイトは読むだけなので今までどおり。
+    // よそから来た文を読んだあとでも、聞き方は変えない（持ち主の決め 2026-11-21）
+    if (!siteAllows(ctx.config.tools.browser.sites, url) || url.search === '') return base;
     const reason = guardText(language, 'browser.open.listed');
     const outbound = { kind: 'send' as const, reason: outboundText(language, 'send.browser_open'), targets: [] };
     if (base.decision !== 'ask') return { decision: 'ask', reasons: [reason], details: [input.url.slice(0, 500)], askKinds: ['web'], outbound };

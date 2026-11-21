@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
+import { CODE_ENV } from './decision-order.ts';
 import { segments, STATEMENT_WORDS, stripQuotedContent, type Segment } from './parse-cmd.ts';
 import { expandPath } from './scope.ts';
 import { loopbackHost, selfPortsOf, selfTarget, type SelfServer } from './self-port.ts';
@@ -31,6 +32,7 @@ const INTERPRETER = new RegExp(`^(?:${[
   'node', 'nodejs', 'deno', 'tsx', 'ts-node', 'python\\d*(?:\\.\\d+)?', 'py', 'pypy\\d*', 'perl', 'ruby', 'irb', 'php', 'lua', 'luajit', 'rscript', 'julia', 'java', 'jshell', 'groovy', 'kotlin', 'scala',
   'elixir', 'escript', 'tclsh', 'expect', 'osascript', 'wscript', 'cscript', 'mshta', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
 ].join('|')})$`, 'u');
+export const isInterpreter = (cmd: string): boolean => INTERPRETER.test(cmd);
 const POWERSHELL = /^(?:pwsh|powershell)$/u;
 const INFO_FLAG = /^(?:--version|-v|-V|--help|-h|-\?|-version|\/\?|--info|-info)$/u;
 const CODE_EXT = /\.(?:ps1|psm1|psd1|bat|cmd|sh|bash|zsh|py|pyw|js|mjs|cjs|ts|mts|cts|jsx|tsx|vbs|vbe|wsf|jar|rb|pl|php|lua|rkt|r|jl|groovy|kts|scala)$/iu;
@@ -85,8 +87,10 @@ const LOOPBACK = /(?:^|[^\w.])(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.
 
 // beat 自身の設定・人格・承認・記憶に触れる文字（人への目印。判定には使わない）
 const SELF_MARKERS: ReadonlyArray<[string, RegExp]> = [
-  ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['beat.db', /beat\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
-  ['skills/', /skills[\\/]/iu],
+  ['SOUL.md', /SOUL\.md/iu], ['USER.md', /USER\.md/iu], ['beat.db', /beat\.db/iu], ['.env', /(?:^|[^\w])\.env(?![\w])/u],
+];
+const SELF_HINTS: ReadonlyArray<[string, RegExp]> = [
+  ['/api/', /\/api\//u], ['config.json', /config\.json/iu], ['skills/', /skills[\\/]/iu],
 ];
 const LOOPBACK_MARKER = '127.0.0.1 / localhost';
 const LOOPBACK_ALL = new RegExp(LOOPBACK.source, 'giu');
@@ -112,29 +116,42 @@ const decodedCopy = (text: string): string => text
 
 export interface BeatPorts { own: ReadonlySet<number>; denied: ReadonlySet<number> }
 
-function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts): boolean {
+const URL_HEAD = /(?:https?|wss?):\/\/$/iu;
+const URL_END = /^(?:$|[\s/?#)\]}>,;&|]|(['"`])(?!\s*[+.[]))/u;
+
+function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts): 'strong' | 'weak' | undefined {
   const own = new Set([...selfPortsOf(server).ports, ...beatPorts.own]);
   const ports = new Set([...own, ...beatPorts.denied]);
   const named = [...own].filter(port => port >= NUMBER_SCAN_FROM);
   if (named.length) {
     const number = new RegExp(String.raw`\b0*(?:${named.join('|')})\b`, 'u');
-    if (number.test(text) || number.test(decodedCopy(text))) return true;
+    if (number.test(text) || number.test(decodedCopy(text))) return 'strong';
   }
-  const marks = (end: number): boolean => {
+  let weak = false;
+  const marks = (start: number, end: number): boolean => {
     const port = PLAIN_PORT.exec(text.slice(end, end + 64));
-    return !port || ports.has(Number(port[1]));
+    if (port) return ports.has(Number(port[1]));
+    if (URL_HEAD.test(text.slice(Math.max(0, start - 8), start)) && URL_END.test(text.slice(end, end + 64))) { weak = true; return false; }
+    return true;
   };
-  for (const match of text.matchAll(LOOPBACK_ALL)) if (marks(match.index + match[0].length)) return true;
-  for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index + match[0].length)) return true;
-  return selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined;
+  for (const match of text.matchAll(LOOPBACK_ALL)) {
+    const end = match.index + match[0].length;
+    if (marks(end - match[0].replace(/^[^\w[:]/u, '').length, end)) return 'strong';
+  }
+  for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index, match.index + match[0].length)) return 'strong';
+  if (selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined) return 'strong';
+  return weak ? 'weak' : undefined;
 }
 
-export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts): string[] {
-  const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
-  if (touchesLoopback(text, server, beatPorts)) found.push(LOOPBACK_MARKER);
+export function selfTouchMarkers(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts): { strong: string[]; weak: string[] } {
+  const strong = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  const weak = SELF_HINTS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  const loopback = touchesLoopback(text, server, beatPorts);
+  if (loopback === 'strong') strong.push(LOOPBACK_MARKER);
+  else if (loopback === 'weak') weak.push(LOOPBACK_MARKER);
   const lower = text.toLowerCase();
-  for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !found.includes(host)) found.push(host);
-  return found;
+  for (const host of selfHosts) if (host && lower.includes(host.toLowerCase()) && !strong.includes(host)) strong.push(host);
+  return { strong, weak };
 }
 
 const text = (language: Language, key: GuardMessageKey, params?: Record<string, string | number>) => guardText(language, key, params);
@@ -171,7 +188,25 @@ function resolveScript(raw: string, ctx: CodeContext): string | undefined {
   const expanded = expandPath(raw, ctx.cwd, process.env, ctx.language);
   return 'path' in expanded ? expanded.path : undefined;
 }
-const resolveAll = (raws: readonly string[], ctx: CodeContext): string[] => [...new Set(raws.flatMap(r => resolveScript(r, ctx) ?? []))].slice(0, 3);
+const resolveAll = (raws: readonly string[], ctx: CodeContext): string[] => [...new Set(raws.flatMap(r => resolveScript(r, ctx) ?? []))].slice(0, 4);
+
+const PRELOAD_FLAG = /^(?:-r|--require|--import|--loader|--experimental-loader|--env-file|--env-file-if-exists|--experimental-config-file|--experimental-default-config-file)(?:=|$)|^-r./u;
+const PY_MODULE_FLAG = /^-[bBdEhiIOPqRsSuvVx]*m(.*)$/u;
+const PERL_FLAG = /^-[MmI]/u;
+const LOCAL_ONLY_MODULES = new Set(['pytest', 'unittest']);
+
+export function unshownCodeOf(seg: Segment, cwd: string): string | undefined {
+  if (!INTERPRETER.test(seg.cmd)) return undefined;
+  if (/^(?:python\d*(?:\.\d+)?|py|pypy\d*)$/u.test(seg.cmd)) {
+    const at = seg.args.findIndex(a => PY_MODULE_FLAG.test(a));
+    if (at < 0) return undefined;
+    const module = PY_MODULE_FLAG.exec(seg.args[at]!)![1] || seg.args[at + 1] || '';
+    const local = [`${module}.py`, `${module}/__init__.py`].some(name => existsSync(join(cwd, name)));
+    return LOCAL_ONLY_MODULES.has(module) && !local ? undefined : `${seg.cmd} ${seg.args[at]}`;
+  }
+  const flag = seg.args.find(a => (seg.cmd === 'perl' ? PERL_FLAG : PRELOAD_FLAG).test(a));
+  return flag === undefined ? undefined : `${seg.cmd} ${flag}`;
+}
 
 const infoOnly = (args: readonly string[]): boolean => args.length > 0 && args.every(a => INFO_FLAG.test(a));
 
@@ -325,7 +360,7 @@ function unknownTargetFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const nested: CodeFinding[] = [];
   if (assignment) {
     const rhs = seg.raw.slice(firstUnquotedEq(seg.raw) + 1).trim();
-    if (rhs && (ctx.depth ?? 0) < 3) {
+    if (rhs && !/^(?:'[^']*'|"[^"$\x60]*")$/u.test(rhs) && (ctx.depth ?? 0) < 3) {
       for (const inner of segments(rhs)) nested.push(...codeFindings(inner, { ...ctx, prev: undefined, depth: (ctx.depth ?? 0) + 1 }));
     }
   }
@@ -361,14 +396,6 @@ function scanFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 }
 
 // ── R1.6 の続き: コードを動かせる環境変数 ──
-// どれも、あとで起こすプロセスの起動時に読み込まれ、コードを動かせる（NODE_OPTIONS=--require ./put.js など）。NODE_ENV のような設定だけの値は含めない
-const CODE_ENV = new RegExp(`^(?:${[
-  'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'PYTHONSTARTUP', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
-  'PERL5OPT', 'PERL5LIB', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_EXTERNAL_DIFF', 'GIT_ASKPASS',
-  'GIT_PAGER', 'GIT_EDITOR', 'GIT_EXEC_PATH', 'GIT_PROXY_COMMAND', 'GIT_TEMPLATE_DIR', 'GIT_CONFIG\\w*', 'PAGER', 'EDITOR', 'VISUAL', 'PROMPT_COMMAND', 'PATH', 'PATHEXT', 'PSMODULEPATH', 'COMSPEC',
-  'SHELL', 'RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER', 'GOFLAGS', 'NPM_CONFIG_SCRIPT_SHELL', 'NPM_CONFIG_NODE_OPTIONS',
-].join('|')})$`, 'iu');
-
 function envFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const names: string[] = [...(seg.envAssign ?? [])];
   const assigned = /^\$env:(\w+)/iu.exec(seg.rawCmd);
@@ -421,3 +448,4 @@ export function codeFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
     ...spawnFindings(seg, ctx), ...unknownTargetFindings(seg, ctx), ...envFindings(seg, ctx), ...loopbackFindings(seg, ctx), ...gitConfigFindings(seg, ctx),
   ];
 }
+

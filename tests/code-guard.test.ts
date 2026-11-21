@@ -488,3 +488,13 @@ test('xargs の -i -l -e は次の語を値として取らない: 起こす先�
   for (const command of ['xargs -I {} python {}', 'xargs -L 1 python', 'xargs -E end node', 'xargs -n1 node']) assert.deepEqual(keys(command), ['code.file_run'], command);
   for (const command of ['xargs -i echo {}', 'xargs -i rm {}', 'xargs -l grep foo', 'xargs -I % echo %', 'xargs -e cat', 'xargs --replace echo {}']) assert.deepEqual(keys(command), [], command);
 });
+
+test('self-run P1 1b: $env:名前 = 引用した文字 1 つの右辺はコマンドとして読み直さない。引用の無い右辺・式・置換は今までどおり読む', t => {
+  const f = fixture(t);
+  const keys = (command: string) => segments(command).flatMap(seg => codeFindings(seg, { cwd: f.ws, language: 'en', selfHosts: [] }).map(x => x.key));
+  for (const c of ['$env:ROOMS_DB=".tmp/start-check.db"', "$env:ROOMS_DB='.tmp/start-check.db'", '$x = "put.js"']) assert.deepEqual(keys(c), [], c);
+  assert.ok(keys('$env:ROOMS_DB=.tmp/start-check.db').includes('code.cmd_is_file'), '引用の無い右辺はコマンド');
+  assert.ok(keys('$env:X = "$(node put.js)"').length > 0, '置換の入った右辺');
+  assert.ok(keys('$env:X = node put.js').includes('code.file_run'), 'コマンドの右辺');
+  assert.deepEqual(keys('$env:NODE_OPTIONS = "--require ./put.js"'), ['code.env'], 'CODE_ENV は今までどおり');
+});

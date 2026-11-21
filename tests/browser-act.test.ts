@@ -285,25 +285,25 @@ test('T-23: 自動承認モードでも、送信の押す・入れるは送る�
   assert.equal(page.acts.length, 0);
 });
 
-test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きか外を読んだあとなら送るに数え、判定役が allow と答える設定でも判定役を呼ばずに send の Pending に積まれる', async t => {
+test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きなら（外を読んだかを問わず）送るに数え、判定役が allow と答える設定でも判定役を呼ばずに send の Pending に積まれる', async t => {
   const classified: ClassifierPrompt[] = [];
   const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
   const query = await r.call('browser_open', { url: 'https://example.com/logout?token=1' });
   assert.equal(query.decidedBy, 'pending');
   r.ctx.taint.tainted = true;
-  const tainted = await r.call('browser_open', { url: 'https://example.com/account/delete' });
+  const tainted = await r.call('browser_open', { url: 'https://example.com/account/delete?id=1' });
   assert.equal(tainted.decidedBy, 'pending');
   assert.deepEqual(r.pending.list({ status: 'waiting' }).map(row => [row.tool, row.kind]), [['browser_open', 'send'], ['browser_open', 'send']]);
   assert.equal(classified.length, 0, '判定役には回らない');
   assert.equal(r.driver.launches, 0, 'ブラウザは起動しない');
-  r.driver.site('https://example.com/logout?token=1', OTHER_SITE).site('https://example.com/account/delete', OTHER_SITE);
+  r.driver.site('https://example.com/logout?token=1', OTHER_SITE).site('https://example.com/account/delete?id=1', OTHER_SITE);
   for (const row of r.pending.list({ status: 'waiting' })) {
     const result = await r.approve(row.id);
     assert.equal(result.status, 'ran', `持ち主が通せば開く: ${JSON.stringify(result)}`);
   }
 });
 
-test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトでもクエリなし・外を読む前の browser_open は、今までどおり積まずに開く', async t => {
+test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトでもクエリなしの browser_open は、外を読んだあとでも積まずに開く（P3）', async t => {
   const classified: ClassifierPrompt[] = [];
   const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
   for (const url of ['https://example.com/form', 'https://other.example.org/a?x=1']) {
@@ -313,6 +313,8 @@ test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトで�
   r.ctx.taint.tainted = true;
   const unlisted = await r.call('browser_open', { url: 'https://other.example.org/a' });
   assert.deepEqual([unlisted.decision, unlisted.decidedBy], ['allow', 'builtin']);
+  const listed = await r.call('browser_open', { url: 'https://example.com/account' });
+  assert.deepEqual([listed.decision, listed.decidedBy], ['allow', 'builtin']);
   assert.equal(r.pending.list({ status: 'waiting' }).length, 0);
   assert.equal(classified.length, 0);
 });

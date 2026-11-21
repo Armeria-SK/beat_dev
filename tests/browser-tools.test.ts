@@ -397,12 +397,14 @@ test('R6: 一覧のサイト + クエリ付き → ask（web・送るに数え�
   assert.equal(sub.decision, 'ask');
 });
 
-test('R6: 一覧のサイト + 会話が外を読んだあと → ask', async t => {
+test('R6（P3 で反転）: 一覧のサイトでも、外を読んだあとのクエリなしの GET は通る。クエリ付きは外を読んだかを問わず ask（R18）', async t => {
   const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
   const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: TAINTED }));
-  assert.equal(check.decision, 'ask');
-  assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.outbound?.kind, 'send');
+  assert.equal(check.decision, 'allow');
+  const query = await browserOpen.preCheck!({ url: 'https://example.com/a?x=1' }, r.ctx({ taint: TAINTED }));
+  const cleanQuery = await browserOpen.preCheck!({ url: 'https://example.com/a?x=1' }, r.ctx());
+  assert.deepEqual([query.decision, query.askKinds, query.outbound?.kind], [cleanQuery.decision, cleanQuery.askKinds, cleanQuery.outbound?.kind]);
+  assert.equal(query.decision, 'ask');
 });
 
 test('R6: 一覧外のサイトは今までどおり（クエリ付き・taint 済みでも読むだけ）', async t => {
@@ -430,18 +432,14 @@ test('R6: 一覧のサイト + 秘密入りクエリは理由が 2 つ重なる�
   assert.equal(off.driver.launches, 0);
 });
 
-test('R6(b): この実行が読んでいなくても、会話がすでに外を読んでいれば → ask（根ページ・パスだけでも）', async t => {
+test('R6(b)（P3 で反転）: 会話がすでに外を読んでいても、クエリなしの GET は通る（会話の印は読まない）', async t => {
   const r = rig(t, c => { c.tools.browser.sites = ['example.com']; });
   const clean = { tainted: false, sources: [] as string[] };
-  const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => true }));
-  assert.equal(check.decision, 'ask');
-  assert.deepEqual(check.askKinds, ['web']);
-  assert.equal(check.outbound?.kind, 'send');
-  // 会話も読んでいなければ今までどおり通る
-  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => false }))).decision, 'allow');
-  // 会話の印が読めない（例外）ときは「ある」側に倒す
-  const broken = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => { throw new Error('db'); } }));
-  assert.equal(broken.decision, 'ask');
+  let asked = 0;
+  const check = await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => { asked++; return true; } }));
+  assert.equal(check.decision, 'allow');
+  assert.equal((await browserOpen.preCheck!({ url: 'https://example.com/account/delete' }, r.ctx({ taint: clean, conversationTainted: () => { throw new Error('db'); } }))).decision, 'allow');
+  assert.equal(asked, 0, '会話の印を読まない');
   // 一覧外のサイトは、会話が読んだあとでも今までどおり
   assert.equal((await browserOpen.preCheck!({ url: 'https://other.example.org/a' }, r.ctx({ taint: clean, conversationTainted: () => true }))).decision, 'allow');
 });

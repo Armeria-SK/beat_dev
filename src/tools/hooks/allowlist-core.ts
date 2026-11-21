@@ -2,6 +2,7 @@
 // 表そのもの（コマンドごとのフラグ）は allowlist-tools.ts（bash と外部の道具）・allowlist-git.ts（git）・allowlist-ps.ts（PowerShell のコマンドレット）にある。
 
 import type { GuardMessageKey } from '../../shared/messages/guard.ts';
+import { CODE_ENV } from './decision-order.ts';
 import type { ShellKind, Statement, Word } from './shell-lex.ts';
 
 export type Level = 'allow' | 'ask' | 'once' | 'deny';
@@ -54,6 +55,7 @@ export interface MatchCtx {
   // 文の判定の前に、並び全体を 1 回（また動きうる本体の cd を先に読むため）と、文ごとに 1 回（番号つき）呼ばれる
   beforeStatements?: ((all: readonly Statement[]) => void) | undefined;
   beforeStatement?: ((st: Statement, index: number) => void) | undefined;
+  productEnv?: ((name: string) => boolean) | undefined;
 }
 
 // file: 読まれる設定ファイルの場所。unknownCwd: cd の先が分からず、調べられない
@@ -110,6 +112,18 @@ export function envAssignOk(name: string, value: Word | null): boolean {
   if (value === null || value.dynamic || value.glob) return false;
   if (name === 'GIT_PAGER' || name === 'PAGER') return value.text === 'cat';
   return ENV_PLAIN.has(name) && /^[A-Za-z0-9_.@:+-]*$/u.test(value.text);
+}
+const PRODUCT_ENV = new Set(['PORT', 'HOST', 'NODE_ENV', 'CI', 'DEBUG', 'LOG_LEVEL', 'TZ', 'FORCE_COLOR', 'NO_COLOR']);
+const TOOL_ENV_PREFIX = /^(?:NPM_|NODE_|YARN_|PNPM_|BUN_|DENO_|TS_NODE_|TSX_|PYTHON|PIP_|UV_|GIT_|LD_|DYLD_|JAVA|JDK_|COR_|CORECLR_|COMPLUS_|DOTNET_|ELECTRON_|BROWSER|PLAYWRIGHT_|PUPPETEER_|LUA_|PHP|MAVEN_|GRADLE_|KUBECONFIG|AWS_|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_)/iu;
+const TOOL_ENV_NAME = /^(?:SSL_CERT_|COREPACK_)|(?:^|_)PROXY$|_CA_BUNDLE$|^(?:SYSTEMROOT|WINDIR|TEMP|TMP|TMPDIR|CC|CXX|LD)$/iu;
+const PRODUCT_ENV_VALUE =/^[A-Za-z0-9_.,:@+=*\\/ -]*$/u;
+export function productEnvOk(name: string, value: Word | null, productReads?: (name: string) => boolean): boolean {
+  if (value === null || value.dynamic || value.glob || CODE_ENV.test(name)) return false;
+  const upper = name.toUpperCase();
+  if (!PRODUCT_ENV.has(upper) && (TOOL_ENV_PREFIX.test(name) || TOOL_ENV_NAME.test(name) || productReads?.(upper) !== true)) return false;
+  const text = value.text;
+  if (!PRODUCT_ENV_VALUE.test(text) || text.includes('://') || /^[\\/~]|^[A-Za-z]:/u.test(text)) return false;
+  return !text.split(/[\\/]/u).includes('..');
 }
 // bash のシェルの変数（小文字だけの名前。proxy を含まない）
 export const bashVarOk = (name: string): boolean => /^[a-z][a-z0-9_]*$/u.test(name) && !name.includes('proxy');
@@ -174,6 +188,8 @@ export function checkUrl(word: Word, acc: Acc, ctx: MatchCtx, cmd: string): void
   let url: URL;
   try { url = new URL(word.text); } catch { acc.add('once', 'list.form', { cmd, detail: word.text }, true); return; }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') { acc.add('once', 'list.form', { cmd, detail: word.text }, true); return; }
+  // web_fetch と同じ長い問い合わせの見張り（どの実行でも）。秘密に見える文字は outbound.ts が断る
+  if (url.search.length > 300) acc.add('ask', 'list.long_query', { cmd }, false);
   const host = hostOf(word.text) ?? '';
   if (isLoopbackHost(host, ctx.selfHosts)) acc.add('once', 'code.loopback', { host }, false);
   else if (LAN_HOST.test(host) || LAN_HOST.test(v4Of(host)) || /\.(?:local|lan|internal)$/u.test(host) || host.endsWith('.home.arpa')) acc.add('ask', 'list.lan', { host });

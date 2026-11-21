@@ -196,6 +196,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     let calls = 0;
     let wrote = false;
     let stop: StopReason = 'other';
+    let refused = false;
     try {
       const create = (replay: boolean) => client.messages.create({
         ...anthropicBody(req, replay ? { provider: this.provider.id, model: req.model.model } : undefined),
@@ -255,13 +256,14 @@ export class AnthropicAdapter implements ProviderAdapter {
           }
           case 'message_delta':
             stop = mapStop(event.delta.stop_reason);
+            refused = event.delta.stop_reason === 'refusal';
             if (typeof event.usage?.output_tokens === 'number') yield { type: 'usage', usage: { outputTokens: event.usage.output_tokens } };
             break;
           default: break;
         }
       }
     } catch (error) { throw classifyAnthropicError(error, req.signal, this.#secrets()); }
-    yield { type: 'done', stop };
+    yield { type: 'done', stop, ...(refused ? { refused: true as const } : {}) };
   }
 
   async probe(model: ModelConfig, required: number, language: Language = DEFAULT_LANGUAGE): Promise<ProbeResult> {

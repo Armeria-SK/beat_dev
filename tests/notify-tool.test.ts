@@ -86,13 +86,14 @@ test('notify_owner: 101 文字の題・1,001 文字の本文は誤り', async t 
   }
 });
 
-test('notify_owner: 外を読んだあとでは題に印が付く', async t => {
+test('notify_owner: 外を読んだあとでも題に印は付かない（P3）', async t => {
   const s = setup(t);
   s.ctx.taint.tainted = true;
   await s.call({ title: '区切り' });
   const first = s.sent[0];
   assert.ok(first);
-  assert.ok(first.title.startsWith('From beat (after reading text that came from elsewhere): '), `題 ${JSON.stringify(first.title)} が印付きで始まらない`);
+  assert.equal(first.title.includes('elsewhere'), false, `題 ${JSON.stringify(first.title)}`);
+  assert.ok(first.title.endsWith('区切り'));
 });
 
 test('notify_owner: 題の改行と向き替え文字が落ち、本文の改行は残り向き替え文字は落ちる', async t => {

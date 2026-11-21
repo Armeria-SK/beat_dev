@@ -142,7 +142,6 @@ test('ui/acceptance: 外の文を読んだあとに書いた計画書か一覧�
   assert.equal(outsideContent(doc(), acc()), false);
   assert.equal(outsideContent(doc({ tainted: true }), null), true);
   assert.equal(outsideContent(doc(), acc({ tainted: true })), true);
-  assert.equal(t('ui.acc.outside'), 'Written after reading text from elsewhere');
 });
 
 test('ui/acceptance: 質問票の答えの出どころ（owner_answer）は「Your answer」の札と答えの文、前の出どころを出す。知らない種類でも落ちない（beat 5-u2）', () => {

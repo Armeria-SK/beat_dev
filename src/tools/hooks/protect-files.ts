@@ -8,7 +8,7 @@ import { isInside, realish, realPath, windowsNames } from './scope.ts';
 export const PROTECT_FILES = 'protect-files';
 export const PROTECT_FILES_OFFERED = 'hooks.protect-files.offered';
 
-export const DEFAULT_PROTECT_FILES: BuiltinHookConfig = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] };
+export const DEFAULT_PROTECT_FILES: BuiltinHookConfig = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] };
 
 const WINDOWS = process.platform === 'win32';
 const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
@@ -132,8 +132,7 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
   const none: HookResult = { hook: PROTECT_FILES, decision: undefined, reason: '' };
   if (!writes.length) return none;
   const roots = [...new Set([payload.project_root, ...(payload.product_roots ?? [])].filter((r): r is string => typeof r === 'string' && r !== ''))];
-  const patterns = [...hook.always, ...(payload.tainted === true ? hook.afterOutside : [])];
-  const rules = patterns.flatMap(p => rulesOf(p, roots));
+  const rules = hook.always.flatMap(p => rulesOf(p, roots));
   if (!rules.length) return none;
   let inodes: Inodes | undefined;
   const budget: Budget = { left: WALK_LIMIT };

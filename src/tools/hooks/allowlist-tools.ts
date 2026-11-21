@@ -2,6 +2,7 @@
 // 表にある綴り以外のフラグ・形は、すべて「今回だけ」（exempt: 持ち主の tools.shell.allow で外せる）。
 
 import { Acc, checkUrl, checkValue, envAssignOk, flagMap, isFlagLike, literal, parseGnu, SH_CD_NAMES, SH_POP_NAMES, walkAll, type CopyUse, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
+import { nodeFileIndex } from './decision-order.ts';
 import type { Word } from './shell-lex.ts';
 
 export type Run = (words: Word[], acc: Acc, ctx: MatchCtx) => void;
@@ -631,7 +632,8 @@ function langInfo(name: string, words: Word[], acc: Acc, ctx: MatchCtx): void {
   if (name === 'npm' && args.length > 0) { npmForms(words, acc); return; }
   if (/^pip3?$/u.test(name) && args.length > 0) { pipForms(words, acc); return; }
   if (/^node(?:js)?$/u.test(name) && args.length > 0 && args.every(literal) && args[0]!.text === '--test' && !args.slice(1).some(isFlagLike)) { acc.add('once', 'list.form', { cmd: name, detail: rest }, true, 'list.node_test'); return; }
-  if (LANG_RUNNERS.has(name) && args.length > 0 && args.every(literal) && !isFlagLike(args[0]!) && LANG_FILE.test(args[0]!.text)) { acc.add('once', 'list.form', { cmd: name, detail: rest }, true, 'list.lang_run'); return; }
+  const fileAt = nodeFileIndex(name, args);
+  if (LANG_RUNNERS.has(name) && args.length > fileAt && args.every(literal) && !isFlagLike(args[fileAt]!) && LANG_FILE.test(args[fileAt]!.text)) { acc.add('once', 'list.form', { cmd: name, detail: rest }, true, 'list.lang_run'); return; }
   formOnce(acc, name, rest);
 }
 // レジストリに問い合わせて、相手の書いた文字（説明・版・作者の文）を読む形。形が一覧の外でも、札で許して動かせば同じなので、検査より先に印を付ける

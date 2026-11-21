@@ -120,7 +120,7 @@ const OUTSIDE_JOB = [
 const PACKAGE_FETCH = ['npm -w a exec vitest', 'npm --prefix . exec vitest', 'npm --loglevel silent exec vitest', 'pnpm --dir . dlx vitest', 'npm init vite', 'npm create vite', 'pnpm create vite', 'yarn create vite', 'bun create vite', 'corepack pnpm dlx vitest',
   'corepack pnpm install', 'corepack use pnpm@9', 'uvx ruff', 'uv tool run ruff', 'uv tool install ruff', 'pipx run black', 'pipx install black'];
 // パイプのある文（製品のコードの段 4 に当たらず、判定役へ行く）
-const PIPE = 'node -e "console.log(1)" | node check.js';
+const JUDGED = "$env:UNREAD_NAME='x'; node check.js";
 const pidAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const fixId = (s: { app: App }): string => (s.app.db.prepare("SELECT id FROM worktrees WHERE kind = 'fix'").get() as { id: string }).id;
 const branchesOf =(product: string): string[] => gitIn(product, 'for-each-ref', '--format=%(refname)', 'refs/heads/').split('\n').filter(Boolean);
@@ -237,7 +237,7 @@ test('8-6a: 直す実行に Web・ブラウザ・MCP・agent_run・task_*・ques
 
 test('8-6a D-11 (3)(4): 写しの中の製品のコード（node check.js）は判定役なしで動き、パイプのある文は判定役へ行って、頼みの文に提案の文が入らない。判定役の「聞きたい」は断られ Pending に行かない', { skip: !gitAvailable }, async t => {
   const s = await fixApp(t);
-  s.model.scripts.push(sh('node check.js'), sh(PIPE), editFix(), reply('done'));
+  s.model.scripts.push(sh('node check.js'), sh(JUDGED), editFix(), reply('done'));
   const result = await s.run();
   assert.ok(result.ok && result.result.kept, JSON.stringify(result));
   const calls = s.calls();
@@ -252,7 +252,7 @@ test('8-6a D-11 (3)(4): 写しの中の製品のコード（node check.js）は�
 
 test('8-6a: 判定役が許せば判定役行きの文は動く。判定役を切っていれば断る', { skip: !gitAvailable }, async t => {
   const s = await fixApp(t, { judge: '{"decision":"allow","reason":"reads a file in the copy"}' });
-  s.model.scripts.push(sh(PIPE), editFix(), reply('done'));
+  s.model.scripts.push(sh(JUDGED), editFix(), reply('done'));
   const result = await s.run();
   assert.ok(result.ok && result.result.kept);
   assert.equal(s.calls()[0]!.decision, 'allow', JSON.stringify(s.calls()[0]));
@@ -260,7 +260,7 @@ test('8-6a: 判定役が許せば判定役行きの文は動く。判定役を�
 
   const off = await fixApp(t, { judgeOff: true });
   assert.equal(off.app.config().routing.judgeMode, 'off', '前提: 判定役を切った');
-  off.model.scripts.push(sh(PIPE), reply('done'));
+  off.model.scripts.push(sh(JUDGED), reply('done'));
   await off.run();
   assert.equal(off.calls()[0]!.decision, 'deny', JSON.stringify(off.calls()[0]));
   assert.match(off.calls()[0]!.out, /fix run/u);

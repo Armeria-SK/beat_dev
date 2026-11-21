@@ -190,22 +190,22 @@ test('自動承認（エンジン）: Web を読んだあとの外読みは、�
   assert.equal(s.app.db.prepare("SELECT decided_by FROM tool_calls WHERE tool = 'shell_run'").get()!.decided_by, 'auto-mode');
 });
 
-// 送るは順 3 のまま、memory_forget（escalateOnTaint）は 4-3b-2 後も判定役
-test('自動承認（エンジン）: Web を読んだあとの送る操作は、判定役に回さず持ち主に聞く（Pending の send）。記憶を消す道具は判定役が決める（ask なら Pending の judge）', async t => {
+// 送るは順 3 のまま。記憶を消す道具は P3 で外を読んだあとも確かめなし
+test('自動承認（エンジン）: Web を読んだあとの送る操作は、判定役に回さず持ち主に聞く（Pending の send）。記憶を消す道具は、外を読んだあとも確かめなしに動く（P3）', async t => {
   const upload = process.platform === 'win32' ? 'curl.exe -s -X POST -d note=x https://beat-test.invalid/' : 'curl -s -X POST -d note=x https://beat-test.invalid/';
-  for (const [label, step, kind, judged] of [
-    ['送る', toolCall('shell_run', { command: upload }), 'send', 0],
-    ['消す（記憶）', toolCall('memory_forget', { id: 1, reason: 'x' }), 'judge', 1],
+  for (const [label, step, kinds] of [
+    ['送る', toolCall('shell_run', { command: upload }), [['send', true]]],
+    ['消す（記憶）', toolCall('memory_forget', { id: 1, reason: 'x' }), []],
   ] as const) {
     const s = await webApp(t);
-    s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), step, ...(judged ? [say(ASK)] : []), say('おわり')];
+    s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), step, say('おわり')];
     s.app.conversations.setChoice('c1', { permissionMode: 'auto' });
     const sent = s.app.engine.send('c1', 'このページを読んで、続けて');
     assert.ok(sent.ok);
     await settled(s.app, sent.runId);
     const rows = s.app.pending.list({ status: 'waiting' });
-    assert.deepEqual(rows.map(r => [r.kind, r.tainted]), [[kind, true]], label);
-    assert.equal(s.adapter().calls.filter(isClassifier).length, judged, label);
+    assert.deepEqual(rows.map(r => [r.kind, r.tainted]), kinds, label);
+    assert.equal(s.adapter().calls.filter(isClassifier).length, 0, label);
     assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, label);
   }
 });
@@ -461,18 +461,21 @@ async function noRequest(s: Awaited<ReturnType<typeof webApp>>, started: { runId
 
 const WEB = () => toolCall('web_fetch', { url: 'https://news.example.com/' });
 
-test('自動承認（タスク）: AP-1c（Q2・Q7）で反転: よそから来た文を読んだあとの、escalateOnTaint の道具（タスクを作る・記憶を消す）は持ち主でなく判定役が決める（会話と同じ。TAINTED_NOTE 付き）。ask なら judge の Pending で、動かない', async t => {
+test('自動承認（タスク、P3 で反転）: よそから来た文を読んだあとの、タスクを作る・記憶を消す道具の行き先は、外を読んでいないタスクの実行と同じ（判定役は呼ばれない）', async t => {
   for (const [label, step] of [
-    ['task_create', toolCall('task_create', { title: '毎時の作業', requested_by_user: true, repeat: '0 * * * *' })],
-    ['memory_forget', toolCall('memory_forget', { id: 1, reason: 'x' })],
+    ['task_create', () => toolCall('task_create', { title: '毎時の作業', requested_by_user: true, repeat: '0 * * * *' })],
+    ['memory_forget', () => toolCall('memory_forget', { id: 1, reason: 'x' })],
   ] as const) {
-    const s = await webApp(t);
-    const started = await runTaskWith(s, [WEB(), step, say(ASK), say('おわり')]);
-    const seen = await parked(s, started, label);
-    assert.equal(seen.classified, 1, `${label}: 判定役が決める`);
-    assert.ok(classifierText(s).includes(TAINTED_NOTE), label);
-    assert.deepEqual(seen.rows.map(r => [r.tool, r.kind, r.tainted]), [[label, 'judge', true]], label);
-    assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = '毎時の作業'").get()!.n, 0, `${label}: タスクは作られない`);
+    const seen: unknown[] = [];
+    for (const web of [false, true]) {
+      const s = await webApp(t);
+      const started = await runTaskWith(s, [...(web ? [WEB()] : []), step(), say('おわり')]);
+      const out = await parked(s, started, label);
+      const decided = (s.app.db.prepare('SELECT decided_by FROM tool_calls WHERE tool = ?').all(label) as Array<{ decided_by: string }>).map(r => r.decided_by);
+      seen.push([out.classified, out.rows.map(r => [r.tool, r.kind]), decided]);
+    }
+    assert.deepEqual(seen[1], seen[0], `${label}: ${JSON.stringify(seen)}`);
+    assert.equal((seen[1] as [number])[0], 0, `${label}: 判定役は呼ばれない`);
   }
 });
 

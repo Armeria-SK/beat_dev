@@ -128,8 +128,8 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
   const onlyProtectsMore = (was: unknown, now: unknown): boolean => {
     const a = obj(was);
     const b = obj(now);
-    return a.builtin === 'protect-files' && !(on(was) && !on(now)) && covers(a.always, b.always) && covers(a.afterOutside, b.afterOutside)
-      && deepEqual(body({ ...b, always: a.always, afterOutside: a.afterOutside }), body(was));
+    return a.builtin === 'protect-files' && !(on(was) && !on(now)) && covers(a.always, b.always)
+      && deepEqual(body({ ...b, always: a.always }), body(was));
   };
   const out: Access[] = [];
   const newHooks: unknown[] = [];

@@ -90,7 +90,7 @@ function candidateOf(r: Rig, command: string, kind: string, c: Partial<ToolConte
   return ruleCandidate({ tool: shellRun, args: { command }, ctx, parkKind: kind, check, outbound: check.outbound, askKinds: extra.askKinds ?? check.askKinds ?? [], policyAsk: extra.policyAsk ?? false });
 }
 
-const ALL_ASK: AskKind[] = ['precheck', 'code', 'taint', 'policy', 'hook', 'outside_read', 'outside_write', 'risky_command', 'egress', 'git_write', 'opaque', 'persona', 'owner', 'web'];
+const ALL_ASK: AskKind[] = ['precheck', 'code', 'policy', 'hook', 'outside_read', 'outside_write', 'risky_command', 'egress', 'git_write', 'opaque', 'persona', 'owner', 'web'];
 // A rule whose key set covers every ask kind (and the extra keys), so only the pipeline's overlap blockers can stop it. Test-only: no product code widens a rule
 function widen(r: Rig, id: number, extra: string[] = []): void {
   const row = r.db.prepare('SELECT keys FROM approval_rules WHERE id = ?').get(id) as { keys: string };
@@ -241,12 +241,10 @@ test('J-5 形: 製品が無い・偵察・Q1 の道具（タスクの実行）�
   assert.equal(candidateOf(r, 'npm install a', 'judge', { project: undefined }), undefined);
   assert.equal(candidateOf(r, 'npm install a', 'judge', { scout: true }), undefined);
   const check = shellPreCheck({ command: 'npm install a' }, r.ctx);
-  const of = (askKinds: AskKind[], fetchEgress?: boolean) => ruleCandidate({ tool: shellRun, args: {}, ctx: r.ctx, parkKind: 'judge', check, outbound: undefined, askKinds, policyAsk: false, ...(fetchEgress !== undefined ? { fetchEgress } : {}) });
+  const of = (askKinds: AskKind[]) => ruleCandidate({ tool: shellRun, args: {}, ctx: r.ctx, parkKind: 'judge', check, outbound: undefined, askKinds, policyAsk: false });
   const clean = of(['code']);
   assert.ok(clean, 'control');
-  assert.deepEqual(of(['code', 'taint']), clean, 'the taint kind is not a key');
-  assert.deepEqual(of(['code', 'egress'], true), clean, 'the egress only the fetch-after-taint added is not a key');
-  assert.ok(of(['code', 'egress'], false)?.keys.includes('ask:egress'), 'an egress the pre-check gave stays a key');
+  assert.ok(of(['code', 'egress'])?.keys.includes('ask:egress'), 'an egress the pre-check gave stays a key');
   const q1 = { name: 'task_create' } as ToolDef;
   assert.equal(ruleCandidate({ tool: q1, args: {}, ctx: { ...r.ctx, kind: 'task' }, parkKind: 'policy', check: undefined, outbound: undefined, askKinds: [], policyAsk: true }), undefined);
   assert.equal(ruleCandidate({ tool: q1, args: {}, ctx: { ...r.ctx, kind: 'agent', parent: { runId: 'x', conversationId: 'c', kind: 'task', title: 't' } }, parkKind: 'policy', check: undefined, outbound: undefined, askKinds: [], policyAsk: true }), undefined);
@@ -531,7 +529,7 @@ test('J-5 重なり（積む前）: キーを広げた決まりがあっても�
 test('J-5 重なり（人の見ていない実行）: AP-1（Q2・Q7・N9）で反転: よそを読んだタスクの実行の escalateOnTaint の道具も、きれいな実行で作った方針の決まり（keys は policy.tool だけ）に当たり、積まない。決まりが無ければ policy の行で選び方を出す', async t => {
   const r = rig(t, c => { c.tools.policies = { memory_like: 'ask' }; });
   const { db } = r;
-  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], escalateOnTaint: true, execute: async () => ({ content: 'ok' }) };
+  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], execute: async () => ({ content: 'ok' }) };
   const registry = new ToolRegistry().register(memoryLike);
   const pending = new PendingStore(db, { tools: registry, dataDir: r.paths.data });
   const task: ToolContext = { ...r.ctx, kind: 'task', task: { id: 't1', control: { outcome: 'none' } }, taint: { tainted: true, sources: ['web_fetch'] } };
@@ -1114,7 +1112,7 @@ test('AP-1f N8: 製品のポート（beat のポートでない）だけを loca
   assert.equal(r.judge.calls, 0);
 });
 
-test('AP-1f T-G8: beat のポート・ポートの無いループバック・組み立てたループバックは今までどおり beat 自身に触る印が付き、決まりにも順 4 にもならない', async t => {
+test('AP-1f T-G8: beat のポート・組み立てたループバック（ポートを後から足す形も）は今までどおり beat 自身に触る印が付き、決まりにも順 4 にもならない', async t => {
   const r = rig(t);
   const port = r.ctx.config.server.port;
   const digits = String(port);
@@ -1130,17 +1128,11 @@ test('AP-1f T-G8: beat のポート・ポートの無いループバック・組
     ['ipv6-full', `fetch('http://[0:0:0:0:0:0:0:1]:${port}/');`],
     ['ipv6-any', `fetch('http://[::]:${port}/');`],
     ['sub-localhost', `fetch('http://app.localhost:${port}/');`],
-    ['no-port', "fetch('http://localhost/');"],
     ['port-elsewhere', `fetch('http://localhost:5173/');\nconst other = ${port};`],
     ['join-v4', "fetch('http://' + ['127.0.0', 1].join('.') + ':5173/');"],
-    ['short-v4', "fetch('http://127.1/');"],
     ['short-v4-beat', `fetch('http://127.1:${port}/');`],
-    ['ipv6-full-no-port', "fetch('http://[0:0:0:0:0:0:0:1]/');"],
-    ['sub-localhost-no-port', "fetch('http://app.localhost/');"],
-    ['ipv6-any-no-port', "fetch('http://[::]/');"],
     ['split-digits', "fetch('http://localhost:" + digits.slice(0, 2) + "' + '" + digits.slice(2) + "/');"],
     ['brace-shell', `execSync('bash -c "curl http://local{host,}:${digits[0]}{${digits.slice(1)},}/"');`],
-    ['api', "fetch('http://localhost:5173/api/pending');"],
     ['newline-in-port', 'fetch(`http://127.0.0.1:' + digits.slice(0, 2) + '\n' + digits.slice(2) + '/settings`);'],
     ['escaped-port', "fetch('http://lvh.me:\\x" + (0x30 + Number(digits[0])).toString(16) + digits.slice(1) + "/');"],
     ['newline-in-host', 'fetch(`http://local\nhost:' + digits + '/`);'],
@@ -1156,6 +1148,46 @@ test('AP-1f T-G8: beat のポート・ポートの無いループバック・組
     assert.equal(r.waiting().at(-1)!.rule ?? null, null, `${name}: 決まりの候補にならない（NEVER_KEYS）`);
   }
   assert.deepEqual(r.ran, []);
+});
+
+test('self-run P1 1c: 弱い目印（/api/・config.json・skills/・ポートの無いループバックの URL）は beat 自身に触る印にせず順 4。判定役への文の手がかりにだけ載る', async t => {
+  const r = rig(t);
+  for (const [name, body] of [
+    ['no-port', "fetch('http://localhost/');"],
+    ['short-v4', "fetch('http://127.1/');"],
+    ['ipv6-full-no-port', "fetch('http://[0:0:0:0:0:0:0:1]/');"],
+    ['sub-localhost-no-port', "fetch('http://app.localhost/');"],
+    ['ipv6-any-no-port', "fetch('http://[::]/');"],
+    ['https-no-port', "fetch('https://localhost/x', {});"],
+    ['api', "fetch('http://localhost:5173/api/pending');"],
+    ['config', "JSON.parse(readFileSync('config.json', 'utf8'));"],
+    ['skills', "readdirSync('skills/');"],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(!pre.reasonKeys?.includes('code.self_touch'), `${name}: ${JSON.stringify(pre.reasonKeys)}`);
+    assert.ok(pre.reasons.some(reason => reason.startsWith('The code mentions')), `${name}: 手がかりの文 ${JSON.stringify(pre.reasons)}`);
+    assert.ok(pre.productRun !== undefined, `${name}: 順 4 に乗る`);
+    assert.equal(out.decidedBy, pre.productRun, `${name}: ${out.output.content}`);
+  }
+  assert.equal(r.judge.calls, 0);
+  for (const [name, body] of [
+    ['soul', "readFileSync('SOUL.md');"], ['user', "readFileSync('USER.md');"], ['db', "open('beat.db');"], ['env', "readFileSync('.env');"],
+    ['user-info', "fetch('http://me@localhost/');"], ['template-port', 'fetch(`http://localhost${port}/`);'], ['concat-port', "fetch('http://localhost' + port);"],
+    ['no-port-and-beat', `fetch('http://localhost/');\nconst p = ${r.ctx.config.server.port};`], ['bare-host', "http.request({ host: 'localhost', port: p });"],
+  ] as const) {
+    const { pre, out } = await loopbackScript(r, name, body);
+    assert.ok(pre.reasonKeys?.includes('code.self_touch'), `${name}: 強い目印のまま ${JSON.stringify(pre.reasonKeys)}`);
+    assert.equal(out.decidedBy, 'pending', name);
+  }
+});
+
+test('self-run P1 1c: beat のポートが 80 なら、ポートの無い http://localhost/ は強い目印のまま', async t => {
+  const r = rig(t, c => { c.server.port = 80; });
+  const { pre, out } = await loopbackScript(r, 'port80', "fetch('http://localhost/');");
+  assert.ok(pre.reasonKeys?.includes('code.self_touch'), JSON.stringify(pre.reasonKeys));
+  assert.equal(out.decidedBy, 'pending');
+  const tls = await loopbackScript(r, 'port443', "fetch('https://localhost/');");
+  assert.ok(!tls.pre.reasonKeys?.includes('code.self_touch'), `https は 443: ${JSON.stringify(tls.pre.reasonKeys)}`);
 });
 
 test('AP-1f T-G8（審査で反転: 既定の 4777 はいつも beat のポート）: beat のポートを設定で変えると新しいポートで印が付き、既定の 4777 にも付いたまま', async t => {
@@ -1297,7 +1329,7 @@ test('AP-1b N7（push）: 外を読んだ実行でも push の決まりに当た
 });
 
 test('AP-1b N9: きれいな実行で作った方針の決まり（memory_save 似の道具）・会話の task_create の決まりは、外を読んだ実行（ask:taint 付き）でも当たる。npm install の決まりは、取得のあとの判定役行き（fetchToJudge）の実行でも当たる', async t => {
-  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], escalateOnTaint: true, execute: async () => ({ content: 'ok' }) };
+  const memoryLike: ToolDef = { name: 'memory_like', description: 'x', input: Type.Object({ title: Type.String() }), effect: 'meta', allowedIn: ['chat', 'task'], execute: async () => ({ content: 'ok' }) };
   const r = rig(t, c => { c.tools.policies = { memory_like: 'ask', task_create: 'ask' }; }, [memoryLike]);
   for (const name of ['memory_like', 'task_create']) {
     await r.call(name, { title: 'clean' }, { ...r.ctx, taint: { tainted: false, sources: [] } });

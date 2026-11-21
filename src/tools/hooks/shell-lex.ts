@@ -1543,13 +1543,15 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       if (op?.t === 'word' && ASSIGN_OPS.has(op.v)) {
         k++;
         skipNl();
+        const lit = peek();
+        const value = op.v === '=' && lit?.t === 'str' && !lit.dyn && !lit.subs && isEnd(peek(1)) ? plain(lit.v, { quoted: true }) : null;
         const r = rightSide(depth + 1);
         if (r) return r;
         st.kind = 'assign';
         if (op.split || op.v === '??=') st.shapes.push(`expr:${op.v}`);
         // `?` の入った変数の名前は、前は $a と ? の語に読んで判定役へ回していたので、その印を残す
         if (t.v !== '?' && t.v.includes('?')) st.shapes.push(`expr:$${t.v}`);
-        st.assigns.push({ name: t.v, op: op.v, value: null });
+        st.assigns.push({ name: t.v, op: op.v, value });
         return finish(st);
       }
       k = from;

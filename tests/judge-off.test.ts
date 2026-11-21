@@ -61,7 +61,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     execute: async () => { ran++; return { content: 'ran' }; },
     ...extra,
   });
-  const registry = new ToolRegistry().register(probe('probe')).register(probe('probe_taint', { escalateOnTaint: true }))
+  const registry = new ToolRegistry().register(probe('probe'))
     .register(probe('mcp__s1__put', { effect: 'write', mcp: { server: 's1', tool: 'put' } })).register(probe('mcp__s1__get', { effect: 'network', mcp: { server: 's1', tool: 'get' } }));
   const pending = new PendingStore(db, { tools: registry, dataDir: paths.data });
   const prompts: ClassifierPrompt[] = [];
@@ -177,7 +177,7 @@ test('J-4: Off でも、送る・消すは Pending に積む（判定の前も�
 });
 
 test('J-4: Off でも、守るファイルのフック・道具の方針の Ask・持ち主の決めのキーは Pending に積む', async t => {
-  const hook = setup(t, c => { off(c); c.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['guarded.txt'], afterOutside: [] }]; });
+  const hook = setup(t, c => { off(c); c.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['guarded.txt'] }]; });
   hook.world.writes = [join(hook.workspace, 'guarded.txt')];
   assert.equal((await hook.call()).decidedBy, 'pending');
   assert.equal(waitingKind(hook), 'hook');
@@ -203,22 +203,21 @@ test('J-4: Off でも、守るファイルのフック・道具の方針の Ask�
   for (const s of [hook, policy, ownerKey, needs, reason, late]) assert.deepEqual([s.ran(), s.prompts.length], [0, 0]);
 });
 
-test('J-4: Off でも、外を読んだタスクが escalateOnTaint の道具を使うときは Pending に積む', async t => {
-  const s = setup(t);
-  const task: ToolContext = { ...s.ctx, kind: 'task', taint: { tainted: true, sources: ['web_fetch'] } };
-  assert.equal((await s.call(task, 'probe_taint')).decidedBy, 'pending');
-  assert.equal(waitingKind(s), 'owner');
-  assert.equal(s.ran(), 0);
-  // AP-1 review: a sub-agent whose parent is a task is unattended too
-  const sub = setup(t);
-  const agent: ToolContext = { ...sub.ctx, kind: 'agent', parent: { runId: 'r0', conversationId: sub.ctx.conversationId, kind: 'task', title: 'parent task', taskId: 't1' }, taint: { tainted: true, sources: ['web_fetch'] } };
-  assert.equal((await sub.call(agent, 'probe_taint')).decidedBy, 'pending');
-  assert.equal(waitingKind(sub), 'owner');
-  assert.deepEqual([sub.ran(), sub.prompts.length], [0, 0]);
-  // control: a sub-agent of a chat is watched by its owner, so the judge-Off run lets it through
-  const chatSub = setup(t);
-  const watched: ToolContext = { ...chatSub.ctx, kind: 'agent', parent: { runId: 'r0', conversationId: chatSub.ctx.conversationId, kind: 'chat', title: 'parent chat' }, taint: { tainted: true, sources: ['web_fetch'] } };
-  assert.notEqual((await chatSub.call(watched, 'probe_taint')).decidedBy, 'pending');
+test('J-4（P3 で反転）: Off で、外を読んだタスク・タスクの子の担当・会話の子の担当の行き先は、外を読んでいない同じ実行と同じ', async t => {
+  const parents = [
+    (c: ToolContext): ToolContext => ({ ...c, kind: 'task' }),
+    (c: ToolContext): ToolContext => ({ ...c, kind: 'agent', parent: { runId: 'r0', conversationId: c.conversationId, kind: 'task', title: 'parent task', taskId: 't1' } }),
+    (c: ToolContext): ToolContext => ({ ...c, kind: 'agent', parent: { runId: 'r0', conversationId: c.conversationId, kind: 'chat', title: 'parent chat' } }),
+  ];
+  for (const [i, shape] of parents.entries()) {
+    const seen: unknown[] = [];
+    for (const tainted of [false, true]) {
+      const s = setup(t);
+      const out = await s.call({ ...shape(s.ctx), taint: { tainted, sources: tainted ? ['web_fetch'] : [] } }, 'probe');
+      seen.push([out.decidedBy, out.decidedBy === 'pending' ? waitingKind(s) : null, s.ran(), s.prompts.length]);
+    }
+    assert.deepEqual(seen[1], seen[0], `${i}: ${JSON.stringify(seen)}`);
+  }
 });
 
 test('J-4: Off でも、beat 自身に触れるコード（code.self_touch）は判定役の代わりに持ち主の Pending に積む。On では今までどおり判定役が見る', async t => {

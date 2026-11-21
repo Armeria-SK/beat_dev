@@ -29,10 +29,10 @@ function repo(t: { after: (fn: () => void) => void }) {
   git('remote', 'add', 'origin', remote);
   git('push', '-q', 'origin', 'main');
   const config = testConfig();
-  config.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: [] }];
+  config.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] }];
   const policy: ScopePolicy = { roots: [{ path: root, mode: 'write' }], deny: [] };
   const protectOf = (command: string) => pushProtectOf({
-    config, projectRoot: root, productRoots: [], tainted: false,
+    config, projectRoot: root, productRoots: [],
     statements: checkShellCommand(command, root, { policy, outsideRoots: 'ask', shell: 'bash', windows: false }).statements,
     git: (dir, args) => {
       const out = spawnSync('git', args, { cwd: dir, encoding: 'utf8' });

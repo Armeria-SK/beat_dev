@@ -155,13 +155,13 @@ test('Memory（DOM）: 0 件の製品は空の表示と New memory。範囲の�
   assert.ok(byText(container, '.bt-empty button', 'New memory'));
 });
 
-test('Memory（DOM）: 一覧は <name>.md・saved by beat / edited by you と時刻。印のある記憶にだけ札。右にパス・本文・History（版の題・だれ・行の増減、新しい版に Undo、古い版に Restore）', async () => {
+test('Memory（DOM）: 一覧は <name>.md・saved by beat / edited by you と時刻。外を読んだ印の札は出さない（P3）。右にパス・本文・History（版の題・だれ・行の増減、新しい版に Undo、古い版に Restore）', async () => {
   fakeServer(SEED);
   const container = await screen(PID);
   assert.deepEqual(rows(container).map(r => r.querySelector('code')?.textContent), ['test-commands.md', 'note-1.md']);
   assert.match(rows(container)[0]!.querySelector('.bt-row__sub')!.textContent!, /^saved by beat · /u);
   assert.equal(rows(container)[0]!.querySelector('.ui-mem__tag'), null);
-  assert.equal(rows(container)[1]!.querySelector('.ui-mem__tag')?.textContent, 'read outside content');
+  assert.equal(rows(container)[1]!.querySelector('.ui-mem__tag'), null, 'no outside tag (P3)');
   assert.equal(container.querySelector('.ui-mem__path')?.textContent, 'memory/test-commands.md');
   assert.match(container.querySelector('article.bt-doc')!.textContent!, /Then npm run check\./u);
   const history = historyRows(container);
@@ -421,5 +421,5 @@ test('Memory（DOM）: Edit のあいだの「印を外す」が 409 でも、Ed
     await settle();
   }
   assert.deepEqual(server.writes().map(c => [c.path.endsWith('/reviewed'), c.body!.baseHash]), [[true, OLD], [true, OLD]]);
-  assert.ok(rows(container)[1]!.querySelector('.ui-mem__tag'), '印は残る');
+  assert.ok(byText(container, 'button', 'I read it · clear the mark'), '印は残る（「印を外す」が出たまま）');
 });

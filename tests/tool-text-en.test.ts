@@ -105,9 +105,6 @@ test('承認の依頼: 題と理由は英語で書く', async t => {
   assert.deepEqual(request.checks, ['This is a persona or profile file (SOUL.md / USER.md), so it is checked with you before it is rewritten']);
   assert.doesNotMatch(request.reason, CJK, request.reason);
 
-  const tainted = setup(t, undefined, true);
-  const askRequest = await tainted.parked('memory_save', { book: 'user', content: 'x' });
-  assert.deepEqual(askRequest.checks, ['You have just read text that came from somewhere else, such as the web or an attachment (A, B), so this is checked with you to be safe']);
 
   const outsideRead = setup(t);
   const outsideAbs = resolve(outsideRead.ctx.workspace, '../out.txt');
@@ -152,7 +149,8 @@ test('コードを動かす確かめ: 理由・beat 自身に触れる目印・�
   assert.equal(check.reasonKeys?.[0], 'code.self_touch');
   assert.equal(request.checks[0], check.reasons[0]);
   assertFilled(request.checks[0]!);
-  assert.ok(request.checks[0]!.endsWith(': /api/, 127.0.0.1 / localhost'), request.checks[0]);
+  assert.ok(request.checks[0]!.endsWith(': 127.0.0.1 / localhost'), request.checks[0]);
+  assert.ok(check.reasons.some(reason => reason.startsWith('The code mentions /api/.')), check.reasons.join(' / '));
   const fileRun = check.reasonKeys!.indexOf('code.file_run');
   assert.ok(fileRun >= 0, check.reasonKeys!.join(', '));
   assert.ok(request.checks.includes(check.reasons[fileRun]!));

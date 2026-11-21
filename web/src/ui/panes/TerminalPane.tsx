@@ -141,7 +141,6 @@ export function TerminalPane({ productId, revision, focus }: TerminalPaneProps) 
   const meta = [
     t('ui.term.readOnly'),
     t('ui.term.startedBy', item.startedBy.title || t('ui.session.untitled')),
-    item.tainted && t('ui.term.tainted'),
     item.orphaned && t('ui.term.orphaned'),
   ].filter(Boolean).join(' · ');
 

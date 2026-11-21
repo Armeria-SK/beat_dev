@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -11,12 +11,15 @@ import { redactKeyEcho, redactOpenKey, redactSecrets } from '../../shared/redact
 import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals.ts';
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
-import { selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
+import { isInterpreter, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
+import { productEnvReader } from '../hooks/product-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
+import { judgeFilesOf } from '../judge-files.ts';
 import { fixShellRefusal } from '../hooks/fix-guard.ts';
 import { broadPush, gitWithOutsidePath, linkOutOfCopy, mainWrites, namesMain, worktreeGitRefusal, WT_MAIN_PATH, WT_OUTSIDE_PATH, WT_PUSH_BEAT, WT_WRITE_MAIN } from '../hooks/worktree-git.ts';
 import { pushProtectOf } from '../hooks/push-protect.ts';
@@ -170,6 +173,141 @@ function shellOutbound(command: string, statements: readonly StatementFacts[], c
   }
 }
 
+const REWRITE_KEYS = new Set(['list.expand', 'list.git_moves']);
+const READ_PROGRAMS = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location', 'pwd', 'get-location', 'cat', 'type', 'get-content', 'gc', 'less', 'more', 'head', 'tail',
+  'grep', 'egrep', 'fgrep', 'rg', 'select-string', 'sls', 'findstr', 'wc', 'diff', 'cmp', 'sort', 'uniq', 'nl', 'file', 'stat', 'ls', 'dir', 'get-childitem', 'gci', 'tree', 'du', 'df', 'get-item', 'gi',
+  'test-path', 'resolve-path', 'split-path', 'join-path', 'echo', 'write-output', 'write-host', 'printf', 'which', 'where', 'get-command', 'gcm', 'whoami', 'date', 'get-date', 'true', 'false', 'sleep', 'start-sleep']);
+const GIT_READS = new Set(['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'blame', 'describe', 'grep']);
+const ENV_ONLY = new Set(['list.env']);
+
+const gitRead = (st: StatementFacts): boolean => {
+  const words = st.words.slice(1).map(w => w.text);
+  for (let i = 0; i < words.length; i++) {
+    if (words[i] === '-C' || words[i] === '-c') { i++; continue; }
+    if (words[i]!.startsWith('-')) return false;
+    return GIT_READS.has(words[i]!);
+  }
+  return false;
+};
+
+const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => /^-f(?:ile)?$/iu.test(w.text));
+const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0 || pwshFile(st);
+
+// 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
+const literal = (st: StatementFacts): boolean => st.words.every(w => !w.dynamic && !w.glob);
+// 作るのはフォルダだけと分かる mkdir（bash・cmd の mkdir・md、PowerShell の mkdir か New-Item -ItemType Directory）。値・リダイレクト・ほかの理由のあるものは外す
+function makesDirOnly(st: StatementFacts, program: string): boolean {
+  if (st.redirected || !literal(st) || st.words.some(w => /^-va/iu.test(w.text)) || !st.reasonKeys.every(key => key === 'list.ps_write')) return false;
+  if (program === 'mkdir' || program === 'md') return st.shell === 'powershell' || st.reasonKeys.length === 0;
+  if (program !== 'new-item') return false;
+  const at = st.words.findIndex(w => /^-itemtype$/iu.test(w.text));
+  return at > 0 && /^directory$/iu.test(st.words[at + 1]?.text ?? '');
+}
+
+// 実行の文のファイル（旗でない最初の語）が、判定役に見せるファイルに入っているか
+function shownRun(st: StatementFacts, shown: ReadonlySet<string>): boolean {
+  if (st.code.length > 0) return true;
+  const target = st.words.slice(1).find(w => !w.text.startsWith('-'));
+  if (!target || !literal(st) || st.cwd === null) return false;
+  return shown.has(resolve(st.cwd, target.text));
+}
+
+const PLAIN_RUNNERS = /^(?:node|nodejs|tsx|bun|python\d*(?:\.\d+)?|py|ruby|perl|bash|sh)$/u;
+const MODULE_RUNNERS = new Set(['pytest', 'unittest']);
+
+// 判定役にファイルを見せるのは、最後のコードの実行が決まった実行役で、最初の引数が製品の中にある拡張子つきのファイルのときだけ。
+// ほかのファイルの実行（拡張子の無い先・./x・-m・.・-- のあと）は、実行役のファイルの選び方を真似しきれないので持ち主（P2 の範囲、4 回の審査の決め）
+// 値を取らない旗（これより前の語は、旗の値をファイルと読み違えないよう、=つきか、この一覧だけ）
+const NO_VALUE_FLAGS: ReadonlyArray<[RegExp, RegExp]> = [
+  [/^(?:node|nodejs|tsx)$/u, NODE_SKIP_FLAG],
+  [/^(?:python\d*(?:\.\d+)?|py)$/u, /^-[bBdEhiIOqsSuvVx]+$/u],
+  [/^(?:bash|sh)$/u, /^(?:-[euxvn]+|--norc|--noprofile|--login)$/u],
+  [/^(?:ruby|perl)$/u, /^-[wTW]$/u],
+  [/^bun$/u, /^(?:--no-check|--quiet|-q)$/u],
+];
+const noValueFlag = (program: string, flag: string): boolean => /^--[^=]+=/u.test(flag) || NO_VALUE_FLAGS.some(([who, ok]) => who.test(program) && ok.test(flag));
+
+function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
+  const program = st.program.toLowerCase().replace(/\.exe$/u, '');
+  let words = st.words.slice(1);
+  if (program === 'pwsh' || program === 'powershell') {
+    const at = words.findIndex(w => /^-f(?:ile)?$/iu.test(w.text));
+    if (at < 0) return false;
+    words = words.slice(at + 1);
+  } else if (!PLAIN_RUNNERS.test(program)) return false;
+  const at = words.findIndex(w => !w.text.startsWith('-'));
+  if (at < 0 || words.slice(0, at).some(w => w.text === '--' || w.dynamic || !noValueFlag(program, w.text))) return false;
+  const target = words[at]!;
+  if (target.dynamic || target.glob || !/\.[A-Za-z0-9]+$/u.test(target.text) || st.cwd === null || !root) return false;
+  const path = resolve(st.cwd, target.text);
+  return isInside(root, path) && statSync(path, { throwIfNoEntry: false })?.isFile() === true;
+}
+
+const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx', 'bunx']);
+
+// 試験の道具・パッケージの道具（--test・-m pytest|unittest は、実行の先より前にあるときだけ）
+function isRunner(st: StatementFacts): boolean {
+  const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
+  const words = st.words.slice(1).map(w => w.text);
+  if (program === 'npx') return true;
+  if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
+  if (RUNNER_PROGRAMS.has(program)) return true;
+  if (!runsCode(st)) return false;
+  const target = words.findIndex(w => !w.startsWith('-'));
+  const before = target < 0 ? words : words.slice(0, target);
+  if (before.includes('--test')) return true;
+  const m = words.indexOf('-m');
+  return m >= 0 && (target < 0 || m < target) && MODULE_RUNNERS.has(words[m + 1] ?? '');
+}
+
+type FilesScope = { kind: 'files' } | { kind: 'command' } | { kind: 'owner'; why: string };
+
+// 判定役にファイルを見せるのは、コードを動かす文が全体で 1 つだけ、包みの中でなく、決まった実行役で拡張子つきのファイル（製品の中）を動かすときだけ。
+// コードを動かす文が試験・パッケージの道具だけなら、FILES を付けずコマンドだけ（計画より前と同じ）。ほかは持ち主（P2 の範囲、審査の決め）
+export function filesScope(sts: readonly StatementFacts[], keys: readonly string[], root: string | undefined, scripts: readonly string[] = []): FilesScope {
+  if (keys.includes('code.cmd_is_file')) return { kind: 'owner', why: 'a direct run of a file' };
+  const runs: StatementFacts[] = [];
+  let unknown = false;
+  const walk = (list: readonly StatementFacts[]): boolean => {
+    let any = false;
+    for (const st of list) {
+      if (st.inner === null) unknown = true;
+      const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])]);
+      if (isRunner(st) || runsCode(st) || inside) { runs.push(st); any = true; }
+    }
+    return any;
+  };
+  walk(sts);
+  if (unknown) return { kind: 'owner', why: 'a wrapped command beat could not read' };
+  if (runs.length === 0) return keys.includes('code.file_run') || scripts.length > 0 ? { kind: 'owner', why: 'a file run beat could not tie to a statement' } : { kind: 'command' };
+  if (runs.every(isRunner)) return { kind: 'command' };
+  if (runs.length > 1) return { kind: 'owner', why: 'more than one code run, or a run inside a wrapper' };
+  const [only] = runs;
+  if (only!.code.length > 0) return { kind: 'files' };
+  return plainFileRun(only!, root) ? { kind: 'files' } : { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
+}
+
+function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {
+  const quiet = (st: StatementFacts): boolean => {
+    const name = st.program.toLowerCase().replace(/\.exe$/u, '');
+    if (makesDirOnly(st, name)) return true;
+    if (st.redirected || st.writes.length > 0 || st.reasonKeys.some(key => REWRITE_KEYS.has(key) || key === 'list.write_dynamic')) return false;
+    const program = st.program.toLowerCase().replace(/\.exe$/u, '');
+    if (program === '') return st.words.length === 0 && st.code.length === 0 && st.reasonKeys.every(key => ENV_ONLY.has(key));
+    if (runsCode(st)) return st.inner === undefined ? shownRun(st, shown) : st.inner !== null && st.inner.every(quiet);
+    return st.reasonKeys.length === 0 && (READ_PROGRAMS.has(program) || (program === 'git' && gitRead(st)));
+  };
+  const moved = sts.flatMap(st => [st, ...(st.inner ?? []), ...(st.unknownInner ?? [])]).find(st => st.reasonKeys.some(key => REWRITE_KEYS.has(key)));
+  if (moved) return moved.program || 'statement';
+  const last = sts.findLastIndex(runsCode);
+  if (last < 0) return undefined;
+  const bad = sts.slice(0, last).find(st => !quiet(st));
+  if (bad) return bad.program || 'statement';
+  const run = sts[last]!;
+  if (run.inner === null) return run.program;
+  return run.inner === undefined ? undefined : rewritesOf(run.inner, shown);
+}
+
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
   if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
@@ -185,6 +323,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
     gitIsolated,
     which: name => findExecutable(name, childEnv, cwd.cwd, { powershell }),
+    ...(ctx.project?.root ? { productEnv: productEnvReader(ctx.project.root) } : {}),
   });
   const touch = checked.decision === 'deny' ? undefined : protectedTouchOf(input.command, checked.statements, ctx.policy, cwd.cwd);
   const verdict = touch && !checked.reasonKeys.includes(touch.key) ? { ...checked, decision: 'ask' as const, reasons: [...checked.reasons, guardText(language, touch.key, { path: touch.path })], reasonKeys: [...checked.reasonKeys, touch.key], askKinds: [...new Set([...checked.askKinds, 'code' as const])] } : checked;
@@ -243,7 +382,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data),
   }) : undefined;
   const pushed = verdict.decision === 'ask' ? pushProtectOf({
-    config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [], tainted: ctx.taint.tainted || ctx.conversationTainted?.() === true,
+    config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [],
     git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }) : () => undefined,
   }) : undefined;
   const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }
@@ -253,16 +392,23 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };
-  const peeked = verdict.scripts.map(file => peek(file, language));
+  const scope = filesScope(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace, verdict.scripts);
+  const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
+    writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? (scope.kind === 'owner' ? scope.why : undefined), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
+  const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
+  const peeked = cards;
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
-  const markers = [...selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx)), ...(peekTouch ? [peekTouch] : [])];
-  const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
+  const found = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx));
+  const markers = [...found.strong, ...(peekTouch ? [peekTouch] : [])];
+  const limited = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
+  const base = found.weak.length ? [...limited, guardText(language, 'code.self_hint', { markers: found.weak.join(', ') })] : limited;
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   const reasonKeys = [...(markers.length ? ['code.self_touch'] : []), ...verdict.reasonKeys];
   return {
     decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
     ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
-    preview: peeked.map(p => p.preview), bind: sha256([...peeked.map(p => p.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
+    ...('problem' in shown.fact || (shown.fact.files.length > 0 && scope.kind === 'files') ? { judgeFiles: shown.fact } : {}),
+    preview: cards.map(p => p.preview), bind: sha256([...cards.map(p => p.fingerprint), ...shown.read.map(file => file.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }
 

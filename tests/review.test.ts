@@ -337,7 +337,7 @@ test('1-5s 登録する前に聞かない設定（skills.askBeforeRegister: fals
   assert.deepEqual(s.app.notifications.list().filter(n => n.title === 'Skill registered without review').map(n => [n.body, n.link]), [['weekly-report', '#/skills/weekly-report']]);
 });
 
-test('1-5s 聞かない設定でも、外の内容を読んだ会話の振り返りの skill_draft は下書きのまま待つ', async t => {
+test('1-5s 外の内容を読んだ会話の振り返りの skill_draft は断る（振り返りには承認する人がいない。denyInReviewAfterOutside）。下書きも登録もしない', async t => {
   const s = await setup(t, c => { c.skills = { askBeforeRegister: false }; });
   await s.app.worker.tick();
   s.adapter().scripts.push(reply('はい'));
@@ -348,8 +348,9 @@ test('1-5s 聞かない設定でも、外の内容を読んだ会話の振り返
   s.adapter().scripts.push(toolCall('skill_draft', { name: 'weekly-report', description: 'When writing the weekly report', body: '1. Collect', reason: 'Weekly' }), reply('下書きしました'));
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.app.skills.get('weekly-report'), undefined);
-  assert.deepEqual(s.app.skills.drafts('all').map(d => d.status), ['pending']);
+  assert.deepEqual(s.app.skills.drafts('all'), []);
+  assert.deepEqual((s.app.db.prepare("SELECT decision FROM tool_calls WHERE tool = 'skill_draft'").all() as Array<{ decision: string }>).map(r => r.decision), ['deny']);
   const titles = s.app.notifications.list().map(n => n.title);
-  assert.ok(titles.includes('Please review the skill draft: weekly-report'));
+  assert.equal(titles.includes('Please review the skill draft: weekly-report'), false);
   assert.equal(titles.includes('Skill registered without review'), false);
 });

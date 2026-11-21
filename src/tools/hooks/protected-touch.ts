@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import type { ProtectedKind, ScopePolicy } from './scope.ts';
-import { guardedRootOf, writeApprovalKind } from './scope.ts';
+import { guardedRootOf, isInside, realish, writeApprovalKind } from './scope.ts';
 import type { StatementFacts } from './shell-facts.ts';
 
 export type TouchKey = 'guard.touch_git' | 'guard.touch_persona' | 'guard.touch_skill' | 'guard.touch_instructions';
@@ -51,7 +51,7 @@ export function installTouchOf(statements: readonly StatementFacts[], policy: Sc
   for (const [base, tokens] of groups) {
     for (const token of tokens) {
       const path = isAbsolute(token) ? token : resolve(base, token);
-      if (guardedRootOf(path, policy)) return path;
+      if (guardedRootOf(path, policy) || policy.deny.some(denied => isInside(denied, path) || isInside(denied, realish(path)))) return path;
     }
   }
   return undefined;

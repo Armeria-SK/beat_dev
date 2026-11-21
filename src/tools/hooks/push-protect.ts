@@ -9,7 +9,6 @@ export interface PushProtectInput {
   git: (dir: string, args: string[]) => string | undefined;
   projectRoot?: string | undefined;
   productRoots: readonly string[];
-  tainted: boolean;
 }
 
 export type PushProtect = { files: string[] } | { unchecked: true } | undefined;
@@ -57,7 +56,7 @@ export function pushProtectOf(input: PushProtectInput): PushProtect {
     if (!paths.length) continue;
     for (const hook of hooks) {
       const result = runProtectFiles(hook, {
-        hook_event_name: 'PreToolUse', tool_name: 'shell_run', tool_input: {}, cwd: top, run_id: '', conversation_id: '', paths, tainted: input.tainted,
+        hook_event_name: 'PreToolUse', tool_name: 'shell_run', tool_input: {}, cwd: top, run_id: '', conversation_id: '', paths,
         ...(input.projectRoot ? { project_root: input.projectRoot } : {}), product_roots: [...input.productRoots, top],
       });
       if (result.decision === 'ask') files.push(result.reason);

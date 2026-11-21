@@ -182,7 +182,7 @@ test('4-J 確かめ: 外を読んだ実行の文が本文にあるとき、持�
   assert.equal(s.app.tasks.judgeRequest(id), '');
 });
 
-test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ会話のきれいな実行がメモを書いたら、新しい会話で始めたタスクの実行も外を読んだ扱いで始まる。AP-1c（Q2）で、task_create は持ち主でなく判定役が決める（ask なら judge の行）', async t => {
+test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ会話のきれいな実行がメモを書いたら、新しい会話で始めたタスクの実行も外を読んだ扱いで始まる。P3 で、外を読んだ扱いでも task_create は聞き方を変えず動く', async t => {
   const s = await setup(t);
   const id = await s.ownerTask({ title: 'Owner task', body: 'owner body', when: LATER });
   const chat = uuid(91);
@@ -201,10 +201,8 @@ test('4-J 確かめ（通しで）: 持ち主のタスクに、外を読んだ�
   assert.ok(started.ok);
   await started.done;
   assert.equal(s.app.runs.get(started.runId)?.tainted, 1);
-  const rows = s.app.pending.list({ status: 'waiting' });
-  assert.deepEqual(rows.map(row => [row.tool, row.kind, row.tainted]), [['task_create', 'judge', true]], 'the judge decides, not the owner kind');
-  assert.match(rows[0]!.reason, /the judge wants the owner to decide: check/u);
-  assert.equal(s.app.db.prepare("SELECT 1 FROM tasks WHERE title = 'SPAWNED'").get(), undefined);
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }), [], 'reading outside content does not add an approval (P3)');
+  assert.notEqual(s.app.db.prepare("SELECT 1 FROM tasks WHERE title = 'SPAWNED'").get(), undefined);
 });
 
 test('4-J 確かめ（通しで）: 持ち主のタスクの文がきれいなら、タスクの実行は外を読んでいない扱いで始まる', async t => {
