@@ -53,7 +53,9 @@ function packageMain(dir: string): string[] {
 }
 
 // node が読むかもしれない候補のうち、あるものを全部（拡張子・フォルダの package.json の main・index）
-export const jsCandidates = (base: string): string[] => [...new Set([...JS_TRIES.map(end => base + end).filter(isFile), ...packageMain(base)])];
+const TS_TWINS: Readonly<Record<string, readonly string[]>> = { '.js': ['.ts', '.tsx'], '.jsx': ['.tsx', '.ts'], '.mjs': ['.mts'], '.cjs': ['.cts'] };
+const tsTwins = (base: string): string[] => { const ext = /[.](?:jsx?|mjs|cjs)$/u.exec(base)?.[0]; return ext ? TS_TWINS[ext]!.map(to => base.slice(0, -ext.length) + to).filter(isFile) : []; };
+export const jsCandidates = (base: string): string[] => [...new Set([...JS_TRIES.map(end => base + end).filter(isFile), ...tsTwins(base), ...packageMain(base)])];
 
 const isFile = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 

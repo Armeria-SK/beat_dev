@@ -25,11 +25,11 @@ test('P0 物差し: 試しの 7 つのコマンドの行き先（タスクの実
     const before = r.judge.prompts.length;
     const { route, pre, detail } = await r.routeOf(c.input);
     if (route !== c.want) got.push(`${c.name}: ${route} (want ${c.want}) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 160)}`);
-    const file = c.input.command.startsWith('npx tsx src/cli.ts') ? 'src/cli.ts' : c.input.command === 'node scripts/poke.ts' ? 'scripts/poke.ts' : undefined;
-    if (file && route === 'judge') {
-      const prompt = r.judge.prompts[before]?.user ?? '';
+    const prompt = route === 'judge' ? r.judge.prompts[before]?.user ?? '' : '';
+    if (c.input.command.startsWith('npx tsx src/cli.ts') && route === 'judge' && (prompt.includes('<<FILES-') || !prompt.includes(c.input.command))) got.push(`${c.name}: npx tsx must reach the judge as the command only (R23)`);
+    if (c.input.command === 'node scripts/poke.ts' && route === 'judge') {
       const files = prompt.slice(prompt.indexOf('<<FILES-'), prompt.indexOf('<<END-FILES-'));
-      if (!files.includes(join(r.ws, file)) || !files.includes(file === 'src/cli.ts' ? 'process.argv.slice(2)' : 'fetch(')) got.push(`${c.name}: the judge was not shown ${file}: ${files.slice(0, 160)}`);
+      if (!files.includes(join(r.ws, 'scripts/poke.ts')) || !files.includes('fetch(')) got.push(`${c.name}: the judge was not shown scripts/poke.ts: ${files.slice(0, 160)}`);
     }
   }
   assert.deepEqual(got, []);

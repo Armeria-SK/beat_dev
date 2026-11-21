@@ -190,9 +190,8 @@ const gitRead = (st: StatementFacts): boolean => {
   return false;
 };
 
-const npxTsx = (st: StatementFacts): boolean => st.program.toLowerCase().replace(/[.](?:exe|cmd)$/u, '') === 'npx' && st.words.slice(1).find(w => !w.text.startsWith('-'))?.text === 'tsx';
 const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => /^-f(?:ile)?$/iu.test(w.text));
-const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0 || npxTsx(st) || pwshFile(st);
+const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0 || pwshFile(st);
 
 // 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
 const literal = (st: StatementFacts): boolean => st.words.every(w => !w.dynamic && !w.glob);
@@ -220,7 +219,7 @@ const MODULE_RUNNERS = new Set(['pytest', 'unittest']);
 // ほかのファイルの実行（拡張子の無い先・./x・-m・.・-- のあと）は、実行役のファイルの選び方を真似しきれないので持ち主（P2 の範囲、4 回の審査の決め）
 // 値を取らない旗（これより前の語は、旗の値をファイルと読み違えないよう、=つきか、この一覧だけ）
 const NO_VALUE_FLAGS: ReadonlyArray<[RegExp, RegExp]> = [
-  [/^(?:node|nodejs|tsx|npx)$/u, NODE_SKIP_FLAG],
+  [/^(?:node|nodejs|tsx)$/u, NODE_SKIP_FLAG],
   [/^(?:python\d*(?:\.\d+)?|py)$/u, /^-[bBdEhiIOqsSuvVx]+$/u],
   [/^(?:bash|sh)$/u, /^(?:-[euxvn]+|--norc|--noprofile|--login)$/u],
   [/^(?:ruby|perl)$/u, /^-[wTW]$/u],
@@ -231,8 +230,7 @@ const noValueFlag = (program: string, flag: string): boolean => /^--[^=]+=/u.tes
 function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   const program = st.program.toLowerCase().replace(/\.exe$/u, '');
   let words = st.words.slice(1);
-  if (program === 'npx' && words[0]?.text === 'tsx') words = words.slice(1);
-  else if (program === 'pwsh' || program === 'powershell') {
+  if (program === 'pwsh' || program === 'powershell') {
     const at = words.findIndex(w => /^-f(?:ile)?$/iu.test(w.text));
     if (at < 0) return false;
     words = words.slice(at + 1);
@@ -251,7 +249,7 @@ const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx', 
 function isRunner(st: StatementFacts): boolean {
   const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
   const words = st.words.slice(1).map(w => w.text);
-  if (program === 'npx') return words.find(w => !w.startsWith('-')) !== 'tsx';
+  if (program === 'npx') return true;
   if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
   if (RUNNER_PROGRAMS.has(program)) return true;
   if (!runsCode(st)) return false;
