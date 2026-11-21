@@ -244,7 +244,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data),
   }) : undefined;
   const pushed = verdict.decision === 'ask' ? pushProtectOf({
-    config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [], tainted: ctx.taint.tainted || ctx.conversationTainted?.() === true,
+    config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [],
     git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }) : () => undefined,
   }) : undefined;
   const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }

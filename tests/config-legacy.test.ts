@@ -36,7 +36,7 @@ function ownerShapedConfig() {
 }
 
 test('古い鍵の一覧: この段では models[].toolMode・language・tools.maxIterations・tools.web.searxngUrl・tools.shell.approvalTimeoutSec・tools.taintEscalation・mcp.servers[].localOk・worker.remindAfterHours・models[].maxTools・memory.reviewAfterToolCalls・worker.autonomy・worker.idleMinutes・worker.selfTasksNeedApproval・worker.quietStart・worker.quietEnd', () => {
-  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes', 'worker.selfTasksNeedApproval', 'worker.quietStart', 'worker.quietEnd']);
+  assert.deepEqual(LEGACY_KEYS.map(key => key.path), ['models[].toolMode', 'language', 'tools.maxIterations', 'tools.web.searxngUrl', 'tools.shell.approvalTimeoutSec', 'tools.taintEscalation', 'tools.hooks.preToolUse[].afterOutside', 'mcp.servers[].localOk', 'worker.remindAfterHours', 'models[].maxTools', 'memory.reviewAfterToolCalls', 'worker.autonomy', 'worker.idleMinutes', 'worker.selfTasksNeedApproval', 'worker.quietStart', 'worker.quietEnd']);
 });
 
 test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残らず、入力は書き換えない', () => {
@@ -46,6 +46,23 @@ test('mcp.servers[].localOk の古い設定が読め、読んだ設定に残ら�
   assert.deepEqual(config.mcp.servers.map(server => [server.id, 'localOk' in server]), [['a', false], ['b', false]]);
   assert.deepEqual(dropLegacy(raw).dropped, ['mcp.servers[].localOk']);
   assert.equal(raw.mcp.servers[0].localOk, true);
+});
+
+test('V32: protect-files の afterOutside（P3c で外した鍵）を含む古い設定が読め、読んだ設定にも保存した設定にも残らず、入力は書き換えない', t => {
+  const raw = JSON.parse(JSON.stringify(testConfig())) as Record<string, any>;
+  raw.tools.hooks = { preToolUse: [{ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] }], postToolUse: [] };
+  const config = parseConfig(raw);
+  assert.deepEqual(config.tools.hooks.preToolUse, [{ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] }]);
+  assert.deepEqual(dropLegacy(raw).dropped, ['tools.hooks.preToolUse[].afterOutside']);
+  assert.deepEqual(raw.tools.hooks.preToolUse[0].afterOutside, ['package.json'], '入力は書き換えない');
+  const dir = tempDir(t);
+  const path = join(dir, 'config.json');
+  writeFileSync(path, JSON.stringify(raw));
+  const store = new ConfigStore(path);
+  const loaded = store.load();
+  assert.equal('afterOutside' in (loaded.tools.hooks.preToolUse[0] as object), false);
+  store.save(loaded);
+  assert.equal(readFileSync(path, 'utf8').includes('afterOutside'), false, '保存すると鍵が消える');
 });
 
 function bootWith(t: TestContext, raw: Record<string, any>) {

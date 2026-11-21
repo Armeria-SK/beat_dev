@@ -261,7 +261,7 @@ test('J-3: 覚えた allow があっても、守るファイル（protect-files 
   await s.call();
   assert.equal((await s.call()).decidedBy, 'judge-reuse', '比べる基準');
   const config = structuredClone(s.ctx.config);
-  config.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['guarded.txt'], afterOutside: [] }];
+  config.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['guarded.txt'] }];
   s.ctx.config = config;
   const parked = await s.call();
   assert.deepEqual([parked.decidedBy, s.prompts.length], ['pending', 1], parked.output.content);

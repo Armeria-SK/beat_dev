@@ -383,7 +383,6 @@ export const EXPLAIN_KEYS = [
   'ui.set.hooks.commandDesc',
   'ui.set.hooks.onErrorDesc',
   'ui.set.hooks.alwaysDesc',
-  'ui.set.hooks.afterOutsideDesc',
   'ui.set.hooks.moved',
   'access.hookDisabled',
   'ui.set.adv.resetDesc',

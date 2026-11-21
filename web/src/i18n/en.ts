@@ -1351,8 +1351,6 @@ export const en = {
   'ui.set.hooks.protect': 'Protect files',
   'ui.set.hooks.always': 'Always ask',
   'ui.set.hooks.alwaysDesc': 'Writing a file that matches waits in Pending for you',
-  'ui.set.hooks.afterOutside': 'After reading from elsewhere',
-  'ui.set.hooks.afterOutsideDesc': 'Once the conversation has read a web page or an attachment, writing a file that matches waits in Pending',
   'ui.set.hooks.removeWarn': 'Remove hook',
   'ui.set.hooks.moved': 'This hook changed elsewhere · nothing saved · the list was reloaded',
   'ui.set.hooks.on': (command: string) => `Run ${command}`,

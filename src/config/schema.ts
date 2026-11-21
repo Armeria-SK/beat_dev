@@ -87,7 +87,6 @@ export const BuiltinHookConfig = Type.Object({
   matcher: Type.String({ minLength: 1, maxLength: 200 }),
   builtin: Type.Literal('protect-files'),
   always: ProtectPatterns,
-  afterOutside: ProtectPatterns,
   enabled: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 

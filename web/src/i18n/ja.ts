@@ -384,7 +384,6 @@ export const ja = {
   'ui.set.hooks.commandDesc': '1 項目に引数 1 つ',
   'ui.set.hooks.onErrorDesc': 'Block は道具を断り、Ask はあなたに聞きます',
   'ui.set.hooks.alwaysDesc': '当てはまるファイルへの書き込みは、Pending であなたを待ちます',
-  'ui.set.hooks.afterOutsideDesc': '会話が Web ページや添付を読んだあとは、当てはまるファイルへの書き込みが Pending で待ちます',
   'ui.set.hooks.moved': 'このフックは別の所で変わりました · 保存していません · 一覧を読み直しました',
   'access.hookDisabled': (stage: string, hook: string) => `フックをオフにします（${stage}。道具を止められる種類）: ${hook}`,
   'ui.set.adv.resetDesc': '既定に戻します。キーとフォルダは残ります',

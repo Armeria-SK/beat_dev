@@ -177,7 +177,7 @@ test('J-4: Off でも、送る・消すは Pending に積む（判定の前も�
 });
 
 test('J-4: Off でも、守るファイルのフック・道具の方針の Ask・持ち主の決めのキーは Pending に積む', async t => {
-  const hook = setup(t, c => { off(c); c.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['guarded.txt'], afterOutside: [] }]; });
+  const hook = setup(t, c => { off(c); c.tools.hooks.preToolUse = [{ matcher: '.*', builtin: 'protect-files', always: ['guarded.txt'] }]; });
   hook.world.writes = [join(hook.workspace, 'guarded.txt')];
   assert.equal((await hook.call()).decidedBy, 'pending');
   assert.equal(waitingKind(hook), 'hook');

@@ -14,7 +14,7 @@ import { accessWidening } from '../web/src/settings/access.ts';
 import type { Config } from '../web/src/settings/model.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
-const hook = (over: Partial<Record<string, unknown>> = {}) => ({ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'], ...over }) as HookConfig;
+const hook = (over: Partial<Record<string, unknown>> = {}) => ({ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**', 'package.json'], ...over }) as HookConfig;
 
 function product(t: { after: (fn: () => void) => void }): string {
   const root = join(tempDir(t), 'prod');
@@ -39,11 +39,13 @@ test('protect-files: .github/workflows/ci.yml への書き込みは ask で、�
   assert.match(result.reason, /ci\.yml is on your protected list/u);
 });
 
-test('protect-files: package.json は外を読む前は何も言わず、外を読んだあとは ask', async t => {
+test('protect-files（P3c）: 外を読んだかで守るファイルは変わらない。既定の一覧に package.json は無く、一覧に書けば外を読む前も ask', async t => {
   const root = product(t);
   const paths = [{ path: join(root, 'package.json'), write: true }];
-  assert.equal((await run(hook(), payload(root, paths, false))).decision, undefined);
-  assert.equal((await run(hook(), payload(root, paths, true))).decision, 'ask');
+  for (const tainted of [false, true]) {
+    assert.equal((await run(DEFAULT_PROTECT_FILES as unknown as HookConfig, payload(root, paths, tainted))).decision, undefined, `default, ${tainted}`);
+    assert.equal((await run(hook(), payload(root, paths, tainted))).decision, 'ask', `listed, ${tainted}`);
+  }
 });
 
 test('protect-files: 読むだけのパス・製品の中のほかのファイル・製品の外のパスは当たらない', async t => {
@@ -89,7 +91,7 @@ test('protect-files: 製品に属さない実行は、相対の一覧を当て�
   const root = product(t);
   const target = join(root, '.github', 'workflows', 'ci.yml');
   assert.equal((await run(hook(), payload(undefined, [{ path: target, write: true }], true))).decision, undefined);
-  const abs = hook({ always: [`${root.replaceAll('\\', '/')}/.github/workflows/**`], afterOutside: [] });
+  const abs = hook({ always: [`${root.replaceAll('\\', '/')}/.github/workflows/**`] });
   assert.equal((await run(abs, payload(undefined, [{ path: target, write: true }]))).decision, 'ask');
   assert.equal((await run(abs, payload(undefined, [{ path: join(root, 'src', 'a.ts'), write: true }]))).decision, undefined);
 });
@@ -154,7 +156,7 @@ test('一度だけの追加: 起動で既定の行を 1 つ足し、ログに 1 
   const logs: string[] = [];
   const first = boot(dir, logs);
   const seeded = first.configStore.current().tools.hooks.preToolUse;
-  assert.deepEqual(seeded, [{ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] }]);
+  assert.deepEqual(seeded, [{ matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] }]);
   assert.equal(logs.filter(l => /protect-files/u.test(l)).length, 1);
   assert.ok(first.kv.get(PROTECT_FILES_OFFERED));
   const config = first.configStore.current();
@@ -174,7 +176,7 @@ test('一度だけの追加: 持ち主が既に組み込みの行を書いてい
   const paths = resolvePaths(dir);
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
-  config.tools.hooks.preToolUse = [hook({ always: ['infra/**'], afterOutside: [] })];
+  config.tools.hooks.preToolUse = [hook({ always: ['infra/**'] })];
   writeFileSync(paths.config, JSON.stringify(config));
   const logs: string[] = [];
   const app = boot(dir, logs);
@@ -186,7 +188,7 @@ test('一度だけの追加: 持ち主が既に組み込みの行を書いてい
 });
 
 test('画面の確かめ: 組み込みのフックを消す・止めるのは広がりとして並び、名前で出る', () => {
-  const builtin = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'], afterOutside: ['package.json'] };
+  const builtin = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] };
   const config = (pre: unknown[]): Config => ({ tools: { hooks: { preToolUse: pre, postToolUse: [] } } });
   assert.deepEqual(accessWidening(config([builtin]), config([])), [{ kind: 'hook-removed', stage: 'preToolUse', hook: { matcher: '.*', command: ['protect-files'] } }]);
   assert.deepEqual(accessWidening(config([builtin]), config([{ ...builtin, enabled: false }])).map(a => a.kind), ['hook-disabled']);

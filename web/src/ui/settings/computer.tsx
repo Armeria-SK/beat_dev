@@ -55,7 +55,7 @@ export function FoldersPanel() {
 
 type Stage = 'preToolUse' | 'postToolUse';
 interface CommandHook { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask'; enabled?: boolean; builtin?: undefined }
-interface BuiltinHook { matcher: string; builtin: string; always: string[]; afterOutside: string[]; enabled?: boolean; command?: undefined; timeoutMs?: undefined; onError?: undefined }
+interface BuiltinHook { matcher: string; builtin: string; always: string[]; enabled?: boolean; command?: undefined; timeoutMs?: undefined; onError?: undefined }
 type Hook = CommandHook | BuiltinHook;
 
 function hooksOf(config: Config, stage: Stage): Hook[] {
@@ -82,7 +82,7 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
       return next === null ? c : setHooks(c, stage, next);
     }).then(() => { if (gone) { toast({ kind: 'info', icon: 'alert', title: t('ui.set.hooks.moved') }); void ctx.reload(); } });
   };
-  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>> | Partial<Pick<BuiltinHook, 'always' | 'afterOutside'>>) => change(h => ({ ...h, ...patch } as Hook));
+  const edit = (patch: Partial<Omit<CommandHook, 'builtin'>> | Partial<Pick<BuiltinHook, 'always'>>) => change(h => ({ ...h, ...patch } as Hook));
   const busy = ctx.busy !== null;
   const on = hook.enabled !== false;
   return (
@@ -97,8 +97,6 @@ function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Ho
               </Row>
               <Row k={`${k}:always`} title={t('ui.set.hooks.always')} desc={t('ui.set.hooks.alwaysDesc')}
                 below={<ListField items={hook.always} label={t('ui.set.hooks.always')} placeholder=".github/workflows/**" disabled={busy} onChange={always => edit({ always })} />} />
-              <Row k={`${k}:afterOutside`} title={t('ui.set.hooks.afterOutside')} desc={t('ui.set.hooks.afterOutsideDesc')}
-                below={<ListField items={hook.afterOutside} label={t('ui.set.hooks.afterOutside')} placeholder="package.json" disabled={busy} onChange={afterOutside => edit({ afterOutside })} />} />
             </div>
           )}
           {open && hook.builtin === undefined && (
