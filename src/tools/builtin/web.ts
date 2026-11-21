@@ -3,14 +3,16 @@ import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
-import type { Language } from '../../config/schema.ts';
+import type { AppConfig, Language } from '../../config/schema.ts';
 import type { PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { htmlText } from '../web/html-text.ts';
-import { clip, decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/public-page.ts';
+import { clip, decodeText, fetchPublic, pageUrl, RetrievalFailure, type PageNetwork } from '../web/public-page.ts';
 import { SearchFailure, SearchThrottle } from '../web/search.ts';
 import { enginesById } from '../web/search/engines/index.ts';
 import { EngineHealth } from '../web/search/health.ts';
 import { metasearch } from '../web/search/metasearch.ts';
+import type { SearchRequestHeaders } from '../web/search/disguise.ts';
+import type { SearchImpersonation } from '../web/search/impersonate.ts';
 
 const PAGE_CHARS = 20_000;
 const SEARCH_BLOCK_LIMIT = 2;
@@ -20,7 +22,12 @@ const sharedThrottle = new SearchThrottle();
 const sharedHealth = new EngineHealth();
 
 function web(ctx: ToolContext) {
-  return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, health: ctx.services?.web?.health ?? sharedHealth, network: ctx.services?.web?.network };
+  return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, health: ctx.services?.web?.health ?? sharedHealth, network: ctx.services?.web?.network, impersonation: ctx.services?.web?.impersonation };
+}
+
+// tools.web.impersonate が off なら impit を読み込みもしない（似せる通信を渡さない）
+export function impersonatedFor(w: Pick<AppConfig['tools']['web'], 'impersonate'>, impersonation: SearchImpersonation | undefined): ((request: SearchRequestHeaders) => PageNetwork) | undefined {
+  return w.impersonate === 'auto' ? impersonation?.networkFor : undefined;
 }
 
 export function exfiltrationCheck(text: string, language: Language, longQuery = false): PreCheck {
@@ -140,7 +147,8 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       });
       if (ctx.research) ctx.research.budget.searches += 1;
       // 止められた先は休ませて別の先へ移るだけ。captcha を解く・JavaScript の確かめを通る・同じ先へすぐ送り直す、はしない
-      const { hits, engines } = await metasearch({ query: input.query, limit, region: w.region, engines: enginesById(w.engines), health: web(ctx).health, signal: ctx.signal, network: web(ctx).network });
+      const { hits, engines } = await metasearch({ query: input.query, limit, region: w.region, engines: enginesById(w.engines), health: web(ctx).health, signal: ctx.signal, network: web(ctx).network,
+        impersonatedFor: impersonatedFor(w, web(ctx).impersonation) });
       ctx.searchBlocks = 0;
       if (ctx.research) ctx.research.budget.answered = (ctx.research.budget.answered ?? 0) + 1;
       if (ctx.research) for (const hit of hits) ctx.research.see(hit.url);

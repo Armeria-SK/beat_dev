@@ -35,6 +35,7 @@ beat が決めかねたことは、選択肢つきの質問として出てくる
 見つかったものを見て、「これを使う」「これを土台にする」「自分で作る」や、入れたい機能を選びます。計画に入るのは、あなたが選んだものだけです。
 計画ができたら「Build with this plan」で作業を始めます。
 Web の検索は、既定で複数の検索サイト（DuckDuckGo・Bing・Wikipedia）へ問いを送ります。どこへ送るかは設定の `tools.web.engines` で選べます。断られたサイトはしばらく休ませ、別のサイトに移ります。
+検索の頼み（DuckDuckGo・Bing など）は、通信の暗号の握手（TLS）と HTTP/2 の形まで普通の Chrome に似せて送ります（[impit](https://github.com/apify/impit) を使います。Wikipedia へは beat と名乗ったまま送ります）。似せたくないときは設定の `tools.web.impersonate` を `"off"` にしてください。impit の組み立て済みの部品が無い環境（Windows・macOS・Linux の x64 / arm64 以外）では、自動で頭の行（header）だけ似せる送り方に戻ります。部品は環境ごとに約 10 MB です。Web ページを読む道具・ダウンロード・ブラウザの道具は今までどおり beat と名乗ります。
 
 ![右の Plan の欄に、調べた結果と選択肢が並んでいるところ](assets/readme/research.png)
 
@@ -175,3 +176,5 @@ Overview の「Pause」で、裏の作業をまとめて一時停止できます
 検索サイトごとに本当に使えるかは `node --import ./tests/helpers/tsx-loader.mjs scripts/search-smoke.ts` で確かめられます（各サイトへ 1 回ずつ問いを送ります）。
 
 Web 検索の作り（複数の検索サイトを少しずつ同時に試す・断られたサイトを休ませる・結果を URL でまとめて並べる）は、[ddgs](https://github.com/deedy5/ddgs)（MIT）と [open-websearch](https://github.com/aas-ee/open-websearch)（Apache-2.0）の考え方を参考にしました。コードは写していません。
+
+beat に入っているほかの人のコードと、使っている部品（impit とその中身）のライセンスは [THIRD_PARTY.md](THIRD_PARTY.md) にまとめています。impit の版を上げるときは、`package.json` の版を固定のまま変え、`npm install --ignore-scripts` のあとで `package-lock.json` の integrity と THIRD_PARTY.md を確かめ直してください。
