@@ -38,6 +38,7 @@ import { questionAdd, questionList } from './tools/builtin/questions.ts';
 import { askOwner } from './tools/builtin/ask.ts';
 import { deviationAdd } from './tools/builtin/deviations.ts';
 import { taskCheckpoint, taskComplete, taskCreate, taskList, taskUpdate } from './tools/builtin/tasks.ts';
+import { pendingWithdraw } from './tools/builtin/pending.ts';
 import { sdkConnect } from './mcp/connect.ts';
 import { McpManager, type McpConnect } from './mcp/manager.ts';
 import { NotifyChannels } from './notify/channels.ts';
@@ -107,7 +108,7 @@ export function builtinTools(): ToolDef[] {
     taskComplete, taskCheckpoint, questionAdd, askOwner, toolSearch,
     memorySave, historySearch, webSearch, webFetch, fileRead, fileList, fileWrite, fileEdit, shellRun, shellOutput, shellStop,
     planWrite, acceptanceWrite, acceptanceChange, meshSearch, meshRead, meshStateSet,
-    taskCreate, taskList, taskUpdate,
+    taskCreate, taskList, taskUpdate, pendingWithdraw,
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
     fileSearch, calculate, dateCalc,
@@ -332,6 +333,7 @@ export class App {
       }
       this.worker.poke();
     };
+    this.tasks.closePending = taskId => { this.pending.withdrawTask(taskId, pendingText('en', 'withdrawn_task_finished')); };
     this.tasks.onFinished = task => {
       if (!isScoutRun(task) && this.worker.skillReviewsOn()) this.reviews.enqueueSkillForTask(task);
       if (task.status === 'cancelled' && task.proposal !== null) void this.dropRejectedPrefix(task.id);

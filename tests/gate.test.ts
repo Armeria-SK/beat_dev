@@ -220,7 +220,7 @@ test('5-3b 別のタスクの札・失敗した呼び出しの札・Pending に�
   ];
   for (const [name, first, tag, why] of cases) {
     const task = s.task(p.id, ['A-1'], `Build ${name}`);
-    await s.run(task.id, [first, done([{ id: 'A-1', evidence: tag }])]);
+    await s.run(task.id, [first, done([{ id: 'A-1', evidence: tag }], () => { for (const row of s.app.pending.list({ status: 'waiting' })) s.app.pending.reject(row.id); })]);
     const text = lastText(s.toolTexts(task.id), 'task_complete');
     assert.equal(text.isError, true, name);
     assert.match(text.text, why, name);

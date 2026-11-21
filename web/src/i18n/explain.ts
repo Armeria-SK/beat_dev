@@ -96,6 +96,7 @@ export const EXPLAIN_KEYS = [
   'tool.task_update',
   'tool.task_checkpoint',
   'tool.task_complete',
+  'tool.pending_withdraw',
   'tool.question_add',
   'tool.ask_owner',
   'tool.tool_search',

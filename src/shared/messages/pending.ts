@@ -82,7 +82,6 @@ const en = {
   'notify_title_task': 'Waiting in Pending: {title}',
   'notify_title_conversation': 'Waiting in Pending from a conversation',
   'taint_note': 'the result of an approved Pending item',
-  'task_waiting': 'Pending: {ids}',
   'reopen_failed': 'Reopened: the owner approved Pending item #{id} after this task was done, and it ended as {status}. Check what relied on its result before you go on. If a check refused it, do not try the same thing another way.',
   'reopen_exit': 'Reopened: the owner approved Pending item #{id} after this task was done, and it ran but ended with exit code {code}. Check what relied on its result before you go on.',
   'judge_asked': 'the judge wants the owner to decide: {reason}',
@@ -104,6 +103,13 @@ const en = {
   'owner_push_unchecked': 'beat could not check whether the push sends changes to protected files',
   'owner_secret_commit': 'it would add a secret-like file to a commit ({path})',
   'owner_secret_message': 'the commit message contains text that looks like a secret',
+  'await_pending': 'Not finished yet: Pending {ids} is still waiting for the owner. beat keeps this task waiting for that decision and continues it once it is decided. If you no longer need it, withdraw it with pending_withdraw and call task_complete again.',
+  'withdrawn_by_beat': 'Withdrawn by beat: it was no longer needed',
+  'withdrawn_task_finished': 'Withdrawn: the task it came from has finished',
+  'withdraw_done': 'Withdrew Pending item #{id}. It will not run.',
+  'withdraw_not_own': 'Pending item #{id} was not parked by this task or conversation, so it cannot be withdrawn here',
+  'withdraw_unavailable': 'Pending items cannot be withdrawn here',
+  'swept': 'Closed Pending item #{id} without running it, because you changed what it would run after it was parked: {reason}. If you still need it, call it again.',
 } as const;
 
 export type PendingMessageKey = keyof typeof en;

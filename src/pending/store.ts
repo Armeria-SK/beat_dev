@@ -580,6 +580,22 @@ export class PendingStore {
     return count;
   }
 
+  withdraw(id: number, reason: string): boolean {
+    const row = this.row(id);
+    if (!row || row.status !== 'waiting') return false;
+    const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'cancelled', reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
+      .run(cleanReason(reason), this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
+    if (Number(changed.changes) !== 1) return false;
+    this.#changed(this.row(id)!);
+    return true;
+  }
+
+  withdrawTask(taskId: string, reason: string): number {
+    const rows = this.#db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(taskId) as Array<{ id: number }>;
+    return rows.filter(row => this.withdraw(Number(row.id), reason)).length;
+  }
+
   closeInterrupted(): number {
     let closed = 0;
     for (const row of this.#db.prepare("SELECT * FROM pending_actions WHERE status = 'running'").all() as unknown as PendingRow[]) {

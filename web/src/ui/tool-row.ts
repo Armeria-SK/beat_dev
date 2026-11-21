@@ -85,6 +85,7 @@ const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
   acceptance_change: (a, cut) => t(cut.has('changes') ? 'ui.toolTarget.changesMore' : 'ui.toolTarget.changes', count(a, 'changes')),
   checklist_write: (a, cut) => doing(a) || t(cut.has('items') ? 'ui.toolTarget.stepsMore' : 'ui.toolTarget.steps', count(a, 'items')),
   task_update: a => idOf(a['id']),
+  pending_withdraw: a => idOf(a['id']),
   memory_forget: a => idOf(a['id']),
   curiosity_update: a => idOf(a['id']),
   history_read: a => idOf(a['conversation_id']),

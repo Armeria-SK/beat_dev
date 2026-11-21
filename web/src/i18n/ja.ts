@@ -97,6 +97,7 @@ export const ja = {
   'tool.task_update': 'タスクを更新します（メモ・次の手・完了・取り消し）',
   'tool.task_checkpoint': 'タスクの進み具合を保存して、新しい実行で続けます',
   'tool.task_complete': 'タスクを終えます',
+  'tool.pending_withdraw': 'Pending で待っている自分の呼び出しを取り下げます',
   'tool.question_add': 'あなたへの質問を記録して、作業を続けます',
   'tool.ask_owner': 'あなたに選んでもらい、答えを待ちます',
   'tool.tool_search': '毎回は渡されない道具を読み込みます（その実行の残りの間だけ）',

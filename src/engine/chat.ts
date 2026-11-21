@@ -460,7 +460,7 @@ export class ChatEngine {
   // 道具に渡す店の一式。実行の中と、Pending の承認のあとの実行（app.ts の replayPending）で同じものを使う
   toolServices(): ToolContext['services'] {
     const d = this.#d;
-    return d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, memoryFiles: d.memoryFiles, web: d.web, notify: d.notify, browser: d.browser, background: d.background, emit: e => d.bus.publish(e) } : undefined;
+    return d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, plans: d.plans, acceptance: d.acceptance, projects: d.projects, mesh: d.mesh, questions: d.questions, memoryFiles: d.memoryFiles, web: d.web, notify: d.notify, browser: d.browser, background: d.background, pending: d.tools?.pending, emit: e => d.bus.publish(e) } : undefined;
   }
 
   addNote(conversationId: string, content: string, fetched: boolean): void {

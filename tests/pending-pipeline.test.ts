@@ -196,7 +196,7 @@ const judgeStub: ToolDef<Record<string, never>> = {
 };
 const appWith = (t: { after: (fn: () => void | Promise<void>) => void }) => startApp(t, { models: [fakeModel('m1')], tools: [fakeSend, judgeStub, ...builtinTools()] });
 
-test('4-2d: タスクは待ちがあっても次の道具を呼べ、task_complete で完了し、結果の末尾に「Pending: #番号」が付く', async t => {
+test('4-2d / P4: タスクは待ちがあっても次の道具を呼べる。task_complete は完了にせず承認待ちの終わり方（await_pending）になり、結果に番号と pending_withdraw が出る', async t => {
   const s = await appWith(t);
   s.adapter().scripts = [toolCall('fake_send', { to: 'x' }), toolCall('fake_send', { to: 'y' }), toolCall('task_complete', { summary: 'done' })];
   const task = s.app.tasks.create({ title: '送る作業', origin: 'schedule', actor: 'system' });
@@ -208,11 +208,11 @@ test('4-2d: タスクは待ちがあっても次の道具を呼べ、task_comple
   const rows = s.app.pending.list({ status: 'waiting' });
   assert.equal(rows.length, 2);
   assert.ok(rows.every(row => row.task_id === task.id && row.kind === 'send'));
-  const ids = rows.map(row => `#${row.id}`).reverse().join(', ');
-  assert.equal(started.control.value.outcome, 'complete');
-  assert.equal((started.control.value as { summary: string }).summary, `done\n\nPending: ${ids}`);
+  const ids = rows.map(row => row.id).reverse();
+  assert.deepEqual(started.control.value, { outcome: 'await_pending', ids });
   const last = s.app.conversations.messages(conversation.id).filter(notSearch).at(-1)!;
-  assert.match(last.text, new RegExp(`Pending: ${ids}\\n\\[E-\\d+\\]$`, 'u'), last.text);
+  assert.match(last.text, new RegExp(`Pending ${ids.map(id => `#${id}`).join(', ')} is still waiting`, 'u'), last.text);
+  assert.match(last.text, /pending_withdraw/u);
 });
 
 test('4-2d: 却下は元のタスクの経過と会話の注記に残り、承認の結果の注記は外の中身の囲みに入り、それを読んだ実行に「外を読んだ」印が付く', async t => {
