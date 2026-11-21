@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { GIT_IDENTITY } from './allowlist-git.ts';
-import { DEV_RUNNERS, GIT_IDENTITY_KEY, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
+import { DEV_RUNNERS, GIT_IDENTITY_KEY, nodeFileIndex, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { definesCommand } from './outbound.ts';
 import { isInside, isSecretPath, realish } from './scope.ts';
@@ -244,7 +244,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
       if (!path || !inside(root, path)) return undefined;
     }
     if (own.has('list.lang_run')) {
-      const file = st.words[1]?.text;
+      const file = st.words[1 + nodeFileIndex(st.program, st.words.slice(1))]?.text;
       if (!file || !inside(root, resolve(st.cwd!, file))) return undefined;
     }
     if (own.has('list.node_test')) {

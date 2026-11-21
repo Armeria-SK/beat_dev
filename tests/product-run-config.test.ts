@@ -45,3 +45,23 @@ test('pytest・tox: 製品のフォルダにその実行役の設定（節）が
   });
   assert.deepEqual(wrong, []);
 });
+
+function productRun(t: { after: (fn: () => void) => void }, files: Record<string, string>, shell: 'bash' | 'powershell') {
+  const base = tempDir(t);
+  const root = realish(join(base, 'prod'));
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(root, name), body);
+  const policy: ScopePolicy = { roots: [{ path: root, mode: 'write' }], deny: [], askOnWrite: [], skillsDir: join(base, 'skills') };
+  return (command: string): string | undefined => {
+    const verdict = checkShellCommand(command, root, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+    if (verdict.decision !== 'ask') return undefined;
+    const result = productRunOf({ root, verdict, which: () => undefined, ownerHooks: () => false, git: () => undefined });
+    return result && 'run' in result ? result.run : undefined;
+  };
+}
+
+test('self-run P1 1a: node の決まった旗のあとのファイルが製品の中なら順 4。製品の外・決まっていない旗は順 4 にしない', t => {
+  const run = productRun(t, { 'package.json': '{}', 'scripts/e2e.ts': '' }, 'bash');
+  for (const c of ['node --disable-warning=ExperimentalWarning scripts/e2e.ts', 'node --no-warnings --enable-source-maps scripts/e2e.ts', 'node scripts/e2e.ts']) assert.equal(run(c), 'product-code', c);
+  for (const c of ['node --no-warnings ../x.ts', 'node --watch scripts/e2e.ts', 'node --require ./scripts/e2e.ts scripts/e2e.ts', 'node --import ./scripts/e2e.ts scripts/e2e.ts']) assert.equal(run(c), undefined, c);
+});

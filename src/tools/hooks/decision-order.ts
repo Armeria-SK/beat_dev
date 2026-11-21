@@ -72,3 +72,12 @@ export function ownerKeysOf(keys: Iterable<string>): string[] {
 export function refusedKeysOf(keys: Iterable<string>): string[] {
   return [...new Set([...keys].filter(key => REASON_ORDER.get(key) === 1))];
 }
+
+const NODE_SKIP_FLAG = /^(?:--disable-warning=[A-Za-z0-9_-]+|--no-warnings|--enable-source-maps|--experimental-strip-types|--experimental-transform-types)$/u;
+
+export function nodeFileIndex(program: string, args: ReadonlyArray<{ text: string }>): number {
+  if (!/^node(?:js)?$/u.test(program)) return 0;
+  let at = 0;
+  while (at < args.length && NODE_SKIP_FLAG.test(args[at]!.text)) at++;
+  return at;
+}

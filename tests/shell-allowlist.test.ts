@@ -919,3 +919,19 @@ test('p4-build-judge P2-7（一覧の段）: git -c user.name / user.email の c
   assert.deepEqual(keysOf('git -c user.name=a commit -m x', 'bash', { repo: repo({ hooksFiles: true }) }), ['ask:list.git_identity', 'once:list.git_hooks']);
   assert.deepEqual(keysOf('git commit -m x', 'bash', found), ['ask:list.git_write'], 'ふつうのコミットは今までどおり');
 });
+
+const idsOf = (command: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}): string[] => classify(command, shell, over).results.flatMap(r => r.reasons.map(x => x.id ?? x.key));
+
+test('self-run P1 1a: node の決まった旗（--disable-warning=名前・--no-warnings・--enable-source-maps・--experimental-strip-types / transform-types）は飛ばして、その次のファイルを見る', () => {
+  for (const c of ['node --disable-warning=ExperimentalWarning .tmp/probe.ts', 'node --no-warnings scripts/e2e.ts', 'node --enable-source-maps --experimental-strip-types a.ts x y',
+    'node --experimental-transform-types a.mts', 'nodejs --no-warnings a.js']) {
+    assert.deepEqual(idsOf(c), ['list.lang_run'], c);
+  }
+  for (const c of ['node --watch a.ts', 'node --watch-path=src a.ts', 'node --inspect a.ts', 'node --inspect-brk=0 a.ts', 'node --require ./x.js a.ts', 'node -r ./x.js a.ts', 'node --import ./x.mjs a.ts',
+    'node --loader ./x.mjs a.ts', 'node --experimental-loader ./x.mjs a.ts', 'node --env-file=.env a.ts', 'node --env-file-if-exists=.env a.ts', 'node -e 1', 'node -p 1', 'node --eval 1',
+    'node --disable-warning ExperimentalWarning a.ts', 'node --disable-warning=$(x) a.ts', 'node --no-warnings', 'node --no-warnings --require ./x.js a.ts', 'python --no-warnings a.py']) {
+    assert.ok(!idsOf(c).includes('list.lang_run'), `${c}: ${idsOf(c).join(' ')}`);
+    assert.notEqual(levelOf(c), 'allow', c);
+  }
+});
+
