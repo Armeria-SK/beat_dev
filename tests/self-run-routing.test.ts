@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { selfRunRig, type Route } from './helpers/self-run-rig.ts';
+
+const PS = process.platform === 'win32';
+
+// The commands of the trial (plans/beat/steps/self-run-approvals/PLAN.md, P0) and where each goes in a task run
+interface Case { name: string; input: { command: string; background?: boolean; timeoutSec?: number }; want: Route; ps?: boolean }
+export const TRIAL_CASES: readonly Case[] = [
+  { name: '#46 probe', input: { command: 'node --disable-warning=ExperimentalWarning .tmp/probe.ts' }, want: 'judge' },
+  { name: '#48 e2e', input: { command: 'node --disable-warning=ExperimentalWarning scripts/e2e.ts 2>&1 | Select-Object -Last 60' }, want: 'judge', ps: true },
+  { name: '#50 start (background)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', background: true }, want: 'judge', ps: true },
+  { name: '#51 start (6 s)', input: { command: '$env:ROOMS_DB=".tmp/start-check.db"; $env:PORT="3999"; npm start', timeoutSec: 6 }, want: 'judge', ps: true },
+  { name: 'v1 #43 cli', input: { command: 'npx tsx src/cli.ts samples/sample.csv' }, want: 'judge' },
+  { name: 'v1 #44 cli --month', input: { command: 'npx tsx src/cli.ts samples/sample.csv --month 2026-11' }, want: 'judge' },
+  { name: 'strong mark: POST to beat', input: { command: 'node scripts/poke.ts' }, want: 'judge' },
+];
+
+test('P0 物差し: 試しの 7 つのコマンドの行き先（タスクの実行）', async t => {
+  const r = selfRunRig(t);
+  const got: string[] = [];
+  for (const c of TRIAL_CASES) {
+    if (c.ps && !PS) continue;
+    const { route, pre, detail } = await r.routeOf(c.input);
+    if (route !== c.want) got.push(`${c.name}: ${route} (want ${c.want}) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 160)}`);
+  }
+  assert.deepEqual(got, []);
+});
+
+test('P0 物差し: 外の文を読んだ実行でも、7 つの行き先は同じ', async t => {
+  const r = selfRunRig(t);
+  const plain = selfRunRig(t);
+  const diff: string[] = [];
+  for (const c of TRIAL_CASES) {
+    if (c.ps && !PS) continue;
+    const a = await plain.routeOf(c.input);
+    const b = await r.routeOf(c.input, r.tainted());
+    if (a.route !== b.route) diff.push(`${c.name}: ${a.route} -> ${b.route} (${b.detail.slice(0, 120)})`);
+  }
+  assert.deepEqual(diff, []);
+});
