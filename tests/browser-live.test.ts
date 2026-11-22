@@ -10,9 +10,12 @@ import { dirname, join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { test, type TestContext } from 'node:test';
 import type { Page } from 'playwright-core';
-import { BrowserFailure, LAUNCH_TIMEOUT_MS, PlaywrightDriver, playwrightOptions, seedPreferences, systemLocale, type LaunchOptions, type PageHandle } from '../src/tools/browser/driver.ts';
+import { rereadTab } from '../src/tools/browser/checks.ts';
+import { BrowserFailure, LAUNCH_TIMEOUT_MS, PlaywrightDriver, playwrightOptions, seedPreferences, systemLocale, type ElementTarget, type LaunchOptions, type PageHandle } from '../src/tools/browser/driver.ts';
 import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
+import { browserClick, browserOpen } from '../src/tools/builtin/browser.ts';
+import type { ToolContext } from '../src/tools/types.ts';
 import { testConfig } from './helpers.ts';
 
 // T-44: 本物の Chrome で動かす（Edge は使わない）。ふだんは飛ばす（BEAT_BROWSER_LIVE=1 のときだけ）。
@@ -154,11 +157,15 @@ test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起�
   const session = new BrowserSession({ driver: new PlaywrightDriver(), config: () => config, paths: { browserProfile: profileDir } });
   t.after(() => session.close());
   const call = { grant: { conversationId: 'live', runId: 'r1', attended: true, loopback: false }, signal: new AbortController().signal };
+  let learn: ElementTarget | undefined;
 
   const read = await session.run(call, async api => {
     const tab = await api.openTab('owner');
     await tab.page.goto('https://example.com/', LAUNCH_TIMEOUT_MS);
-    return { url: tab.page.url(), text: await tab.page.text(5000), links: (await tab.page.locate({ role: 'link', name: 'Learn more', nth: 0, count: 1 })) !== undefined };
+    const table = await rereadTab(tab, tab.page.url(), api.signal);
+    const item = table?.items.find(e => e.name === 'Learn more');
+    learn = item && { ref: item.pwRef, role: item.role, name: item.name };
+    return { url: tab.page.url(), text: await tab.page.text(5000), links: learn !== undefined && (await tab.page.locate(learn)) !== undefined };
   });
   assert.match(read.url, /^https:\/\/example\.com\//u);
   assert.match(read.text, /documentation examples/u);
@@ -188,7 +195,7 @@ test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起�
   // 押す（リンク先へ移る）
   const clicked = await session.run(call, async api => {
     const tab = api.tab();
-    const events = await tab.page.click({ role: 'link', name: 'Learn more', nth: 0, count: 1 }, 10_000);
+    const events = await tab.page.click(learn!, 10_000);
     await new Promise(resolve => setTimeout(resolve, 3000));
     return { events, url: tab.page.url(), refused: tab.page.lastRefusal() };
   });
@@ -392,4 +399,80 @@ test('9-1a A-6・T1・T4d: 本物の Chrome で、受け口が受けた見出し
   assert.doesNotMatch(String(outcome.afterPublicLink), /127\.0\.0\.1/u);
   assert.notEqual(outcome.redirectBeat, 200, 'T1: 公開の URL から beat のポートへのリダイレクトは中継が断る');
   assert.deepEqual(hits.filter(hit => hit.at === 'beat'), [], 'T1: リダイレクトでも beat のポートの受け口に届かない');
+});
+
+// ---------------------------------------------------------------- P3a: 番号は要素そのもの（Playwright の印）に結ぶ
+
+// 手元の開発サーバーに見立てたページを道具（browser_open / browser_click）で開いて押す。押した要素は document.title に残る
+async function refRig(t: TestContext, pages: Record<string, string>) {
+  const server = createServer((req, res) => {
+    const body = pages[new URL(req.url ?? '/', 'http://x').pathname];
+    if (body === undefined) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><head><title>start</title></head><body>${body}<script>document.addEventListener('click', e => { const b = e.target.closest('button'); if (b) document.title = 'clicked ' + b.dataset.id; }, true);</script></body></html>`);
+  });
+  const port = (await listenOn(t, server))!;
+  const config = testConfig();
+  config.tools.browser.enabled = true;
+  const session = new BrowserSession({ driver: new PlaywrightDriver(), config: () => config, paths: { browserProfile: tmpDir(t, 'refs') } });
+  t.after(() => session.close());
+  const ctx = {
+    runId: 'r1', conversationId: 'live-refs', kind: 'chat', signal: new AbortController().signal, config, log: () => undefined,
+    project: { id: 'p-live', root: tmpDir(t, 'refs-root') }, services: { browser: session }, ownerText: () => [`http://127.0.0.1:${port}/`],
+  } as unknown as ToolContext;
+  const base = `http://127.0.0.1:${port}`;
+  const open = async (path: string): Promise<string> => {
+    const out = await browserOpen.execute({ url: `${base}${path}` }, ctx);
+    assert.equal(out.isError, undefined, out.content);
+    return out.content;
+  };
+  const raw = (): Promise<Page> => session.run({ grant: { conversationId: 'live-refs', runId: 'r1', attended: true, loopback: true, productId: 'p-live' }, signal: new AbortController().signal }, async api => rawPage(api.tab().page));
+  const title = async (): Promise<string> => (await raw()).title();
+  const refs = (content: string, name: string): string[] => [...content.matchAll(new RegExp(`^(e\\d+) button "${name}"`, 'gmu'))].map(m => m[1]!);
+  return { ctx, open, raw, title, refs };
+}
+
+const SLOT = `<x-swap><button slot="b" data-id="dom-first">S</button><button slot="a" data-id="dom-second">S</button></x-swap>
+<script>customElements.define('x-swap', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<slot name="a"></slot><slot name="b"></slot>'; } });</script>`;
+const OWNS = `<div role="list" aria-owns="i2 i1"></div><div role="listitem" id="i1"><button data-id="dom-first">Go</button></div><div role="listitem" id="i2"><button data-id="dom-second">Go</button></div>`;
+const ROWS = `<table><tbody><tr><td id="t1">Order 1</td><td><button data-id="row-1">Delete</button></td></tr><tr><td id="t2">Order 2</td><td><button data-id="row-2">Delete</button></td></tr></tbody></table>`;
+
+test('P3a: slot・aria-owns で表の並びと DOM の順が違う画面でも、表の 1 つ目の番号を押すと、表で 1 つ目に見えた要素が押される', options, async t => {
+  const r = await refRig(t, { '/slot': SLOT, '/owns': OWNS });
+  for (const [path, name] of [['/slot', 'S'], ['/owns', 'Go']] as const) {
+    const content = await r.open(path);
+    const shown = r.refs(content, name);
+    assert.equal(shown.length, 2, content);
+    // 表の 1 つ目に当たる要素（DOM の順では 2 つ目）を、ページの中の Playwright の表から確かめる
+    const first = await (await r.raw()).evaluate(() => document.querySelectorAll('button')[1]!.dataset.id);
+    assert.equal(first, 'dom-second');
+    const out = await browserClick.execute({ ref: shown[0]! }, r.ctx);
+    assert.equal(out.isError, undefined, out.content);
+    assert.equal(await r.title(), 'clicked dom-second', `${path}: 表で 1 つ目に見えた要素を押す（DOM の順の 1 つ目ではない）`);
+  }
+});
+
+test('P3a: 読んだあと・押す前に、ページの中で行の文だけが入れ替わる（要素はそのまま）と、押さない', options, async t => {
+  const r = await refRig(t, { '/rows': ROWS });
+  const shown = r.refs(await r.open('/rows'), 'Delete');
+  assert.equal(shown.length, 2);
+  await (await r.raw()).evaluate(() => { const a = document.getElementById('t1')!; const b = document.getElementById('t2')!; [a.textContent, b.textContent] = [b.textContent, a.textContent]; });
+  const out = await browserClick.execute({ ref: shown[0]! }, r.ctx);
+  assert.equal(out.isError, true);
+  assert.match(out.content, /can no longer be used/u);
+  assert.equal(await r.title(), 'start', 'どちらの行も押さない');
+});
+
+test('P3a: 読んだあとに消された要素の番号は、待たずに（2 秒以内に）断る', options, async t => {
+  const r = await refRig(t, { '/rows': ROWS });
+  const shown = r.refs(await r.open('/rows'), 'Delete');
+  await (await r.raw()).evaluate(() => { document.querySelector('[data-id="row-1"]')!.remove(); });
+  const started = Date.now();
+  const out = await browserClick.execute({ ref: shown[0]! }, r.ctx);
+  const took = Date.now() - started;
+  t.diagnostic(`refused in ${took} ms`);
+  assert.equal(out.isError, true);
+  assert.match(out.content, /can no longer be used/u);
+  assert.ok(took < 2000, `${took} ms`);
+  assert.equal(await r.title(), 'start');
 });

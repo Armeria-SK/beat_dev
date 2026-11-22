@@ -122,7 +122,7 @@ test('T-20: 送信の事前の判定は ask。sends・submits・askKinds web・b
   assert.equal(check.submits, true);
   assert.deepEqual(check.askKinds, ['web']);
   assert.equal(check.fetched, true);
-  assert.equal(check.bind, JSON.stringify([r.session.instance, 't1', PAGE, 'textbox', 'Search', 0, null]));
+  assert.equal(check.bind, JSON.stringify([r.session.instance, 't1', PAGE, 'e1', 'textbox', 'Search']));
   const file = check.preview![0]!;
   assert.ok(file.path.includes(PAGE));
   assert.ok(file.text.includes('textbox') && file.text.includes('Search'));
@@ -502,26 +502,28 @@ const rowsSite = (names: readonly string[]): FakeSite => ({
 const ROW_NAMES = ['材料 1', '材料 2', '材料 3'];
 // 並べ替え e1 / 削除 e2・e3・e4
 
-test('P3a: 表を読んだあとにページが並べ替わってから押すと、古い番号は断る（別の行を押さない）。新しい番号なら押せる', async t => {
+test('P3a: 表を読んだあとに、鍵の無い一覧の行の中身が並べ替わってから押すと、中身が変わった行の古い番号は断る（別の行を押さない）。中身が同じ行・新しい番号なら押せる', async t => {
   const r = rig(t);
   r.driver.site(ROWS, rowsSite(ROW_NAMES));
   const page = await opened(r, ROWS);
-  // 同じ数のまま並べ替わった（同じ URL）。モデルはまだ読み直していない
+  // 同じ数のまま並べ替わった（同じ URL。偽のブラウザでは要素はそのままで、行の文だけが入れ替わる）。モデルはまだ読み直していない
   page.mutate(rowsSite([...ROW_NAMES].reverse()));
-  const outcome = await r.call('browser_click', { ref: 'e3' });
+  const outcome = await r.call('browser_click', { ref: 'e2' });
   assert.equal(outcome.decision, 'deny');
-  assert.match(outcome.output.content, /e3 can no longer be used: the page changed after it was read/u);
-  assert.doesNotMatch(outcome.output.content.replace(/\be3\b/gu, ''), /\be\d+\b/u, '新しい番号を並びだけで選ばせない（番号は添えない）');
+  assert.match(outcome.output.content, /e2 can no longer be used: the page changed after it was read/u);
+  assert.doesNotMatch(outcome.output.content.replace(/\be2\b/gu, ''), /\be\d+\b/u, '新しい番号を並びだけで選ばせない（番号は添えない）');
   // 事前の判定を通らない直接の実行でも、その場で取り直して断る
-  const direct = await browserClick.execute({ ref: 'e2' }, r.ctx);
+  const direct = await browserClick.execute({ ref: 'e4' }, r.ctx);
   assert.equal(direct.isError, true);
-  assert.match(direct.content, /e2 can no longer be used/u);
+  assert.match(direct.content, /e4 can no longer be used/u);
   assert.equal(page.acts.length, 0, '古い番号では、どの行も押さない');
   const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
-  assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne6 button "削除"\ne7 button "削除"/u);
-  const ok = await r.call('browser_click', { ref: 'e6' });
+  assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne3 button "削除"\ne6 button "削除"/u, '真ん中の行（材料 2）は中身が同じなので同じ番号');
+  const ok = await r.call('browser_click', { ref: 'e3' });
   assert.equal(ok.decision, 'allow', ok.output.content);
-  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);
+  const last = await r.call('browser_click', { ref: 'e6' });
+  assert.equal(last.decision, 'allow', last.output.content);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1], ['削除', 2]]);
 });
 
 test('P3a: 探し直してから要素をつかむまでのあいだに並べ替わると、つかんだあとの読み直しで断り、押さない', async t => {
@@ -529,16 +531,17 @@ test('P3a: 探し直してから要素をつかむまでのあいだに並べ替
   r.driver.site(ROWS, rowsSite(ROW_NAMES));
   const page = await opened(r, ROWS);
   page.beforePin = () => { page.mutate(rowsSite([...ROW_NAMES].reverse())); };
-  const outcome = await r.call('browser_click', { ref: 'e3' });
+  const outcome = await r.call('browser_click', { ref: 'e2' });
   assert.equal(outcome.output.isError, true);
   assert.match(outcome.output.content, /The page has changed/u);
   assert.equal(page.acts.length, 0, '並べ替わったあとの行は押さない');
   // 並べ替えのない読み直しなら押せる（確かめが毎回断るわけではない）
   page.beforePin = undefined;
-  await browserRead.execute({ mode: 'elements' }, r.ctx);
-  const ok = await r.call('browser_click', { ref: 'e6' });
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne3 button "削除"\ne6 button "削除"/u);
+  const ok = await r.call('browser_click', { ref: 'e5' });
   assert.equal(ok.decision, 'allow', ok.output.content);
-  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 0]]);
 });
 
 test('P3a: 使えなくなった番号の文（その組がもう無い）と、振っていない番号の文は分ける', async t => {
@@ -580,4 +583,31 @@ test('P3a: 番号の始まりは BrowserSession ごとに決められ（beat の
   assert.match(r.session.instance, /^[0-9a-f]{16}$/u);
   const check = await preCheck(r, browserClick, { ref: 'e123457' });
   assert.equal(JSON.parse(check.bind!)[0], r.session.instance);
+});
+
+test('P3a: モデルに見せていない番号（表の 300 件より後ろ）は、表に持っていても押せない', async t => {
+  const r = rig(t);
+  const MANY = 'https://example.com/many';
+  const names = Array.from({ length: 350 }, (_, i) => `品番 ${i + 1}`);
+  r.driver.site(MANY, { title: 'Many', snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  const page = await opened(r, MANY);
+  const hidden = await preCheck(r, browserClick, { ref: 'e301' });
+  assert.equal(hidden.decision, 'deny');
+  assert.match(hidden.reasons[0]!, /Number e301 is not in the list for this tab/u);
+  const direct = await browserClick.execute({ ref: 'e301' }, r.ctx);
+  assert.equal(direct.isError, true);
+  assert.equal((await preCheck(r, browserClick, { ref: 'e300' })).decision, 'allow', '見せた番号は押せる');
+  assert.equal(page.acts.length, 0);
+});
+
+test('P3a: 同じ URL のまま新しい文書になった（再読み込み・POST の結果）ら、前の番号は全部使えず、押さない', async t => {
+  const r = rig(t);
+  const page = await opened(r);
+  page.reload();
+  const outcome = await r.call('browser_click', { ref: 'e8' });
+  assert.equal(outcome.decision, 'deny');
+  assert.match(outcome.output.content, /e8 can no longer be used/u);
+  assert.equal(page.acts.length, 0);
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e10 textbox "Search"/u, '読み直すと続きの番号');
 });

@@ -89,7 +89,8 @@ test('操作のあとに 1 枚撮る。次の操作で seq が増え、画像が
   r.driver.sites.get(PAGE_A)!.rows![0]!.name = 'Up\u0000load\u202e';
   await r.session.run(call(grant('c1', { runId: 'run-2' })), async api => {
     const mine = api.tab(tab.id);
-    await mine.page.click({ role: 'button', name: 'Up\u0000load\u202e', nth: 0, count: 1 }, 1000);
+    const raw = r.driver.current!.pageList.at(-1)!;
+    await mine.page.click({ ref: raw.refFor('button', 'Up\u0000load\u202e'), role: 'button', name: 'Up\u0000load\u202e' }, 1000);
     await mine.page.title();
   });
   const second = r.session.view('p-a', conversations)!;
@@ -242,7 +243,7 @@ test('遅れて終わった古い撮影は、あとの操作の画像を上書�
   await r.advance(SHOT_INTERVAL_MS);
   // 古い撮影が止まっているあいだに、押して移る（呼び出しの終わりの 1 枚は新しい画像）
   page.screenshot = original;
-  await r.session.run(call(grant('c1')), async api => { await api.tab(tab.id).page.click({ role: 'button', name: 'Upload', nth: 0, count: 1 }, 1000); });
+  await r.session.run(call(grant('c1')), async api => { await api.tab(tab.id).page.click({ ref: page.refFor('button', 'Upload'), role: 'button', name: 'Upload' }, 1000); });
   assert.deepEqual(r.session.frame(tab.id, 'p-a', lookup)?.data, PNG_B);
   release();
   await r.advance(0);

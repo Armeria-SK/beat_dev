@@ -1,0 +1,30 @@
+- generic [active] [ref=e1]:
+  - heading "見出し" [level=1] [ref=e2]
+  - paragraph [ref=e3]:
+    - text: 本文です
+    - link "ログイン" [ref=e4] [cursor=pointer]:
+      - /url: https://example.com/login
+  - navigation [ref=e5]:
+    - link "Home" [ref=e6] [cursor=pointer]:
+      - /url: /a
+    - link "Home" [ref=e7] [cursor=pointer]:
+      - /url: /a
+    - button "無効" [disabled] [ref=e8]
+  - text: 検索
+  - textbox "検索" [ref=e9]:
+    - /placeholder: ここ
+  - textbox "パスワード" [ref=e10]
+  - generic [ref=e11]:
+    - checkbox "覚える" [checked] [ref=e12]
+    - text: 覚える
+  - combobox "言語" [ref=e13]:
+    - option "日本語" [selected]
+    - option "English"
+  - button "送信" [ref=e14]
+  - list [ref=e15]:
+    - listitem [ref=e16]: one
+    - listitem [ref=e17]: two
+  - iframe [ref=e18]:
+    - button "枠の中" [ref=f1e2]
+  - tablist [ref=e19]:
+    - tab "T1" [selected] [ref=e20]

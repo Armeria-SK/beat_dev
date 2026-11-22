@@ -68,7 +68,7 @@ export interface BrowserTab {
   readonly instance: string;
   // 最後に読んだ「触れるもの」の表。URL が変わったら使わない
   table: ElementTable | undefined;
-  // 番号の対応（組としるし）。続きの数は会話のタブで共通
+  // 番号の対応（Playwright の印と手がかりの記録）。続きの数は会話のタブで共通
   readonly refs: RefBook;
   used: number;
 }
@@ -125,7 +125,7 @@ const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
 const VIEWPORT = { width: 1280, height: 800 };
 
-const sameTarget = (a: ElementTarget, b: ElementTarget): boolean => a.role === b.role && a.name === b.name && a.nth === b.nth && a.count === b.count;
+const sameTarget = (a: ElementTarget, b: ElementTarget): boolean => a.ref === b.ref && a.role === b.role && a.name === b.name;
 
 // 押す・入れる要素の中心。事前の判定（locate）で読んだ位置が同じ要素のもので、見えている範囲の中にあるときだけ
 export function pointerOf(located: { target: ElementTarget; box: ElementBox } | undefined, target: ElementTarget): { x: number; y: number } | undefined {

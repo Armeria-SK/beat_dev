@@ -9,7 +9,7 @@ beat が自分で起動した Web アプリをブラウザで確かめるとき�
   - `/admin` 事務の画面: 暗証番号の欄（`type=password`）でログイン → 行ごとの「発注済みにする」・「ログアウト」。
   - **暗証番号（試しの値）: `2468`**。`app.mjs` の頭と起動の出力にも書いてある。
   - 受け入れ 6 項目の操作が実際に起きたかを、アプリ自身が `.bench/events.jsonl`（`app.mjs` の隣）に 1 行ずつ書く: `submit`（1 件送った）・`list_view`（一覧の画面が、送った行を含めて読み込まれた）・`plus10`・`date_button`・`admin_login`（`ok` つき）・`mark_ordered`・`logout`。各行に、頼みがどこから来たか（`src`: ブラウザが付ける `sec-fetch-mode`・`sec-fetch-site` があり、user-agent が `Mozilla/` で始まれば `browser`、ほかは `other`。`ua`・`fetchMode`・`fetchSite` も残す）。
-- `live.mjs` — 段ごとの実機の確かめ用の別のアプリ（`node live.mjs` で `http://localhost:3457`）。物差しの数には使わない。`/rows`（同じ名前の「削除」が行ごとに並ぶ一覧。「並べ替え」「つぎのページ」も同じ URL のまま。P3a）・`/many`（触れるものが 350 個。P4）・`/select`（`<select>`。P6）。
+- `live.mjs` — 段ごとの実機の確かめ用の別のアプリ（`node live.mjs` で `http://localhost:3457`）。物差しの数には使わない。`/rows`（同じ名前の「削除」が行ごとに並ぶ一覧。「並べ替え」「つぎのページ」も同じ URL のまま。P3a）・`/swap`（鍵の無い一覧。行の要素は作り直さず、並べ替え・つぎのページ・削除で行の文だけを書き換える。P3a の作り直し）・`/many`（触れるものが 350 個。P4）・`/select`（`<select>`。P6）。
 - `run.ts` — 1 回流す。使い捨てのデータと製品を作り、beat を起動し、決まった頼みを送り、終わったら数を集めて beat を止める。
 - `collect.ts` — 物差しの会話 1 つの数を DB（読むだけ）とアプリの記録から集める。`run.ts` が呼ぶ。単独でも `node scripts/browser-bench/collect.ts --db <beat.db> --conversation <id> --events <events.jsonl>`。
 

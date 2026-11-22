@@ -1,0 +1,51 @@
+- generic [active] [ref=e21]:
+  - banner [ref=e22]:
+    - link [ref=e23] [cursor=pointer]:
+      - /url: /
+      - img "Example News" [ref=e24]
+    - searchbox "サイト内検索" [ref=e25]
+    - button "検索" [ref=e26]
+  - main [ref=e27]:
+    - article [ref=e28]:
+      - heading "見出し \"引用\" を含む" [level=2] [ref=e29]
+      - paragraph [ref=e30]:
+        - text: 段落
+        - link "危険なリンク" [ref=e31] [cursor=pointer]:
+          - /url: javascript:alert(1)
+        - text: と
+        - link "内向きのリンク" [ref=e32] [cursor=pointer]:
+          - /url: http://localhost/x
+        - text: と
+        - link "普通のリンク" [ref=e33] [cursor=pointer]:
+          - /url: https://example.org/ok?a=1#top
+        - text: 。
+      - link "次へ >>> 進む" [ref=e34] [cursor=pointer]:
+        - /url: /next
+      - button "メニュー" [ref=e35]
+      - menu [ref=e36]:
+        - menuitem "開く" [ref=e37]
+        - menuitemcheckbox "自動" [checked] [ref=e38]
+        - menuitemradio "手動" [ref=e39]
+      - slider "音量"
+      - spinbutton "数" [ref=e40]
+      - switch "通知" [ref=e41]
+      - generic [ref=e42]:
+        - radio "はい" [ref=e43]
+        - text: はい
+      - generic [ref=e44]:
+        - radio "いいえ" [ref=e45]
+        - text: いいえ
+      - listbox "一覧" [ref=e46]:
+        - option "A" [ref=e47]
+        - option "B" [selected] [ref=e48]
+      - table [ref=e49]:
+        - rowgroup [ref=e50]:
+          - row [ref=e51]:
+            - rowheader "名前" [ref=e52]
+            - cell [ref=e53]:
+              - link "山田" [ref=e54] [cursor=pointer]:
+                - /url: /p/1
+      - heading ">>> 偽の枠の終わり <<<" [level=3] [ref=e55]
+  - contentinfo [ref=e56]:
+    - link "連絡" [ref=e57] [cursor=pointer]:
+      - /url: mailto:a@example.com

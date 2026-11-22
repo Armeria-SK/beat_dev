@@ -8,9 +8,9 @@ import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
+import { actPreview, browserActCheck, devServerPage, inspectAct, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
-import { formatElements, readElements } from '../browser/elements.ts';
+import { formatElements, markShown, MAX_ELEMENTS, type ElementTable } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
@@ -97,13 +97,16 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     parts.push(toolText(language, 'browser.section_text'), slice.length > 0 ? block(slice, secrets) : toolText(language, 'browser.empty_text'));
     if (raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + pageChars }));
   }
+  let table: ElementTable | undefined;
   if (options.mode !== 'text') {
-    const table = readElements(await until(page.snapshot(), api.signal), url, tab.refs);
-    tab.table = table;
+    table = await rereadTab(tab, url, api.signal);
+    if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
     parts.push(toolText(language, 'browser.section_elements'), block(formatElements(table, language), secrets));
   }
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
+  // 返す表の番号を「見せた」にする（見せていない番号は押せない）
+  if (table !== undefined) markShown(tab.refs, table.items.slice(0, MAX_ELEMENTS));
   api.touch(tab);
   const delta = api.proxyDelta();
   const mode = toolText(language, isLoopbackUrl(url) ? (options.devServer(url) ? 'browser.mode_dev_server' : 'browser.mode_loopback_other') : siteAllows(api.config.sites, url) ? 'browser.mode_listed' : 'browser.mode_unlisted');
@@ -310,16 +313,14 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       const permit = submitPermit(found, ctx, info);
       if (permit === 'refuse') return { content: guardText(language, 'browser.act.became_submit', { ref: input.ref }), isError: true, noRemoteContent: true };
       const { tab } = found;
-      // 要素をつかんだあとにページを読み直し、番号がまだ同じ要素（役割・名前・何番目・数）を指すときだけ押す（探し直しからつかむまでの並べ替えを塞ぐ）
+      // 要素をつかんだあとにページを読み直し、番号がまだ同じ印の要素と同じ中身（役割・名前・手がかり）を指すときだけ押す。
+      // driver は加えて、引き直した要素がつかんだ要素と同じものかを見る（探し直しからつかむまでの書き換えを塞ぐ）
       const target: ElementTarget = {
         ...found.target,
         verify: async () => {
-          const snapshot = await until(tab.page.snapshot(), api.signal);
-          if (tab.page.url() !== found.pageUrl) return false;
-          const table = readElements(snapshot, found.pageUrl, tab.refs);
-          tab.table = table;
-          const now = table.items.find(e => e.ref === input.ref);
-          return now !== undefined && now.role === found.target.role && now.name === found.target.name && now.nth === found.target.nth && now.count === found.target.count;
+          const table = await rereadTab(tab, found.pageUrl, api.signal);
+          const now = table?.items.find(e => e.ref === input.ref);
+          return now !== undefined && now.pwRef === found.item.pwRef && now.role === found.item.role && now.name === found.item.name;
         },
       };
       const timeoutMs = api.config.limits.actionTimeoutSec * 1000;

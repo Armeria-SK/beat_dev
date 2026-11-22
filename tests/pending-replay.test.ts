@@ -858,8 +858,8 @@ test('P3a: 承認を待つあいだに、前に別の要素が増えて読み直
   assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);
 });
 
-test('P3a: 承認を待つあいだに組が変わったら（並べ替え・1 行消えた）、承認しても再実行せず、どの行も押さない', async t => {
-  for (const after of [['材料 3', '材料 2', '材料 1'], ['材料 1', '材料 3']]) {
+test('P3a: 承認を待つあいだに、押す行の中身が変わったら（鍵の無い一覧の並べ替え・1 行消えた）、承認しても再実行せず、どの行も押さない', async t => {
+  for (const after of [['材料 1', '材料 3', '材料 2'], ['材料 1', '材料 3']]) {
     const s = browserSetup(t);
     const page = await s.open();
     assert.equal((await s.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');

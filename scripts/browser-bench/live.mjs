@@ -3,6 +3,7 @@
 //   /rows    同じ名前の「削除」が行ごとに並ぶ一覧。「並べ替え」「つぎのページ」も同じ URL のまま（P3a）
 //   /many    触れるものが 350 個ある画面（P4 の browser_find）
 //   /select  <select> の選択の欄（P6）
+//   /swap    鍵の無い一覧。行の要素は作り直さず、並べ替え・つぎのページ・削除で行の文だけを書き換える（P3a の作り直し）
 import { createServer } from 'node:http';
 
 const PORT = Number(process.env.PORT) || 3457;
@@ -10,7 +11,7 @@ const PORT = Number(process.env.PORT) || 3457;
 const page = (title, body, script = '') => `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
 <style>body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 640px; padding: 16px; } button { margin: 2px; }</style></head><body>
-<nav><a href="/rows">行の一覧</a> <a href="/many">多い画面</a> <a href="/select">選ぶ欄</a></nav>
+<nav><a href="/rows">行の一覧</a> <a href="/swap">鍵の無い一覧</a> <a href="/many">多い画面</a> <a href="/select">選ぶ欄</a></nav>
 ${body}<script>${script}</script></body></html>`;
 
 const rows = page('行の一覧', `
@@ -36,9 +37,29 @@ const select = page('選ぶ欄', `<h1>選ぶ欄</h1>
 <label>単位 <select id="unit"><option value="">選んでください</option><option>枚</option><option>本</option><option>箱</option></select></label>
 <p id="msg" role="status"></p>`, `unit.onchange = () => { msg.textContent = '単位: ' + unit.value; };`);
 
+const swap = page('鍵の無い一覧', `
+<h1>鍵の無い一覧</h1>
+<p><button id="sort">並べ替え</button><button id="next">つぎのページ</button></p>
+<table><tbody id="list"></tbody></table><p id="msg" role="status"></p>`, `
+const all = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, name: '材料 ' + (i + 1) }));
+let start = 0, asc = true;
+const rowsShown = [];
+for (let i = 0; i < 5; i++) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td></td><td><button>削除</button></td>';
+  tr.querySelector('button').onclick = () => { const x = view()[i]; if (!x) return; all.splice(all.indexOf(x), 1); msg.textContent = x.name + ' を消しました'; draw(); };
+  list.appendChild(tr);
+  rowsShown.push(tr);
+}
+const view = () => (asc ? all : [...all].reverse()).slice(start, start + 5);
+const draw = () => { const v = view(); rowsShown.forEach((tr, i) => { tr.hidden = !v[i]; tr.cells[0].textContent = v[i] ? v[i].name : ''; }); };
+sort.onclick = () => { asc = !asc; draw(); };
+next.onclick = () => { start = start + 5 >= all.length ? 0 : start + 5; draw(); };
+draw();`);
+
 createServer((req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
-  const body = { '/rows': rows, '/many': many, '/select': select, '/': rows }[path];
+  const body = { '/rows': rows, '/swap': swap, '/many': many, '/select': select, '/': rows }[path];
   if (!body) { res.writeHead(404); res.end('not found'); return; }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(body);
