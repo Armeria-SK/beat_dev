@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { eraseConversation } from '../src/db/erase.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import { estimateRequest } from '../src/engine/tokens.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { isBrowserTool } from '../src/tools/browser/names.ts';
@@ -121,25 +122,26 @@ async function inProduct(t: Parameters<typeof startApp>[0], options: Options = {
     assert.equal(task.status, 201, JSON.stringify(task.body));
     assert.equal(await s.app.worker.tick(), 'ran');
   };
-  const searches = () => (s.app.db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE tool = 'tool_search'").get() as { n: number }).n;
-  return { ...s, shop, runTask, searches };
+  return { ...s, shop, runTask };
 }
 
 const has = (names: string[], wanted: readonly string[], label: string) => { for (const name of wanted) assert.ok(names.includes(name), `${label}: ${name}`); };
 const lacks = (names: string[], unwanted: readonly string[], label: string) => { for (const name of unwanted) assert.ok(!names.includes(name), `${label}: ${name} should not be listed`); };
 
-test('P1 製品の中の会話: 1 回目の呼び出しからブラウザの道具・pending_withdraw・image_view（画像を読めるモデル）が並び、実行の中で並びが変わらない。deviation_add（タスクだけ）は入らない', async t => {
+test('P1 製品の中の会話: 1 回目の呼び出しからブラウザの道具・pending_withdraw・image_view（画像を読めるモデル）が並び、途中で先読みした道具を tool_search しても並びも記録も変わらない。deviation_add（タスクだけ）は入らない', async t => {
   const s = await inProduct(t, { models: [fakeModel('m1', { vision: true })], configure: c => { c.tools.browser.enabled = true; } });
   assert.ok(BROWSER.length >= 6, `前提: ブラウザの道具 ${BROWSER.join(',')}`);
   const from = s.calls().length;
-  s.adapter().scripts = [call('file_list', {}), call('file_list', {}), reply('ok')];
+  s.adapter().scripts = [call('tool_search', { query: 'browser_open' }), call('file_list', {}), reply('ok')];
   await s.send(uuid(1), { text: 'check it', projectId: s.shop.id, permissionMode: 'auto' });
+  const searched = s.app.db.prepare("SELECT decision FROM tool_calls WHERE tool = 'tool_search'").all() as { decision: string }[];
+  assert.deepEqual(searched.map(r => r.decision), ['allow'], '前提: 途中で tool_search が動いた');
   const run = s.calls().slice(from);
   assert.equal(run.length, 3, '前提: 1 つの実行で 3 回呼んだ');
   has(s.names(run[0]!), [...BROWSER, 'pending_withdraw', 'image_view'], 'first call');
   lacks(s.names(run[0]!), ['deviation_add'], 'chat');
   for (const later of run.slice(1)) assert.equal(JSON.stringify(later.tools), JSON.stringify(run[0]!.tools), '実行の中で道具の並びが変わらない');
-  assert.equal(s.searches(), 0, '読み込みの tool_search は 0 回');
+  assert.deepEqual(s.app.kv.getJson(`loaded-tools:${uuid(1)}`), [...BROWSER, 'pending_withdraw', 'deviation_add', 'image_view'], '記録は先読みのまま（読み込み直しで増えない）');
 });
 
 test('P1 製品の中のタスク: 1 回目からブラウザの道具・pending_withdraw・deviation_add が並ぶ。画像を読めないモデルには image_view を入れない', async t => {
@@ -149,6 +151,40 @@ test('P1 製品の中のタスク: 1 回目からブラウザの道具・pending
   const first = s.calls().at(-1)!;
   has(s.names(first), [...BROWSER, 'pending_withdraw', 'deviation_add'], 'task');
   lacks(s.names(first), ['image_view'], 'no vision');
+  const conversation = (s.app.db.prepare('SELECT conversation_id FROM engine_runs ORDER BY started_at DESC LIMIT 1').get() as { conversation_id: string }).conversation_id;
+  assert.ok(!(s.app.kv.getJson<string[]>(`loaded-tools:${conversation}`) ?? []).includes('image_view'), '画像を読めないモデルの実行は image_view を先読みしない');
+});
+
+test('P1 使用量（contextUsage）は、計画モードの実行しかない製品の会話でも、次のふつうの実行の最初の要求と同じ道具で数える。kv は書かない', async t => {
+  const s = await inProduct(t, { configure: c => { c.tools.browser.enabled = true; } });
+  s.adapter().scripts = [reply('planned')];
+  await s.send(uuid(1), { text: 'plan', projectId: s.shop.id, permissionMode: 'plan' });
+  await s.json(`/api/conversations/${uuid(1)}`, 'PATCH', { permissionMode: 'auto' });
+  assert.equal(s.app.conversations.modeOf(uuid(1)), 'auto', '前提: ふつうのモードに戻した');
+  const kv = () => JSON.stringify(s.app.db.prepare('SELECT key, value FROM kv ORDER BY key').all());
+  const before = kv();
+  const usage = s.app.engine.contextUsage(uuid(1), 'm1');
+  assert.equal(kv(), before, '使用量は kv に何も書かない');
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'x', projectId: s.shop.id, permissionMode: 'auto' });
+  const req = s.calls().at(-1)!;
+  has(s.names(req), BROWSER, 'the next auto run');
+  const real = estimateRequest(`${req.system.frozen}\n${req.system.dynamic}`, req.messages.slice(0, -1), req.tools, 1, req.system.tail).tokens;
+  assert.ok(usage.ok && Math.abs(usage.tokens - real) < 64, `contextUsage ${usage.ok && usage.tokens} vs the real first request ${real}`);
+});
+
+test('P1 画像を読めないモデルに替えると、先読みした image_view を要求に入れない（読めるモデルに戻せば入る）', async t => {
+  const s = await inProduct(t, { models: [fakeModel('m1', { vision: true }), fakeModel('m2')] });
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'x', projectId: s.shop.id, permissionMode: 'auto', modelId: 'm1' });
+  has(s.names(s.calls().at(-1)!), ['image_view'], 'vision model');
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'y', projectId: s.shop.id, permissionMode: 'auto', modelId: 'm2' });
+  lacks(s.names(s.calls().at(-1)!), ['image_view'], 'no vision model');
+  assert.ok(s.app.kv.getJson<string[]>(`loaded-tools:${uuid(1)}`)!.includes('image_view'), '前提: 記録には残っている');
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'z', projectId: s.shop.id, permissionMode: 'auto', modelId: 'm1' });
+  has(s.names(s.calls().at(-1)!), ['image_view'], 'back to the vision model');
 });
 
 test('P1 製品の外の会話・ブラウザが切り・計画モードでは、先に並べない（今までどおり、要るときに読み込む）', async t => {
