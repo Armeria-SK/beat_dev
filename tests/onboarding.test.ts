@@ -18,7 +18,9 @@ const JA_SOUL = '# SOUL\n\nあなた自身の人格。ここを書き換える�
 const JA_USER = '# USER\n\nユーザーについて分かっていること。ここを書き換えると、次の会話から反映されます。\n\n## 基本情報\n\n- 名前:\n- 主な使用言語: 日本語\n\n## 関心\n\n## 今のプロジェクト\n\n## 覚えておくこと';
 
 async function start(t: Parameters<typeof tempDir>[0], models = true) {
-  const paths = resolvePaths(tempDir(t));
+  const dir = tempDir(t);
+  // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
@@ -303,6 +305,20 @@ test('POST /api/onboarding/reload-env: パスを受け取らず、鍵がある�
   assert.equal(askedText.includes('also-secret'), false);
   const several = await (await s.post('/api/onboarding/reload-env', { env: ['PATH', 'HOME', 'USERPROFILE'] })).json() as any;
   assert.deepEqual(Object.keys(several.apiKeys).sort(), ['FAKE_KEY', 'PATH'], '複数の名前を並べても、先頭の 1 つだけ');
+});
+
+test('POST /api/onboarding/reload-env: 起動したあとに paths.env へ書いた鍵を読み込み、loaded と鍵がある印を返す', async t => {
+  const s = await start(t);
+  assert.equal(process.env.FAKE_KEY, undefined);
+  t.after(() => { delete process.env.FAKE_KEY; });
+  writeFileSync(s.paths.env, 'FAKE_KEY=sk-written-after-start\n');
+  const res = await s.post('/api/onboarding/reload-env', {});
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  const body = JSON.parse(text) as any;
+  assert.equal(body.loaded, true);
+  assert.deepEqual(body.apiKeys, { FAKE_KEY: true });
+  assert.equal(text.includes('sk-written'), false, '鍵の値は返さない');
 });
 
 test('名前（botName・callMe・userName）の先頭の # は 400（http.bad_hash_start）。見出しを作らせない。通った名前の # も念のため印を付ける', async t => {
