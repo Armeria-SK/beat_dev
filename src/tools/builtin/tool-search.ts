@@ -5,6 +5,7 @@ import { neutralizeFence } from '../../shared/fence.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { ToolRegistry } from '../registry.ts';
 import type { ToolDef } from '../types.ts';
+import { isBrowserTool } from '../browser/names.ts';
 
 const MAX_EXACT = 10;
 const MAX_MATCHES = 3;
@@ -17,6 +18,8 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 ]);
 
 export const DEFERRED_HEADER = 'Tools you can load (name and a short summary). To use one you have not loaded yet, first call tool_search with its name, then call it:';
+
+const inBrowserGroup = (t: ToolDef): boolean => !t.mcp && isBrowserTool(t.name);
 
 const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
@@ -73,7 +76,8 @@ export const toolSearch: ToolDef<{ query: string }> = {
     const list = ctx.deferred.list();
     const listedNames = new Set(list.map(t => t.name));
     const ready = (ctx.reachable?.() ?? []).filter(t => !listedNames.has(t.name)).map(t => t.name);
-    const found = matchTools(list, input.query, new Set(ready));
+    const matched = matchTools(list, input.query, new Set(ready));
+    const found = matched.some(inBrowserGroup) ? [...matched, ...list.filter(t => inBrowserGroup(t) && !matched.includes(t))] : matched;
     if (!found.length) {
       const asked = namesOf(input.query).filter(name => ready.includes(name));
       return { content: asked.length ? toolText(language, 'tool_search.ready', { names: asked.join(', ') }) : toolText(language, 'tool_search.none') };
