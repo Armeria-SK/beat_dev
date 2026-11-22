@@ -60,6 +60,7 @@ import { BROWSER_TOOLS } from './tools/builtin/browser.ts';
 import { BrowserSession } from './tools/browser/session.ts';
 import { FolderDialog, type FolderDialogOptions } from './projects/folder-dialog.ts';
 import { PlaywrightDriver, type BrowserDriver } from './tools/browser/driver.ts';
+import { randomRefStart } from './tools/browser/elements.ts';
 import { isBrowserTool } from './tools/browser/names.ts';
 import { agentRun } from './tools/builtin/agent.ts';
 import { ledgerRecord } from './tools/builtin/ledger.ts';
@@ -147,6 +148,8 @@ export interface AppOptions {
   browserDriver?: BrowserDriver;
   // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
   browserDisplay?: boolean;
+  // 試験用: 要素の番号の始まり（書かなければ起動ごとに 1〜500,000 のどこか）
+  browserRefStart?: number;
   projectFolderExempt?: readonly string[];
   botMemory?: boolean;
   folderDialog?: FolderDialogOptions;
@@ -282,7 +285,7 @@ export class App {
     // ブラウザ 1 つ（全会話で共有）。無効なら何も起動しない。起動は最初の browser_* の呼び出しのとき
     this.browser = new BrowserSession({
       driver: options.browserDriver ?? new PlaywrightDriver(), config: () => this.config(), paths: this.paths, log: this.log,
-      notify: input => this.notifications.notify(input), secrets: () => this.registry.secrets(), now,
+      notify: input => this.notifications.notify(input), secrets: () => this.registry.secrets(), now, refStart: options.browserRefStart ?? randomRefStart(),
       ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
     });
     this.background = new BackgroundJobs({ logDir: join(this.paths.data, 'tool_outputs'), now, isOpen: owner => this.#backgroundOpen(owner) });

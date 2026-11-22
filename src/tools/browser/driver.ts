@@ -2,7 +2,7 @@
 // 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は BEAT_BROWSER_LIVE=1 のときだけ動かす
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Browser, BrowserContext, Frame, Locator, Page, Request, Route } from 'playwright-core';
+import type { Browser, BrowserContext, ElementHandle, Frame, Locator, Page, Request, Route } from 'playwright-core';
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { isEdgeExecutable } from '../../shared/browser-path.ts';
@@ -33,6 +33,16 @@ export class BrowserFailure extends Error {
   text(language: Language): string { return browserText(language, this.key, this.params); }
   // 文が全部アプリの決まった文か（そうなら、外から読んだ内容を含まない）
   get appTextOnly(): boolean { return this.code !== 'nav_failed'; }
+}
+
+// 中止の信号と競わせる。中止されたら待たずに aborted で終える（ページの仕事は続いても、結果は誰も受け取らない）
+export function until<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) { work.catch(() => undefined); return Promise.reject(new BrowserFailure('aborted', 'browser.aborted')); }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(new BrowserFailure('aborted', 'browser.aborted')); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => { signal.removeEventListener('abort', onAbort); });
+  });
 }
 
 export const REFUSAL_KEYS: Record<RouteRefusal, BrowserMessageKey> = {
@@ -357,16 +367,21 @@ class PlaywrightPage implements PageHandle {
   }
 
   // 操作の前に出来事の数を 0 に戻し、あとで返す
-  async #act(target: ElementTarget, timeoutMs: number, work: (one: Locator) => Promise<void>): Promise<ActionEvents> {
+  // 数を確かめたその要素をつかんで（ElementHandle）操作する。Locator のままだと、操作の途中で並びが変わったとき探し直して別の行に当たりうる
+  async #act(target: ElementTarget, timeoutMs: number, work: (one: ElementHandle) => Promise<void>): Promise<ActionEvents> {
     const one = await this.#locator(target);
     if (!one) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    const pinned = await one.elementHandle({ timeout: BOX_TIMEOUT_MS }).catch(() => null);
+    if (!pinned) throw new BrowserFailure('page_changed', 'browser.page_changed');
     this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
     try {
-      await work(one);
+      await work(pinned);
     } catch (e) {
       if ((e as { name?: string }).name === 'TimeoutError') throw new BrowserFailure('timeout', 'browser.timeout', { sec: Math.round(timeoutMs / 1000) });
       // Playwright の文にはページの文字が入りうるので、そのままは出さない
       throw new BrowserFailure('act_failed', 'browser.act_failed');
+    } finally {
+      await pinned.dispose().catch(() => undefined);
     }
     await new Promise<void>(resolve => { setTimeout(resolve, SETTLE_MS); });
     await this.page.waitForLoadState('domcontentloaded', { timeout: SETTLE_LOAD_MS }).catch(() => undefined);

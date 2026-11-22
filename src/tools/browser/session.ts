@@ -31,6 +31,8 @@ export interface BrowserSessionDeps {
   startProxy?: ((options: EgressProxyOptions) => Promise<EgressProxy>) | undefined;
   // ログイン用の窓（見えるブラウザ）を出せる環境か。省くと、この計算機の環境変数から決める
   canShowWindow?: (() => boolean) | undefined;
+  // 要素の番号の始まり（会話ごとの続きの数の最初）。省くと 1。beat の起動では randomRefStart（elements.ts）を渡す
+  refStart?: number | undefined;
 }
 
 // 見えるブラウザの窓を出せるか。Linux は画面（X11 か Wayland）が無ければ出せない。Windows・macOS はいつも出せる
@@ -62,6 +64,8 @@ export interface BrowserTab {
   // タブを開いた実行の製品（grant.productId）。製品に属さない会話のタブは undefined で、Browser の欄に出ない
   readonly productId: string | undefined;
   readonly page: PageHandle;
+  // このタブを作った BrowserSession の印（beat の起動ごとに違う。承認の bind に入れる）
+  readonly instance: string;
   // 最後に読んだ「触れるもの」の表。URL が変わったら使わない
   table: ElementTable | undefined;
   // 番号の対応（組としるし）。続きの数は会話のタブで共通
@@ -171,6 +175,8 @@ interface WorkContext extends Proxied { conversationId: string; loopback: boolea
 interface PopupSink { conversationId: string; attended: boolean; pages: Array<{ page: PageHandle; kind: BrowserTabKind; handle: BrowserHandle }> }
 
 export class BrowserSession {
+  // 起動ごとの印。タブの番号（t1…）と要素の番号は起動し直すと振り直すので、承認の bind で前の起動のものと見分ける
+  readonly instance = randomBytes(8).toString('hex');
   readonly #d: BrowserSessionDeps;
   readonly #now: () => number;
   readonly #schedule: (fn: () => void, ms: number) => () => void;
@@ -727,8 +733,8 @@ export class BrowserSession {
     };
     const page = trackPointer(observePage(raw, note), mirror);
     let counter = this.#refCounters.get(grant.conversationId);
-    if (counter === undefined) { counter = { next: 1 }; this.#refCounters.set(grant.conversationId, counter); }
-    const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, table: undefined, refs: newRefBook(counter), used: ++this.#clock };
+    if (counter === undefined) { counter = { next: this.#d.refStart ?? 1 }; this.#refCounters.set(grant.conversationId, counter); }
+    const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, instance: this.instance, table: undefined, refs: newRefBook(counter), used: ++this.#clock };
     this.#tabs.set(tab.id, tab);
     this.#tabHandles.set(tab, handle);
     this.#mirror.set(id, mirror);

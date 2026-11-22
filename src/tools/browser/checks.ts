@@ -16,7 +16,7 @@ import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { pageUrl } from '../web/public-page.ts';
-import { BrowserFailure, type ElementDetail, type ElementTarget } from './driver.ts';
+import { BrowserFailure, until, type ElementDetail, type ElementTarget } from './driver.ts';
 import { readElements, retiredRef, type ListedElement } from './elements.ts';
 import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
@@ -71,16 +71,12 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input:
   if (tab.table === undefined) return refuse(guardText(language, 'browser.act.no_table'));
   if (tab.table.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
   // 番号は、いつもその場で取り直した表から引く（読んだあとに並べ替わった・1 行消えた組の古い番号は、ここで使えなくなる）
-  const table = readElements(await tab.page.snapshot(), pageUrl, tab.refs);
+  const table = readElements(await until(tab.page.snapshot(), api.signal), pageUrl, tab.refs);
   if (tab.page.url() !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
   tab.table = table;
   const item = table.items.find(e => e.ref === input.ref);
-  if (item === undefined) {
-    const retired = retiredRef(tab.refs, input.ref);
-    if (retired === undefined) return refuse(guardText(language, 'browser.act.no_ref', { ref: input.ref }));
-    const now = table.items.filter(e => e.role === retired.role && e.name === retired.name).map(e => e.ref);
-    return refuse(guardText(language, now.length > 0 ? 'browser.act.retired_now' : 'browser.act.retired', { ref: input.ref, refs: now.join(', ') }));
-  }
+  // 使えなくなった番号には、新しい番号を添えない（周りを見ずに並びで選び直させない）。読み直させる
+  if (item === undefined) return refuse(guardText(language, retiredRef(tab.refs, input.ref) ? 'browser.act.retired' : 'browser.act.no_ref', { ref: input.ref }));
   if (item.frameUrl !== undefined && hostOf(item.frameUrl) !== hostOf(pageUrl)) return refuse(guardText(language, 'browser.act.frame', { ref: input.ref }));
   if (kind === 'type' && !TEXT_ROLES.has(item.role)) return refuse(guardText(language, 'browser.act.not_text', { ref: input.ref, role: item.role }));
   const target: ElementTarget = { role: item.role, name: item.name, nth: item.nth, count: item.count };
@@ -155,7 +151,8 @@ export function actPreview(kind: 'click' | 'type', input: ActInput, found: Extra
     lines.push(guardText(language, input.submit === true ? 'browser.act.preview_submit' : 'browser.act.preview_no_submit'));
   }
   // 札を出したときのページ・タブ・要素。承認のあとに同じ判定をもう一度走らせて、これが変わっていたら実行しない（別のページ・別の要素に押さない）
-  const bind = JSON.stringify([found.tab.id, found.pageUrl, found.item.role, found.item.name, found.item.nth, found.item.frameUrl ?? null]);
+  // タブの番号と要素の番号は beat を起動し直すと 1 から振るので、起動ごとの印（instance）も入れる（起動し直す前の承認は、あとの起動では押さない）
+  const bind = JSON.stringify([found.tab.instance, found.tab.id, found.pageUrl, found.item.role, found.item.name, found.item.nth, found.item.frameUrl ?? null]);
   return { preview: [{ path: guardText(language, 'browser.act.preview_page', { url: found.pageUrl }), text: lines.join('\n'), truncated: false }], bind };
 }
 

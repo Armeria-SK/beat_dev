@@ -796,8 +796,11 @@ function browserSetup(t: { after: (fn: () => void | Promise<void>) => void }) {
   raw.tools.browser.enabled = true;
   raw.tools.browser.sites = ['example.com'];
   const config = parseConfig(raw);
-  const driver = new FakeBrowserDriver().site(ROWS_URL, rowsSite(['材料 1', '材料 2', '材料 3']));
-  const session = new BrowserSession({ driver, config: () => config, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] });
+  const start = (names: readonly string[]) => {
+    const made = new FakeBrowserDriver().site(ROWS_URL, rowsSite(names));
+    return { driver: made, session: new BrowserSession({ driver: made, config: () => config, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] }) };
+  };
+  let { driver, session } = start(['材料 1', '材料 2', '材料 3']);
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
@@ -823,8 +826,25 @@ function browserSetup(t: { after: (fn: () => void | Promise<void>) => void }) {
     return driver.current!.pageList[0]!;
   };
   const read = () => tool('browser_read').execute({ mode: 'elements' } as never, ctx);
-  return { call, approve, open, read };
+  // beat を起動し直したことにする: ブラウザを閉じ、新しい BrowserSession（タブも番号も 1 から）。積んだ承認は DB に残る
+  const restart = async (names: readonly string[]): Promise<void> => {
+    await session.close();
+    ({ driver, session } = start(names));
+    (ctx as { services: ToolContext['services'] }).services = { browser: session } as ToolContext['services'];
+  };
+  return { call, approve, open, read, restart };
 }
+
+test('P3a: beat を起動し直す前に積んだ承認は、起動し直したあとの同じ番号（e2）が別の行になっていても押さない（bind に起動ごとの印）', async t => {
+  const s = browserSetup(t);
+  await s.open();
+  assert.equal((await s.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+  await s.restart(['材料 1', '材料 3', '材料 2']);
+  const page = await s.open();
+  const result = await s.approve();
+  assert.notEqual(result.status, 'ran', result.output);
+  assert.equal(page.acts.length, 0, '起動し直したあとの e2（材料 3 の行）を押さない');
+});
 
 test('P3a: 承認を待つあいだに、前に別の要素が増えて読み直されても、番号も bind も変わらず、承認で同じ行を押す', async t => {
   const s = browserSetup(t);

@@ -658,7 +658,9 @@ test('本物の PlaywrightPage: 要素の見分けが読めない形なら送信
       count: async () => 1,
       nth: () => ({
         isVisible: async () => true, isEnabled: async () => true, evaluate: async () => facts,
-        click: async () => { pressed.push('click'); }, fill: async (text: string) => { pressed.push(`fill ${text}`); }, press: async (key: string) => { pressed.push(`press ${key}`); },
+        elementHandle: async () => ({
+          click: async () => { pressed.push('click'); }, fill: async (text: string) => { pressed.push(`fill ${text}`); }, press: async (key: string) => { pressed.push(`press ${key}`); }, dispose: async () => {},
+        }),
       }),
     }),
     waitForLoadState: async () => {},
@@ -715,7 +717,7 @@ test('T12: 持ち主が見ている文脈で、許しの無い POST の遷移（
 test('T12: 押すあいだにページが出した送信を横取りが断ると、その数が押した結果（events.blocked）に入り、道具の結果に断った旨が出る', async t => {
   const r = routeRig('attended');
   await r.install();
-  const tab = { ...r.tab, getByRole: () => ({ count: async () => 1, nth: () => ({ click: async () => { assert.equal(await r.fire(tab as never, 'POST', 'https://shop.example.org/send'), 'abort'); } }) }), waitForLoadState: async () => {} };
+  const tab = { ...r.tab, getByRole: () => ({ count: async () => 1, nth: () => ({ elementHandle: async () => ({ click: async () => { assert.equal(await r.fire(tab as never, 'POST', 'https://shop.example.org/send'), 'abort'); }, dispose: async () => {} }) }) }), waitForLoadState: async () => {} };
   const page = r.browser.wrap(tab as unknown as Page);
   const events = await page.click({ role: 'button', name: 'More', nth: 0, count: 1 }, 1000);
   assert.equal(events.blocked, 1);

@@ -60,7 +60,7 @@ type Rig = ReturnType<typeof rig>;
 const withoutSubmits = (def: ToolDef): ToolDef => Object.fromEntries(Object.entries(def).filter(([key]) => key !== 'submits')) as unknown as ToolDef;
 
 function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
-  mutate?: (c: AppConfig) => void; mode?: PermissionMode; classify?: (prompt: ClassifierPrompt) => Promise<string> | string; plain?: boolean;
+  mutate?: (c: AppConfig) => void; mode?: PermissionMode; classify?: (prompt: ClassifierPrompt) => Promise<string> | string; plain?: boolean; refStart?: number;
 } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
@@ -70,7 +70,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   options.mutate?.(config);
   const parsed = parseConfig(config);
   const driver = new FakeBrowserDriver().site(PAGE, SITE).site(OTHER, OTHER_SITE);
-  const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] });
+  const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [], ...(options.refStart !== undefined ? { refStart: options.refStart } : {}) });
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
   const approvals = new ApprovalBroker(db);
@@ -122,7 +122,7 @@ test('T-20: 送信の事前の判定は ask。sends・submits・askKinds web・b
   assert.equal(check.submits, true);
   assert.deepEqual(check.askKinds, ['web']);
   assert.equal(check.fetched, true);
-  assert.equal(check.bind, JSON.stringify(['t1', PAGE, 'textbox', 'Search', 0, null]));
+  assert.equal(check.bind, JSON.stringify([r.session.instance, 't1', PAGE, 'textbox', 'Search', 0, null]));
   const file = check.preview![0]!;
   assert.ok(file.path.includes(PAGE));
   assert.ok(file.text.includes('textbox') && file.text.includes('Search'));
@@ -510,7 +510,8 @@ test('P3a: 表を読んだあとにページが並べ替わってから押すと
   page.mutate(rowsSite([...ROW_NAMES].reverse()));
   const outcome = await r.call('browser_click', { ref: 'e3' });
   assert.equal(outcome.decision, 'deny');
-  assert.match(outcome.output.content, /e3 can no longer be used: the page changed after it was read .* Their numbers are now e5, e6, e7/u);
+  assert.match(outcome.output.content, /e3 can no longer be used: the page changed after it was read/u);
+  assert.doesNotMatch(outcome.output.content.replace(/e3/gu, ''), /ed+/u, '新しい番号を並びだけで選ばせない（番号は添えない）');
   // 事前の判定を通らない直接の実行でも、その場で取り直して断る
   const direct = await browserClick.execute({ ref: 'e2' }, r.ctx);
   assert.equal(direct.isError, true);
@@ -530,7 +531,7 @@ test('P3a: 使えなくなった番号の文（その組がもう無い）と、
   page.mutate(rowsSite([]));
   const gone = await preCheck(r, browserClick, { ref: 'e2' });
   assert.equal(gone.decision, 'deny');
-  assert.match(gone.reasons[0]!, /e2 can no longer be used: the page changed after it was read, and that element is no longer on it/u);
+  assert.match(gone.reasons[0]!, /e2 can no longer be used: the page changed after it was read/u);
   const never = await preCheck(r, browserClick, { ref: 'e99' });
   assert.match(never.reasons[0]!, /Number e99 is not in the list for this tab/u);
   // 名前が 1 つだけの要素（並べ替え）は、周りが変わっても同じ番号のまま押せる
@@ -551,4 +552,15 @@ test('P3a: 番号は会話のタブで共通の続きの数。別のタブの番
   const moved = await browserOpen.execute({ url: OTHER, tab: 't1' }, r.ctx);
   assert.match(moved.content, /e14 textbox "Search"\ne15 button "Send"/u);
   assert.equal(r.driver.current!.pageList[1]!.acts.length, 0);
+});
+
+test('P3a: 番号の始まりは BrowserSession ごとに決められ（beat の起動では乱数）、承認の bind には起動ごとの印が入る', async t => {
+  const r = rig(t, { refStart: 123_456 });
+  const out = await browserOpen.execute({ url: PAGE }, r.ctx);
+  assert.match(out.content, /e123456 textbox "Search"\ne123457 button "Send"/u);
+  const other = rig(t);
+  assert.notEqual(other.session.instance, r.session.instance);
+  assert.match(r.session.instance, /^[0-9a-f]{16}$/u);
+  const check = await preCheck(r, browserClick, { ref: 'e123457' });
+  assert.equal(JSON.parse(check.bind!)[0], r.session.instance);
 });

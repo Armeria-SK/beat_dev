@@ -9,7 +9,7 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
 import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
-import { BrowserFailure, REFUSAL_KEYS, type ActionEvents } from '../browser/driver.ts';
+import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents } from '../browser/driver.ts';
 import { formatElements, readElements } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
@@ -41,16 +41,6 @@ const tabKindFor = (grant: BrowserGrant, kind: 'public' | 'loopback'): BrowserTa
 // 鍵の値を伏せ、1 行にして切り、枠に見える並びを無害にする（題・URL・要素の名前に使う）
 const oneLine = (text: string, secrets: readonly string[]): string => neutralizeFence(clip(redactSecrets(text, secrets).replace(/\s+/gu, ' ').trim(), SHOWN_MAX));
 const block = (text: string, secrets: readonly string[]): string => redactSecrets(neutralizeFence(text), secrets);
-
-// 中止の信号と競わせる。中止されたら待たずに aborted で終える（ページの仕事は続いても、結果は誰も受け取らない）
-function until<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) { work.catch(() => undefined); return Promise.reject(new BrowserFailure('aborted', 'browser.aborted')); }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => { reject(new BrowserFailure('aborted', 'browser.aborted')); };
-    signal.addEventListener('abort', onAbort, { once: true });
-    work.then(resolve, reject).finally(() => { signal.removeEventListener('abort', onAbort); });
-  });
-}
 
 function failureOutput(thrown: unknown, ctx: ToolContext, secrets: readonly string[]): ToolOutput {
   const language = languageOf(ctx.config);

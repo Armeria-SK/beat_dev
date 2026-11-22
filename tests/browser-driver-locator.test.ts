@@ -15,8 +15,15 @@ function rig(count: number) {
         isVisible: async () => true,
         isEnabled: async () => true,
         evaluate: async () => ({ type: null, autocomplete: null, inForm: false, submits: false }),
-        click: async () => { acted.push(`click ${i}`); },
-        fill: async () => { acted.push(`fill ${i}`); },
+        // Locator のまま押すと、押す途中で並びが変わったとき探し直す。押すのは、数を確かめたときにつかんだ要素（ElementHandle）
+        click: async () => { acted.push(`locator click ${i}`); },
+        fill: async () => { acted.push(`locator fill ${i}`); },
+        elementHandle: async () => ({
+          click: async () => { acted.push(`click ${i}`); },
+          fill: async () => { acted.push(`fill ${i}`); },
+          press: async (key: string) => { acted.push(`press ${key} ${i}`); },
+          dispose: async () => { acted.push(`dispose ${i}`); },
+        }),
       }),
     }),
     waitForLoadState: async () => {},
@@ -31,7 +38,10 @@ test('本物の #locator: 数が読んだときと違えば、探し直さず、
   const same = rig(2);
   assert.deepEqual(await same.handle.locate(target), { visible: true, enabled: true, type: undefined, autocomplete: undefined, form: { inForm: false, submits: false } });
   await same.handle.click(target, 1000);
-  assert.deepEqual(same.acted, ['click 1']);
+  assert.deepEqual(same.acted, ['click 1', 'dispose 1'], '数を確かめた要素をつかんで押し、Locator では押さない。押したら離す');
+  const typed = rig(2);
+  await typed.handle.fill(target, 'x', true, 1000);
+  assert.deepEqual(typed.acted, ['fill 1', 'press Enter 1', 'dispose 1']);
 
   for (const changed of [1, 3]) {
     const r = rig(changed);

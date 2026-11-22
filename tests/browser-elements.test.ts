@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Value } from '@sinclair/typebox/value';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
-import { formatElements, newRefBook, readElements, REF_MAX, retiredRef } from '../src/tools/browser/elements.ts';
+import { formatElements, newRefBook, randomRefStart, readElements, REF_MAX, retiredRef } from '../src/tools/browser/elements.ts';
 import { browserClick } from '../src/tools/builtin/browser.ts';
 
 // T-05: 触れるものの番号。手本は、固定版の playwright-core（本物のブラウザ）が出した ariaSnapshot
@@ -154,7 +154,8 @@ test('P3a: 消えた要素の番号は使い回さない（同じ名前の要素
   assert.deepEqual(allRefs(before), ['e1', 'e2', 'e3']);
   const gone = readElements('- button "A"\n- button "C"', URL_FORM, book);
   assert.deepEqual(allRefs(gone), ['e1', 'e3']);
-  assert.deepEqual(retiredRef(book, 'e2'), { role: 'button', name: 'B' });
+  assert.equal(retiredRef(book, 'e2'), true);
+  assert.equal(retiredRef(book, 'e1'), false);
   const back = readElements('- button "A"\n- button "B"\n- button "C"', URL_FORM, book);
   assert.deepEqual(allRefs(back), ['e1', 'e4', 'e3']);
 });
@@ -198,7 +199,7 @@ test('P3a: 同じ名前の「削除」が並ぶ組は、1 行消えると組ご�
   const after = refsOf(readElements(rowsPage(['材料 1', '材料 3']), URL_ROWS, book), '削除');
   assert.equal(after.length, 2);
   assert.ok(after.every(ref => !before.includes(ref)), `${before} → ${after}`);
-  for (const ref of before) assert.deepEqual(retiredRef(book, ref), { role: 'button', name: '削除' });
+  for (const ref of before) assert.equal(retiredRef(book, ref), true);
 });
 
 test('P3a: 同じ数のまま並べ替えると、組ごと新しい番号になる', () => {
@@ -247,11 +248,14 @@ test('P3a（見分けない、を書いておく）: 周りの行まで同じ 2 
   assert.deepEqual(after, before);
 });
 
-test('P3a（残る穴 R1-1 を書いておく）: 行を見分ける手がかりが入力欄の値だけの一覧は、同じ数のままのページ送りを見分けない', () => {
+test('P3a（R1-1）: 行を見分ける手がかりが入力欄の値だけの一覧は、その組だけ値も手がかりに入れる（ページ送りで新しい番号。打っても新しい番号）', () => {
   const only = (values: readonly string[]): string => ['- table:', '  - rowgroup:', ...values.flatMap(v => [`    - row "${v} 削除":`, `      - cell "${v}":`, `        - textbox: "${v}"`, '      - cell "削除":', '        - button "削除"'])].join('\n');
   const book = newRefBook();
   const before = refsOf(readElements(only(['1', '2']), URL_ROWS, book), '削除');
-  assert.deepEqual(refsOf(readElements(only(['3', '4']), URL_ROWS, book), '削除'), before);
+  const paged = refsOf(readElements(only(['3', '4']), URL_ROWS, book), '削除');
+  assert.ok(paged.every(ref => !before.includes(ref)), `${before} → ${paged}`);
+  const typed = refsOf(readElements(only(['3', '5']), URL_ROWS, book), '削除');
+  assert.ok(typed.every(ref => !paged.includes(ref)), '値で見分ける組は、打っても新しい番号（安全の側）');
 });
 
 test('P3a: 名前が 1 つだけの要素は、同じ URL のまま周りが変わっても同じ番号（R1-2）', () => {
@@ -260,4 +264,69 @@ test('P3a: 名前が 1 つだけの要素は、同じ URL のまま周りが変�
   const after = readElements(rowsPage(['材料 7', '材料 8', '材料 9']), URL_ROWS, book);
   assert.deepEqual(refsOf(after, '並べ替え'), refsOf(before, '並べ替え'));
   assert.deepEqual(refsOf(after, 'つぎのページ'), refsOf(before, 'つぎのページ'));
+});
+
+// 安全の審査（P3a 第 1 版）の形: どれも、変わったあとの組の番号が全部新しいこと
+const allNew = (book: ReturnType<typeof newRefBook>, before: string, after: string, name: string): void => {
+  const old = refsOf(readElements(before, URL_ROWS, book), name);
+  const now = refsOf(readElements(after, URL_ROWS, book), name);
+  assert.equal(old.length, now.length);
+  assert.ok(old.length >= 2 && now.every(ref => !old.includes(ref)), `${old} → ${now}`);
+};
+
+test('P3a: 組の最後の要素のあとの行が変わっても、組ごと新しい番号（押す部品が先・文があと、行の入れ物なし）', () => {
+  const list = (last: string): string => ['- list:', '  - listitem:', '    - checkbox "Done"', '    - text: Buy milk', '  - listitem:', '    - checkbox "Done"', `    - text: ${last}`].join('\n');
+  allNew(newRefBook(), list('Pay rent'), list('Delete account'), 'Done');
+});
+
+test('P3a: 長い段落の下の一覧で 1 行目が入れ替わっても、組ごと新しい番号（1 行ずつ字数を切るので、近くの行が押し出されない）', () => {
+  const page = (first: string): string => ['- heading "Inbox" [level=1]', `- paragraph: ${'x'.repeat(250)}`, '- list:',
+    '  - listitem:', `    - text: ${first}`, '    - button "Delete"', '  - listitem:', '    - text: Bob', '    - button "Delete"'].join('\n');
+  allNew(newRefBook(), page('Alice'), page('Mallory'), 'Delete');
+});
+
+test('P3a: 押す部品の前にセルが多い行で、先頭のセル（ID）が変わっても、組ごと新しい番号（親の行の名前を入れる）', () => {
+  const row = (id: string): string[] => [`    - row "${id} ${Array.from({ length: 9 }, (_, i) => `c${i}`).join(' ')} 削除":`, `      - cell "${id}"`,
+    ...Array.from({ length: 9 }, (_, i) => `      - cell "c${i}"`), '      - cell "削除":', '        - button "削除"'];
+  const page = (first: string): string => ['- table:', '  - rowgroup:', ...row(first), ...row('ID-2')].join('\n');
+  allNew(newRefBook(), page('ID-1'), page('ID-9'), '削除');
+});
+
+test('P3a: 同じ名前のリンクの行き先が入れ替わったら、組ごと新しい番号（見せる行き先も手がかりに入れる）', () => {
+  const links = (a: string, b: string): string => ['- link "Open":', `  - /url: ${a}`, '- link "Open":', `  - /url: ${b}`].join('\n');
+  allNew(newRefBook(), links('/r/1', '/r/2'), links('/r/2', '/r/1'), 'Open');
+});
+
+test('P3a: 文が同じで状態（[checked]）だけ違う行が入れ替わったら、組ごと新しい番号（状態も手がかりに入れる）', () => {
+  const list = (first: boolean): string => ['- list:', '  - listitem:', `    - checkbox "Done"${first ? ' [checked]' : ''}`, '    - button "Delete"',
+    '  - listitem:', `    - checkbox "Done"${first ? '' : ' [checked]'}`, '    - button "Delete"'].join('\n');
+  allNew(newRefBook(), list(true), list(false), 'Delete');
+  allNew(newRefBook(), list(true), list(false), 'Done');
+});
+
+test('P3a: 大きなページでも表は速く読める（3,000 組の名前の対・段落 10,000 行・約 350 KB の形で 500 ms 未満。量は要素の数に比例）', () => {
+  // 同じ名前の 2 つが、ページの前半と後半に離れて並ぶ（組の間が長いほど、前の作りは遅かった）
+  const lines: string[] = [];
+  let buttons = 0;
+  for (let i = 0; i < 10_000; i++) {
+    lines.push(`- paragraph: 段落 ${i} ${'あ'.repeat(10)}`);
+    if (i % 5 === 0) for (let k = 0; k < 3; k++) lines.push(`- button "名前 ${buttons++ % 3000}"`);
+  }
+  assert.equal(buttons, 6000);
+  const snapshot = lines.join('\n');
+  assert.ok(snapshot.length > 300_000, `${snapshot.length}`);
+  const book = newRefBook();
+  const started = performance.now();
+  readElements(snapshot, URL_ROWS, book);
+  readElements(snapshot, URL_ROWS, book);
+  const took = (performance.now() - started) / 2;
+  assert.ok(took < 500, `${Math.round(took)} ms`);
+});
+
+test('P3a: beat の起動ごとの番号の始まりは 1〜500,000（使い切るまで 499,999 個以上残る）', () => {
+  for (let i = 0; i < 200; i++) {
+    const start = randomRefStart();
+    assert.ok(Number.isInteger(start) && start >= 1 && start <= 500_000, String(start));
+    assert.ok(REF_MAX - start + 1 >= 499_999);
+  }
 });
