@@ -265,6 +265,13 @@ export type ContextUsageOutcome =
   | { ok: true; modelId: string; tokens: number; available: number; capacity: number; ratio: number }
   | (Extract<SendOutcome, { ok: false }> & { errorParams?: MessageParams });
 
+// 製品の中の実行（計画モードを除く）が頭で先読みする道具の名前（browser-rethink P1）。何も書かない（先読み・使用量・mesh-probe の見積もりが同じ答えを使う）
+export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: PermissionMode, model: Pick<ModelConfig, 'vision'>): string[] {
+  if (!inProduct || mode === 'plan') return [];
+  const browser = tools.filter(t => !t.mcp && isBrowserTool(t.name)).map(t => t.name);
+  return [...browser, 'pending_withdraw', 'deviation_add', ...(model.vision === true ? ['image_view'] : [])];
+}
+
 // 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
 export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
@@ -1087,6 +1094,8 @@ export class ChatEngine {
       // 読み込んだ道具は会話ごとに持ち越す（TE-2。kv の loaded-tools:<会話>。並びが前の実行の終わりと同じになり、前半を読める）。使えない道具は #toolsFor が外す
       // 要約のある会話には history_read を入れておく（TE-4a。手放した元の文を読み戻せるように。要約した時点で入るが、それより前に要約した会話はここで）
       if (d.conversations.get(conversationId)?.summary) this.preload(conversationId, [HISTORY_READ]);
+      // 製品の中の実行は、よく読み込む道具を 1 回目の呼び出しから並べる（browser-rethink P1。途中の読み込みは道具の後ろ全部のキャッシュを書き直すため）
+      this.preload(conversationId, this.#usualTools(project, this.#modeFor(kind, conversationId, ctx.permissionMode), chain[0]!.model));
       const loaded = new Set<string>(this.#carriedTools(conversationId));
       const sent = new Set<string>();
       this.#loaded.set(runId, { loaded, sent });
@@ -1604,8 +1613,10 @@ export class ChatEngine {
     const language = languageOf(config);
     const mode = this.#modeFor(p.kind, p.conversationId, p.startedMode);
     const frozen = this.#frozen(p.project?.id);
-    const loaded = p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>(this.#carriedTools(p.conversationId)) : undefined;
-    const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen, loaded);
+    // 使用量は、次の実行が頭で先読みする道具も数える（kv には書かない）
+    const loaded = p.runId ? this.#loaded.get(p.runId)?.loaded : this.#defers(p.kind, p.forbid, p.started) ? new Set<string>([...this.#carriedTools(p.conversationId), ...this.#usualTools(p.project, mode, model)]) : undefined;
+    // 画像を読めないモデルには image_view を渡さない（呼んでも断るだけ。予備のモデルに替わったときも）
+    const toolDefs = this.#toolsFor(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen, loaded).filter(t => t.name !== 'image_view' || model.vision === true);
     const listed = loaded && toolDefs.some(t => t.name === 'tool_search') ? this.#deferred(p.kind, p.forbid, p.started, mode, p.project !== undefined || p.memoryProject !== undefined, frozen) : [];
     const deferred = deferredSection(listed, config);
     const specs = ToolRegistry.specs(toolDefs, config, { fixProduct: p.project ? d.projects?.get(p.project.id)?.scout_mode === 'fix' : false });
@@ -1914,6 +1925,10 @@ export class ChatEngine {
     const carried = this.#carriedTools(conversationId);
     const added = names.filter(name => !carried.includes(name) && registry.get(name) !== undefined && !isCore(registry.get(name)!));
     if (added.length) this.#d.kv.setJson(`loaded-tools:${conversationId}`, [...carried, ...new Set(added)]);
+  }
+
+  #usualTools(project: ToolContext['project'], mode: PermissionMode, model: ModelConfig): string[] {
+    return usualTools(this.#d.tools?.registry.list() ?? [], project?.root !== undefined, mode, model);
   }
 
   #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined): boolean {

@@ -9,6 +9,7 @@ import { defaultConfig, findModel, parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { KV } from '../src/db/kv.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
+import { usualTools } from '../src/engine/chat.ts';
 import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts';
 import { compactPrompt, compactSpeaker, compactSystem, summarySection } from '../src/engine/prompts.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
@@ -123,8 +124,9 @@ export interface ChatRequest { frozen: string; baseTools: string[]; meshTools: s
 export function productChatRequest(config: AppConfig, paths: AppPaths, model: ModelConfig, root: string, language: Language, smallestAvailable?: number): ChatRequest {
   const registry = new ToolRegistry();
   for (const tool of builtinTools()) if (!MEMORY_TOOL_NAMES.includes(tool.name)) registry.register(tool);
+  const usual = new Set(usualTools(registry.list(), true, 'auto', model));
   const exclude = (t: ToolDef) => (t.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(t.name) && !config.tools.browser.enabled)
-    || effectivePolicy(t.name, config) === 'block' || !acceptanceAllows(t, false) || !isCore(t);
+    || effectivePolicy(t.name, config) === 'block' || !acceptanceAllows(t, false) || !(isCore(t) || usual.has(t.name));
   const chat = registry.forRun('chat', { exclude });
   const base = chat.filter(t => !t.name.startsWith(MESH_TOOL_PREFIX));
   const instructions = instructionsSection(readInstructions(root, instructionsBudget(smallestAvailable)));

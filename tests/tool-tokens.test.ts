@@ -123,6 +123,32 @@ test('TE-7 固定の部分の線: 既定・全部オン・skills 200 個のど�
   }
 });
 
+// 製品の中のタスクの最初の要求（browser-rethink P1 の先読みが入る。measure の task の行は製品の外のタスク）
+async function productTaskRequest(t: Parameters<typeof startApp>[0], vision: boolean) {
+  const products = realpathSync.native(tempDir(t as never));
+  const s = await startApp(t, { models: [{ ...MEASURE_MODEL, provider: 'fake', vision }], projectFolderExempt: [products], tools: builtinTools(), configure: allOn });
+  const dir = join(products, 'Demo');
+  mkdirSync(dir, { recursive: true });
+  const made = await s.json('/api/projects', 'POST', { root: dir });
+  fillAll(s.app, { root: realpathSync.native(dir), projectId: made.body.project.id });
+  const task = await s.json('/api/tasks', 'POST', { title: 'Work', when: new Date(Date.now() - 1000).toISOString(), projectId: made.body.project.id });
+  assert.equal(task.status, 201, JSON.stringify(task.body));
+  s.adapter().scripts = [reply('ok')];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const last = s.adapter().calls.at(-1)!;
+  return { names: last.tools.map(tool => tool.name), request: estimateRequest(`${last.system.frozen}\n${last.system.dynamic}`, [], last.tools, 1, last.system.tail).tokens };
+}
+
+test('TE-7 固定の部分の線: 製品の中のタスク（全部オン・skills 200 個・指示と目次を目いっぱい、画像を読める・読めないモデル）も 64k の使える量の 35% 以内', async t => {
+  for (const vision of [false, true]) {
+    const { names, request } = await productTaskRequest(t, vision);
+    assert.ok(names.includes('browser_open') && names.includes('deviation_add'), `前提: 先読みの道具が入っている (vision ${vision})`);
+    assert.equal(names.includes('image_view'), vision, `image_view (vision ${vision})`);
+    const percent = (request / 45_875) * 100;
+    assert.ok(percent <= FIXED_LINE_PERCENT, `product task (vision ${vision}): ${percent.toFixed(1)}% (${request} tokens)`);
+  }
+});
+
 test('TE-7 skills の一覧: 名前の順で決まり、書いた順・使った回数に揺れない。3% の線と 160 字の説明、あふれた分は 1 行', t => {
   const make = () => {
     const db = openDatabase(':memory:', MIGRATIONS);
