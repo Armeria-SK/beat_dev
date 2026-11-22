@@ -1,5 +1,5 @@
 import { Type } from '@sinclair/typebox';
-import { IMAGE_TOKENS } from '../../engine/tokens.ts';
+import { estimateTextTokens, IMAGE_TOKENS, prefixLength } from '../../engine/tokens.ts';
 import { neutralizeFence } from '../../shared/fence.ts';
 import { IMAGE_MAX_BYTES } from '../../shared/image-info.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -10,11 +10,12 @@ import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
 import { actPreview, browserActCheck, devServerPage, inspectAct, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
-import { formatElements, markShown, MAX_ELEMENTS, type ElementTable } from '../browser/elements.ts';
+import { formatElements, markShown, type ElementTable } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
 import { siteAllows } from '../browser/sites.ts';
+import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { clip, pageUrl, RetrievalFailure } from '../web/public-page.ts';
 import { ROOM_MARGIN_TOKENS } from './image.ts';
@@ -81,7 +82,11 @@ function assertTabUrl(browser: BrowserSession, api: BrowserApi, tab: BrowserTab,
   }
 }
 
-interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean }
+interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean; outputTokens: number | undefined }
+
+// 道具の結果の上限（文字数は pipeline の TOOL_OUTPUT_LIMIT、トークンはその呼び出しに許された量）から、見出し・足跡・伏せ字の揺れの分を引いた残り
+const RENDER_MARGIN_CHARS = 400;
+const RENDER_MARGIN_TOKENS = 120;
 
 // タブの中身を、外の内容の見出し・枠・本文・触れるもの・足跡の形にする
 async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserTab, language: Language, secrets: readonly string[], options: ReadOptions): Promise<ToolOutput> {
@@ -90,28 +95,52 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   assertTabUrl(browser, api, tab, url);
   const pageChars = api.config.limits.pageChars;
   const title = await until(page.title(), api.signal);
+  const header = toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) });
+  const footerRoom = 300;
+  // 結果は道具の結果の上限の中に収める（収まらない分は pipeline が切り、切られた番号は見せていないのに押せてしまう）
+  let chars = TOOL_OUTPUT_LIMIT - RENDER_MARGIN_CHARS - footerRoom - header.length;
+  let tokens = (options.outputTokens ?? Infinity) - RENDER_MARGIN_TOKENS - estimateTextTokens(header) - footerRoom / 3.5;
+  const raw = options.mode !== 'elements' ? await until(page.text(options.offset + pageChars + 1), api.signal) : '';
+  let table: ElementTable | undefined;
+  let elementsText = '';
+  if (options.mode !== 'text') {
+    // 表は、両方を返すときは残りの半分まで（文が残りを使う）。番号は収まる行にだけ振り、その番号だけを「見せた」にする
+    const share = options.mode === 'elements' ? 1 : 0.5;
+    const elementsTitle = toolText(language, 'browser.section_elements');
+    let usedChars = elementsTitle.length + 1 + 80;
+    let usedTokens = estimateTextTokens(elementsTitle) + 30;
+    const fits = (line: string): boolean => {
+      const nextChars = usedChars + line.length + 1;
+      const nextTokens = usedTokens + estimateTextTokens(line) + 1;
+      if (nextChars > chars * share || nextTokens > tokens * share) return false;
+      usedChars = nextChars; usedTokens = nextTokens;
+      return true;
+    };
+    table = await rereadTab(tab, url, api.signal, { kind: 'show', fits });
+    if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    elementsText = block(formatElements(table, language), secrets);
+    chars -= elementsTitle.length + 1 + elementsText.length + 1;
+    tokens -= estimateTextTokens(elementsTitle) + estimateTextTokens(elementsText) + 2;
+  }
   const parts: string[] = [];
   if (options.mode !== 'elements') {
-    const raw = await until(page.text(options.offset + pageChars + 1), api.signal);
-    const slice = raw.slice(options.offset, options.offset + pageChars);
-    parts.push(toolText(language, 'browser.section_text'), slice.length > 0 ? block(slice, secrets) : toolText(language, 'browser.empty_text'));
-    if (raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + pageChars }));
+    const wanted = raw.slice(options.offset, options.offset + pageChars);
+    const textTitle = toolText(language, 'browser.section_text');
+    const room = prefixLength(wanted, Math.max(0, chars - textTitle.length - 120), Math.max(0, tokens - estimateTextTokens(textTitle) - 40));
+    const slice = wanted.slice(0, room);
+    parts.push(textTitle, slice.length > 0 ? block(slice, secrets) : toolText(language, 'browser.empty_text'));
+    if (slice.length < wanted.length || raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + slice.length }));
   }
-  let table: ElementTable | undefined;
-  if (options.mode !== 'text') {
-    table = await rereadTab(tab, url, api.signal);
-    if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    parts.push(toolText(language, 'browser.section_elements'), block(formatElements(table, language), secrets));
-  }
+  if (table !== undefined) parts.push(toolText(language, 'browser.section_elements'), elementsText);
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
   // 返す表の番号を「見せた」にする（見せていない番号は押せない）
-  if (table !== undefined) markShown(tab.refs, table.items.slice(0, MAX_ELEMENTS));
+  if (table !== undefined) markShown(tab.refs, table.items);
   api.touch(tab);
   const delta = api.proxyDelta();
   const mode = toolText(language, isLoopbackUrl(url) ? (options.devServer(url) ? 'browser.mode_dev_server' : 'browser.mode_loopback_other') : siteAllows(api.config.sites, url) ? 'browser.mode_listed' : 'browser.mode_unlisted');
   const lines = [
-    toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) }),
+    header,
     '<<<',
     ...parts,
     '>>>',
@@ -179,7 +208,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
           const refusal = tab.page.lastRefusal();
           if (refusal !== undefined) throw new BrowserFailure('blocked', REFUSAL_KEYS[refusal]);
           assertTabUrl(browser, api, tab, tab.page.url());
-          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx) });
+          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens });
         } catch (thrown) {
           // 開けなかった・行き先が公開でなかったタブは、中身を残さない（新しく作ったタブは上限も使わせない）
           if (created || (thrown instanceof BrowserFailure && thrown.code === 'blocked')) await api.closeTab(tab.id).catch(() => false);
@@ -208,7 +237,7 @@ export const browserRead: ToolDef<{ tab?: string; offset?: number; mode?: 'text'
       requireTabs(browser, ctx, input.tab);
       return browser.run({ grant, signal: ctx.signal }, async api => {
         const tab = api.tab(input.tab);
-        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx) });
+        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens });
       });
     });
   },

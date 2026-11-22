@@ -12,6 +12,7 @@ import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
+import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
@@ -583,6 +584,35 @@ test('P3a: 番号の始まりは BrowserSession ごとに決められ（beat の
   assert.match(r.session.instance, /^[0-9a-f]{16}$/u);
   const check = await preCheck(r, browserClick, { ref: 'e123457' });
   assert.equal(JSON.parse(check.bind!)[0], r.session.instance);
+});
+
+test('P3a: 長いページでも、道具の結果は上限（16,000 文字）の中に収まり、収まらなかった番号は見せていないので押せない（道具の流れを通して）', async t => {
+  const r = rig(t);
+  const LONG = 'https://example.com/long';
+  const names = Array.from({ length: 150 }, (_, i) => `品物 ${String(i + 1).padStart(3, '0')} ${'くわしい説明'.repeat(16)}`);
+  r.driver.site(LONG, { title: 'Long', text: 'あ'.repeat(30_000), snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  const open = await r.call('browser_open', { url: LONG });
+  const content = open.output.content;
+  assert.ok(content.length <= 16_000, `${content.length}`);
+  assert.doesNotMatch(content, /The output was long/u, '道具の流れで切られていない');
+  assert.match(content, /Continue with offset=/u, '文は残りを offset で読ませる');
+  const shown = [...content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
+  assert.ok(shown.length > 10 && shown.length < 150, `${shown.length}`);
+  assert.match(content, new RegExp(`\\(${150 - shown.length} more elements are omitted\\)`, 'u'));
+  const unseen = `e${Number(shown[shown.length - 1]!.slice(1)) + 1}`;
+  const refused = await r.call('browser_click', { ref: unseen });
+  assert.equal(refused.decision, 'deny', '見せていない番号は押せない');
+  const page = r.driver.current!.pageList[0]!;
+  assert.equal(page.acts.length, 0);
+  const allowed = await r.call('browser_click', { ref: shown[shown.length - 1]! });
+  assert.notEqual(allowed.decision, 'deny', '見せた最後の番号は押せる');
+  // その呼び出しに許された量（トークン）が小さいときも、その中に収める
+  (r.ctx as { outputTokens?: number }).outputTokens = 2_000;
+  const small = await r.call('browser_read', { tab: 't1' });
+  assert.ok(estimateTextTokens(small.output.content) <= 2_000, `${estimateTextTokens(small.output.content)}`);
+  assert.doesNotMatch(small.output.content, /The output was long/u);
+  const few = [...small.output.content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
+  assert.ok(few.length > 0 && few.length < shown.length, `${few.length}`);
 });
 
 test('P3a: モデルに見せていない番号（表の 300 件より後ろ）は、表に持っていても押せない', async t => {

@@ -148,7 +148,7 @@ export interface AppOptions {
   browserDriver?: BrowserDriver;
   // 試験用: ログイン用の窓（見えるブラウザ）を出せる環境か（書かなければ、この計算機の環境から決める）
   browserDisplay?: boolean;
-  // 試験用: 要素の番号の始まり（書かなければ起動ごとに 1〜500,000 のどこか）
+  // 試験用: 要素の番号の始まり（書かなければ起動ごとに 1〜9,000 のどこか）
   browserRefStart?: number;
   projectFolderExempt?: readonly string[];
   botMemory?: boolean;

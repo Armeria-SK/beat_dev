@@ -162,7 +162,7 @@ test('T-44(1)(3)(4): example.com を開いて本文が読め、押せて、起�
   const read = await session.run(call, async api => {
     const tab = await api.openTab('owner');
     await tab.page.goto('https://example.com/', LAUNCH_TIMEOUT_MS);
-    const table = await rereadTab(tab, tab.page.url(), api.signal);
+    const table = await rereadTab(tab, tab.page.url(), api.signal, { kind: 'show' });
     const item = table?.items.find(e => e.name === 'Learn more');
     learn = item && { ref: item.pwRef, role: item.role, name: item.name };
     return { url: tab.page.url(), text: await tab.page.text(5000), links: learn !== undefined && (await tab.page.locate(learn)) !== undefined };
@@ -475,4 +475,35 @@ test('P3a: 読んだあとに消された要素の番号は、待たずに（2 �
   assert.match(out.content, /can no longer be used/u);
   assert.ok(took < 2000, `${took} ms`);
   assert.equal(await r.title(), 'start');
+});
+
+const ICONS = `<a href="/home" data-id="logo"><img alt="Logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a>
+<button data-id="close"><img alt="Close" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></button>
+<button data-id="trash"><img alt="Trash" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="> Delete</button>`;
+
+test('P3a: 名前が子（画像）から来るボタン・リンクも、表に名前つきで出て、その番号で押せる', options, async t => {
+  const r = await refRig(t, { '/icons': ICONS });
+  const content = await r.open('/icons');
+  assert.match(content, /^e\d+ link "Logo"/mu, content);
+  assert.match(content, /^e\d+ button "Trash Delete"/mu, content);
+  const [close] = r.refs(content, 'Close');
+  assert.ok(close, content);
+  const out = await browserClick.execute({ ref: close }, r.ctx);
+  assert.equal(out.isError, undefined, out.content);
+  assert.equal(await r.title(), 'clicked close');
+});
+
+test('P3a: 押す要素が動いているあいだに行の文が入れ替わると、動きが止まるのを待ったあとで確かめるので、押さない', options, async t => {
+  const r = await refRig(t, { '/rows': ROWS });
+  const shown = r.refs(await r.open('/rows'), 'Delete');
+  assert.equal(shown.length, 2);
+  await (await r.raw()).evaluate(() => {
+    document.querySelector('[data-id="row-1"]')!.animate([{ transform: 'translateX(0px)' }, { transform: 'translateX(40px)' }], { duration: 1500 });
+    setTimeout(() => { const a = document.getElementById('t1')!; const b = document.getElementById('t2')!; [a.textContent, b.textContent] = [b.textContent, a.textContent]; }, 600);
+  });
+  const started = Date.now();
+  const out = await browserClick.execute({ ref: shown[0]! }, r.ctx);
+  t.diagnostic(`answered in ${Date.now() - started} ms: ${out.content.slice(0, 120)}`);
+  assert.equal(out.isError, true, out.content);
+  assert.equal(await r.title(), 'start', '入れ替わったあとの行を押さない');
 });

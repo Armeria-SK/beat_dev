@@ -303,6 +303,8 @@ export async function frameSource(frame: Frame): Promise<string | undefined> {
 const SETTLE_MS = 250;
 const SETTLE_LOAD_MS = 1000;
 const BOX_TIMEOUT_MS = 1000;
+// 確かめたあと、本当の操作が待ってよい時間（操作できる形になるのは先に待つので、ふだんはすぐ終わる）
+const ACT_AFTER_CHECK_MS = 1000;
 
 class PlaywrightPage implements PageHandle {
   readonly page: Page;
@@ -392,25 +394,21 @@ class PlaywrightPage implements PageHandle {
   }
 
   // 操作の前に出来事の数を 0 に戻し、あとで返す
-  // 印の要素をつかんで（ElementHandle）操作する。つかんだあと、確かめ（ページを読み直して番号がまだ同じ要素と中身を指すか）と、
-  // 引き直した要素がつかんだ要素と同じかを見る（どちらかが違えば押さない）
-  async #act(target: ElementTarget, timeoutMs: number, work: (one: ElementHandle) => Promise<void>): Promise<ActionEvents> {
+  // 印の要素をつかんで（ElementHandle）操作する。まず操作できる形になるまで待ち（ready: 試しの押し・入れられる状態。長く待ちうる）、
+  // そのあとで確かめ（ページを読み直して番号がまだ同じ要素と中身を指すか）と、引き直した要素がつかんだ要素と同じかを見て（どちらかが違えば押さない）、
+  // 最後に短い時間の上限（ACT_AFTER_CHECK_MS）で本当の操作をする（確かめてから操作までのあいだを短くする）
+  async #act(target: ElementTarget, timeoutMs: number, ready: (one: ElementHandle) => Promise<void>, work: (one: ElementHandle, timeout: number) => Promise<void>): Promise<ActionEvents> {
     const one = await this.#locator(target);
     if (!one) throw new BrowserFailure('page_changed', 'browser.page_changed');
     const pinned = await one.elementHandle({ timeout: BOX_TIMEOUT_MS }).catch(() => null);
     if (!pinned) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    const confirmed = (target.verify === undefined || await target.verify().catch(() => false)) && await this.#samePinned(target, pinned);
-    if (!confirmed) {
-      await pinned.dispose().catch(() => undefined);
-      throw new BrowserFailure('page_changed', 'browser.page_changed');
-    }
-    this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
     try {
-      await work(pinned);
-    } catch (e) {
-      if ((e as { name?: string }).name === 'TimeoutError') throw new BrowserFailure('timeout', 'browser.timeout', { sec: Math.round(timeoutMs / 1000) });
-      // Playwright の文にはページの文字が入りうるので、そのままは出さない
-      throw new BrowserFailure('act_failed', 'browser.act_failed');
+      await this.#step(timeoutMs, () => ready(pinned));
+      const confirmed = (target.verify === undefined || await target.verify().catch(() => false)) && await this.#samePinned(target, pinned).catch(() => false);
+      if (!confirmed) throw new BrowserFailure('page_changed', 'browser.page_changed');
+      this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
+      const after = Math.min(timeoutMs, ACT_AFTER_CHECK_MS);
+      await this.#step(after, () => work(pinned, after));
     } finally {
       await pinned.dispose().catch(() => undefined);
     }
@@ -419,14 +417,28 @@ class PlaywrightPage implements PageHandle {
     return { ...this.#events };
   }
 
+  // Playwright の失敗を beat の失敗にする（Playwright の文にはページの文字が入りうるので、そのままは出さない）
+  async #step(timeoutMs: number, run: () => Promise<void>): Promise<void> {
+    try {
+      await run();
+    } catch (e) {
+      if (e instanceof BrowserFailure) throw e;
+      if ((e as { name?: string }).name === 'TimeoutError') throw new BrowserFailure('timeout', 'browser.timeout', { sec: Math.max(1, Math.round(timeoutMs / 1000)) });
+      throw new BrowserFailure('act_failed', 'browser.act_failed');
+    }
+  }
+
   click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents> {
-    return this.#act(target, timeoutMs, one => one.click({ timeout: timeoutMs }));
+    return this.#act(target, timeoutMs, one => one.click({ trial: true, timeout: timeoutMs }), (one, timeout) => one.click({ timeout }));
   }
 
   fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents> {
     return this.#act(target, timeoutMs, async one => {
-      await one.fill(text, { timeout: timeoutMs });
-      if (submit) await one.press('Enter', { timeout: timeoutMs });
+      await one.waitForElementState('stable', { timeout: timeoutMs });
+      await one.waitForElementState('editable', { timeout: timeoutMs });
+    }, async (one, timeout) => {
+      await one.fill(text, { timeout });
+      if (submit) await one.press('Enter', { timeout });
     });
   }
 

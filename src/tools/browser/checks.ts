@@ -17,7 +17,7 @@ import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { pageUrl } from '../web/public-page.ts';
 import { BrowserFailure, until, type ElementDetail, type ElementTarget } from './driver.ts';
-import { readElements, retiredRef, shownRef, type ElementTable, type ListedElement } from './elements.ts';
+import { readElements, retiredRef, shownRef, type ElementTable, type ListedElement, type Numbering } from './elements.ts';
 import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
 import { ownerHostAllows, ownerLoopbackPorts, siteAllows } from './sites.ts';
@@ -58,12 +58,13 @@ function placeOf(tab: BrowserTab, api: BrowserApi, url: string, denied: Readonly
   try { pageUrl(url); return 'public'; } catch { return undefined; }
 }
 
-// タブの表をその場で撮り直して番号の対応を更新する。撮るあいだに URL か文書が変わったら undefined（古い表として断る側）
-export async function rereadTab(tab: BrowserTab, pageUrl: string, signal: AbortSignal): Promise<ElementTable | undefined> {
+// タブの表をその場で撮り直して番号の対応を更新する。撮るあいだに URL か文書が変わったら undefined（古い表として断る側）。
+// numbering は既定で check（新しい番号を振らず、前の番号のうちまだ使えるものだけ残す）。見せる表を作るときだけ show
+export async function rereadTab(tab: BrowserTab, pageUrl: string, signal: AbortSignal, numbering: Numbering = { kind: 'check' }): Promise<ElementTable | undefined> {
   const document = tab.page.documentId();
   const snapshot = await until(tab.page.snapshot(), signal);
   if (tab.page.url() !== pageUrl || tab.page.documentId() !== document) return undefined;
-  const table = readElements(snapshot, pageUrl, tab.refs, document);
+  const table = readElements(snapshot, pageUrl, tab.refs, document, numbering);
   tab.table = table;
   return table;
 }

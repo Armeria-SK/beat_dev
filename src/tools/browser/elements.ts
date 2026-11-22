@@ -12,9 +12,8 @@ export const NUMBERED_ROLES: ReadonlySet<string> = new Set([
   'link', 'button', 'textbox', 'searchbox', 'checkbox', 'radio', 'combobox', 'listbox', 'option',
   'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'switch', 'slider', 'spinbutton',
 ]);
-// 見せるのは 300 件まで。表として持つ（番号で押せる）のは 2,000 件まで
+// 見せるのは 300 件まで（道具の結果の上限に収まる分だけ。番号を振るのは見せる要素だけ）
 export const MAX_ELEMENTS = 300;
-export const MAX_TABLE = 2000;
 // 番号は e1〜e999999。使い切ったら断る
 export const REF_MAX = 999_999;
 // beat の起動ごとの番号の始まり（1〜9,000 のどこか）。起動し直したあとに、前の起動の番号が同じ番号の別の要素に当たりにくくする。
@@ -54,9 +53,9 @@ export interface ListedElement extends ElementRef {
 export interface ElementTable {
   // 読んだときのページの URL。遷移して URL が変わったら、この表は捨てる
   url: string;
-  // 表として持つ要素（2,000 件まで）。見せるのは先頭の 300 件
+  // 番号のある要素（show: 見せる要素。check: 前の番号がまだ使える要素）
   items: ListedElement[];
-  // 上限（2,000）で省いた数
+  // 表に入れなかった要素の数（300 件と道具の結果の上限を超えた分）
   omitted: number;
 }
 
@@ -102,7 +101,7 @@ const flatText = (text: string): string => text.replace(/[\p{Cc}\p{Cf}\s]+/gu, '
 // ariaSnapshot の 1 行。attrs は手がかりに入れる [checked] などの並び、url はその行の下の /url:（リンク先）、parent は親の行。
 // raw: 読めなかった行の生の文（印を外したもの。役割は空）
 interface Line { indent: number; role: string; name: string; attrs: string; inline: string; url: string; pwRef: string | undefined; raw: string | undefined; hasInput: boolean; inFrame: boolean; parent: number }
-interface Entry { role: string; name: string; pwRef: string | undefined; href: string | undefined; states: string[]; line: number }
+interface Entry { role: string; name: string; pwRef: string | undefined; href: string | undefined; states: string[]; line: number; derived: boolean }
 
 // 「- 」のあとの中身を、役割・名前・印・値に分ける。行全体が YAML の一重引用（名前に「: 」などを含む）なら、'' を ' に戻してから読む
 function parseItem(body: string): { role: string; name: string; attrs: string[]; inline: string } | undefined {
@@ -185,6 +184,16 @@ function between(page: Page, digest: Digest, from: number, to: number): string {
   return `${b - a}:${value}`;
 }
 
+// 組の最初の要素の窓の頭: 入れ物の 8 行前か、入れ物の親の最初の子の、早い方。最後の要素の窓の終わりは、その逆（入れ物の 8 行あとか、入れ物の親の終わりの、遅い方）
+function edgeFrom(page: Page, top: number): number {
+  const up = page.lines[top]!.parent;
+  return Math.max(0, Math.min(top - EDGE_LINES, up >= 0 ? up + 1 : 0));
+}
+function edgeTo(page: Page, top: number): number {
+  const up = page.lines[top]!.parent;
+  return Math.min(page.lines.length - 1, Math.max(page.end[top]! + EDGE_LINES, up >= 0 ? page.end[up]! : page.lines.length - 1));
+}
+
 // 要素の入れ物: 組のほかの要素を中に持たない、いちばん上の親（無ければ要素の行そのもの）。prev / next は組の前後の要素の行
 function itemOf(page: Page, at: number, prev: number, next: number): number {
   let top = at;
@@ -194,18 +203,18 @@ function itemOf(page: Page, at: number, prev: number, next: number): number {
 
 // 組の要素ごとの手がかり。
 // 1 つだけ: 自分の行。2 つ以上: 自分の行 + 根からの親の行の並び + 入れ物の下の全部の行 + 前の要素の入れ物の終わりから次の要素の入れ物の頭までの全部の行
-//   （最初の要素は前の 8 行から、最後の要素はあとの 8 行まで）。入れ物の中身（値を除く）が同じ要素があれば、その組だけ入力欄の値も入れる
+//   （最初の要素は入れ物の前の 8 行か入れ物の親の頭から、最後の要素は入れ物のあとの 8 行か入れ物の親の終わりまで。edgeFrom / edgeTo）。
+//   入れ物の中身（値を除く）が同じ要素があれば、その組だけ入力欄の値も入れる
 function cluesOf(members: readonly Entry[], page: Page): string[] {
   if (members.length === 1) return [`1|${token(page.lines[members[0]!.line]!, false)}`];
   const tops = members.map((member, k) => itemOf(page, member.line, members[k - 1]?.line ?? -1, members[k + 1]?.line ?? Infinity));
   const plain = digestOf(page, false);
   const withValues = new Set(tops.map(top => plain.sub[top])).size < members.length;
   const digest = withValues ? digestOf(page, true) : plain;
-  const last = page.lines.length - 1;
   return members.map((member, k) => {
     const line = page.lines[member.line]!;
-    const from = k > 0 ? page.end[tops[k - 1]!]! + 1 : Math.max(0, member.line - EDGE_LINES);
-    const to = k < members.length - 1 ? tops[k + 1]! - 1 : Math.min(last, page.end[tops[k]!]! + EDGE_LINES);
+    const from = k > 0 ? page.end[tops[k - 1]!]! + 1 : edgeFrom(page, tops[k]!);
+    const to = k < members.length - 1 ? tops[k + 1]! - 1 : edgeTo(page, tops[k]!);
     const chain = line.parent >= 0 ? digest.chain[line.parent] : '';
     return `${members.length > 1 ? 'n' : '1'}${withValues ? 'v' : ''}|${token(line, withValues)}|${chain}|${digest.sub[tops[k]!]}|${between(page, digest, from, to)}`;
   });
@@ -222,7 +231,7 @@ function retireAll(book: RefBook): void {
   book.records.clear();
 }
 
-function parseLines(snapshot: string, url: string): { lines: Line[]; entries: Entry[] } {
+function parseLines(snapshot: string, url: string): { lines: Line[]; entries: Entry[]; end: number[] } {
   const lines: Line[] = [];
   const entries: Entry[] = [];
   let skipBelow: number | undefined;
@@ -259,65 +268,113 @@ function parseLines(snapshot: string, url: string): { lines: Line[]; entries: En
     if (inFrame || !parsed) continue;
     // iframe の中は、どのホストの枠か分からないので、番号を振らず、手がかりにも入れない
     if (line.role === 'iframe' || line.role === 'frame') { skipBelow = indent; link = undefined; continue; }
-    if (!NUMBERED_ROLES.has(line.role) || line.name === '') continue;
+    // 名前の無い行は、印があれば下の行から名前を作る（ai の形は、子の要素から来る名前を親の行に書かない）
+    if (!NUMBERED_ROLES.has(line.role) || (line.name === '' && pwRef === undefined)) continue;
     const states = kept.filter(state => STATES.has(state));
-    const entry: Entry = { role: line.role, name: line.name, pwRef, href: undefined, states, line: lines.length - 1 };
+    const entry: Entry = { role: line.role, name: line.name, pwRef, href: undefined, states, line: lines.length - 1, derived: line.name === '' };
     entries.push(entry);
     link = line.role === 'link' ? { indent, entry } : undefined;
   }
-  return { lines, entries };
+  const end = endsOf(lines);
+  for (let k = entries.length - 1; k >= 0; k--) {
+    const entry = entries[k]!;
+    if (!entry.derived) continue;
+    entry.name = subtreeName(lines, end, entry.line);
+    lines[entry.line]!.name = entry.name;
+  }
+  return { lines, entries: entries.filter(e => e.name !== ''), end };
 }
 
+// 各行の下の、最後の行
+function endsOf(lines: readonly Line[]): number[] {
+  const end = lines.map((_, i) => i);
+  for (let i = lines.length - 1; i >= 0; i--) { const up = lines[i]!.parent; if (up >= 0 && end[i]! > end[up]!) end[up] = end[i]!; }
+  return end;
+}
+
+// 名前の無い要素の名前を、下の行（子の名前と文）から作る。名前のある子はその名前だけ使い、その下は見ない。入力欄の値は入れない
+function subtreeName(lines: readonly Line[], end: readonly number[], at: number): string {
+  const own = lines[at]!;
+  const parts: string[] = VALUE_ROLES.has(own.role) || own.inline === '' ? [] : [own.inline];
+  for (let i = at + 1; i <= end[at]!;) {
+    const line = lines[i]!;
+    if (line.inFrame || line.raw !== undefined || VALUE_ROLES.has(line.role)) { i = end[i]! + 1; continue; }
+    if (line.name !== '') { parts.push(line.name); i = end[i]! + 1; continue; }
+    if (line.inline !== '') parts.push(line.inline);
+    i += 1;
+  }
+  return flatText(parts.join(' '));
+}
+
+// 番号の振り方。show: 見せる表を作る（先頭から 300 件まで、fits が false を返したところで止める。新しい番号は見せる要素にだけ振る）。
+// check: 押す前の取り直し。新しい番号は振らず、前の番号のうち、同じ要素・同じ中身のものだけを表に残す
+export type Numbering = { kind: 'show'; fits?: ((line: string) => boolean) | undefined } | { kind: 'check' };
+
 // 表を読み、book の番号の対応を更新する。document は文書の代（主フレームが移動するたびに進む。PageHandle.documentId）。book を省くと、新しい対応（e1 から）
-export function readElements(snapshot: string, url: string, book: RefBook = newRefBook(), document = 0, limit = MAX_TABLE): ElementTable {
-  const { lines, entries } = parseLines(snapshot, url);
+export function readElements(snapshot: string, url: string, book: RefBook = newRefBook(), document = 0, numbering: Numbering = { kind: 'show' }): ElementTable {
+  const { lines, entries, end } = parseLines(snapshot, url);
   // URL か文書が変わったら、前の番号は全部使えない
   if (book.url !== url || book.document !== document) {
     retireAll(book);
     book.url = url;
     book.document = document;
   }
-  const end = lines.map((_, i) => i);
-  for (let i = lines.length - 1; i >= 0; i--) { const up = lines[i]!.parent; if (up >= 0 && end[i]! > end[up]!) end[up] = end[i]!; }
   const outside = [0];
   for (const line of lines) outside.push(outside[outside.length - 1]! + (line.inFrame ? 0 : 1));
   const page: Page = { lines, end, outside, power: [1n], digests: [undefined, undefined] };
+  // 同じ印が 2 回出る表（本来は無い）は、その印に番号を振らない
+  const seenTwice = new Set<string>();
+  const once = new Set<string>();
+  for (const e of entries) if (e.pwRef !== undefined) { if (once.has(e.pwRef)) seenTwice.add(e.pwRef); else once.add(e.pwRef); }
+  const usable = entries.filter(e => e.pwRef !== undefined && !seenTwice.has(e.pwRef));
+  const candidates = new Set(numbering.kind === 'show' ? usable.slice(0, MAX_ELEMENTS) : []);
   const groups = new Map<string, Entry[]>();
   for (const e of entries) {
     const key = `${e.role}\u0000${e.name}`;
     const list = groups.get(key);
     if (list) list.push(e); else groups.set(key, [e]);
   }
-  const shown = entries.slice(0, limit);
+  // 手がかりは、番号を振るかもしれない要素と、前の番号のある要素の組だけ作る
   const clue = new Map<Entry, string>();
-  const wanted = new Set(shown);
   for (const list of groups.values()) {
-    if (!list.some(e => wanted.has(e))) continue;
+    if (!list.some(e => candidates.has(e) || (e.pwRef !== undefined && book.records.has(e.pwRef)))) continue;
     cluesOf(list, page).forEach((c, k) => clue.set(list[k]!, c));
   }
-  // 同じ印が 2 回出る表（本来は無い）は、その印に番号を振らない
-  const seenTwice = new Set<string>();
-  const once = new Set<string>();
-  for (const e of shown) if (e.pwRef !== undefined) { if (once.has(e.pwRef)) seenTwice.add(e.pwRef); else once.add(e.pwRef); }
+  const same = (e: Entry, record: RefRecord | undefined): boolean => record !== undefined && record.role === e.role && record.name === e.name && record.clue === clue.get(e);
   const alive = new Set<string>();
   const items: ListedElement[] = [];
-  for (const e of shown) {
-    if (e.pwRef === undefined || seenTwice.has(e.pwRef)) continue;
-    const c = clue.get(e)!;
-    let record = book.records.get(e.pwRef);
-    if (record === undefined || record.role !== e.role || record.name !== e.name || record.clue !== c) {
-      if (record !== undefined) retire(book, record.ref);
-      if (book.counter.next > REF_MAX) throw new BrowserFailure('ref_limit', 'browser.refs_exhausted', { max: REF_MAX });
-      record = { ref: `e${book.counter.next++}`, role: e.role, name: e.name, clue: c };
-      book.records.set(e.pwRef, record);
+  const fits = numbering.kind === 'show' ? numbering.fits ?? (() => true) : () => false;
+  let open = numbering.kind === 'show';
+  for (const e of usable) {
+    const pwRef = e.pwRef!;
+    const record = book.records.get(pwRef);
+    const kept = same(e, record);
+    if (open && candidates.has(e)) {
+      const ref = kept ? record!.ref : `e${book.counter.next}`;
+      const item: ListedElement = { ref, role: e.role, name: e.name, pwRef, frameUrl: undefined, href: e.href, states: e.states };
+      if (fits(elementLine(item))) {
+        if (!kept) {
+          if (record !== undefined) retire(book, record.ref);
+          if (book.counter.next > REF_MAX) throw new BrowserFailure('ref_limit', 'browser.refs_exhausted', { max: REF_MAX });
+          book.counter.next += 1;
+          book.records.set(pwRef, { ref, role: e.role, name: e.name, clue: clue.get(e)! });
+        }
+        alive.add(pwRef);
+        items.push(item);
+        continue;
+      }
+      open = false;
     }
-    alive.add(e.pwRef);
-    items.push({ ref: record.ref, role: e.role, name: e.name, pwRef: e.pwRef, frameUrl: undefined, href: e.href, states: e.states });
+    // 見せない要素: 前の番号が同じ要素・同じ中身なら残す（check では表にも入れる）。違えば使えなくする
+    if (kept) {
+      alive.add(pwRef);
+      if (numbering.kind === 'check') items.push({ ref: record!.ref, role: e.role, name: e.name, pwRef, frameUrl: undefined, href: e.href, states: e.states });
+    }
   }
   for (const [pwRef, record] of [...book.records]) {
     if (!alive.has(pwRef)) { retire(book, record.ref); book.records.delete(pwRef); }
   }
-  return { url, items, omitted: Math.max(0, entries.length - limit) };
+  return { url, items, omitted: Math.max(0, usable.length - items.length) };
 }
 
 // 使えなくなった番号か
@@ -339,9 +396,14 @@ function shown(name: string): string {
   return JSON.stringify(flat.length > NAME_SHOWN ? `${flat.slice(0, NAME_SHOWN)}…` : flat);
 }
 
+// 表の 1 行（見せる形）
+export function elementLine(e: ListedElement): string {
+  return [e.ref, e.role, shown(e.name), ...e.states.map(s => `[${s}]`), ...(e.href ? [`→ ${e.href}`] : [])].join(' ');
+}
+
 export function formatElements(table: ElementTable, language: Language, limit = MAX_ELEMENTS): string {
   if (table.items.length === 0) return toolText(language, 'browser.no_elements');
-  const lines = table.items.slice(0, limit).map(e => [e.ref, e.role, shown(e.name), ...e.states.map(s => `[${s}]`), ...(e.href ? [`→ ${e.href}`] : [])].join(' '));
+  const lines = table.items.slice(0, limit).map(elementLine);
   const more = Math.max(0, table.items.length - limit) + table.omitted;
   if (more > 0) lines.push(toolText(language, 'browser.more_elements', { count: more }));
   return lines.join('\n');

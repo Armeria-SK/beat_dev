@@ -44,6 +44,7 @@ test('リンクの href は、相対なら元の URL で絶対にし、pageUrl �
   assert.equal(link('次へ >>> 進む').href, 'https://news.example.org/next');
   assert.equal(link('連絡').href, undefined, 'mailto: は出さない');
   assert.equal(link('山田').href, 'https://news.example.org/p/1');
+  assert.equal(link('Example News').href, 'https://news.example.org/', '画像だけのリンクは、画像の名前で振る');
 });
 
 test('手本（記事）: 印のある役割（searchbox / menuitem 系 / spinbutton / switch / radio / listbox / option）に振る', () => {
@@ -71,26 +72,99 @@ test('名前の無いもの・印の無いものには番号を振らない（�
   assert.deepEqual(table.items.map(e => [e.ref, e.name]), [['e1', 'OK']]);
 });
 
+test('名前が子から来る要素（ai の形では親の行に名前が無い）は、下の行の名前と文から名前を作って振る。入力欄の値は名前に入れない', () => {
+  const table = readElements(ai(
+    '- link [ref=e2] [cursor=pointer]:', '  - /url: /home', '  - img "Logo" [ref=e3]',
+    '- button [ref=e4]:', '  - img "Close" [ref=e5]',
+    '- button [ref=e6]:', '  - img "Trash" [ref=e7]', '  - text: Delete',
+    '- link [ref=e8]:', '  - /url: /m', '  - strong: Bold', '  - emphasis: mixed',
+    '- link [ref=e9]:', '  - /url: /card', '  - heading "Card title" [level=3] [ref=e10]:', '    - text: ignored below a name', '  - paragraph: Card body',
+    '- tab [ref=e11]:', '  - img "Settings" [ref=e12]',
+    '- button [ref=e13]:', '  - textbox "Qty" [ref=e14]: secret value', '  - text: Apply',
+  ), URL_FORM);
+  assert.deepEqual(table.items.map(e => [e.ref, e.role, e.name]), [
+    ['e1', 'link', 'Logo'], ['e2', 'button', 'Close'], ['e3', 'button', 'Trash Delete'], ['e4', 'link', 'Bold mixed'],
+    ['e5', 'link', 'Card title Card body'], ['e6', 'tab', 'Settings'], ['e7', 'button', 'Apply'], ['e8', 'textbox', 'Qty'],
+  ]);
+  assert.equal(table.items[0]!.href, 'https://example.com/home');
+});
+
+test('名前を子から作った要素も、名前が手がかりに入る（子の名前が変われば番号が変わる）', () => {
+  const book = newRefBook();
+  const [before] = readElements(ai('- button [ref=e4]:', '  - img "Close" [ref=e5]'), URL_FORM, book).items;
+  const [after] = readElements(ai('- button [ref=e4]:', '  - img "Open" [ref=e5]'), URL_FORM, book).items;
+  assert.equal(before!.name, 'Close');
+  assert.equal(after!.name, 'Open');
+  assert.notEqual(after!.ref, before!.ref);
+  assert.equal(retiredRef(book, before!.ref), true);
+});
+
+test('組の最初の要素の窓は入れ物の 8 行前（か入れ物の親の頭）から: 1 行目の見出しだけが変わると、1 行目の番号が使えなくなる', () => {
+  const card = (heading: string, n: number): string[] => [
+    `  - heading "${heading}" [level=3] [ref=h${n}]`,
+    ...Array.from({ length: 9 }, (_, i) => `  - paragraph [ref=p${n}x${i}]: detail ${i}`),
+    `  - button "Delete" [ref=b${n}]`,
+  ];
+  const page = (first: string): string => ai('- generic [ref=g]:', ...card(first, 1), ...card('Order #1002', 2));
+  const book = newRefBook();
+  const [one, two] = refsOf(readElements(page('Order #1001'), URL_ROWS, book), 'Delete');
+  const after = refsOf(readElements(page('Order #1005'), URL_ROWS, book), 'Delete');
+  assert.equal(retiredRef(book, one!), true, '1 行目の番号は使えない');
+  assert.notEqual(after[0], one);
+  assert.equal(after[1], two, '2 行目の窓（1 行目の入れ物の後ろから）は同じ');
+  // 最後の要素も同じ形（入れ物のあと 8 行か、入れ物の親の終わりまで）
+  const tail = (last: string): string => ai('- generic [ref=g]:', ...card('Order #1001', 1), ...card('Order #1002', 2), ...Array.from({ length: 9 }, (_, i) => `  - paragraph [ref=t${i}]: tail ${i}`), `  - paragraph [ref=tz]: ${last}`);
+  const book2 = newRefBook();
+  const [, lastBefore] = refsOf(readElements(tail('end A'), URL_ROWS, book2), 'Delete');
+  readElements(tail('end B'), URL_ROWS, book2);
+  assert.equal(retiredRef(book2, lastBefore!), true, '最後の要素のあとの、入れ物の親の中の行が変わると使えない');
+});
+
 test('同じ印が 2 回出る表（本来は無い）は、その印に番号を振らない', () => {
   const table = readElements(ai('- button "A" [ref=e1]', '- button "B" [ref=e1]', '- button "C" [ref=e2]'), URL_FORM);
   assert.deepEqual(table.items.map(e => e.name), ['C']);
 });
 
-test('表は 2,000 個まで持ち、見せるのは 300 個まで。超えた数を数える', () => {
+test('番号を振るのは見せる 300 個だけ。超えた数を数え、後ろには番号を振らない（続きの数も進めない）', () => {
   const lines = Array.from({ length: 350 }, (_, i) => `- button "b${i % 2}" [ref=e${i + 10}]`).join('\n');
-  const table = readElements(lines, URL_FORM);
-  assert.equal(table.items.length, 350);
-  assert.equal(table.omitted, 0);
+  const book = newRefBook();
+  const table = readElements(lines, URL_FORM, book);
+  assert.equal(table.items.length, 300);
+  assert.equal(table.omitted, 50);
   assert.equal(table.items[299]!.ref, 'e300');
-  assert.equal(table.items[349]!.ref, 'e350', '見せない 300 個より後ろにも番号がある');
+  assert.equal(book.counter.next, 301, '見せない 50 個には番号を振らない');
   const text = formatElements(table, 'en');
   assert.equal(text.split('\n').length, 301);
   assert.match(text, /\(50 more elements are omitted\)/u);
   assert.ok(!text.includes('e301 '));
-  const big = readElements(Array.from({ length: 2100 }, (_, i) => `- button "x${i}" [ref=e${i + 1}]`).join('\n'), URL_FORM);
-  assert.equal(big.items.length, 2000);
-  assert.equal(big.omitted, 100);
-  assert.match(formatElements(big, 'en'), /\(1800 more elements are omitted\)/u);
+});
+
+test('show の fits: 収まらない行のところで止め、そこから後ろには新しい番号を振らない。前に見せた番号は、見せなくても中身が同じなら残る', () => {
+  const lines = Array.from({ length: 10 }, (_, i) => `- button "x${i}" [ref=e${i + 1}]`).join('\n');
+  const book = newRefBook();
+  const all = readElements(lines, URL_FORM, book);
+  assert.equal(all.items.length, 10);
+  let room = 3;
+  const few = readElements(lines, URL_FORM, book, 0, { kind: 'show', fits: () => room-- > 0 });
+  assert.deepEqual(few.items.map(e => e.ref), ['e1', 'e2', 'e3']);
+  assert.equal(few.omitted, 7);
+  const check = readElements(lines, URL_FORM, book, 0, { kind: 'check' });
+  assert.deepEqual(check.items.map(e => e.ref), all.items.map(e => e.ref), '見せなかった行の前の番号も、中身が同じなら使える');
+  const fresh = newRefBook();
+  room = 2;
+  const cut = readElements(lines, URL_FORM, fresh, 0, { kind: 'show', fits: () => room-- > 0 });
+  assert.deepEqual(cut.items.map(e => e.ref), ['e1', 'e2']);
+  assert.equal(fresh.counter.next, 3, '収まらない行には番号を振らない');
+});
+
+test('check: 押す前の取り直しは、新しい番号を振らない（前の番号のうち同じ要素・中身のものだけ）', () => {
+  const book = newRefBook();
+  readElements(ai('- button "A" [ref=a1]', '- button "B" [ref=b1]'), URL_FORM, book);
+  const next = book.counter.next;
+  const check = readElements(ai('- button "A" [ref=a1]', '- button "B2" [ref=b1]', '- button "C" [ref=c1]'), URL_FORM, book, 0, { kind: 'check' });
+  assert.deepEqual(check.items.map(e => [e.ref, e.name]), [['e1', 'A']]);
+  assert.equal(book.counter.next, next, '新しい番号を振らない');
+  assert.equal(retiredRef(book, 'e2'), true, '名前の変わった要素の番号は使えない');
 });
 
 test('iframe の中は、番号を振らない（どのホストの枠か分からないので止める）。印の頭（f1e2）の形では決めず、木の中で iframe の下かで見る', () => {
@@ -145,9 +219,11 @@ test('P3a: 同じ文書で読み直しても番号が同じ（手本のフォー
 });
 
 test('P3a: 前に別の要素が増えても、ほかの番号は変わらない（増えた要素は新しい番号）', () => {
+  // 増える所は、組の最初の要素の入れ物の 8 行前より前（その窓の中なら、最初の行は新しい番号になる。下の試験）
+  const filler = Array.from({ length: 8 }, (_, i) => `- paragraph [ref=p${i}]: note ${i}`);
   const book = newRefBook();
-  const before = read(book, table([R1, R2, R3]));
-  const added = read(book, table([R1, R2, R3], ['- button "Close notice" [ref=n1]', ...HEAD]));
+  const before = read(book, table([R1, R2, R3], [...filler, ...HEAD]));
+  const added = read(book, table([R1, R2, R3], ['- button "Close notice" [ref=n1]', ...filler, ...HEAD]));
   const others = (t: Table) => t.items.filter(e => e.name !== 'Close notice').map(e => [e.name, e.ref]);
   assert.deepEqual(others(added), others(before));
   assert.deepEqual(refsOf(added, 'Close notice'), ['e6']);
@@ -358,7 +434,7 @@ test('P3a: 速さ: 同じ名前のボタン 3,000 個の一覧 2 つ（ai の形
   const first = read(book, snapshot);
   const again = read(book, snapshot);
   const took = (performance.now() - started) / 2;
-  assert.equal(first.items.length, 2000);
+  assert.equal(first.items.length, 300, '見せるのは 300 個まで');
   assert.deepEqual(allRefs(again), allRefs(first));
   assert.ok(took < 500, `${Math.round(took)} ms`);
 });
@@ -370,6 +446,6 @@ test('P3a: 速さ: 1 MB の長い名前の行の中に同じ名前のボタン�
   const started = performance.now();
   const t = read(newRefBook(), snapshot);
   const took = performance.now() - started;
-  assert.equal(refsOf(t, 'Pick').length, 2000);
+  assert.equal(refsOf(t, 'Pick').length, 300, '見せるのは 300 個まで（手がかりは組の 2,000 個全部で作る）');
   assert.ok(took < 500, `${Math.round(took)} ms`);
 });

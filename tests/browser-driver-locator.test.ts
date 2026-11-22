@@ -19,10 +19,11 @@ function rig(options: RigOptions = {}, elements: string[] = ['A']) {
   const handleOf = (id: string) => ({
     id,
     ownerFrame: async () => options.frame ?? MAIN,
-    click: async () => { acted.push(`click ${id}`); },
+    click: async (o?: { trial?: boolean }) => { acted.push(o?.trial ? `trial ${id}` : `click ${id}`); },
     fill: async () => { acted.push(`fill ${id}`); },
     press: async (key: string) => { acted.push(`press ${key} ${id}`); },
-    dispose: async () => {},
+    waitForElementState: async (state: string) => { acted.push(`wait ${state} ${id}`); },
+    dispose: async () => { acted.push(`dispose ${id}`); },
     evaluate: async (fn: (a: unknown, b: unknown) => boolean, other: { id: string }) => fn(id, other.id),
   });
   const refs: string[] = [];
@@ -56,10 +57,10 @@ test('本物の #locator: 印の要素をつかんで押し、Locator では押�
   assert.deepEqual(await same.handle.locate(target), { visible: true, enabled: true, type: undefined, autocomplete: undefined, form: { inForm: false, submits: false } });
   assert.ok(same.refs.every(ref => ref === 'f3e7'), '探すのは Playwright の印だけ（役割・名前・何番目では探さない）');
   await same.handle.click(target, 1000);
-  assert.deepEqual(same.acted, ['click A']);
+  assert.deepEqual(same.acted.filter(a => !a.startsWith('dispose')), ['trial A', 'click A']);
   const typed = rig();
   await typed.handle.fill(target, 'x', true, 1000);
-  assert.deepEqual(typed.acted, ['fill A', 'press Enter A']);
+  assert.deepEqual(typed.acted.filter(a => !a.startsWith('dispose')), ['wait stable A', 'wait editable A', 'fill A', 'press Enter A']);
 });
 
 test('本物の #locator: 印が 0 件・2 件（最後の表に無い・作り直された要素）なら、探し直さず、押さず、入れない（page_changed）', async () => {
@@ -68,7 +69,7 @@ test('本物の #locator: 印が 0 件・2 件（最後の表に無い・作り�
     assert.equal(await r.handle.locate(target), undefined, `数 ${count}`);
     await assert.rejects(r.handle.click(target, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
     await assert.rejects(r.handle.fill(target, 'x', true, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
-    assert.deepEqual(r.acted, [], `数 ${count}`);
+    assert.deepEqual(r.acted.filter(x => !x.startsWith('dispose')), [], `数 ${count}`);
   }
 });
 
@@ -76,22 +77,22 @@ test('本物の #locator: 主フレームでない要素（iframe の中）は�
   const r = rig({ frame: CHILD });
   assert.equal(await r.handle.locate(target), undefined);
   await assert.rejects(r.handle.click(target, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
-  assert.deepEqual(r.acted, []);
+  assert.deepEqual(r.acted.filter(x => !x.startsWith('dispose')), []);
 });
 
 test('本物の #act: 確かめ（verify）が false なら押さない。true でも、引き直した要素がつかんだ要素と違えば押さない', async () => {
   const refused = rig();
   await assert.rejects(refused.handle.click({ ...target, verify: async () => false }, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
-  assert.deepEqual(refused.acted, []);
+  assert.deepEqual(refused.acted.filter(a => a.startsWith('click')), []);
   // 引く順: 主フレームの確かめ・つかむ・（確かめのあと）主フレームの確かめ・引き直し。引き直しだけが B（同じ印が別の要素を指した）
   const swapped = rig({}, ['A', 'A', 'A', 'B']);
   let verified = 0;
   await assert.rejects(swapped.handle.click({ ...target, verify: async () => { verified++; return true; } }, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
   assert.equal(verified, 1);
-  assert.deepEqual(swapped.acted, [], 'つかんだ要素と違う要素は押さない');
+  assert.deepEqual(swapped.acted.filter(a => a.startsWith('click')), [], 'つかんだ要素と違う要素は押さない');
   const kept = rig({}, ['A', 'A']);
   await kept.handle.click({ ...target, verify: async () => true }, 1000);
-  assert.deepEqual(kept.acted, ['click A'], '同じ要素なら押す');
+  assert.deepEqual(kept.acted.filter(a => a.startsWith('click')), ['click A'], '同じ要素なら押す');
 });
 
 test('本物の snapshot: ai の形だけを撮る（ふつうの形を撮ると印が引けなくなる）', async () => {
@@ -99,4 +100,31 @@ test('本物の snapshot: ai の形だけを撮る（ふつうの形を撮ると
   assert.equal(await r.handle.snapshot(), '- button "Send" [ref=e2]');
   assert.deepEqual(r.acted, ['snapshot {"mode":"ai"}']);
   assert.equal(r.handle.documentId(), 0);
+});
+
+test('本物の #act: 操作できる形になるまでの待ち（試しの押し・入れられる状態）は確かめより前。確かめは待ちのあと、本当の操作の直前', async () => {
+  const r = rig({}, ['A', 'A']);
+  await r.handle.click({ ...target, verify: async () => { r.acted.push('verify'); return true; } }, 1000);
+  assert.deepEqual(r.acted.filter(a => !a.startsWith('dispose')), ['trial A', 'verify', 'click A']);
+  const typed = rig({}, ['A', 'A']);
+  await typed.handle.fill({ ...target, verify: async () => { typed.acted.push('verify'); return true; } }, 'x', false, 1000);
+  assert.deepEqual(typed.acted.filter(a => !a.startsWith('dispose')), ['wait stable A', 'wait editable A', 'verify', 'fill A']);
+});
+
+test('本物の #act: 確かめや引き直しが投げても、押さず、つかんだ要素は離す', async () => {
+  const thrown = rig();
+  await assert.rejects(thrown.handle.click({ ...target, verify: async () => { throw new Error('closed'); } }, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
+  assert.ok(!thrown.acted.includes('click A'));
+  assert.ok(thrown.acted.includes('dispose A'), 'つかんだ要素を離す');
+  // 引き直し（getByRef().count()）が投げる: 移動のあと・閉じたタブ
+  const r = rig({}, ['A']);
+  let calls = 0;
+  const original = (r.handle as unknown as { page: { getByRef: (ref: string) => { count: () => Promise<number> } } }).page.getByRef;
+  (r.handle as unknown as { page: { getByRef: unknown } }).page.getByRef = (ref: string) => {
+    const loc = original(ref);
+    return { ...loc, count: async () => { if (++calls > 1) throw new Error('Target closed'); return loc.count(); } };
+  };
+  await assert.rejects(r.handle.click({ ...target, verify: async () => true }, 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
+  assert.ok(!r.acted.includes('click A'));
+  assert.equal(r.acted.filter(a => a === 'dispose A').length >= 1, true, 'つかんだ要素を離す');
 });

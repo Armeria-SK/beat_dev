@@ -655,7 +655,7 @@ test('本物の PlaywrightPage: 要素の見分けが読めない形なら送信
   const main = {};
   const element = {
     ownerFrame: async () => main, evaluate: async () => true,
-    click: async () => { pressed.push('click'); }, fill: async (text: string) => { pressed.push(`fill ${text}`); }, press: async (key: string) => { pressed.push(`press ${key}`); }, dispose: async () => {},
+    click: async (o?: { trial?: boolean }) => { if (!o?.trial) pressed.push('click'); }, fill: async (text: string) => { pressed.push(`fill ${text}`); }, press: async (key: string) => { pressed.push(`press ${key}`); }, waitForElementState: async () => {}, dispose: async () => {},
   };
   const make = (facts: unknown) => new PlaywrightBrowser({} as BrowserContext).wrap({
     on: () => {},
@@ -720,7 +720,7 @@ test('T12: 押すあいだにページが出した送信を横取りが断ると
   const r = routeRig('attended');
   await r.install();
   const main = {};
-  const element = { ownerFrame: async () => main, evaluate: async () => true, click: async () => { assert.equal(await r.fire(tab as never, 'POST', 'https://shop.example.org/send'), 'abort'); }, dispose: async () => {} };
+  const element = { ownerFrame: async () => main, evaluate: async () => true, click: async (o?: { trial?: boolean }) => { if (!o?.trial) assert.equal(await r.fire(tab as never, 'POST', 'https://shop.example.org/send'), 'abort'); }, dispose: async () => {} };
   const tab = { ...r.tab, mainFrame: () => main, getByRef: () => ({ count: async () => 1, elementHandle: async () => element }), waitForLoadState: async () => {} };
   const page = r.browser.wrap(tab as unknown as Page);
   const events = await page.click({ ref: 'e5', role: 'button', name: 'More' }, 1000);
