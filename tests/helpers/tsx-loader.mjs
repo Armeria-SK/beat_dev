@@ -1,10 +1,21 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { createRequire, registerHooks } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const ENV = JSON.stringify({ DEV: false, PROD: true, MODE: 'production', BASE_URL: '/', SSR: false });
 let esbuild;
+
+// 試験は、本物の置き場所（製品のフォルダ）の .env・.env.bak を作らず書き換えない（paths.env は一時フォルダに向ける）。
+// 有るか・大きさ・更新時刻だけを、始めと終わりで比べる（中身は読まない）。変わっていたら、その試験の実行を失敗にする
+const ROOT_ENV_FILES = ['.env', '.env.bak'].map(name => fileURLToPath(new URL(`../../${name}`, import.meta.url)));
+const rootEnvStamp = () => ROOT_ENV_FILES.map(path => { const s = statSync(path, { throwIfNoEntry: false }); return s ? `${s.size}:${s.mtimeMs}` : '-'; }).join('|');
+const rootEnvBefore = rootEnvStamp();
+process.on('exit', () => {
+  if (rootEnvStamp() === rootEnvBefore) return;
+  console.error(`A test created or changed ${ROOT_ENV_FILES.join(' / ')}. Point paths.env at a temporary folder (see tests/app-setup.ts)`);
+  process.exitCode = 1;
+});
 
 // Node の navigator.languages は OS の言語に従う。画面の説明の言語の Auto が PC ごとに変わらないよう、どの試験でも en-US にする
 Object.defineProperty(globalThis.navigator, 'languages', { configurable: true, get: () => Object.freeze(['en-US']) });

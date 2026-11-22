@@ -84,7 +84,8 @@ function gate(): { script: Script; started: Promise<void> } {
 
 async function setup(t: { after: (fn: () => void | Promise<void>) => void }, options: { cloud?: boolean; mode?: 'fix' | 'research' } = {}) {
   const dir = realpathSync.native(tempDir(t));
-  const paths = resolvePaths(join(dir, 'beat'));
+  // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
+  const paths = { ...resolvePaths(join(dir, 'beat')), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [
