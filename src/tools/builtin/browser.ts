@@ -8,7 +8,7 @@ import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
+import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, type ActionEvents } from '../browser/driver.ts';
 import { formatElements, readElements } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
@@ -310,6 +310,8 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       if (info?.bind !== undefined && actPreview(kind, input, found, language).bind !== info.bind) {
         return { content: toolText(language, 'pipeline.changed'), isError: true, noRemoteContent: true };
       }
+      const stopped = found.place === 'loopback' && !devServerPage(found.pageUrl, ctx) ? stoppedServerText(found.pageUrl, ctx, language) : undefined;
+      if (stopped !== undefined) return { content: stopped, isError: true, noRemoteContent: true };
       // 秘密に見える文は、その実行の開発サーバーのページにしか入れない（事前の判定と同じ。直接の実行でも外れない）
       if (secretText(kind, input) && !(found.place === 'loopback' && devServerPage(found.pageUrl, ctx))) {
         return { content: guardText(language, 'web.secret_text'), isError: true, noRemoteContent: true };

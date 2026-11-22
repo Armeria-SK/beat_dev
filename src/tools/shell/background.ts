@@ -17,6 +17,7 @@ export const BACKGROUND_LIMITS = {
   logBytes: 50 * 1024 * 1024,
   keepPerConversation: 8,
   keepTotal: 32,
+  stoppedPorts: 64,
   partialLineBytes: 4096,
   keyHoldBytes: 64 * 1024,
   stopWaitMs: 5000,
@@ -329,6 +330,8 @@ interface Job extends JobOwner {
 const LOOPBACK_URL = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})\b/giu;
 const PORTS_PER_JOB = 16;
 
+export interface StoppedPort { port: number; jobId: string }
+
 export interface BackgroundOptions {
   logDir: string;
   now?: () => number;
@@ -346,6 +349,8 @@ export class BackgroundJobs {
   readonly #isOpen: (owner: JobOwner) => boolean;
   readonly #openJob: () => Promise<RunJob | { failed: string }>;
   readonly #instance = randomBytes(4).toString('hex');
+  // 止まった・自分で終わった裏のコマンドが出力に出したポート（掃除 #prune のあとも残す。古いものから上限で消す）
+  readonly #stoppedPorts = new Map<string, StoppedPort & { conversationId: string; taskId: string | undefined }>();
   #seq = 0;
   #finished = 0;
   #closed = false;
@@ -464,6 +469,17 @@ export class BackgroundJobs {
       for (const port of job.ports) out.add(port);
     }
     return out;
+  }
+
+  // この会話かこのタスクが始めて、もう動いていない裏のコマンドが出したポート（いちばん新しく止まったもの）
+  stoppedPort(owner: { conversationId: string; taskId?: string | undefined }, port: number): StoppedPort | undefined {
+    let found: StoppedPort | undefined;
+    for (const entry of this.#stoppedPorts.values()) {
+      if (entry.port !== port) continue;
+      if (entry.conversationId !== owner.conversationId && (owner.taskId === undefined || entry.taskId !== owner.taskId)) continue;
+      found = { port: entry.port, jobId: entry.jobId };
+    }
+    return found;
   }
 
   read(id: string, conversationId: string, from?: number): JobRead | undefined {
@@ -649,6 +665,7 @@ export class BackgroundJobs {
     job.state = job.stoppedBy ? 'stopped' : 'exited';
     job.endedAt = this.#now();
     job.finishedOrder = ++this.#finished;
+    this.#rememberPorts(job);
     if (!job.logCut) job.log?.end();
     void this.#closeJob(job);
     job.rootExit.resolve();
@@ -656,6 +673,18 @@ export class BackgroundJobs {
     try { job.onExit?.(); } catch { }
     this.#prune();
     this.#emit(job);
+  }
+
+  #rememberPorts(job: Job): void {
+    for (const port of job.ports) {
+      const key = JSON.stringify([job.conversationId, job.taskId ?? null, port]);
+      this.#stoppedPorts.delete(key);
+      this.#stoppedPorts.set(key, { port, jobId: job.id, conversationId: job.conversationId, taskId: job.taskId });
+    }
+    for (const key of this.#stoppedPorts.keys()) {
+      if (this.#stoppedPorts.size <= this.#limits.stoppedPorts) break;
+      this.#stoppedPorts.delete(key);
+    }
   }
 
   #prune(): void {

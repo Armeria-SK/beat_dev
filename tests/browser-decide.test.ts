@@ -65,6 +65,8 @@ interface RigOptions {
   parentKind?: 'chat' | 'task';
   // この会話・タスクの裏のコマンドが出力に出したループバックのポート
   printed?: readonly number[];
+  // 本物の裏のコマンドの入れ物（止めたポートの試し）。無ければ printed の作り物
+  background?: BackgroundJobs;
 }
 
 function rig(t: TestContext, options: RigOptions = {}) {
@@ -90,7 +92,7 @@ function rig(t: TestContext, options: RigOptions = {}) {
   const ctxFor = (over: Partial<ToolContext> = {}): ToolContext => ({
     runId: 'r1', conversationId: kind === 'chat' ? 'c1' : `c-${kind}`, kind, signal: new AbortController().signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
-    services: { browser: session, questions, tasks, background: { printedPorts: () => new Set(options.printed ?? []) } }, model: { id: 'm', vision: true },
+    services: { browser: session, questions, tasks, background: options.background ?? { printedPorts: () => new Set(options.printed ?? []) } }, model: { id: 'm', vision: true },
     ownerText: () => [...(options.ownerText ?? [])],
     ...(kind === 'task' ? { task: { id: task.id, control: { kind: 'none' } } } : {}),
     ...(kind === 'agent' ? { parent: { runId: 'rp', conversationId: 'c1', kind: options.parentKind ?? 'task', title: '', ...(options.parentKind === 'chat' ? {} : { taskId: task.id }) } } : {}),
@@ -486,6 +488,85 @@ test('BackgroundJobs.printedPorts: 動いている裏のコマンドの出力の
   assert.deepEqual([...jobs.printedPorts({ conversationId: 'c2', taskId: 't2' })], []);
   await jobs.stop(started.id, 'owner');
   assert.deepEqual([...jobs.printedPorts({ conversationId: 'c1' })], [], '止まった裏のコマンドのポートは数えない');
+});
+
+// ── P2（#56）: 止めた・自分で終わった開発サーバーのページは、判定役に回さずすぐ断る ──
+
+const STOPPED_PORT = Number(new URL(OTHER_LOOP).port);
+const serve = (exitAfterMs?: number): string => "console.log('  Local:   " + OTHER_LOOP + "');" + (exitAfterMs === undefined ? ' setInterval(() => {}, 1000);' : ' setTimeout(() => {}, ' + exitAfterMs + ');');
+
+function backgroundRig(t: TestContext) {
+  const dir = tempDir(t);
+  const jobs = new BackgroundJobs({ logDir: join(dir, 'tool_outputs') });
+  t.after(async () => { jobs.closeAll(); await new Promise(done => setTimeout(done, 200)); });
+  const start = async (owner: { conversationId: string; taskId?: string }, script: string): Promise<string> => {
+    const started = jobs.start({ ...owner, projectId: 'p1', command: 'node dev', cwd: dir, file: process.execPath, args: ['-e', script], env: scrubEnv(), fetched: false });
+    assert.ok('id' in started);
+    const deadline = Date.now() + 15_000;
+    while (!jobs.printedPorts(owner).has(STOPPED_PORT) && jobs.get(started.id)!.state === 'running' && Date.now() < deadline) await new Promise(done => setTimeout(done, 50));
+    return started.id;
+  };
+  const ended = async (id: string): Promise<void> => {
+    const deadline = Date.now() + 15_000;
+    while (jobs.get(id)!.state === 'running' && Date.now() < deadline) await new Promise(done => setTimeout(done, 50));
+    assert.notEqual(jobs.get(id)!.state, 'running');
+  };
+  return { jobs, start, ended };
+}
+
+const stoppedText = (id: string): RegExp => new RegExp('port ' + STOPPED_PORT + ' has stopped \\(' + id + '\\)', 'u');
+
+test('P2: 動いている開発サーバーは聞かずに押す。止めたら判定役なしで断り（新しい文）、直接の実行も押さない。同じポートで起動し直すと今どおり聞かない。自分で終わっても同じく断る', async t => {
+  const bg = backgroundRig(t);
+  const r = rig(t, { product: true, judge: 'allow', background: bg.jobs });
+  const page = await r.open(OTHER_LOOP);
+  const first = await bg.start({ conversationId: 'c1' }, serve());
+  assert.equal((await r.call('browser_click', { ref: 'e3' })).decision, 'allow', '動いている間');
+  assert.deepEqual(r.counts(), { ...NONE, acts: 1 });
+
+  await bg.jobs.stop(first, 'owner');
+  const stopped = await r.call('browser_click', { ref: 'e3' });
+  assert.equal(stopped.decision, 'deny');
+  assert.match(stopped.output.content, stoppedText(first));
+  assert.equal((await r.call('browser_type', { ref: 'e1', text: 'hello' })).decision, 'deny', '入れるも断る');
+  assert.equal((await r.call('browser_click', { ref: 'e2' })).decision, 'deny', '送信も Pending に積まずに断る');
+  assert.deepEqual(r.counts(), { ...NONE, acts: 1 }, '判定役 0・Pending 0・押さない');
+  const direct = await browserClick.execute({ ref: 'e3' }, r.ctx);
+  assert.equal(direct.isError, true);
+  assert.match(direct.content, stoppedText(first), '直接の実行でも押さない');
+  assert.equal(page.acts.length, 1);
+
+  const again = await bg.start({ conversationId: 'c1' }, serve());
+  assert.equal((await r.call('browser_click', { ref: 'e3' })).decision, 'allow', '起動し直したら、動いている方が勝つ');
+  assert.deepEqual(r.counts(), { ...NONE, acts: 2 });
+  await bg.jobs.stop(again, 'model', 'c1');
+
+  const crashed = await bg.start({ conversationId: 'c1' }, serve(300));
+  await bg.ended(crashed);
+  assert.equal(bg.jobs.get(crashed)!.state, 'exited');
+  const after = await r.call('browser_click', { ref: 'e3' });
+  assert.equal(after.decision, 'deny', '自分で終わった（落ちた）サーバーも断る');
+  assert.match(after.output.content, stoppedText(crashed), 'いちばん新しく止まった裏のコマンドを言う');
+  assert.deepEqual(r.counts(), { ...NONE, acts: 2 });
+});
+
+test('P2: 別の会話が止めたポートは今どおり判定役へ。同じタスクの別の実行が止めたポートは断る', async t => {
+  const bg = backgroundRig(t);
+  const chat = rig(t, { product: true, judge: 'ask', background: bg.jobs });
+  await chat.open(OTHER_LOOP);
+  const other = await bg.start({ conversationId: 'c-other' }, serve());
+  await bg.jobs.stop(other, 'owner');
+  assert.equal((await chat.call('browser_click', { ref: 'e3' })).decidedBy, 'pending');
+  assert.deepEqual(chat.counts(), { ...NONE, judge: 1, judgeRows: 1, pending: ['judge'], acts: 0 });
+
+  const task = rig(t, { kind: 'task', product: true, judge: 'allow', background: bg.jobs });
+  await task.open(OTHER_LOOP);
+  const sameTask = await bg.start({ conversationId: 'c-earlier-run', taskId: task.task.id }, serve());
+  await bg.jobs.stop(sameTask, 'owner');
+  const refused = await task.call('browser_click', { ref: 'e3' });
+  assert.equal(refused.decision, 'deny');
+  assert.match(refused.output.content, stoppedText(sameTask));
+  assert.deepEqual(task.counts(), { ...NONE, acts: 0 });
 });
 
 // ── 純関数: ownerHostAllows・navigationMethodVerdict ──

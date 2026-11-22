@@ -83,7 +83,7 @@ async function treePids(jobs: BackgroundJobs, id: string, track: number[]): Prom
 test('limits are the plan constants', () => {
   assert.deepEqual(
     { ...BACKGROUND_LIMITS },
-    { perConversation: 4, total: 8, ringBytes: 256 * 1024, logBytes: 50 * 1024 * 1024, keepPerConversation: 8, keepTotal: 32, partialLineBytes: 4096, keyHoldBytes: 64 * 1024, stopWaitMs: 5000, termGraceMs: 5000 },
+    { perConversation: 4, total: 8, ringBytes: 256 * 1024, logBytes: 50 * 1024 * 1024, keepPerConversation: 8, keepTotal: 32, stoppedPorts: 64, partialLineBytes: 4096, keyHoldBytes: 64 * 1024, stopWaitMs: 5000, termGraceMs: 5000 },
   );
 });
 
@@ -313,6 +313,33 @@ test('retention: finished commands are kept per conversation and overall, newest
   assert.deepEqual(jobs.list().map(v => v.id), [...c1.slice(2), ...c2]);
   const running = start(SLEEP, { conversationId: 'c3' });
   assert.ok(jobs.list().some(v => v.id === running));
+});
+
+test('stopped ports: kept after the finished command is pruned, matched by conversation or task, newest stop wins, capped oldest first', async t => {
+  const { jobs, start } = setup(t, { limits: { keepPerConversation: 1, keepTotal: 1, stoppedPorts: 3 } });
+  const finish = async (script: string, more: Partial<StartInput> = {}) => {
+    const id = start(script, more);
+    await jobs.wait(id, more.conversationId ?? 'c1', 10, new AbortController().signal);
+    return id;
+  };
+  const first = await finish("console.log('http://localhost:5173/');", { taskId: 't1' });
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 5173), { port: 5173, jobId: first });
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c9', taskId: 't1' }, 5173), { port: 5173, jobId: first }, 'same task, another run');
+  assert.equal(jobs.stoppedPort({ conversationId: 'c9' }, 5173), undefined, 'another conversation');
+  assert.equal(jobs.stoppedPort({ conversationId: 'c1' }, 5174), undefined, 'a port it never printed');
+  await finish("console.log('nothing here');");
+  assert.equal(jobs.get(first), undefined, 'the first command was pruned');
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 5173), { port: 5173, jobId: first }, 'its port is still remembered');
+  const third = await finish("console.log('http://127.0.0.1:5173/');");
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 5173), { port: 5173, jobId: third }, 'the newest stop wins');
+  await finish("console.log('http://localhost:6001/ http://localhost:6002/ http://localhost:6003/');");
+  assert.equal(jobs.stoppedPort({ conversationId: 'c1' }, 5173), undefined, 'the oldest goes over the cap');
+  assert.ok(jobs.stoppedPort({ conversationId: 'c1' }, 6001) && jobs.stoppedPort({ conversationId: 'c1' }, 6003));
+  const running = start("console.log('http://localhost:7001/'); setInterval(() => {}, 1000);");
+  await until(() => jobs.printedPorts({ conversationId: 'c1' }).has(7001));
+  assert.equal(jobs.stoppedPort({ conversationId: 'c1' }, 7001), undefined, 'a running command is not stopped');
+  await jobs.stop(running, 'model', 'c1');
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 7001), { port: 7001, jobId: running });
 });
 
 test('a command that cannot start ends once as exited with the spawn error', async t => {
