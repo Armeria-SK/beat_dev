@@ -11,6 +11,7 @@
     "start": "node src/main.ts",
     "dev": "node --watch src/main.ts",
     "test": "node --import ./tests/helpers/tsx-loader.mjs --test --test-reporter=spec \"tests/**/*.test.ts\"",
+    "test:affected": "node scripts/affected-tests.ts --run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
     "build:web": "vite build --config web/vite.config.mjs",
     "dev:web": "vite --config web/vite.config.mjs",
