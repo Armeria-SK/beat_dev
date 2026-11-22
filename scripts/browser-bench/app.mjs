@@ -13,7 +13,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const LOG_DIR = join(HERE, '.bench');
 const LOG = join(LOG_DIR, 'events.jsonl');
 mkdirSync(LOG_DIR, { recursive: true });
-const record = (kind, data = {}) => appendFileSync(LOG, `${JSON.stringify({ at: Date.now(), kind, ...data })}\n`);
+// どこから来た頼みか: ブラウザは sec-fetch-* を付ける（curl・node の fetch は付けない）。物差しはブラウザから来た記録だけを数える
+const sourceOf = req => {
+  if (!req) return {};
+  const ua = String(req.headers['user-agent'] ?? '').slice(0, 160);
+  const mode = req.headers['sec-fetch-mode'];
+  const site = req.headers['sec-fetch-site'];
+  return { src: mode !== undefined && site !== undefined && /Mozilla\//.test(ua) ? 'browser' : 'other', ua, fetchMode: mode ?? null, fetchSite: site ?? null };
+};
+const record = (req, kind, data = {}) => appendFileSync(LOG, `${JSON.stringify({ at: Date.now(), kind, ...data, ...sourceOf(req) })}\n`);
 
 const requests = [
   { id: 1, site: '山田邸', material: '石膏ボード 9.5mm', qty: 20, date: '2026-11-20', ordered: false },
@@ -128,7 +136,7 @@ createServer(async (req, res) => {
   if (req.method === 'GET' && path === '/list') return html(res, list);
   if (req.method === 'GET' && path === '/admin') return html(res, admin);
   if (req.method === 'GET' && path === '/api/requests') {
-    if (url.searchParams.get('from') === 'list') record('list_view', { ids: requests.map(r => r.id), added: requests.filter(r => r.id >= 4).map(r => r.id) });
+    if (url.searchParams.get('from') === 'list') record(req, 'list_view', { ids: requests.map(r => r.id), added: requests.filter(r => r.id >= 4).map(r => r.id) });
     return json(res, 200, { requests });
   }
   if (req.method === 'POST' && path === '/api/requests') {
@@ -136,21 +144,21 @@ createServer(async (req, res) => {
     if (!String(b.site ?? '').trim() || !String(b.material ?? '').trim() || !(Number(b.qty) > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(String(b.date ?? ''))) return json(res, 400, { error: '入力が足りません' });
     const row = { id: nextId++, site: String(b.site).slice(0, 100), material: String(b.material).slice(0, 100), qty: Math.trunc(Number(b.qty)), date: String(b.date), ordered: false };
     requests.push(row);
-    record('submit', { id: row.id, site: row.site, material: row.material, qty: row.qty, date: row.date });
+    record(req, 'submit', { id: row.id, site: row.site, material: row.material, qty: row.qty, date: row.date });
     return json(res, 201, { id: row.id });
   }
   if (req.method === 'POST' && path === '/api/ev') {
     const b = await readBody(req);
-    if (b.kind === 'plus10') record('plus10', { before: Number(b.before), after: Number(b.after) });
-    if (b.kind === 'date_button') record('date_button', { which: String(b.which), value: String(b.value) });
+    if (b.kind === 'plus10') record(req, 'plus10', { before: Number(b.before), after: Number(b.after) });
+    if (b.kind === 'date_button') record(req, 'date_button', { which: String(b.which), value: String(b.value) });
     return json(res, 204, {});
   }
   if (req.method === 'POST' && path === '/api/admin/login') {
     const b = await readBody(req);
-    if (String(b.pin ?? '') !== PIN) { record('admin_login', { ok: false }); return json(res, 401, { error: 'bad_pin' }); }
+    if (String(b.pin ?? '') !== PIN) { record(req, 'admin_login', { ok: false }); return json(res, 401, { error: 'bad_pin' }); }
     const sid = randomBytes(16).toString('hex');
     sessions.add(sid);
-    record('admin_login', { ok: true });
+    record(req, 'admin_login', { ok: true });
     return json(res, 200, { ok: true }, { 'set-cookie': `sid=${sid}; HttpOnly; SameSite=Strict; Path=/` });
   }
   const sid = cookieSession(req);
@@ -162,17 +170,17 @@ createServer(async (req, res) => {
     const row = requests.find(r => r.id === Number(ordered[1]));
     if (!row) return json(res, 404, { error: 'not_found' });
     row.ordered = true;
-    record('mark_ordered', { id: row.id });
+    record(req, 'mark_ordered', { id: row.id });
     return json(res, 200, { ok: true });
   }
   if (req.method === 'POST' && path === '/api/admin/logout') {
     sessions.delete(sid);
-    record('logout', {});
+    record(req, 'logout', {});
     return json(res, 200, { ok: true }, { 'set-cookie': 'sid=; Max-Age=0; Path=/' });
   }
   json(res, 404, { error: 'not_found' });
 }).listen(PORT, '127.0.0.1', () => {
-  record('start', { port: PORT });
+  record(null, 'start', { port: PORT });
   console.log(`listening on http://localhost:${PORT}`);
   console.log(`admin PIN (test value): ${PIN}`);
 });
