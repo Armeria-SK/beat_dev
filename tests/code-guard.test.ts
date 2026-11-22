@@ -521,3 +521,22 @@ test('v3 P2 selfTouchMarkers: コマンドの文の loopback・.env は強い。
   }
   assert.deepEqual(of('node x.js .env', ["String(req.headers.host || 'localhost')"]), { strong: ['.env'], weak: ['127.0.0.1 / localhost'] });
 });
+
+test('v3 P2 再審査: ファイルの中の、オブジェクトの形の port に断るポート・beat のポートがあり loopback もあれば強い。.env は上のフォルダへのぼる形と同じ行なら強い', () => {
+  const server = { port: 80, origins: [] as string[] };
+  const ports = { own: new Set([4777]), denied: new Set([4777, 11434, 3845]) };
+  const of = (files: string[]) => selfTouchMarkers('node x.js', [], server, ports, files);
+  for (const file of ["http.request({ host: '127.0.0.1', port: 11434 });", "http.request({ hostname: 'localhost', port: 3845 });", "const o = { host: 'localhost', 'port': '11434' };", "const o = { host: 'localhost', port: 80 };", "opts.host = '127.0.0.1'; opts.port = 3845;"]) {
+    assert.ok(of([file]).strong.includes('127.0.0.1 / localhost'), `${file}: ${JSON.stringify(of([file]))}`);
+  }
+  for (const file of ["http.request({ host: '127.0.0.1', port: 5173 });", "http.request({ host: 'localhost', port: p });", 'const port = 11434;']) {
+    assert.ok(!of([file]).strong.includes('127.0.0.1 / localhost'), `${file}: ${JSON.stringify(of([file]))}`);
+  }
+  for (const file of ["readFileSync('../../.env');", "loadDotEnv(path.join(__dirname, '..', '.env'));", "require('dotenv').config({ path: '..\\.env' });", 'const p = `${root}/../.env`;']) {
+    assert.ok(of([file]).strong.includes('.env'), `${file}: ${JSON.stringify(of([file]))}`);
+  }
+  for (const file of ["loadDotEnv(path.join(__dirname, '.env'));", "readFileSync('./.env');", "const up = '../data';\nreadFileSync('.env');", 'const all = [...a, ".env"];']) {
+    const found = of([file]);
+    assert.ok(!found.strong.includes('.env') && found.weak.includes('.env'), `${file}: ${JSON.stringify(found)}`);
+  }
+});

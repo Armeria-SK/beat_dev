@@ -119,6 +119,8 @@ export interface BeatPorts { own: ReadonlySet<number>; denied: ReadonlySet<numbe
 
 const URL_HEAD = /(?:https?|wss?):\/\/$/iu;
 const URL_END = /^(?:$|[\s/?#)\]}>,;&|]|(['"`])(?!\s*[+.[]))/u;
+const PORT_FIELD = /\bport['"`]?\s*[:=]\s*['"`]?0*(\d{1,5})\b/giu;
+const PARENT_CLIMB = /(?:^|[\\/'"`\s,(])\.\.(?=[\\/'"`\s,)]|$)/u;
 
 function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts, inFile: boolean): 'strong' | 'weak' | undefined {
   const own = new Set([...selfPortsOf(server).ports, ...beatPorts.own]);
@@ -141,13 +143,16 @@ function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts,
   }
   for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index, match.index + match[0].length)) return 'strong';
   if (selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined) return 'strong';
+  if (weak && [...text.matchAll(PORT_FIELD)].some(m => ports.has(Number(m[1])))) return 'strong';
   return weak ? 'weak' : undefined;
 }
 
 function markersOf(text: string, selfHosts: readonly string[], server: SelfServer, beatPorts: BeatPorts, inFile: boolean): { strong: string[]; weak: string[] } {
   const found = SELF_MARKERS.filter(([, re]) => re.test(text)).map(([label]) => label);
-  const strong = inFile ? found.filter(label => label !== DOTENV_MARKER) : found;
-  const weak = [...(inFile && found.includes(DOTENV_MARKER) ? [DOTENV_MARKER] : []), ...SELF_HINTS.filter(([, re]) => re.test(text)).map(([label]) => label)];
+  const dotenv = SELF_MARKERS.find(([label]) => label === DOTENV_MARKER)![1];
+  const climbs = inFile && found.includes(DOTENV_MARKER) && text.split(/\r?\n/u).some(line => dotenv.test(line) && PARENT_CLIMB.test(line));
+  const strong = inFile && !climbs ? found.filter(label => label !== DOTENV_MARKER) : found;
+  const weak = [...(inFile && !climbs && found.includes(DOTENV_MARKER) ? [DOTENV_MARKER] : []), ...SELF_HINTS.filter(([, re]) => re.test(text)).map(([label]) => label)];
   const loopback = touchesLoopback(text, server, beatPorts, inFile);
   if (loopback === 'strong') strong.push(LOOPBACK_MARKER);
   else if (loopback === 'weak') weak.push(LOOPBACK_MARKER);
