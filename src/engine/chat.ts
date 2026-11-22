@@ -1087,6 +1087,8 @@ export class ChatEngine {
       // 読み込んだ道具は会話ごとに持ち越す（TE-2。kv の loaded-tools:<会話>。並びが前の実行の終わりと同じになり、前半を読める）。使えない道具は #toolsFor が外す
       // 要約のある会話には history_read を入れておく（TE-4a。手放した元の文を読み戻せるように。要約した時点で入るが、それより前に要約した会話はここで）
       if (d.conversations.get(conversationId)?.summary) this.preload(conversationId, [HISTORY_READ]);
+      // 製品の中の実行は、よく読み込む道具を 1 回目の呼び出しから並べる（browser-rethink P1。途中の読み込みは道具の後ろ全部のキャッシュを書き直すため）
+      if (project?.root && this.#modeFor(kind, conversationId, ctx.permissionMode) !== 'plan') this.preload(conversationId, this.#usualTools(chain[0]!.model));
       const loaded = new Set<string>(this.#carriedTools(conversationId));
       const sent = new Set<string>();
       this.#loaded.set(runId, { loaded, sent });
@@ -1914,6 +1916,11 @@ export class ChatEngine {
     const carried = this.#carriedTools(conversationId);
     const added = names.filter(name => !carried.includes(name) && registry.get(name) !== undefined && !isCore(registry.get(name)!));
     if (added.length) this.#d.kv.setJson(`loaded-tools:${conversationId}`, [...carried, ...new Set(added)]);
+  }
+
+  #usualTools(model: ModelConfig): string[] {
+    const browser = (this.#d.tools?.registry.list() ?? []).filter(t => !t.mcp && isBrowserTool(t.name)).map(t => t.name);
+    return [...browser, 'pending_withdraw', 'deviation_add', ...(model.vision === true ? ['image_view'] : [])];
   }
 
   #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined): boolean {
