@@ -10,6 +10,7 @@ import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
+import { retiredRef } from '../src/tools/browser/elements.ts';
 import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
@@ -638,6 +639,29 @@ test('P3a: 名前に「>>>」が並ぶ（送る形では全角に置き換わっ
     assert.equal((await r.call('browser_click', { ref: unseen })).decision, 'deny', `${tool}: 見せていない ${unseen}`);
     assert.doesNotMatch(content, /The output was long/u, `${tool}: 道具の流れで切られない`);
   }
+  assert.equal(r.driver.current!.pageList[0]!.acts.length, 0);
+});
+
+test('P3a: 番号があり表にもあるが「見せた」に入っていない番号（結果の最後の守りが落とした行など）は、モデルと同じ道で押しても断る', async t => {
+  const r = rig(t);
+  const open = await r.call('browser_open', { url: PAGE });
+  const [ref] = [...open.output.content.matchAll(/^(e\d+) button "Send"/gmu)].map(m => m[1]!);
+  assert.ok(ref, open.output.content);
+  // 見せた番号から 1 つだけ外す（renderTab が shownIn で 1 行を落としたのと同じ形）
+  const grant = { conversationId: 'c1', runId: 'r1', attended: true, loopback: false };
+  await r.session.run({ grant, signal: new AbortController().signal }, async api => {
+    const tab = api.tab('t1');
+    assert.ok(tab.table?.items.some(e => e.ref === ref), '表にある');
+    assert.equal(retiredRef(tab.refs, ref), false, '使えなくなった番号ではない');
+    tab.refs.shown.delete(ref);
+  });
+  const pre = await preCheck(r, browserClick, { ref });
+  assert.equal(pre.decision, 'deny');
+  assert.match(pre.reasons[0]!, new RegExp(`Number ${ref} is not in the list for this tab`, 'u'));
+  const outcome = await r.call('browser_click', { ref });
+  assert.equal(outcome.decision, 'deny');
+  const direct = await browserClick.execute({ ref }, r.ctx);
+  assert.equal(direct.isError, true, '事前の判定を通らない直接の実行でも押さない');
   assert.equal(r.driver.current!.pageList[0]!.acts.length, 0);
 });
 
