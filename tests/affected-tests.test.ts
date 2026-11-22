@@ -239,3 +239,25 @@ test('a path argument that is neither on disk nor known to git picks every test'
     assert.deepEqual(cased.stdout.trim().split('\n'), ['tests/a.test.ts']);
   }
 });
+
+const PATHS_TS = "import { dirname, resolve } from 'node:path';\nimport { fileURLToPath } from 'node:url';\nexport const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');\n";
+
+test('APP_ROOT joined with fixed parts in a test is followed from the repo root', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'scripts/tool.ts': "import '../src/deep.ts';\n",
+    'src/deep.ts': 'export {};\n',
+    'tests/approot.test.ts': "import { join } from 'node:path';\nimport { APP_ROOT } from '../src/paths.ts';\nvoid join(APP_ROOT, 'scripts', 'tool.ts');\n",
+  }));
+  assert.deepEqual(graph.everyChange(), []);
+  assert.deepEqual(graph.pick(['src/deep.ts']).tests, ['tests/approot.test.ts']);
+});
+
+test('APP_ROOT used any other way in a test picks it for any change', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'tests/approot-bare.test.ts': "import { APP_ROOT } from '../src/paths.ts';\nvoid APP_ROOT.length;\n",
+    'tests/approot-computed.test.ts': "import { join } from 'node:path';\nimport { APP_ROOT } from '../src/paths.ts';\ndeclare const name: string;\nvoid join(APP_ROOT, name);\n",
+  }));
+  assert.deepEqual(graph.everyChange(), ['tests/approot-bare.test.ts', 'tests/approot-computed.test.ts']);
+});

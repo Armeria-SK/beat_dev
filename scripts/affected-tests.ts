@@ -80,6 +80,10 @@ function isFileAnchor(node: ts.Node): boolean {
   return ts.isCallExpression(node) && node.arguments.length === 1 && ['dirname', 'fileURLToPath'].includes(calleeName(node.expression) ?? '') && isFileAnchor(node.arguments[0]!);
 }
 
+function isAppRoot(node: ts.Node): boolean {
+  return ts.isIdentifier(node) && node.text === 'APP_ROOT' && !ts.isImportSpecifier(node.parent) && !ts.isExportSpecifier(node.parent);
+}
+
 function isCwd(node: ts.Node): boolean {
   return ts.isCallExpression(node) && node.arguments.length === 0 && ts.isPropertyAccessExpression(node.expression)
     && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'process' && node.expression.name.text === 'cwd';
@@ -138,7 +142,7 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
       if (name === 'createRequire' && args[0]) consume(args[0]);
       const base = args.find(arg => isImportMeta(arg, 'url'));
       if (base && fileRelative(node, args[0])) consume(base);
-      if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]))) {
+      if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]) || (testSide && isAppRoot(args[0])))) {
         const parts: string[] = [];
         for (const arg of args.slice(1)) {
           const path = pathText(arg);
@@ -146,14 +150,14 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
           parts.push(path.text);
           if (!path.whole) break;
         }
-        load(node, resolve(isCwd(args[0]) ? root : dir, ...parts));
+        load(node, resolve(isCwd(args[0]) || isAppRoot(args[0]) ? root : dir, ...parts));
         consume(args[0]);
       }
     } else if (ts.isBinaryExpression(node) && isImportMeta(node.left, 'url')
       && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
       consume(node.left);
     }
-    if (!consumed.has(node) && isFileAnchor(node)) { scan.anchors.push(at(node)); consume(node); }
+    if (!consumed.has(node) && (isFileAnchor(node) || (testSide && isAppRoot(node)))) { scan.anchors.push(at(node)); consume(node); }
     if (testSide) {
       const value = literal(node);
       if (value !== undefined && REPO_PATH.test(value) && !value.split(/[/\\]/u).includes('..')) {
