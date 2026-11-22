@@ -9,7 +9,7 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
 import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
-import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents } from '../browser/driver.ts';
+import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
 import { formatElements, readElements } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
@@ -309,7 +309,19 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       // 探し直しで送信の部品に変わっていたら、送信として承認されていない呼び出しは押さない
       const permit = submitPermit(found, ctx, info);
       if (permit === 'refuse') return { content: guardText(language, 'browser.act.became_submit', { ref: input.ref }), isError: true, noRemoteContent: true };
-      const { tab, target } = found;
+      const { tab } = found;
+      // 要素をつかんだあとにページを読み直し、番号がまだ同じ要素（役割・名前・何番目・数）を指すときだけ押す（探し直しからつかむまでの並べ替えを塞ぐ）
+      const target: ElementTarget = {
+        ...found.target,
+        verify: async () => {
+          const snapshot = await until(tab.page.snapshot(), api.signal);
+          if (tab.page.url() !== found.pageUrl) return false;
+          const table = readElements(snapshot, found.pageUrl, tab.refs);
+          tab.table = table;
+          const now = table.items.find(e => e.ref === input.ref);
+          return now !== undefined && now.role === found.target.role && now.name === found.target.name && now.nth === found.target.nth && now.count === found.target.count;
+        },
+      };
       const timeoutMs = api.config.limits.actionTimeoutSec * 1000;
       const text = input.text ?? '';
       tab.page.permitSubmits(permit);

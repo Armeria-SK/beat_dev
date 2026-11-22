@@ -323,10 +323,46 @@ test('P3a: 大きなページでも表は速く読める（3,000 組の名前の
   assert.ok(took < 500, `${Math.round(took)} ms`);
 });
 
-test('P3a: beat の起動ごとの番号の始まりは 1〜500,000（使い切るまで 499,999 個以上残る）', () => {
+test('P3a: beat の起動ごとの番号の始まりは 1〜9,000（使い切るまで 990,000 個以上残る）', () => {
   for (let i = 0; i < 200; i++) {
     const start = randomRefStart();
-    assert.ok(Number.isInteger(start) && start >= 1 && start <= 500_000, String(start));
-    assert.ok(REF_MAX - start + 1 >= 499_999);
+    assert.ok(Number.isInteger(start) && start >= 1 && start <= 9_000, String(start));
+    assert.ok(REF_MAX - start + 1 >= 990_000);
   }
+});
+
+test('P3a: 名前の無い背の高いカードの 1 枚目が入れ替わっても、組ごと新しい番号（要素の入れ物の行をすべて手がかりに入れる）', () => {
+  const card = (title: string, body: string): string[] => ['- article:', `  - heading "${title}" [level=3]`,
+    ...Array.from({ length: 9 }, (_, i) => `  - paragraph: ${body} ${i}`), '  - button "Add to cart"'];
+  const page = (first: string[]): string => [...first, ...card('Desk', 'wood'), ...card('Lamp', 'steel')].join('\n');
+  // 1 枚目の見出しだけが違う（本文は同じ）
+  allNew(newRefBook(), page(card('Chair', 'oak')), page(card('Knife', 'oak')), 'Add to cart');
+  // 2 枚目の見出しだけが違う
+  const mid = (title: string): string => [...card('Chair', 'oak'), ...card(title, 'wood'), ...card('Lamp', 'steel')].join('\n');
+  allNew(newRefBook(), mid('Desk'), mid('Saw'), 'Add to cart');
+  // 変わらなければ同じ番号
+  const same = newRefBook();
+  const a = refsOf(readElements(page(card('Chair', 'oak')), URL_ROWS, same), 'Add to cart');
+  assert.deepEqual(refsOf(readElements(page(card('Chair', 'oak')), URL_ROWS, same), 'Add to cart'), a);
+});
+
+test('P3a（R1-1）: 見出しと下の「行を足す」がある、入力欄だけの表も、行の入れ物の中身が同じなら値も手がかりに入れる（ページ送り・並べ替えで新しい番号）', () => {
+  const grid = (values: readonly string[]): string => ['- heading "数量" [level=2]', '- table:', '  - rowgroup:',
+    ...values.flatMap(v => [`    - row "${v} 削除":`, `      - cell "${v}":`, `        - textbox: "${v}"`, '      - cell "削除":', '        - button "削除"']),
+    '- button "Add row"'].join('\n');
+  allNew(newRefBook(), grid(['1', '2']), grid(['3', '4']), '削除');
+  allNew(newRefBook(), grid(['1', '2', '3']), grid(['4', '5', '6']), '削除');
+  allNew(newRefBook(), grid(['1', '2', '3']), grid(['3', '2', '1']), '削除');
+});
+
+test('P3a: 1 MB のページで、とても長い名前の行の中に同じ名前のボタンが 2,000 個あっても、表は 500 ms 未満で読める（行の手がかりは 1 行に 1 回だけ作る）', () => {
+  const buttons = Array.from({ length: 2000 }, () => '  - button "Pick"');
+  const snapshot = [`- row "${'長い名前 '.repeat(200_000)}":`, ...buttons].join('\n');
+  assert.ok(snapshot.length > 1_000_000, `${snapshot.length}`);
+  const book = newRefBook();
+  const started = performance.now();
+  const table = readElements(snapshot, URL_ROWS, book);
+  const took = performance.now() - started;
+  assert.equal(refsOf(table, 'Pick').length, 2000);
+  assert.ok(took < 500, `${Math.round(took)} ms`);
 });

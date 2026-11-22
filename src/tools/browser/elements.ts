@@ -17,12 +17,13 @@ export const MAX_ELEMENTS = 300;
 export const MAX_TABLE = 2000;
 // 番号は e1〜e999999。使い切ったら断る
 export const REF_MAX = 999_999;
-// beat の起動ごとの番号の始まり（1〜500,000 のどこか）。起動し直したあとに、前の起動の番号が同じ番号の別の要素に当たりにくくする。
-// 始まりが最大でも、使い切るまで 499,999 個ある
-const REF_START_SPAN = 500_000;
+// beat の起動ごとの番号の始まり（1〜9,000 のどこか）。起動し直したあとに、前の起動の番号が同じ番号の別の要素に当たりにくくする。
+// 始まりが最大でも、使い切るまで 990,000 個以上ある
+const REF_START_SPAN = 9_000;
 export const randomRefStart = (): number => 1 + randomInt(REF_START_SPAN);
 const NAME_SHOWN = 100;
-// 各要素の手がかり: 前後 8 行ずつと、親の行（16 段まで）。1 行は 120 字で切る（長い 1 行で近くの行が押し出されない。量は要素の数に比例）
+// 各要素の手がかり: 前後 8 行ずつと、親の行（16 段まで）と、その要素の入れ物（下を参照）の行すべて。
+// 1 行は 120 字で切る（長い 1 行で近くの行が押し出されない）。行の手がかりの形は 1 行につき 1 回だけ作る（量はページの行の数に比例）
 const NEAR_LINES = 8;
 const PARENT_LINES = 16;
 const LINE_CHARS = 120;
@@ -101,6 +102,14 @@ function token(line: Line, withValues: boolean): string {
   return flatText(text).slice(0, LINE_CHARS);
 }
 
+// 1 回の読みの行と、行ごとの手がかりの形（値なし・値ありを 1 行につき 1 回だけ作って使い回す）。end[i] は行 i の下の最後の行
+interface Page { lines: readonly Line[]; end: readonly number[]; tokens: [Array<string | undefined>, Array<string | undefined>] }
+
+function tokenAt(page: Page, i: number, withValues: boolean): string {
+  const cache = page.tokens[withValues ? 1 : 0];
+  return cache[i] ??= token(page.lines[i]!, withValues);
+}
+
 const groupKey = (role: string, name: string): string => `${role}\u0000${name}`;
 
 // 1 つの要素の手がかりにする行: 自分の行（状態・リンク先）、親の行（16 段まで）、前後 8 行（iframe の中の行は入れない）。-1 は区切り
@@ -115,29 +124,32 @@ function nearLines(lines: readonly Line[], at: number): number[] {
   return picked;
 }
 
-const anchorOf = (lines: readonly Line[], picked: readonly number[], withValues: boolean): string =>
-  picked.map(i => (i < 0 ? '\u0001' : token(lines[i]!, withValues))).join('\n');
-
-// 値を除いた手がかりのうち、中身（名前・文・状態・リンク先）のある行だけを並べ替えたもの。位置の違いを除いて、要素どうしを見分けられるかを見る
-function contentOf(lines: readonly Line[], picked: readonly number[]): string {
-  const texts: string[] = [];
-  for (const i of picked) {
-    if (i < 0) continue;
-    const text = token(lines[i]!, false);
-    if (text !== lines[i]!.role) texts.push(text);
-  }
-  return texts.sort().join('\n');
+// 要素の入れ物: 組のほかの要素を中に持たない、いちばん上の親（無ければ要素の行そのもの）。prev / next は組の前後の要素の行。
+// 組の要素どうしの入れ物は重ならないので、全部の入れ物の行を足してもページの行の数を超えない
+function itemOf(page: Page, at: number, prev: number, next: number): [number, number] {
+  let top = at;
+  for (let up = page.lines[at]!.parent; up >= 0 && up > prev && page.end[up]! < next; up = page.lines[up]!.parent) top = up;
+  return [top, page.end[top]!];
 }
 
-// 組のしるし: 数が 1 なら「1」だけ。2 以上なら数と、各要素の手がかり。
-// 値を除いた手がかりの中身で見分けられない要素があれば（入力欄の値だけが違う一覧など）、その組だけ入力欄の値も入れる
-function signatureOf(members: readonly Entry[], lines: readonly Line[]): string {
+function hashItem(hash: ReturnType<typeof createHash>, page: Page, item: readonly [number, number], withValues: boolean): void {
+  for (let i = item[0]; i <= item[1]; i++) if (!page.lines[i]!.inFrame) hash.update(tokenAt(page, i, withValues)).update('\n');
+}
+
+// 組のしるし: 数が 1 なら「1」だけ。2 以上なら数と、各要素の手がかり（周りの行と入れ物の行すべて）。
+// 入れ物の中身（値を除く）が同じ要素があれば（入力欄の値だけが違う一覧など）、その組だけ入力欄の値も入れる
+function signatureOf(members: readonly Entry[], page: Page): string {
   if (members.length === 1) return '1';
-  const picked = members.map(member => nearLines(lines, member.line));
-  const withValues = new Set(picked.map(p => contentOf(lines, p))).size < members.length;
-  const anchors = picked.map(p => anchorOf(lines, p, withValues));
+  const items = members.map((member, k) => itemOf(page, member.line, members[k - 1]?.line ?? -1, members[k + 1]?.line ?? Infinity));
+  const contents = items.map(item => { const hash = createHash('sha256'); hashItem(hash, page, item, false); return hash.digest('hex'); });
+  const withValues = new Set(contents).size < members.length;
   const hash = createHash('sha256').update(`${members.length}${withValues ? 'v' : ''}`);
-  for (const anchor of anchors) hash.update('\u0000').update(anchor);
+  members.forEach((member, k) => {
+    hash.update('\u0000');
+    for (const i of nearLines(page.lines, member.line)) hash.update(i < 0 ? '\u0001' : tokenAt(page, i, withValues)).update('\n');
+    hash.update('\u0002');
+    if (withValues) hashItem(hash, page, items[k]!, true); else hash.update(contents[k]!);
+  });
   return hash.digest('hex');
 }
 
@@ -205,8 +217,11 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   for (const [key, group] of [...book.groups]) {
     if (!members.has(key)) { retire(book, group); book.groups.delete(key); }
   }
+  const end = lines.map((_, i) => i);
+  for (let i = lines.length - 1; i >= 0; i--) { const up = lines[i]!.parent; if (up >= 0 && end[i]! > end[up]!) end[up] = end[i]!; }
+  const page: Page = { lines, end, tokens: [[], []] };
   for (const [key, list] of members) {
-    const signature = signatureOf(list, lines);
+    const signature = signatureOf(list, page);
     const before = book.groups.get(key);
     if (before?.signature === signature) continue;
     if (before) retire(book, before);

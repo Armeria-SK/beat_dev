@@ -90,7 +90,8 @@ export interface WorkBrowserHandle {
 export interface ElementState { visible: boolean; enabled: boolean }
 
 // 探し直す要素: 役割・名前（完全一致）・何番目か・読んだときの全部の数（数が違えば別のページとみなして触らない）
-export interface ElementTarget { role: string; name: string; nth: number; count: number }
+// verify: 要素をつかんだあと、押す前に呼ぶ確かめ（ページを読み直して、番号がまだ同じ要素を指すか）。false なら押さない
+export interface ElementTarget { role: string; name: string; nth: number; count: number; verify?: () => Promise<boolean> }
 // 探し直した要素の属性（パスワード欄などの判定に使う。ariaSnapshot からは分からないので、要素そのものから読む）
 export interface ElementDetail extends ElementState {
   // <input> は DOM の type（ブラウザが正規化したもの）、それ以外は type 属性。小文字。無ければ undefined
@@ -373,6 +374,10 @@ class PlaywrightPage implements PageHandle {
     if (!one) throw new BrowserFailure('page_changed', 'browser.page_changed');
     const pinned = await one.elementHandle({ timeout: BOX_TIMEOUT_MS }).catch(() => null);
     if (!pinned) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    if (target.verify !== undefined && !(await target.verify().catch(() => false))) {
+      await pinned.dispose().catch(() => undefined);
+      throw new BrowserFailure('page_changed', 'browser.page_changed');
+    }
     this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
     try {
       await work(pinned);

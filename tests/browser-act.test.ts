@@ -511,7 +511,7 @@ test('P3a: 表を読んだあとにページが並べ替わってから押すと
   const outcome = await r.call('browser_click', { ref: 'e3' });
   assert.equal(outcome.decision, 'deny');
   assert.match(outcome.output.content, /e3 can no longer be used: the page changed after it was read/u);
-  assert.doesNotMatch(outcome.output.content.replace(/e3/gu, ''), /ed+/u, '新しい番号を並びだけで選ばせない（番号は添えない）');
+  assert.doesNotMatch(outcome.output.content.replace(/\be3\b/gu, ''), /\be\d+\b/u, '新しい番号を並びだけで選ばせない（番号は添えない）');
   // 事前の判定を通らない直接の実行でも、その場で取り直して断る
   const direct = await browserClick.execute({ ref: 'e2' }, r.ctx);
   assert.equal(direct.isError, true);
@@ -519,6 +519,23 @@ test('P3a: 表を読んだあとにページが並べ替わってから押すと
   assert.equal(page.acts.length, 0, '古い番号では、どの行も押さない');
   const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
   assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne6 button "削除"\ne7 button "削除"/u);
+  const ok = await r.call('browser_click', { ref: 'e6' });
+  assert.equal(ok.decision, 'allow', ok.output.content);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);
+});
+
+test('P3a: 探し直してから要素をつかむまでのあいだに並べ替わると、つかんだあとの読み直しで断り、押さない', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  const page = await opened(r, ROWS);
+  page.beforePin = () => { page.mutate(rowsSite([...ROW_NAMES].reverse())); };
+  const outcome = await r.call('browser_click', { ref: 'e3' });
+  assert.equal(outcome.output.isError, true);
+  assert.match(outcome.output.content, /The page has changed/u);
+  assert.equal(page.acts.length, 0, '並べ替わったあとの行は押さない');
+  // 並べ替えのない読み直しなら押せる（確かめが毎回断るわけではない）
+  page.beforePin = undefined;
+  await browserRead.execute({ mode: 'elements' }, r.ctx);
   const ok = await r.call('browser_click', { ref: 'e6' });
   assert.equal(ok.decision, 'allow', ok.output.content);
   assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);

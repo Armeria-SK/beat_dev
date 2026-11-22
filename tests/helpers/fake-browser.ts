@@ -63,6 +63,8 @@ export class FakePage implements PageHandle {
   #refusal: RouteRefusal | undefined;
   // いまの送信の許し（permitSubmits）
   permit: SubmitPermit | undefined;
+  // 数を確かめてから要素をつかむまでのあいだに呼ぶ（その隙にページが変わった、を作る）
+  beforePin: (() => void) | undefined;
   constructor(browser: FakeBrowser) { this.browser = browser; }
 
   url(): string { return this.#url; }
@@ -97,9 +99,11 @@ export class FakePage implements PageHandle {
     return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete, form: { inForm: row.submits === true, submits: row.submits === true } };
   }
 
-  #act(act: FakeAct, target: ElementTarget, effect: FakeEffect | undefined): ActionEvents {
-    // 本物と同じ: 実行の直前に数が違えば、触らない
+  async #act(act: FakeAct, target: ElementTarget, effect: FakeEffect | undefined): Promise<ActionEvents> {
+    // 本物と同じ: 実行の直前に数が違えば、触らない。つかんだあとの確かめ（verify）が false でも触らない
     if (this.#rows(target.role, target.name).length !== target.count) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    this.beforePin?.();
+    if (target.verify !== undefined && !(await target.verify().catch(() => false))) throw new BrowserFailure('page_changed', 'browser.page_changed');
     this.acts.push({ ...act, permit: this.permit });
     if (effect?.fail === 'act_failed') throw new BrowserFailure('act_failed', 'browser.act_failed');
     if (effect?.fail === 'timeout') throw new BrowserFailure('timeout', 'browser.timeout', { sec: 1 });
