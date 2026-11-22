@@ -169,6 +169,17 @@ test('P1 1c: 弱い目印（config.json）は beat 自身に触る印になら�
   assert.match(r.judge.prompts.at(-1)!.user, /why it needs approval: .*The code mentions config\.json/u);
 });
 
+test('v3 P1b 再審査: 判定役を切っていても、メソッドの形で別のプログラムを起こすその場のコードは持ち主に行く', async t => {
+  const r = selfRunRig(t, c => { c.routing.judgeMode = 'off'; }, V3_FILES);
+  const got: string[] = [];
+  for (const command of ["python -c \"__import__('os').system('x')\"", "ruby -e \"Process.exec('x')\"", "ruby -e \"PTY.spawn('x')\""]) {
+    const { route, pre, detail } = await r.routeOf({ command });
+    if (route !== 'owner') got.push(`${command}: ${route} (want owner) keys=${JSON.stringify(pre.reasonKeys)} ${detail.slice(0, 120)}`);
+  }
+  assert.deepEqual(got, []);
+  assert.deepEqual(r.ran, []);
+});
+
 test('v3 P2: #54 node scripts/smoke-test.js と、自分の .env を読む node server.js は順 4。ファイルの中のポートの無い loopback は判定役の文の手がかりにだけなる', async t => {
   const r = selfRunRig(t, () => undefined, V3_FILES);
   const got: string[] = [];
