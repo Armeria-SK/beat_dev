@@ -60,7 +60,7 @@ function assignments(st: Statement, ps: boolean, acc: Acc, ctx: MatchCtx): void 
     const bareStatement = st.words.length === 0;
     if (ps) {
       const env = /^env:(.*)$/isu.exec(a.name);
-      if (env ? !productEnvOk(env[1]!, a.value, ctx.productEnv) : !psVarOk(a.name)) acc.add('once', 'list.env', { name: a.name }, false);
+      if (env ? !productEnvOk(env[1]!, a.value, ctx.productEnv, ctx.productEnvPath) : !psVarOk(a.name)) acc.add('once', 'list.env', { name: a.name }, false);
     } else if (bareStatement) {
       if (!bashVarOk(a.name)) acc.add('once', 'list.env', { name: a.name }, false);
     } else if (!envAssignOk(a.name, a.value)) acc.add('once', 'list.env', { name: a.name }, false);

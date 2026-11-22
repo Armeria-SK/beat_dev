@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { test } from 'node:test';
-import { productEnvNames, productEnvReader } from '../src/tools/hooks/product-env.ts';
+import { productEnvNames, productEnvPath, productEnvReader } from '../src/tools/hooks/product-env.ts';
+import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
 import { productRunOf } from '../src/tools/hooks/product-run.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { productEnvOk } from '../src/tools/hooks/allowlist-core.ts';
@@ -107,4 +108,35 @@ test('再審査 P1: 製品のコードが読む名前の走査は、同じ製品
   assert.equal(productEnvReader(root, now)('LATER_NAME'), false, 'cached: not scanned again');
   clock += 31_000;
   assert.equal(productEnvReader(root, now)('LATER_NAME'), true, 'scanned again after 30 s');
+});
+
+test('v3 P3 productEnvPath: env の絶対パスの値は、製品の外の守っていないフォルダと製品の中なら通す。beat のデータのフォルダ（製品の中は除く）・秘密・守る場所・決まりで断る場所・ドライブの根・UNC・..・相対・~ は断る', t => {
+  const base = realish(tempDir(t));
+  const data = join(base, 'data');
+  const root = join(data, 'projects', 'p');
+  const install = join(base, 'beat');
+  mkdirSync(root, { recursive: true });
+  const policy: ScopePolicy = { roots: [{ path: root, mode: 'write' }], deny: [join(base, 'denied')], askOnWrite: [join(data, 'SOUL.md')], skillsDir: join(data, 'skills'), guarded: { roots: [install] } };
+  const ok = productEnvPath({ root, dataDir: data, policy, protect: [DEFAULT_PROTECT_FILES] });
+  const drive = /^[A-Za-z]:/u.test(base) ? base.slice(0, 3) : '/';
+  const yes = [join(base, 'study-demo-data'), join(root, 'data'), join(root, 'data', 'study.sqlite')];
+  const no = [data, join(data, 'backups'), join(data, 'projects', 'other'), join(base, '.ssh', 'x'), join(base, 'denied', 'x'), join(data, 'skills', 'x'), join(root, '.git', 'hooks'),
+    join(root, '.github', 'workflows'), join(root, '.github'), join(install, 'x'), drive, '\\\\server\\share\\x', '//server/share/x', `${root}${sep}..${sep}x`, 'data', '~/x', 'C:data'];
+  assert.deepEqual(yes.filter(v => !ok(v)), [], 'passes');
+  assert.deepEqual(no.filter(ok), [], 'refused');
+  const trailing = [`${data}.`, `${data} `, `${data}.${sep}backups`, `${data} ${sep}backups`, `${join(base, '.ssh')}.`, `${join(base, '.ssh')}.${sep}id_rsa`, `${join(root, '.git')}.`, `${join(root, '.git')}.${sep}hooks`, `${join(data, 'skills')} `];
+  assert.deepEqual(trailing.filter(ok), [], 'a segment ending in a dot or a space (Windows drops it) is refused');
+  const wild = [`${data}*`, `${join(base, 'dat?')}`, `${join(base, 'study-demo-*')}`];
+  assert.deepEqual(wild.filter(ok), [], 'a wildcard (a PowerShell script could expand it) is refused');
+  if (/^[A-Za-z]:/u.test(data)) assert.equal(ok(data.slice(2)), false, 'a root-relative value resolves on the product root\'s drive');
+  const bare = productEnvPath({ root, dataDir: data, policy, protect: [] });
+  assert.equal(bare(drive), false, 'the drive root is refused without the protect-files hook too');
+  assert.equal(bare(join(root, '.github')), true, 'without the hook, nothing is protected there');
+  const word = (text: string) => ({ text, dynamic: false, glob: false, quoted: true, home: false, kind: 'plain' as const });
+  assert.equal(productEnvOk('DATA_DIR', word(yes[0]!), () => true, ok), true);
+  assert.equal(productEnvOk('DATA_DIR', word(yes[0]!), () => true), false, 'without the path check an absolute value is refused as before');
+  assert.equal(productEnvOk('NODE_OPTIONS', word(yes[0]!), () => true, ok), false);
+  assert.equal(productEnvOk('npm_config_userconfig', word(yes[0]!), () => true, ok), false);
+  assert.equal(productEnvOk('OTHER_DIR', word(yes[0]!), () => false, ok), false, 'a name the product does not read');
+  assert.equal(productEnvOk('DATA_DIR', word('https://e.example/x'), () => true, () => true), false);
 });
