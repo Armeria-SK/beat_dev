@@ -108,7 +108,7 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     if (raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + pageChars }));
   }
   if (options.mode !== 'text') {
-    const table = readElements(await until(page.snapshot(), api.signal), url);
+    const table = readElements(await until(page.snapshot(), api.signal), url, tab.refs);
     tab.table = table;
     parts.push(toolText(language, 'browser.section_elements'), block(formatElements(table, language), secrets));
   }
@@ -286,7 +286,7 @@ export const browserClose: ToolDef<{ tab?: string }> = {
   },
 };
 
-const REF = Type.String({ pattern: '^e[0-9]{1,4}$', description: 'The number of an element you can touch (such as e12 in the list from browser_open / browser_read)' });
+const REF = Type.String({ pattern: '^e[0-9]{1,6}$', description: 'The number of an element you can touch (such as e12 in the list from browser_open / browser_read)' });
 
 // 押す・入れる。事前の判定（checks.ts）は聞く（ask）か断る（deny）。
 // 実行の直前の探し直し（inspectAct）は、通った理由に関わらず必ずやる。

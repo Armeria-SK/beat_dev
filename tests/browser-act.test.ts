@@ -17,7 +17,7 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { replayAction } from '../src/pending/replay.ts';
-import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-browser.ts';
+import { FakeBrowserDriver, type FakePage, type FakeRow, type FakeSite } from './helpers/fake-browser.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 // T-20〜T-29（AU-6b）: browser_click / browser_type。偽の driver で、パイプライン込みの流れを確かめる（本物のブラウザは起動しない）
@@ -210,15 +210,18 @@ test('T-22: 承認のあいだに遷移したら、実行しない（同じ呼�
   assert.equal(page.acts.length, 1);
 });
 
-test('T-22: 承認のあいだに同じ番号が別の要素になったら、実行しない（bind の不一致）', async t => {
+test('T-22: 承認のあいだに同じ位置の要素が別の名前になったら、番号は使えなくなり実行しない（番号は位置ではなく組で持つ）', async t => {
   const r = rig(t);
   const page = await opened(r);
   assert.equal((await r.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
-  // ページが書き換わり、読み直したら e2 は別の名前のボタンになった（同じ URL）
+  // ページが書き換わり、Send の位置に別の名前のボタンが来た（同じ URL）。読み直すと、新しいボタンは新しい番号になる
   page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
-  await browserRead.execute({ mode: 'elements' }, r.ctx);
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e10 button "Delete account"/u);
+  assert.doesNotMatch(read.content, /e2 /u);
   const result = await r.approve(parkedId(r));
-  assert.equal(result.status, 'stale');
+  assert.equal(result.status, 'failed');
+  assert.match(result.output ?? '', /e2 can no longer be used/u);
   assert.equal(page.acts.length, 0);
 });
 
@@ -486,4 +489,66 @@ test('T-29: 方針が allow でも、password 欄の拒否は外れず、サイ�
   assert.equal(result.outcome.decidedBy, 'pending');
   assert.deepEqual(outside.pending.list({ status: 'waiting' }).map(row => row.kind), ['send']);
   assert.equal(page.acts.length + outsidePage.acts.length, 0);
+});
+
+// ── P3a: 番号は、押す・入れるの直前にその場で取り直した表から引く ──
+
+const ROWS = 'https://example.com/rows';
+const rowsSite = (names: readonly string[]): FakeSite => ({
+  title: 'Rows', text: names.join('\n'),
+  snapshot: ['- button "並べ替え"', '- table:', '  - rowgroup:', ...names.flatMap(n => [`    - row "${n} 削除":`, `      - cell "${n}"`, '      - cell "削除":', '        - button "削除"'])].join('\n'),
+  rows: [{ role: 'button', name: '並べ替え' }, ...names.map((): FakeRow => ({ role: 'button', name: '削除' }))],
+});
+const ROW_NAMES = ['材料 1', '材料 2', '材料 3'];
+// 並べ替え e1 / 削除 e2・e3・e4
+
+test('P3a: 表を読んだあとにページが並べ替わってから押すと、古い番号は断る（別の行を押さない）。新しい番号なら押せる', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  const page = await opened(r, ROWS);
+  // 同じ数のまま並べ替わった（同じ URL）。モデルはまだ読み直していない
+  page.mutate(rowsSite([...ROW_NAMES].reverse()));
+  const outcome = await r.call('browser_click', { ref: 'e3' });
+  assert.equal(outcome.decision, 'deny');
+  assert.match(outcome.output.content, /e3 can no longer be used: the page changed after it was read .* Their numbers are now e5, e6, e7/u);
+  // 事前の判定を通らない直接の実行でも、その場で取り直して断る
+  const direct = await browserClick.execute({ ref: 'e2' }, r.ctx);
+  assert.equal(direct.isError, true);
+  assert.match(direct.content, /e2 can no longer be used/u);
+  assert.equal(page.acts.length, 0, '古い番号では、どの行も押さない');
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne6 button "削除"\ne7 button "削除"/u);
+  const ok = await r.call('browser_click', { ref: 'e6' });
+  assert.equal(ok.decision, 'allow', ok.output.content);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);
+});
+
+test('P3a: 使えなくなった番号の文（その組がもう無い）と、振っていない番号の文は分ける', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  const page = await opened(r, ROWS);
+  page.mutate(rowsSite([]));
+  const gone = await preCheck(r, browserClick, { ref: 'e2' });
+  assert.equal(gone.decision, 'deny');
+  assert.match(gone.reasons[0]!, /e2 can no longer be used: the page changed after it was read, and that element is no longer on it/u);
+  const never = await preCheck(r, browserClick, { ref: 'e99' });
+  assert.match(never.reasons[0]!, /Number e99 is not in the list for this tab/u);
+  // 名前が 1 つだけの要素（並べ替え）は、周りが変わっても同じ番号のまま押せる
+  assert.equal((await preCheck(r, browserClick, { ref: 'e1' })).decision, 'allow');
+});
+
+test('P3a: 番号は会話のタブで共通の続きの数。別のタブの番号は当たらず、移動しても振り直さない', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  await opened(r);
+  // 新しいタブ t2 の番号は、t1（e1〜e9）の続きから
+  const second = await browserOpen.execute({ url: ROWS }, r.ctx);
+  assert.match(second.content, /e10 button "並べ替え"\ne11 button "削除"/u);
+  const other = await preCheck(r, browserClick, { tab: 't2', ref: 'e2' });
+  assert.equal(other.decision, 'deny');
+  assert.match(other.reasons[0]!, /Number e2 is not in the list for this tab/u);
+  // t1 を別の URL へ移すと、t1 の番号は全部使えなくなり、続きの番号になる
+  const moved = await browserOpen.execute({ url: OTHER, tab: 't1' }, r.ctx);
+  assert.match(moved.content, /e14 textbox "Search"\ne15 button "Send"/u);
+  assert.equal(r.driver.current!.pageList[1]!.acts.length, 0);
 });

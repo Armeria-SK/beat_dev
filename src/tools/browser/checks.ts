@@ -1,7 +1,8 @@
 // browser_click / browser_type の事前の判定と、実行の直前の探し直し（同じ判定を 2 回通す）。
 // 守り（どれも、方針が allow でも・「この会話では許可」でも外れない。preCheck が deny を返し、execute も同じ判定をもう一度通す）:
 //   - 押せるのは、そのタブで許されたページ（公開のページ、または作業用のタブで許しのある実行の許されたループバック）だけ
-//   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否
+//   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否。
+//     番号は、判定のたびにその場で取り直した表から引く（組が変わって使えなくなった番号は拒否。elements.ts）
 //   - 実行の直前に、役割・名前・nth で探し直し、数が読んだときと同じで、見えていて、有効でなければ実行しない
 //   - browser_type は、パスワード・認証コード・カード番号の欄（type=password・autocomplete・名前）に入れない
 // 通り方（9-1b。PLAN Approach 4 の順）: 秘密に見える文を入れる → 公開のページ・開発サーバーでないループバックは断る、開発サーバーは判定役 /
@@ -16,7 +17,7 @@ import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { pageUrl } from '../web/public-page.ts';
 import { BrowserFailure, type ElementDetail, type ElementTarget } from './driver.ts';
-import type { ListedElement } from './elements.ts';
+import { readElements, retiredRef, type ListedElement } from './elements.ts';
 import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
 import { ownerHostAllows, ownerLoopbackPorts, siteAllows } from './sites.ts';
@@ -67,11 +68,19 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input:
   const pageUrl = tab.page.url();
   const place = placeOf(tab, api, pageUrl, denied);
   if (place === undefined) return refuse(guardText(language, 'browser.act.not_allowed_page'));
-  const table = tab.table;
-  if (table === undefined) return refuse(guardText(language, 'browser.act.no_table'));
-  if (table.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  if (tab.table === undefined) return refuse(guardText(language, 'browser.act.no_table'));
+  if (tab.table.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  // 番号は、いつもその場で取り直した表から引く（読んだあとに並べ替わった・1 行消えた組の古い番号は、ここで使えなくなる）
+  const table = readElements(await tab.page.snapshot(), pageUrl, tab.refs);
+  if (tab.page.url() !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  tab.table = table;
   const item = table.items.find(e => e.ref === input.ref);
-  if (item === undefined) return refuse(guardText(language, 'browser.act.no_ref', { ref: input.ref }));
+  if (item === undefined) {
+    const retired = retiredRef(tab.refs, input.ref);
+    if (retired === undefined) return refuse(guardText(language, 'browser.act.no_ref', { ref: input.ref }));
+    const now = table.items.filter(e => e.role === retired.role && e.name === retired.name).map(e => e.ref);
+    return refuse(guardText(language, now.length > 0 ? 'browser.act.retired_now' : 'browser.act.retired', { ref: input.ref, refs: now.join(', ') }));
+  }
   if (item.frameUrl !== undefined && hostOf(item.frameUrl) !== hostOf(pageUrl)) return refuse(guardText(language, 'browser.act.frame', { ref: input.ref }));
   if (kind === 'type' && !TEXT_ROLES.has(item.role)) return refuse(guardText(language, 'browser.act.not_text', { ref: input.ref, role: item.role }));
   const target: ElementTarget = { role: item.role, name: item.name, nth: item.nth, count: item.count };

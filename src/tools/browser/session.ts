@@ -10,7 +10,7 @@ import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { selfPortsOf } from '../hooks/self-port.ts';
 import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle } from './driver.ts';
-import type { ElementTable } from './elements.ts';
+import { newRefBook, type ElementTable, type RefBook, type RefCounter } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 import { allowedLoopbackUrl, deniedLoopbackPorts, type BrowserGrant } from './loopback.ts';
 import { DRIVING_MS, MirrorFrames, observePage, shortLabel, SHOT_INTERVAL_MS, SHOT_TIMEOUT_MS, strongerAction, TITLE_MAX, URL_MAX, WATCH_MS, type MirrorAction, type MirrorFrame } from './mirror.ts';
@@ -64,6 +64,8 @@ export interface BrowserTab {
   readonly page: PageHandle;
   // 最後に読んだ「触れるもの」の表。URL が変わったら使わない
   table: ElementTable | undefined;
+  // 番号の対応（組としるし）。続きの数は会話のタブで共通
+  readonly refs: RefBook;
   used: number;
 }
 
@@ -184,6 +186,8 @@ export class BrowserSession {
   // withPopups のあいだだけ、ページ側が開いた窓を集める入れ物
   #popups: PopupSink | undefined;
   #nextTab = 1;
+  // 会話ごとの番号の続きの数（タブで共通。振り直さない。beat を起動し直すと 1 から）
+  readonly #refCounters = new Map<string, RefCounter>();
   #clock = 0;
   #locked = false;
   #waiters: Array<() => void> = [];
@@ -282,7 +286,7 @@ export class BrowserSession {
     await this.#acquire(undefined);
     try {
       for (const tab of [...this.#tabs.values()]) if (ids.includes(tab.conversationId)) await this.#closeTab(tab);
-      for (const id of ids) { const context = this.#contexts.get(id); if (context) await this.#closeContext(context); }
+      for (const id of ids) { const context = this.#contexts.get(id); if (context) await this.#closeContext(context); this.#refCounters.delete(id); }
     } finally { this.#release(); }
   }
 
@@ -722,7 +726,9 @@ export class BrowserSession {
       mirror.url = shortLabel(raw.url(), URL_MAX);
     };
     const page = trackPointer(observePage(raw, note), mirror);
-    const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, table: undefined, used: ++this.#clock };
+    let counter = this.#refCounters.get(grant.conversationId);
+    if (counter === undefined) { counter = { next: 1 }; this.#refCounters.set(grant.conversationId, counter); }
+    const tab: BrowserTab = { id, conversationId: grant.conversationId, kind, productId: grant.productId, page, table: undefined, refs: newRefBook(counter), used: ++this.#clock };
     this.#tabs.set(tab.id, tab);
     this.#tabHandles.set(tab, handle);
     this.#mirror.set(id, mirror);

@@ -13,7 +13,7 @@ import { listedNavigationVerdict, loopbackVerdict, navigationMethodVerdict, rout
 
 export type BrowserFailureCode =
   | 'disabled' | 'no_browser' | 'launch_failed' | 'profile_busy' | 'paused' | 'tab_limit' | 'no_tab'
-  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed' | 'login_open' | 'no_display';
+  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed' | 'login_open' | 'no_display' | 'ref_limit';
 
 // 文の鍵は道具の文（tools.ts）か、守りの文（guard.ts。9-1a で足したループバックなどの文）
 export type BrowserMessageKey = ToolMessageKey | GuardMessageKey;
