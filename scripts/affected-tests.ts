@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { globSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, globSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -14,6 +14,10 @@ const TRY_EXT = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs'];
 const JS_TO_TS: Record<string, string[]> = { '.js': ['.ts', '.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
 const REPO_PATH = /^(?:src|web|scripts|templates|assets|deploy|tests)(?:[/\\][^\s'"`]*)?$/u;
 const WHOLE = '';
+const KNOWN_SAFE: Record<string, string[]> = {
+  'src/paths.ts': ["resolve(dirname(fileURLToPath(import.meta.url)), '..')"],
+  'tests/helpers/dom.ts': ['import(new URL(path, from).href)'],
+};
 
 export type Scan = {
   edges: string[];
@@ -55,7 +59,7 @@ function literal(node: ts.Node | undefined): string | undefined {
 function pathText(node: ts.Node | undefined): { text: string; whole: boolean } | undefined {
   const text = literal(node);
   if (text !== undefined) return { text, whole: true };
-  if (node && ts.isTemplateExpression(node)) return { text: node.head.text.slice(0, node.head.text.lastIndexOf('/') + 1) || '.', whole: false };
+  if (node && ts.isTemplateExpression(node) && node.head.text.includes('/')) return { text: node.head.text.slice(0, node.head.text.lastIndexOf('/') + 1), whole: false };
   return undefined;
 }
 
@@ -109,7 +113,9 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
     return true;
   };
 
+  const safe = KNOWN_SAFE[rel] ?? [];
   const visit = (node: ts.Node): void => {
+    if (safe.length > 0 && (ts.isCallExpression(node) || ts.isNewExpression(node)) && safe.includes(node.getText(sf))) { consume(node); return; }
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
       const spec = literal(node.moduleSpecifier);
       if (spec !== undefined) specs.push(spec);
@@ -124,14 +130,15 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
       const name = calleeName(node.expression);
       const isLoader = node.expression.kind === ts.SyntaxKind.ImportKeyword || (name === 'require' && ts.isIdentifier(node.expression)) || isImportMeta(node.expression, 'resolve');
       if (isLoader) {
-        const spec = literal(args[0]);
-        if (spec !== undefined) specs.push(spec);
-        else scan.dynamic.push(at(node));
+        const path = pathText(args[0]);
+        if (path?.whole) specs.push(path.text);
+        else if (path?.text.startsWith('.')) load(node, resolve(dir, path.text));
+        else { scan.dynamic.push(at(node)); scan.anchors.push(at(node)); }
       }
       if (name === 'createRequire' && args[0]) consume(args[0]);
       const base = args.find(arg => isImportMeta(arg, 'url'));
       if (base && fileRelative(node, args[0])) consume(base);
-      if (testSide && ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]))) {
+      if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]))) {
         const parts: string[] = [];
         for (const arg of args.slice(1)) {
           const path = pathText(arg);
@@ -146,8 +153,8 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
       && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
       consume(node.left);
     }
+    if (!consumed.has(node) && isFileAnchor(node)) { scan.anchors.push(at(node)); consume(node); }
     if (testSide) {
-      if (!consumed.has(node) && isFileAnchor(node)) { scan.anchors.push(at(node)); consume(node); }
       const value = literal(node);
       if (value !== undefined && REPO_PATH.test(value) && !value.split(/[/\\]/u).includes('..')) {
         const cut = value.search(/[*?]/u);
@@ -281,6 +288,17 @@ export function changedFromGit(root: string, base: string): string[] {
   ];
 }
 
+export function knownFiles(root: string, base: string): Map<string, string> {
+  const lists = [['ls-files', '-z'], ['ls-files', '--others', '--exclude-standard', '-z'], ['ls-tree', '-r', '--name-only', '-z', base]];
+  const known = new Map<string, string>();
+  for (const args of lists) {
+    let files: string[] = [];
+    try { files = git(root, args); } catch { files = []; }
+    for (const file of files) known.set(process.platform === 'win32' ? file.toLowerCase() : file, file);
+  }
+  return known;
+}
+
 function main(): number {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { base: { type: 'string', default: 'origin/main' }, run: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } } });
   if (values.help) { process.stdout.write(`${USAGE}\n`); return 0; }
@@ -288,8 +306,16 @@ function main(): number {
   const graph = new ImportGraph(root);
   let changed: string[] = [];
   let forced: string | undefined;
-  if (positionals.length > 0) changed = positionals.map(file => slash(relative(root, resolve(file))));
-  else {
+  if (positionals.length > 0) {
+    const known = knownFiles(root, values.base);
+    changed = positionals.map(file => {
+      const rel = slash(relative(root, resolve(file)));
+      const real = known.get(process.platform === 'win32' ? rel.toLowerCase() : rel);
+      if (real !== undefined) return real;
+      if (!existsSync(join(root, rel))) forced ??= `${rel}: neither on disk nor known to git`;
+      return rel;
+    });
+  } else {
     try { changed = changedFromGit(root, values.base); }
     catch (error) { forced = `could not list changes against ${values.base}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`; }
   }
@@ -304,7 +330,7 @@ function main(): number {
   err(`picked ${pick.tests.length} of ${graph.tests.length} test files`);
   if (pick.everyChange.length > 0) err(`note: ${pick.everyChange.length} test files read repo paths at runtime in a way that could not be narrowed, so any change picks them`);
   if (pick.dynamic.length > 0) {
-    err(`warn: ${pick.dynamic.length} import()/require() with a non-literal specifier among the picked tests' imports (not followed):`);
+    err(`warn: ${pick.dynamic.length} import()/require() with a non-literal specifier among the picked tests' imports (not followed, so the tests reaching them are picked for any change):`);
     for (const where of pick.dynamic) err(`  ${where}`);
   }
   if (!values.run) {
@@ -314,6 +340,7 @@ function main(): number {
   if (pick.tests.length === 0) { err('no tests to run'); return 0; }
   const targets = pick.all.length > 0 ? [TEST_GLOB] : pick.tests;
   const run = spawnSync(process.execPath, ['--import', LOADER, '--test', '--test-reporter=spec', ...targets], { cwd: root, stdio: 'inherit' });
+  if (run.error) err(`could not start the test run: ${run.error.message}`);
   return run.status ?? 1;
 }
 
