@@ -25,13 +25,20 @@ function add(v: Volume, c: CallRow): void {
   v.calls++; v.input += input; v.read += read; v.write += write; v.fresh += Math.max(0, input - read - write); v.output += c.output_tokens ?? 0;
 }
 
-// アプリの記録で、受け入れ 6 項目の操作が実際に起きたか。数えるのはブラウザから来た頼み（src = browser）だけ
-export function appRecord(lines: readonly string[]): Record<Item, boolean> & { adminLoginFailed: number; notBrowser: number; parseErrors: number } {
+// ページの中の頼み（ev() の非同期の fetch など）が道具の呼び出しの終わりより少しあとに届く分
+export const EVENT_SLACK_MS = 2000;
+export type Window = readonly [number, number];
+
+// アプリの記録で、受け入れ 6 項目の操作が実際に起きたか。数えるのは、ブラウザから来た頼み（src = browser）で、
+// windows を渡したときは、本体のブラウザの道具の呼び出しの間（始め〜終わり + EVENT_SLACK_MS）に起きたものだけ（src はモデルが curl で真似られるので、時刻でも絞る）
+export function appRecord(lines: readonly string[], windows?: readonly Window[]): Record<Item, boolean> & { adminLoginFailed: number; notBrowser: number; outsideBrowserCalls: number; parseErrors: number } {
   let parseErrors = 0;
   const all = lines.filter(line => line.trim()).flatMap(line => {
-    try { return [JSON.parse(line) as { kind: string; src?: string; added?: number[]; ok?: boolean }]; } catch { parseErrors++; return []; }
+    try { return [JSON.parse(line) as { at?: number; kind: string; src?: string; added?: number[]; ok?: boolean }]; } catch { parseErrors++; return []; }
   });
-  const events = all.filter(e => e.src === 'browser');
+  const during = (at: number | undefined): boolean => !windows || (typeof at === 'number' && windows.some(([from, to]) => at >= from && at <= to + EVENT_SLACK_MS));
+  const browserSent = all.filter(e => e.src === 'browser');
+  const events = browserSent.filter(e => during(e.at));
   return {
     submit: events.some(e => e.kind === 'submit'),
     list: events.some(e => e.kind === 'list_view' && (e.added ?? []).length > 0),
@@ -41,6 +48,7 @@ export function appRecord(lines: readonly string[]): Record<Item, boolean> & { a
     logout: events.some(e => e.kind === 'logout'),
     adminLoginFailed: events.filter(e => e.kind === 'admin_login' && e.ok === false).length,
     notBrowser: all.filter(e => e.kind !== 'start' && e.src !== 'browser').length,
+    outsideBrowserCalls: browserSent.length - events.length,
     parseErrors,
   };
 }
@@ -83,7 +91,7 @@ export function collectFrom(db: DatabaseSync, conversationId: string, eventLines
   for (const c of callsOf(childIds)) if (c.purpose !== 'compact') add(childVolume, c);
 
   const toolRows = (ids: readonly string[]) => ids.length
-    ? db.prepare(`SELECT tool, decision, decided_by FROM tool_calls WHERE run_id IN (${placeholders(ids.length)}) ORDER BY created_at, rowid`).all(...ids) as Array<{ tool: string; decision: string; decided_by: string }>
+    ? db.prepare(`SELECT tool, decision, decided_by, created_at, duration_ms FROM tool_calls WHERE run_id IN (${placeholders(ids.length)}) ORDER BY created_at, rowid`).all(...ids) as Array<{ tool: string; decision: string; decided_by: string; created_at: number; duration_ms: number | null }>
     : [];
   const tools = toolRows(mainIds);
   const childBrowser = toolRows(childIds).filter(t => t.tool.startsWith('browser_')).length;
@@ -116,7 +124,8 @@ export function collectFrom(db: DatabaseSync, conversationId: string, eventLines
   const tasksStarted = (db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE created_in_conversation = ?').get(conversationId) as { n: number }).n;
   const lastAssistant = (db.prepare("SELECT text FROM messages WHERE conversation_id = ? AND role = 'assistant' AND text != '' ORDER BY id DESC LIMIT 1").get(conversationId) as { text: string } | undefined)?.text ?? '';
   const first = body[0];
-  const app = appRecord(eventLines);
+  const windows: Window[] = browser.filter(t => t.decision === 'allow').map(t => [t.created_at, t.created_at + (t.duration_ms ?? 0)]);
+  const app = appRecord(eventLines, windows);
 
   return {
     conversationId,

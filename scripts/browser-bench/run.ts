@@ -108,8 +108,11 @@ function lastCallEnd(dbPath: string): number | undefined {
   try { return (db.prepare('SELECT MAX(started_at + duration_ms) AS t FROM model_calls').get() as { t: number | null }).t ?? undefined; } finally { db.close(); }
 }
 
-async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { base: { type: 'string' }, name: { type: 'string' }, port: { type: 'string', default: '4787' }, model: { type: 'string', default: 'claude-sonnet-5-5' }, minutes: { type: 'string', default: '45' } } });
+export interface RunArgs { base: string; name: string; port: number; minutes: number; model: string }
+
+// 引数の確かめ（何も起動せず、ファイルにも触らない。試験はこれを直接呼ぶ）
+export function parseRunArgs(args: readonly string[]): RunArgs {
+  const { values } = parseArgs({ args: [...args], options: { base: { type: 'string' }, name: { type: 'string' }, port: { type: 'string', default: '4787' }, model: { type: 'string', default: 'claude-sonnet-5-5' }, minutes: { type: 'string', default: '45' } } });
   const port = Number(values.port);
   const minutes = Number(values.minutes);
   if (!values.base || !values.name || !/^[a-z0-9-]{1,40}$/u.test(values.name)) throw new Error(USAGE);
@@ -117,8 +120,24 @@ async function main(): Promise<number> {
   if (!Number.isFinite(minutes) || minutes < 1 || minutes > 180) throw new Error('--minutes must be a number from 1 to 180');
   const baseProblem = checkBase(values.base);
   if (baseProblem) throw new Error(baseProblem);
-  for (const p of [port, APP_PORT]) if (await listening(p)) throw new Error(`port ${p} is already in use; stop whatever listens there before a bench run`);
-  const base = resolve(values.base);
+  return { base: resolve(values.base), name: values.name, port, minutes, model: values.model };
+}
+
+export async function busyPort(ports: readonly number[]): Promise<number | undefined> {
+  for (const p of ports) if (await listening(p)) return p;
+  return undefined;
+}
+
+const refuseBusy = async (port: number): Promise<void> => {
+  const busy = await busyPort([port, APP_PORT]);
+  if (busy !== undefined) throw new Error(`port ${busy} is already in use; stop whatever listens there before a bench run`);
+};
+
+async function main(): Promise<number> {
+  const values = parseRunArgs(process.argv.slice(2));
+  const { port, minutes } = values;
+  await refuseBusy(port);
+  const base = values.base;
   const root = join(base, values.name);
   if (existsSync(root)) throw new Error(`${root} already exists; every run needs a fresh folder`);
 
@@ -128,6 +147,8 @@ async function main(): Promise<number> {
   const wait = Number.isFinite(last) ? last + COLD_GAP_MS - Date.now() : 0;
   if (wait > 0) { process.stdout.write(`waiting ${Math.ceil(wait / 1000)} s so the cache is cold\n`); await sleep(wait); }
   const sincePrevious = Number.isFinite(last) ? Math.round((Date.now() - last) / 1000) : null;
+  // 待っているあいだにほかが起動していないか、作る直前にもう一度確かめる
+  await refuseBusy(port);
 
   const dataDir = join(root, 'data');
   const product = join(root, 'product');
@@ -138,7 +159,8 @@ async function main(): Promise<number> {
   const head = git(APP_ROOT, 'rev-parse', 'HEAD').stdout.trim();
   const dirty = git(APP_ROOT, 'status', '--porcelain').stdout.trim() !== '';
 
-  const log = openSync(join(root, 'beat.log'), 'a');
+  const logPath = join(root, 'beat.log');
+  const log = openSync(logPath, 'a');
   const beat = spawn(process.execPath, ['src/main.ts', '--data-dir', dataDir], { cwd: APP_ROOT, stdio: ['ignore', log, log] });
   const origin = `http://127.0.0.1:${port}`;
   const started = Date.now();
@@ -147,7 +169,9 @@ async function main(): Promise<number> {
   try {
     for (;;) {
       if (beat.exitCode !== null) throw new Error('beat exited during startup (see beat.log)');
-      try { if ((await api(origin, 'GET', '/api/projects')).status === 200) break; } catch { /* まだ起動中 */ }
+      // 答えたのがこの beat であること: 自分の起動の記録に「beat started: <origin>/」が出てから口を確かめる
+      const ours = readFileSync(logPath, 'utf8').includes(`beat started: ${origin}/`);
+      try { if (ours && (await api(origin, 'GET', '/api/projects')).status === 200) break; } catch { /* まだ起動中 */ }
       if (Date.now() - started > 120_000) throw new Error('beat did not start within 2 minutes');
       await sleep(1000);
     }

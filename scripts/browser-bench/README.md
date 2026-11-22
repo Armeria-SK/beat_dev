@@ -28,12 +28,12 @@ beat が自分で起動した Web アプリをブラウザで確かめるとき�
    node scripts/browser-bench/run.ts --base <workspace>/tmp/browser-rethink --name p0-1
    ```
    `<base>/<name>/` に `data/`（使い捨ての beat のデータ）・`product/`（`app.mjs` を写した git フォルダ）・`beat.log`・`pending.json`・`result.json` ができる。
-3. `result.json` の数を `bench.md` に写し、(f) は下の決まりで決める。写したら `<base>/<name>/` と `<base>/.bench-last-call` を消す。
+3. `result.json` の数を `bench.md` に写し、(f) は下の決まりで決める。写したら `<base>/<name>/` を消す。`<base>/.bench-last-call` は**3 回目のあと（その組の終わり）にだけ**消す（途中で消すと、次の回が冷やすための待ちを飛ばす）。
 
 `run.ts` が断る・止めるもの:
 - `--base` が作業場所の `tmp/` の下でない（`tmp/worktrees/` の下・リンクで外へ出る所も断る。製品の `data/` には置けない）。
 - `--port` が 4777・4797・1024 未満、`--minutes` が 1〜180 の数でない。
-- **起動の前に、`--port` か 3456 で何かが待ち受けている**（残っている beat に頼みを送ったり、アプリが 3456 を取れなかったりしないように）。
+- **起動の前に、`--port` か 3456 で何かが待ち受けている**（残っている beat に頼みを送ったり、アプリが 3456 を取れなかったりしないように）。冷やすための待ちのあと、フォルダを作る直前にもう一度確かめる。起動を待つあいだも、自分の beat の記録（`beat.log`）に `beat started: <origin>/` が出るまでは、答えたサーバーを自分の beat と見ない。
 - 同じ名前のフォルダがある。
 - 終わったあとに `--port` か 3456 がまだ待ち受けている（`beatStopped` / `appStopped` が false）なら、終了コード 1。実行が `finished` でない（時間切れ・失敗）ときも 1。
 
@@ -53,6 +53,6 @@ beat が自分で起動した Web アプリをブラウザで確かめるとき�
 - (c) `c_input`: 本体の入力の合計（新規 + 読み + 書き）
 - (d) `d_cacheWrite`: 本体のキャッシュの書き込み
 - (e) `e_toolsMisses`: 本体の外れのうち理由が `tools` の数。`e_preloadLoads`: ブラウザ・`pending_withdraw`・`deviation_add`・`image_view` を `tool_search` で読み込んだ回数（`e_otherLoads` はほかの道具の読み込み）。`toolSearchCalls`（呼び出しの数）と `toolSearchResults`（読めた結果の数）が合わないとき・`parseErrors` が 0 でないときは、(e) を 0 と書かずに確かめ直す
-- (f) 確かめられた項目の数 / 6（手で決める）: 項目ごとに、**アプリの記録にその操作の `src: browser` の行がある**（`result.json` の `app`。`other` から来た行は `app.notBrowser` に数が出るだけで、項目にならない）**かつ、モデルがその項目を「通った」と言った**ものだけ数える。モデルが言うのは、最後の答え（`finalAnswer`）か、実行が質問票（`ask_owner`）で止まったときはそれまでの発言のうち、その項目を名指して確かめた結果を言ったもの（「+10 で 15 になりました」など。どれを使ったかを `bench.md` に書く）。モデルが `.bench/events.jsonl` を読んで言っただけのもの・curl や node の頼みで起きた操作は数えない
+- (f) 確かめられた項目の数 / 6（手で決める）: 項目ごとに、**アプリの記録にその操作の `src: browser` の行があり、その時刻（`at`）が本体のブラウザの道具の呼び出しの間（`tool_calls.created_at` から `duration_ms` のあと 2 秒まで）に入っている**（`result.json` の `app`。`other` から来た行は `app.notBrowser`、呼び出しの外の行は `app.outsideBrowserCalls` に数が出るだけで、項目にならない。`src` の決まりは `app.mjs` に書いてあって測られるモデルにも読めるので、時刻でも絞る）**かつ、モデルがその項目を「通った」と言った**ものだけ数える。モデルが言うのは、最後の答え（`finalAnswer`）か、実行が質問票（`ask_owner`）で止まったときはそれまでの発言のうち、その項目を名指して確かめた結果を言ったもの（「+10 で 15 になりました」など。どれを使ったかを `bench.md` に書く）。モデルが `.bench/events.jsonl` を読んで言っただけのもの・curl や node の頼みで起きた操作は数えない
 - (g) `g_pending`: 持ち主に回った承認（`pending_actions`）の数。質問票は `askOwner` に別に出る
 - 別の列: `judge`（本体の判定役）・`compactVolume`（本体の要約）・`children`・`tasks`（この会話から作られたタスク〔Build を含む〕の数と `task_create` の呼び出し。0 でなければ `bench.md` に書く）

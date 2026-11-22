@@ -95,3 +95,21 @@ test('アプリの記録は、ブラウザから来た頼みだけを数える',
   assert.equal(r.mark_ordered, false);
   assert.equal(r.notBrowser, 2);
 });
+
+test('ブラウザから来た記録でも、本体のブラウザの道具の呼び出しの間に起きていなければ数えない', t => {
+  const db = setup(t);
+  run(db, 'r1', 'bench', 1000);
+  db.prepare("INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, duration_ms, created_at) VALUES ('b1', 'r1', 'bench', 'browser_click', '{}', 'allow', 'builtin', 500, 10000)").run();
+  const lines = [
+    '{"at":10200,"kind":"plus10","src":"browser"}',
+    '{"at":12400,"kind":"date_button","src":"browser"}',
+    '{"at":13000,"kind":"submit","src":"browser"}',
+    '{"at":9000,"kind":"logout","src":"browser"}',
+  ];
+  const r = collectFrom(db, 'bench', lines);
+  assert.equal(r.app.plus10, true);
+  assert.equal(r.app.date_button, true);
+  assert.equal(r.app.submit, false);
+  assert.equal(r.app.logout, false);
+  assert.equal(r.app.outsideBrowserCalls, 2);
+});
