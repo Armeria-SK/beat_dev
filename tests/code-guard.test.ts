@@ -529,7 +529,10 @@ test('v3 P2 再審査: ファイルの中の、オブジェクトの形の port 
   for (const file of ["http.request({ host: '127.0.0.1', port: 11434 });", "http.request({ hostname: 'localhost', port: 3845 });", "const o = { host: 'localhost', 'port': '11434' };", "const o = { host: 'localhost', port: 80 };", "opts.host = '127.0.0.1'; opts.port = 3845;"]) {
     assert.ok(of([file]).strong.includes('127.0.0.1 / localhost'), `${file}: ${JSON.stringify(of([file]))}`);
   }
-  for (const file of ["http.request({ host: '127.0.0.1', port: 5173 });", "http.request({ host: 'localhost', port: p });", 'const port = 11434;']) {
+  for (const file of ["net.connect(11434, 'localhost');", "socket.create_connection(('localhost', 11434))", "TCPSocket.new('localhost', 11434)", "http.client.HTTPConnection('localhost', 11434)", "Net::HTTP.new('localhost', 3845)"]) {
+    assert.ok(of([file]).strong.includes('127.0.0.1 / localhost'), `${file}: ${JSON.stringify(of([file]))}`);
+  }
+  for (const file of ["http.request({ host: '127.0.0.1', port: 5173 });", "http.request({ host: 'localhost', port: p });", 'const port = 11434;', "net.connect(5173, 'localhost');", "net.connect(114340, 'localhost');"]) {
     assert.ok(!of([file]).strong.includes('127.0.0.1 / localhost'), `${file}: ${JSON.stringify(of([file]))}`);
   }
   for (const file of ["readFileSync('../../.env');", "loadDotEnv(path.join(__dirname, '..', '.env'));", "require('dotenv').config({ path: '..\\.env' });", 'const p = `${root}/../.env`;']) {

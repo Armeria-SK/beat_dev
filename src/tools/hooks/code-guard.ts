@@ -144,6 +144,8 @@ function touchesLoopback(text: string, server: SelfServer, beatPorts: BeatPorts,
   for (const match of text.matchAll(HOST_WORD)) if (loopbackWord(match[0]) && marks(match.index, match.index + match[0].length)) return 'strong';
   if (selfTarget(text, { port: server.port, origins: [...server.origins, ...[...ports].map(port => `http://127.0.0.1:${port}`)] }) !== undefined) return 'strong';
   if (weak && [...text.matchAll(PORT_FIELD)].some(m => ports.has(Number(m[1])))) return 'strong';
+  const refused = [...beatPorts.denied].filter(port => port >= NUMBER_SCAN_FROM);
+  if (weak && refused.length && new RegExp(String.raw`\b0*(?:${refused.join('|')})\b`, 'u').test(text)) return 'strong';
   return weak ? 'weak' : undefined;
 }
 

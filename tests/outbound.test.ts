@@ -551,6 +551,6 @@ test('v3 P1b: その場のコードのメソッドの .exec( は送信に数え�
     `ruby -e "Kernel.exec('x')"`, `ruby -e "Kernel.system('x')"`, `ruby -e "Kernel.spawn('x')"`, `ruby -e "Process.spawn('x')"`, `ruby -e "IO.popen('x')"`,
     `node -e "Bun.spawn(['x'])"`, `node -e "new Deno.Command('x')"`, `node -e "db.spawn; obj.system(1)"`,
     `python -c "__import__('os').system('x')"`, `python -c "import os as o; o.system('x')"`, `python -c "import nt; nt.system('x')"`, `python -c "import posix; posix.system('x')"`,
-    `ruby -e "Process.exec('x')"`, `ruby -e "require 'pty'; PTY.spawn('x')"`,
+    `ruby -e "Process.exec('x')"`, `ruby -e "require 'pty'; PTY.spawn('x')"`, `node -e "require('shelljs').exec('id')"`,
   ]);
 });
