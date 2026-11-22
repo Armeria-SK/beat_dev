@@ -7,6 +7,8 @@ import type { RouteRefusal, SubmitPermit } from '../../src/tools/browser/route.t
 export interface FakeEffect {
   // 別の URL へ移る（FakeBrowserDriver.site に登録があれば、その中身になる）
   navigate?: string;
+  // 同じ URL・同じ文書のまま、ページの中身がこれに変わる（押したあとに画面の一部が描き変わる）
+  mutate?: FakeSite;
   // 開く窓の数
   popups?: number;
   dialogs?: number;
@@ -177,6 +179,7 @@ export class FakePage implements PageHandle {
     this.acts.push({ kind, role: row.role, name: row.name, nth, ...extra, permit: this.permit });
     if (effect?.fail === 'act_failed') throw new BrowserFailure('act_failed', 'browser.act_failed');
     if (effect?.fail === 'timeout') throw new BrowserFailure('timeout', 'browser.timeout', { sec: 1 });
+    if (effect?.mutate !== undefined) this.#site = effect.mutate;
     if (effect?.navigate !== undefined) {
       this.#site = this.browser.driver.sites.get(effect.navigate);
       this.#url = effect.navigate;

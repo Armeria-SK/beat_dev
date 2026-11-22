@@ -57,9 +57,17 @@ export interface ElementTable {
   url: string;
   // 番号のある要素（show: 見せる要素。check: 前の番号がまだ使える要素）
   items: ListedElement[];
-  // 表に入れなかった要素の数（300 件と道具の結果の上限を超えた分）
+  // 表に入れなかった要素の数（300 件と道具の結果の上限を超えた分。差分の形では、番号を振れなかった変化の数）
   omitted: number;
+  // diff で読んだときだけ: 差分の形か、移動・大きすぎる差分で表の形に落としたか
+  diff?: DiffResult | undefined;
 }
+
+// 差分。from: 新しい番号 → 前の番号（中身が変わって番号が変わった要素。無ければ増えた要素）/
+// dead: 見せた番号のうち使えなくなったもの（present: 要素はまだあるが、新しい番号を振れなかった）
+export type DiffResult =
+  | { form: 'diff'; from: ReadonlyMap<string, string>; dead: ReadonlyArray<{ ref: string; present: boolean }> }
+  | { form: 'table'; reason: 'navigated' | 'too_big' };
 
 // 会話のブラウザに 1 つの続きの数（タブで共通）
 export interface RefCounter { next: number }
@@ -78,10 +86,14 @@ export interface RefBook {
   readonly retired: Set<string>;
   // モデルに見せた番号（表の 300 件・差分・find）。見せていない番号は押せない
   readonly shown: Set<string>;
+  // 差分の元（P3b）。view: 見せた番号 → Playwright の印（使えなくなったと差分で知らせるまで残す）。
+  // seen: 最後に見せる形（show / diff）で読んだときの要素（印 → 役割と名前）。押す前の取り直し（check）では変えない
+  readonly view: Map<string, string>;
+  readonly seen: Map<string, string>;
 }
 
 export function newRefBook(counter: RefCounter = { next: 1 }): RefBook {
-  return { counter, url: undefined, document: undefined, records: new Map(), retired: new Set(), shown: new Set() };
+  return { counter, url: undefined, document: undefined, records: new Map(), retired: new Set(), shown: new Set(), view: new Map(), seen: new Map() };
 }
 
 const KEY = /^([a-z]+)(?: "((?:[^"\\]|\\.)*)")?((?: \[[^\]]*\])*)$/u;
@@ -231,6 +243,8 @@ function retire(book: RefBook, ref: string): void {
 function retireAll(book: RefBook): void {
   for (const record of book.records.values()) retire(book, record.ref);
   book.records.clear();
+  book.view.clear();
+  book.seen.clear();
 }
 
 function parseLines(snapshot: string, url: string): { lines: Line[]; entries: Entry[]; end: number[] } {
@@ -320,15 +334,26 @@ function scalar(raw: string): string {
   return raw;
 }
 
-// 番号の振り方。show: 見せる表を作る（先頭から 300 件まで、fits が false を返したところで止める。新しい番号は見せる要素にだけ振る）。
-// check: 押す前の取り直し。新しい番号は振らず、前の番号のうち、同じ要素・同じ中身のものだけを表に残す
-export type Numbering = { kind: 'show'; fits?: ((line: string) => boolean) | undefined } | { kind: 'check' };
+// 番号の振り方。show: 見せる表を作る（先頭から limit 件〔既定 300〕まで、fits が false を返したところで止める。新しい番号は見せる要素にだけ振る）。
+// check: 押す前の取り直し。新しい番号は振らず、前の番号のうち、同じ要素・同じ中身のものだけを表に残す。
+// diff: 押したあとの差分（P3b）。増えた要素と、見せた番号の要素で中身が変わったものにだけ新しい番号を振る（fits には差分の行を渡す）。
+//   URL か文書が変わった・差分の行が maxLines を超えるときは、show（tableLimit 件まで）と同じ表の形に落とす
+export type Numbering =
+  | { kind: 'show'; fits?: ((line: string) => boolean) | undefined; limit?: number | undefined }
+  | { kind: 'check' }
+  | { kind: 'diff'; fits?: ((line: string) => boolean) | undefined; maxLines: number; tableLimit: number };
+
+// 差分の行。from があれば中身が変わって番号が変わった要素（「e12 → e57 …」）、無ければ増えた要素（「+ e58 …」）
+export function diffLine(item: ListedElement, from: string | undefined): string {
+  return from === undefined ? `+ ${elementLine(item)}` : `${from} → ${elementLine(item)}`;
+}
 
 // 表を読み、book の番号の対応を更新する。document は文書の代（主フレームが移動するたびに進む。PageHandle.documentId）。book を省くと、新しい対応（e1 から）
 export function readElements(snapshot: string, url: string, book: RefBook = newRefBook(), document = 0, numbering: Numbering = { kind: 'show' }): ElementTable {
   const { lines, entries, end } = parseLines(snapshot, url);
+  const navigated = book.url !== url || book.document !== document;
   // URL か文書が変わったら、前の番号は全部使えない
-  if (book.url !== url || book.document !== document) {
+  if (navigated) {
     retireAll(book);
     book.url = url;
     book.document = document;
@@ -341,32 +366,59 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   const once = new Set<string>();
   for (const e of entries) if (e.pwRef !== undefined) { if (once.has(e.pwRef)) seenTwice.add(e.pwRef); else once.add(e.pwRef); }
   const usable = entries.filter(e => e.pwRef !== undefined && !seenTwice.has(e.pwRef));
-  const candidates = new Set(numbering.kind === 'show' ? usable.slice(0, MAX_ELEMENTS) : []);
+  const keyOf = (e: Entry): string => `${e.role}\u0000${e.name}`;
+  // diff: 見せた番号の印 → その番号。差分で新しい番号を振ってよいのは、見せた番号の要素と、前に見せる形で読んだときに無かった要素だけ
+  const viewed = new Map<string, string>();
+  for (const [ref, pwRef] of book.view) viewed.set(pwRef, ref);
+  const wanted = numbering.kind === 'diff' && !navigated ? usable.filter(e => viewed.has(e.pwRef!) || book.seen.get(e.pwRef!) !== keyOf(e)) : [];
+  const tableLimit = numbering.kind === 'show' ? numbering.limit ?? MAX_ELEMENTS : numbering.kind === 'diff' ? numbering.tableLimit : 0;
+  let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (navigated ? 'show' : 'diff') : numbering.kind;
+  let candidates = new Set(form === 'show' ? usable.slice(0, tableLimit) : wanted);
   const groups = new Map<string, Entry[]>();
   for (const e of entries) {
-    const key = `${e.role}\u0000${e.name}`;
+    const key = keyOf(e);
     const list = groups.get(key);
     if (list) list.push(e); else groups.set(key, [e]);
   }
   // 手がかりは、番号を振るかもしれない要素と、前の番号のある要素の組だけ作る
   const clue = new Map<Entry, string>();
-  for (const list of groups.values()) {
-    if (!list.some(e => candidates.has(e) || (e.pwRef !== undefined && book.records.has(e.pwRef)))) continue;
-    cluesOf(list, page).forEach((c, k) => clue.set(list[k]!, c));
-  }
+  const addClues = (): void => {
+    for (const list of groups.values()) {
+      if (clue.has(list[0]!) || !list.some(e => candidates.has(e) || (e.pwRef !== undefined && book.records.has(e.pwRef)))) continue;
+      cluesOf(list, page).forEach((c, k) => clue.set(list[k]!, c));
+    }
+  };
+  addClues();
   const same = (e: Entry, record: RefRecord | undefined): boolean => record !== undefined && record.role === e.role && record.name === e.name && record.clue === clue.get(e);
+  // 差分の行の数（使えなくなった見せた番号 + 増えた要素）が多すぎれば、表の形に落とす（番号を振る前に決める）
+  let tableReason: 'navigated' | 'too_big' = 'navigated';
+  if (form === 'diff' && numbering.kind === 'diff') {
+    const keptNow = new Set(usable.filter(e => same(e, book.records.get(e.pwRef!))).map(e => e.pwRef!));
+    const dead = [...book.view].filter(([ref, pwRef]) => !(keptNow.has(pwRef) && book.records.get(pwRef)?.ref === ref));
+    const deadPw = new Set(dead.map(([, pwRef]) => pwRef));
+    const added = wanted.filter(e => !keptNow.has(e.pwRef!) && !deadPw.has(e.pwRef!)).length;
+    if (dead.length + added > numbering.maxLines) {
+      form = 'show';
+      tableReason = 'too_big';
+      candidates = new Set(usable.slice(0, tableLimit));
+      addClues();
+    }
+  }
   const alive = new Set<string>();
   const items: ListedElement[] = [];
-  const fits = numbering.kind === 'show' ? numbering.fits ?? (() => true) : () => false;
-  let open = numbering.kind === 'show';
+  const fits = numbering.kind === 'check' ? () => false : numbering.fits ?? (() => true);
+  let open = form !== 'check';
+  let skipped = 0;
   for (const e of usable) {
     const pwRef = e.pwRef!;
     const record = book.records.get(pwRef);
     const kept = same(e, record);
+    // 差分では、変わらない要素は行にしない
+    if (form === 'diff' && kept) { alive.add(pwRef); continue; }
     if (open && candidates.has(e)) {
       const ref = kept ? record!.ref : `e${book.counter.next}`;
       const item: ListedElement = { ref, role: e.role, name: e.name, pwRef, frameUrl: undefined, href: e.href, states: e.states };
-      if (fits(elementLine(item))) {
+      if (fits(form === 'diff' ? diffLine(item, viewed.get(pwRef)) : elementLine(item))) {
         if (!kept) {
           if (record !== undefined) retire(book, record.ref);
           if (book.counter.next > REF_MAX) throw new BrowserFailure('ref_limit', 'browser.refs_exhausted', { max: REF_MAX });
@@ -379,6 +431,7 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
       }
       open = false;
     }
+    if (candidates.has(e)) skipped += 1;
     // 見せない要素: 前の番号が同じ要素・同じ中身なら残す（check では表にも入れる）。違えば使えなくする
     if (kept) {
       alive.add(pwRef);
@@ -388,7 +441,25 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   for (const [pwRef, record] of [...book.records]) {
     if (!alive.has(pwRef)) { retire(book, record.ref); book.records.delete(pwRef); }
   }
-  return { url, items, omitted: Math.max(0, usable.length - items.length) };
+  if (form === 'check') return { url, items, omitted: Math.max(0, usable.length - items.length) };
+  // 見せる形で読んだ要素を、次の差分の元として覚える
+  book.seen.clear();
+  for (const e of usable) book.seen.set(e.pwRef!, keyOf(e));
+  // 使えなくなった見せた番号は元から外す。差分の形では、番号が変わったもの（from）と、使えなくなったもの（dead）として知らせる
+  // （表の形では、表そのものが新しい元になる）
+  const numbered = new Set(items.map(item => item.ref));
+  const from = new Map<string, string>();
+  const dead: Array<{ ref: string; present: boolean }> = [];
+  for (const [ref, pwRef] of [...book.view]) {
+    const record = book.records.get(pwRef);
+    if (record?.ref === ref) continue;
+    book.view.delete(ref);
+    if (form !== 'diff') continue;
+    if (record !== undefined && numbered.has(record.ref) && viewed.get(pwRef) === ref) from.set(record.ref, ref);
+    else dead.push({ ref, present: book.seen.has(pwRef) });
+  }
+  if (form === 'diff') return { url, items, omitted: skipped, diff: { form: 'diff', from, dead } };
+  return { url, items, omitted: Math.max(0, usable.length - items.length), ...(numbering.kind === 'diff' ? { diff: { form: 'table', reason: tableReason } } : {}) };
 }
 
 // 使えなくなった番号か
@@ -398,7 +469,11 @@ export function retiredRef(book: RefBook, ref: string): boolean {
 
 // モデルに見せた番号として覚える（見せていない番号は押せない）
 export function markShown(book: RefBook, items: readonly ElementRef[]): void {
-  for (const item of items) book.shown.add(item.ref);
+  for (const item of items) {
+    book.shown.add(item.ref);
+    book.view.set(item.ref, item.pwRef);
+  }
+  while (book.view.size > RETIRED_KEPT) book.view.delete(book.view.keys().next().value!);
 }
 
 export function shownRef(book: RefBook, ref: string): boolean {
