@@ -67,8 +67,8 @@ export interface EnvPathPlaces { root: string; dataDir: string; policy: ScopePol
 // 製品のコードが読む env に渡す絶対パスの値。製品のコードへのデータなので、beat のデータのフォルダ（製品の中は除く）・秘密・守る場所・ドライブの根でなければ通す
 export function productEnvPath(places: EnvPathPlaces): (value: string) => boolean {
   return value => {
-    if (!isAbsolute(value)) return false;
-    const abs = resolve(value);
+    if (!isAbsolute(value) || value.split(/[\\/]/u).some(segment => /[. ]$/u.test(segment))) return false;
+    const abs = resolve(places.root, value);
     if (abs === parse(abs).root || placePath(abs, places.policy).kind === 'deny' || writeApprovalKind(abs, places.policy) !== undefined) return false;
     const real = realish(abs);
     const inRoot = isInside(places.root, abs) && isInside(realish(places.root), real);

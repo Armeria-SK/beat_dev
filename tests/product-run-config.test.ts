@@ -124,6 +124,9 @@ test('v3 P3 productEnvPath: env の絶対パスの値は、製品の外の守っ
     join(root, '.github', 'workflows'), join(root, '.github'), join(install, 'x'), drive, '\\\\server\\share\\x', '//server/share/x', `${root}${sep}..${sep}x`, 'data', '~/x', 'C:data'];
   assert.deepEqual(yes.filter(v => !ok(v)), [], 'passes');
   assert.deepEqual(no.filter(ok), [], 'refused');
+  const trailing = [`${data}.`, `${data} `, `${data}.${sep}backups`, `${data} ${sep}backups`, `${join(base, '.ssh')}.`, `${join(base, '.ssh')}.${sep}id_rsa`, `${join(root, '.git')}.`, `${join(root, '.git')}.${sep}hooks`, `${join(data, 'skills')} `];
+  assert.deepEqual(trailing.filter(ok), [], 'a segment ending in a dot or a space (Windows drops it) is refused');
+  if (/^[A-Za-z]:/u.test(data)) assert.equal(ok(data.slice(2)), false, 'a root-relative value resolves on the product root\'s drive');
   const bare = productEnvPath({ root, dataDir: data, policy, protect: [] });
   assert.equal(bare(drive), false, 'the drive root is refused without the protect-files hook too');
   assert.equal(bare(join(root, '.github')), true, 'without the hook, nothing is protected there');
