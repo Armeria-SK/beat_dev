@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import { App } from '../../src/app.ts';
 import type { AppConfig } from '../../src/config/schema.ts';
 import type { RunEvent, StopReason, ToolCall } from '../../src/engine/types.ts';
@@ -21,7 +22,9 @@ export function toolCall(name: string, args: unknown): Script {
 
 // 偽の時計・偽のモデル・メモリの中の DB で App と Web サーバーを立てる（タスクの API のテスト用）
 export async function taskApp(t: { after: (fn: () => void) => void }, edit: (config: AppConfig) => void = () => undefined) {
-  const paths = resolvePaths(tempDir(t));
+  const dir = tempDir(t);
+  // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];

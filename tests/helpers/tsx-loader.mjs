@@ -7,13 +7,15 @@ const ENV = JSON.stringify({ DEV: false, PROD: true, MODE: 'production', BASE_UR
 let esbuild;
 
 // 試験は、本物の置き場所（製品のフォルダ）の .env・.env.bak を作らず書き換えない（paths.env は一時フォルダに向ける）。
-// 有るか・大きさ・更新時刻だけを、始めと終わりで比べる（中身は読まない）。変わっていたら、その試験の実行を失敗にする
+// 有るか・大きさ・更新時刻だけを、始めと終わりで比べる（中身は読まない）。変わっていたら、その試験のファイルを失敗にする。
+// 見るのは試験のファイルごとの子のプロセスだけ（--test の親のプロセスでは、子の失敗として出る）。exit の出来事なしに殺された子は確かめられない。
+// 同時に動いた別のファイルが書いても、その間に動いていたファイルはみな失敗になる（どれが書いたかは、1 つずつ流し直して分ける）
 const ROOT_ENV_FILES = ['.env', '.env.bak'].map(name => fileURLToPath(new URL(`../../${name}`, import.meta.url)));
 const rootEnvStamp = () => ROOT_ENV_FILES.map(path => { const s = statSync(path, { throwIfNoEntry: false }); return s ? `${s.size}:${s.mtimeMs}` : '-'; }).join('|');
 const rootEnvBefore = rootEnvStamp();
 process.on('exit', () => {
   if (rootEnvStamp() === rootEnvBefore) return;
-  console.error(`A test created or changed ${ROOT_ENV_FILES.join(' / ')}. Point paths.env at a temporary folder (see tests/app-setup.ts)`);
+  console.error(`${ROOT_ENV_FILES.join(' / ')} was created or changed while this test file ran. Another test file running at the same time may be the cause: rerun the failing files one at a time. The test that writes it must point paths.env at a temporary folder (see tests/app-setup.ts)`);
   process.exitCode = 1;
 });
 

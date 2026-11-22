@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import { App } from '../src/app.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { createWebServer } from '../src/web/server.ts';
@@ -7,7 +8,9 @@ import { tempDir, testConfig } from './helpers.ts';
 
 // 画面が読む API を、本物のサーバーで確かめるための起動。モデルは使わない（確認は常に ok を返す）。
 export async function startScreenServer(t: Parameters<typeof tempDir>[0]) {
-  const paths = resolvePaths(tempDir(t));
+  const dir = tempDir(t);
+  // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
