@@ -7,7 +7,8 @@
 // 通り方（9-1b。PLAN Approach 4 の順）: 秘密に見える文を入れる → 公開のページ・開発サーバーでないループバックは断る、開発サーバーは判定役 /
 //   その実行の開発サーバー（持ち主が書いたループバックのポート・この会話かタスクの裏のコマンドが出力に出したポート）→ 判定役なし（送信も）/
 //   送信 → 送る（会話は Pending、会話の外は断る）/ 一覧のサイト → 判定役なし / 持ち主が書いた URL のホスト → 判定役なし / ほか → 判定役。
-//   開発サーバーでない許されたループバックは、一覧外の公開のサイトと同じ（送信は送る、ほかは判定役）
+//   開発サーバーでない許されたループバックは、一覧外の公開のサイトと同じ（送信は送る、ほかは判定役）。
+//   ただし、そのポートがこの会話・タスクの止まった（自分で終わった）裏のコマンドのものなら、判定役に回さず断る（#56）
 // Pending で承認された呼び出しは、再実行の前に preCheck をもう一度走らせ、bind が変わっていたら実行しない（src/pending/replay.ts）
 import { languageOf } from '../../shared/language.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
@@ -20,6 +21,7 @@ import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
 import { ownerHostAllows, ownerLoopbackPorts, siteAllows } from './sites.ts';
 import type { Language } from '../../config/schema.ts';
+import type { StoppedPort } from '../shell/background.ts';
 
 export const TEXT_ROLES: ReadonlySet<string> = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
 export const TYPE_TEXT_MAX = 2000;
@@ -110,6 +112,18 @@ export function devServerPage(pageUrl: string, ctx: Pick<ToolContext, 'ownerText
   } catch { return false; }
 }
 
+// 開発サーバーでないループバックのページで、ポートがこの会話・このタスクの止まった裏のコマンドのもの（判定役に回さず断る。動いている方が勝つので devServerPage のあとに見る）
+export function stoppedServerText(pageUrl: string, ctx: Pick<ToolContext, 'services' | 'conversationId' | 'task' | 'parent'>, language: Language): string | undefined {
+  let url: URL;
+  try { url = new URL(pageUrl); } catch { return undefined; }
+  if (!isLoopbackUrl(pageUrl)) return undefined;
+  const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+  let stopped: StoppedPort | undefined;
+  try { stopped = ctx.services?.background?.stoppedPort({ conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId }, port); } catch { return undefined; }
+  if (stopped === undefined) return undefined;
+  return guardText(language, stopped.stoppedBy === 'owner' ? 'browser.act.server_stopped_owner' : 'browser.act.server_ended', { port: stopped.port, job: stopped.jobId });
+}
+
 // 入れる文が API の鍵・トークンに見えるか（web_fetch と同じ見分け）
 export const secretText = (kind: 'click' | 'type', input: ActInput): boolean => kind === 'type' && sanitizeModelInputText(input.text ?? '').redaction_count > 0;
 
@@ -154,6 +168,8 @@ export async function browserActCheck(kind: 'click' | 'type', input: ActInput, c
       if (!found.ok) return { decision: 'deny', reasons: [found.reason] } satisfies PreCheck;
       const { preview, bind } = actPreview(kind, input, found, language);
       const devServer = found.place === 'loopback' && devServerPage(found.pageUrl, ctx);
+      const stopped = found.place === 'loopback' && !devServer ? stoppedServerText(found.pageUrl, ctx, language) : undefined;
+      if (stopped !== undefined) return { decision: 'deny', reasons: [stopped] } satisfies PreCheck;
       // 秘密に見える文: 公開のページ（と開発サーバーでないループバック）へは断る（順 1。web.secret_text は拒否の印）。開発サーバーへは判定役に見せる
       if (secretText(kind, input)) {
         return devServer
