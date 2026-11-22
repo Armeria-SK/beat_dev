@@ -82,20 +82,19 @@ function assertTabUrl(browser: BrowserSession, api: BrowserApi, tab: BrowserTab,
   }
 }
 
-interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean; outputTokens: number | undefined }
+// replay: Pending の承認のあとの再実行。結果はそのままモデルに届かない（末尾だけが知らせになる）ので、番号を「見せた」にしない
+interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean; outputTokens: number | undefined; replay: boolean }
 
 // 道具の結果の上限（文字数は pipeline の TOOL_OUTPUT_LIMIT、トークンはその呼び出しに許された量）から、見出し・足跡・伏せ字の揺れの分を引いた残り
 const RENDER_MARGIN_CHARS = 400;
 const RENDER_MARGIN_TOKENS = 120;
 
-// pipeline の切り方（capOutput: 伏せ字のあと、文字数とトークンの上限）で残る部分に、行がそのまま入っている要素だけを返す
-function shownIn(items: readonly ListedElement[], content: string, outputTokens: number | undefined, secrets: readonly string[]): ListedElement[] {
+// pipeline の切り方（capOutput: 伏せ字のあと、文字数とトークンの上限）で残る部分に、行がそのまま入っている要素だけを返す。
+// 途中で切れた最後の行は、番号が同じ行がほかに無いので、どの要素の行とも一致しない
+export function shownIn(items: readonly ListedElement[], content: string, outputTokens: number | undefined, secrets: readonly string[]): ListedElement[] {
   const redacted = redactSecrets(content);
   const kept = redacted.slice(0, prefixLength(redacted, TOOL_OUTPUT_LIMIT, outputTokens ?? Infinity));
-  const lines = kept.split('\n');
-  // 切られた最後の行は、途中までしか見えていない
-  if (kept.length < redacted.length) lines.pop();
-  const present = new Set(lines);
+  const present = new Set(kept.split('\n'));
   return items.filter(item => present.has(redactSecrets(block(elementLine(item), secrets))));
 }
 
@@ -169,9 +168,10 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     toolText(language, 'browser.footer', { tab: tab.id, blocked: delta.blocked, mode }),
   ];
   if (delta.busy > 0) lines.push(toolText(language, 'browser.busy_note', { busy: delta.busy }));
+  if (options.replay && table !== undefined) lines.push(toolText(language, 'browser.replay_read_again'));
   const content = lines.join('\n');
   // 最後の守り: pipeline が切ったあとに残る行にある番号だけを「見せた」にする（見せていない番号は押せない）
-  if (table !== undefined) markShown(tab.refs, shownIn(table.items, content, options.outputTokens, secrets));
+  if (table !== undefined && !options.replay) markShown(tab.refs, shownIn(table.items, content, options.outputTokens, secrets));
   return { content, fetched: true };
 }
 
@@ -212,7 +212,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
     return { ...base, reasons: [...base.reasons, reason], askKinds: [...(base.askKinds ?? base.reasons.map((): 'web' => 'web')), 'web'], outbound };
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.browser_open'), body: input.url }),
-  execute(input, ctx) {
+  execute(input, ctx, info) {
     return guarded(ctx, async (browser, language, secrets, grant) => {
       let url: URL;
       let kind: 'public' | 'loopback';
@@ -233,7 +233,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
           const refusal = tab.page.lastRefusal();
           if (refusal !== undefined) throw new BrowserFailure('blocked', REFUSAL_KEYS[refusal]);
           assertTabUrl(browser, api, tab, tab.page.url());
-          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens });
+          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens, replay: info?.approvedOnce === true });
         } catch (thrown) {
           // 開けなかった・行き先が公開でなかったタブは、中身を残さない（新しく作ったタブは上限も使わせない）
           if (created || (thrown instanceof BrowserFailure && thrown.code === 'blocked')) await api.closeTab(tab.id).catch(() => false);
@@ -256,13 +256,13 @@ export const browserRead: ToolDef<{ tab?: string; offset?: number; mode?: 'text'
   allowedIn: ['chat', 'task', 'agent'],
   preCheck: (_input, ctx) => entryCheck(ctx) ?? allow(),
   summarize: (_input, language) => ({ title: toolText(language, 'summary.browser_read'), body: '' }),
-  execute(input, ctx) {
+  execute(input, ctx, info) {
     return guarded(ctx, async (browser, language, secrets, grant) => {
       if (input.tab === undefined && browser.tabCount(ctx.conversationId) === 0) return { content: toolText(language, 'browser.no_tabs') };
       requireTabs(browser, ctx, input.tab);
       return browser.run({ grant, signal: ctx.signal }, async api => {
         const tab = api.tab(input.tab);
-        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens });
+        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens, replay: info?.approvedOnce === true });
       });
     });
   },

@@ -10,9 +10,10 @@ import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
-import { retiredRef } from '../src/tools/browser/elements.ts';
-import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
-import { runToolCall } from '../src/tools/pipeline.ts';
+import { elementLine, retiredRef, type ListedElement } from '../src/tools/browser/elements.ts';
+import { Type } from '@sinclair/typebox';
+import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType, shownIn } from '../src/tools/builtin/browser.ts';
+import { runToolCall, TOOL_OUTPUT_LIMIT } from '../src/tools/pipeline.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -290,6 +291,36 @@ test('T-23: 自動承認モードでも、送信の押す・入れるは送る�
   assert.equal(page.acts.length, 0);
 });
 
+test('P3a: shownIn は、道具の流れ（runToolCall の切り方）で実際に残る行の番号だけを返す。途中で切れた最後の行の番号は入れない（文字数でもトークンでも）', async t => {
+  const r = rig(t);
+  const echo: ToolDef<{ text: string }> = {
+    name: 'echo_probe', description: 'echo', effect: 'read', allowedIn: ['chat'],
+    input: Type.Object({ text: Type.String() }, { additionalProperties: false }),
+    execute: async input => ({ content: input.text }),
+  };
+  const registry = new ToolRegistry();
+  registry.register(echo as never);
+  const items: ListedElement[] = Array.from({ length: 900 }, (_, i) => ({ ref: `e${i + 1}`, role: 'button', name: `品物 ${i + 1} の説明 abc`, pwRef: `p${i}`, frameUrl: undefined, href: undefined, states: [] }));
+  const content = ['header line', '<<<', ...items.map(elementLine), '>>>', 'footer'].join('\n');
+  assert.ok(content.length > TOOL_OUTPUT_LIMIT, `${content.length}`);
+  let partialSeen = 0;
+  for (const tokens of [undefined, 900, 3_000]) {
+    (r.ctx as { outputTokens?: number | undefined }).outputTokens = tokens;
+    const out = await runToolCall({ id: `echo-${tokens}`, name: 'echo_probe', arguments: { text: content } }, r.ctx, { registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto' });
+    const returned = out.output.content;
+    const body = returned.slice(0, returned.indexOf('\n\n[The output was long'));
+    assert.ok(body.length > 0 && content.startsWith(body), `${tokens}: 先頭が残る`);
+    const lines = body.split('\n');
+    // 本文の続きが改行でなければ、最後の行は途中で切れている
+    if (content[body.length] !== '\n') { lines.pop(); partialSeen += 1; }
+    const survived = new Set(lines);
+    const expected = items.filter(item => survived.has(elementLine(item))).map(item => item.ref);
+    assert.ok(expected.length > 0 && expected.length < items.length, `${tokens}: ${expected.length}`);
+    assert.deepEqual(shownIn(items, content, tokens, []).map(item => item.ref), expected, `${tokens}`);
+  }
+  assert.ok(partialSeen > 0, '途中で切れた行の場合を 1 つ以上通る');
+});
+
 test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きなら（外を読んだかを問わず）送るに数え、判定役が allow と答える設定でも判定役を呼ばずに send の Pending に積まれる', async t => {
   const classified: ClassifierPrompt[] = [];
   const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
@@ -306,6 +337,29 @@ test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きなら（�
     const result = await r.approve(row.id);
     assert.equal(result.status, 'ran', `持ち主が通せば開く: ${JSON.stringify(result)}`);
   }
+});
+
+test('P3a: Pending の承認のあとの再実行で開いた（読んだ）ページの番号は、モデルに届く知らせ（末尾）に無いので押せない。知らせは読み直しを求める', async t => {
+  const r = rig(t, { mode: 'auto' });
+  const QUERY = 'https://example.com/list?q=1';
+  const names = Array.from({ length: 30 }, (_, i) => `品物 ${i + 1}`);
+  const queued = await r.call('browser_open', { url: QUERY });
+  assert.equal(queued.decidedBy, 'pending');
+  r.driver.site(QUERY, { title: 'List', text: 'く'.repeat(5_000), snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  const row = r.pending.list({ status: 'waiting' })[0]!;
+  const result = await r.approve(row.id);
+  assert.equal(result.status, 'ran', JSON.stringify(result));
+  const preview = (r.db.prepare('SELECT output_preview FROM pending_actions WHERE id = ?').get(row.id) as { output_preview: string | null }).output_preview ?? '';
+  assert.match(preview, /Read the page again with browser_read before you click or type/u, '知らせの末尾に読み直しを求める文');
+  for (let n = 1; n <= 60; n++) {
+    const ref = `e${n}`;
+    const decision = (await preCheck(r, browserClick, { ref })).decision;
+    if (decision !== 'deny') assert.ok(new RegExp(`^${ref} `, 'mu').test(preview), `${ref} は押せるのに、知らせに無い`);
+  }
+  // 読み直せば押せる
+  const read = await r.call('browser_read', {});
+  const [first] = [...read.output.content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
+  assert.notEqual((await preCheck(r, browserClick, { ref: first! })).decision, 'deny');
 });
 
 test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトでもクエリなしの browser_open は、外を読んだあとでも積まずに開く（P3）', async t => {

@@ -363,6 +363,7 @@ const en = {
   'browser.no_elements': '(There is nothing to touch)',
   'browser.more_text': '(Cut here. Continue with offset={offset})',
   'browser.more_elements': '({count} more elements are omitted)',
+  'browser.replay_read_again': '(This page was read after the owner approved it, so its element numbers cannot be used yet. Read the page again with browser_read before you click or type.)',
   'browser.refs_exhausted': 'The browser of this conversation has used up its element numbers (up to e{max}) and does not number them again, so the page cannot be read or operated until beat is restarted',
   'browser.no_tabs': 'No tab is open in this conversation. Open one with browser_open',
   'browser.closed': 'Closed {count} tab(s)',
