@@ -339,7 +339,27 @@ test('stopped ports: kept after the finished command is pruned, matched by conve
   await until(() => jobs.printedPorts({ conversationId: 'c1' }).has(7001));
   assert.equal(jobs.stoppedPort({ conversationId: 'c1' }, 7001), undefined, 'a running command is not stopped');
   await jobs.stop(running, 'model', 'c1');
-  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 7001), { port: 7001, jobId: running });
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 7001), { port: 7001, jobId: running, stoppedBy: 'model' });
+});
+
+test('stopped ports: a port stopped again moves to the newest place, so the cap drops the older one', async t => {
+  const { jobs, start } = setup(t, { limits: { stoppedPorts: 2 } });
+  const finish = async (script: string) => {
+    const id = start(script);
+    await jobs.wait(id, 'c1', 10, new AbortController().signal);
+    return id;
+  };
+  await finish("console.log('http://localhost:5173/');");
+  await finish("console.log('http://localhost:6001/');");
+  const again = await finish("console.log('http://localhost:5173/');");
+  await finish("console.log('http://localhost:6002/');");
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 5173), { port: 5173, jobId: again });
+  assert.equal(jobs.stoppedPort({ conversationId: 'c1' }, 6001), undefined);
+  assert.ok(jobs.stoppedPort({ conversationId: 'c1' }, 6002));
+  const owner = start("console.log('http://localhost:7002/'); setInterval(() => {}, 1000);");
+  await until(() => jobs.printedPorts({ conversationId: 'c1' }).has(7002));
+  await jobs.stop(owner, 'owner');
+  assert.deepEqual(jobs.stoppedPort({ conversationId: 'c1' }, 7002), { port: 7002, jobId: owner, stoppedBy: 'owner' });
 });
 
 test('a command that cannot start ends once as exited with the spawn error', async t => {

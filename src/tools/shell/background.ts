@@ -330,7 +330,7 @@ interface Job extends JobOwner {
 const LOOPBACK_URL = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})\b/giu;
 const PORTS_PER_JOB = 16;
 
-export interface StoppedPort { port: number; jobId: string }
+export interface StoppedPort { port: number; jobId: string; stoppedBy?: StopBy }
 
 export interface BackgroundOptions {
   logDir: string;
@@ -477,7 +477,7 @@ export class BackgroundJobs {
     for (const entry of this.#stoppedPorts.values()) {
       if (entry.port !== port) continue;
       if (entry.conversationId !== owner.conversationId && (owner.taskId === undefined || entry.taskId !== owner.taskId)) continue;
-      found = { port: entry.port, jobId: entry.jobId };
+      found = { port: entry.port, jobId: entry.jobId, ...(entry.stoppedBy ? { stoppedBy: entry.stoppedBy } : {}) };
     }
     return found;
   }
@@ -679,7 +679,7 @@ export class BackgroundJobs {
     for (const port of job.ports) {
       const key = JSON.stringify([job.conversationId, job.taskId ?? null, port]);
       this.#stoppedPorts.delete(key);
-      this.#stoppedPorts.set(key, { port, jobId: job.id, conversationId: job.conversationId, taskId: job.taskId });
+      this.#stoppedPorts.set(key, { port, jobId: job.id, ...(job.stoppedBy ? { stoppedBy: job.stoppedBy } : {}), conversationId: job.conversationId, taskId: job.taskId });
     }
     for (const key of this.#stoppedPorts.keys()) {
       if (this.#stoppedPorts.size <= this.#limits.stoppedPorts) break;

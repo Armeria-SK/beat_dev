@@ -514,7 +514,8 @@ function backgroundRig(t: TestContext) {
   return { jobs, start, ended };
 }
 
-const stoppedText = (id: string): RegExp => new RegExp('port ' + STOPPED_PORT + ' has stopped \\(' + id + '\\)', 'u');
+const ownerStoppedText = (id: string): RegExp => new RegExp('^- The owner stopped ' + id + ', which printed port ' + STOPPED_PORT + '\\. Ask the owner before starting it again$', 'mu');
+const endedText = (id: string): RegExp => new RegExp(id + ', which printed port ' + STOPPED_PORT + ', has ended\\. If it is the app you are checking, start it again', 'u');
 
 test('P2: 動いている開発サーバーは聞かずに押す。止めたら判定役なしで断り（新しい文）、直接の実行も押さない。同じポートで起動し直すと今どおり聞かない。自分で終わっても同じく断る', async t => {
   const bg = backgroundRig(t);
@@ -527,13 +528,14 @@ test('P2: 動いている開発サーバーは聞かずに押す。止めたら�
   await bg.jobs.stop(first, 'owner');
   const stopped = await r.call('browser_click', { ref: 'e3' });
   assert.equal(stopped.decision, 'deny');
-  assert.match(stopped.output.content, stoppedText(first));
+  assert.match(stopped.output.content, ownerStoppedText(first), '持ち主が止めたものは、起動し直す前に持ち主に聞くよう言う');
+  assert.doesNotMatch(stopped.output.content, /start it again, then/u);
   assert.equal((await r.call('browser_type', { ref: 'e1', text: 'hello' })).decision, 'deny', '入れるも断る');
   assert.equal((await r.call('browser_click', { ref: 'e2' })).decision, 'deny', '送信も Pending に積まずに断る');
   assert.deepEqual(r.counts(), { ...NONE, acts: 1 }, '判定役 0・Pending 0・押さない');
   const direct = await browserClick.execute({ ref: 'e3' }, r.ctx);
   assert.equal(direct.isError, true);
-  assert.match(direct.content, stoppedText(first), '直接の実行でも押さない');
+  assert.match(direct.content, /The owner stopped/u, '直接の実行でも押さない');
   assert.equal(page.acts.length, 1);
 
   const again = await bg.start({ conversationId: 'c1' }, serve());
@@ -546,7 +548,7 @@ test('P2: 動いている開発サーバーは聞かずに押す。止めたら�
   assert.equal(bg.jobs.get(crashed)!.state, 'exited');
   const after = await r.call('browser_click', { ref: 'e3' });
   assert.equal(after.decision, 'deny', '自分で終わった（落ちた）サーバーも断る');
-  assert.match(after.output.content, stoppedText(crashed), 'いちばん新しく止まった裏のコマンドを言う');
+  assert.match(after.output.content, endedText(crashed), 'いちばん新しく止まった裏のコマンドを言う');
   assert.deepEqual(r.counts(), { ...NONE, acts: 2 });
 });
 
@@ -562,10 +564,10 @@ test('P2: 別の会話が止めたポートは今どおり判定役へ。同じ�
   const task = rig(t, { kind: 'task', product: true, judge: 'allow', background: bg.jobs });
   await task.open(OTHER_LOOP);
   const sameTask = await bg.start({ conversationId: 'c-earlier-run', taskId: task.task.id }, serve());
-  await bg.jobs.stop(sameTask, 'owner');
+  await bg.jobs.stop(sameTask, 'model', 'c-earlier-run');
   const refused = await task.call('browser_click', { ref: 'e3' });
   assert.equal(refused.decision, 'deny');
-  assert.match(refused.output.content, stoppedText(sameTask));
+  assert.match(refused.output.content, endedText(sameTask), 'AI が止めたものは「終わった」と言う');
   assert.deepEqual(task.counts(), { ...NONE, acts: 0 });
 });
 

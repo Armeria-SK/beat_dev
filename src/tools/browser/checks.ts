@@ -21,6 +21,7 @@ import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
 import { ownerHostAllows, ownerLoopbackPorts, siteAllows } from './sites.ts';
 import type { Language } from '../../config/schema.ts';
+import type { StoppedPort } from '../shell/background.ts';
 
 export const TEXT_ROLES: ReadonlySet<string> = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
 export const TYPE_TEXT_MAX = 2000;
@@ -117,9 +118,10 @@ export function stoppedServerText(pageUrl: string, ctx: Pick<ToolContext, 'servi
   try { url = new URL(pageUrl); } catch { return undefined; }
   if (!isLoopbackUrl(pageUrl)) return undefined;
   const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
-  let stopped: { port: number; jobId: string } | undefined;
+  let stopped: StoppedPort | undefined;
   try { stopped = ctx.services?.background?.stoppedPort({ conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId }, port); } catch { return undefined; }
-  return stopped === undefined ? undefined : guardText(language, 'browser.act.server_stopped', { port: stopped.port, job: stopped.jobId });
+  if (stopped === undefined) return undefined;
+  return guardText(language, stopped.stoppedBy === 'owner' ? 'browser.act.server_stopped_owner' : 'browser.act.server_ended', { port: stopped.port, job: stopped.jobId });
 }
 
 // 入れる文が API の鍵・トークンに見えるか（web_fetch と同じ見分け）
