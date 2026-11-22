@@ -261,3 +261,25 @@ test('APP_ROOT used any other way in a test picks it for any change', t => {
   }));
   assert.deepEqual(graph.everyChange(), ['tests/approot-bare.test.ts', 'tests/approot-computed.test.ts']);
 });
+
+test('a path joined from a folder with a non-literal part picks its tests for any change', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/tools/x.ts': "import { join } from 'node:path';\nexport const at = (name: string) => join(import.meta.dirname, name);\n",
+    'src/tools/y.ts': "import { join } from 'node:path';\nexport const at = (name: string) => join(import.meta.dirname, 'plug', name);\n",
+    'tests/x.test.ts': "import '../src/tools/x.ts';\n",
+    'tests/y.test.ts': "import '../src/tools/y.ts';\n",
+  }));
+  assert.deepEqual(graph.everyChange(), ['tests/x.test.ts', 'tests/y.test.ts']);
+});
+
+test('APP_ROOT imported under another name follows the same rules', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'scripts/tool.ts': "import '../src/deep.ts';\n",
+    'src/deep.ts': 'export {};\n',
+    'tests/alias-join.test.ts': "import { join } from 'node:path';\nimport { APP_ROOT as ROOT } from '../src/paths.ts';\nvoid join(ROOT, 'scripts', 'tool.ts');\n",
+    'tests/alias-bare.test.ts': "import { APP_ROOT as ROOT } from '../src/paths.ts';\nvoid ROOT.length;\n",
+  }));
+  assert.deepEqual(graph.everyChange(), ['tests/alias-bare.test.ts']);
+  assert.deepEqual(graph.pick(['src/deep.ts']).tests, ['tests/alias-bare.test.ts', 'tests/alias-join.test.ts']);
+});

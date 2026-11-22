@@ -80,10 +80,6 @@ function isFileAnchor(node: ts.Node): boolean {
   return ts.isCallExpression(node) && node.arguments.length === 1 && ['dirname', 'fileURLToPath'].includes(calleeName(node.expression) ?? '') && isFileAnchor(node.arguments[0]!);
 }
 
-function isAppRoot(node: ts.Node): boolean {
-  return ts.isIdentifier(node) && node.text === 'APP_ROOT' && !ts.isImportSpecifier(node.parent) && !ts.isExportSpecifier(node.parent);
-}
-
 function isCwd(node: ts.Node): boolean {
   return ts.isCallExpression(node) && node.arguments.length === 0 && ts.isPropertyAccessExpression(node.expression)
     && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'process' && node.expression.name.text === 'cwd';
@@ -117,6 +113,15 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
     return true;
   };
 
+  const rootNames = new Set<string>();
+  for (const statement of sf.statements) {
+    const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
+    if (bindings && ts.isNamedImports(bindings)) {
+      for (const spec of bindings.elements) if ((spec.propertyName ?? spec.name).text === 'APP_ROOT') rootNames.add(spec.name.text);
+    }
+  }
+  const isAppRoot = (node: ts.Node): boolean => (ts.isIdentifier(node) && rootNames.has(node.text) && !ts.isImportSpecifier(node.parent) && !ts.isExportSpecifier(node.parent))
+    || (ts.isPropertyAccessExpression(node) && node.name.text === 'APP_ROOT');
   const safe = KNOWN_SAFE[rel] ?? [];
   const visit = (node: ts.Node): void => {
     if (safe.length > 0 && (ts.isCallExpression(node) || ts.isNewExpression(node)) && safe.includes(node.getText(sf))) { consume(node); return; }
@@ -144,13 +149,14 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
       if (base && fileRelative(node, args[0])) consume(base);
       if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]) || (testSide && isAppRoot(args[0])))) {
         const parts: string[] = [];
+        let fixed = true;
         for (const arg of args.slice(1)) {
-          const path = pathText(arg);
-          if (!path) break;
-          parts.push(path.text);
-          if (!path.whole) break;
+          const path = literal(arg);
+          if (path === undefined) { fixed = false; break; }
+          parts.push(path);
         }
-        load(node, resolve(isCwd(args[0]) || isAppRoot(args[0]) ? root : dir, ...parts));
+        if (fixed) load(node, resolve(isCwd(args[0]) || isAppRoot(args[0]) ? root : dir, ...parts));
+        else scan.anchors.push(at(node));
         consume(args[0]);
       }
     } else if (ts.isBinaryExpression(node) && isImportMeta(node.left, 'url')
