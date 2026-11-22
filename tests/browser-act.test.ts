@@ -615,6 +615,32 @@ test('P3a: 長いページでも、道具の結果は上限（16,000 文字）�
   assert.ok(few.length > 0 && few.length < shown.length, `${few.length}`);
 });
 
+test('P3a: 名前に「>>>」が並ぶ（送る形では全角に置き換わって大きくなる）ページでも、見せた番号は全部、道具の流れで切られたあとの結果にある。無い番号は押せない', async t => {
+  const r = rig(t);
+  const FENCE = 'https://example.com/fence';
+  const names = Array.from({ length: 200 }, (_, i) => `品 ${i + 1} ${'>>>'.repeat(30)}`);
+  r.driver.site(FENCE, { title: 'Fence', text: `本文 ${'<<<>>>'.repeat(2000)}`, snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  (r.ctx as { outputTokens?: number }).outputTokens = 1_500;
+  const seen = new Set<string>();
+  for (const [tool, args] of [['browser_open', { url: FENCE }], ['browser_read', { tab: 't1', mode: 'elements' }], ['browser_read', { tab: 't1' }]] as const) {
+    const out = await r.call(tool, args);
+    const content = out.output.content;
+    const visible = new Set([...content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!));
+    for (const ref of visible) seen.add(ref);
+    assert.ok(visible.size > 0, `${tool}: ${content.slice(0, 300)}`);
+    const highest = Math.max(...[...visible].map(ref => Number(ref.slice(1))));
+    for (let n = 1; n <= highest + 30; n++) {
+      const ref = `e${n}`;
+      const decision = (await preCheck(r, browserClick, { ref })).decision;
+      if (decision !== 'deny') assert.ok(seen.has(ref), `${tool}: ${ref} は押せるのに、どの結果にも無い`);
+    }
+    const unseen = `e${Math.max(...[...seen].map(ref => Number(ref.slice(1)))) + 1}`;
+    assert.equal((await r.call('browser_click', { ref: unseen })).decision, 'deny', `${tool}: 見せていない ${unseen}`);
+    assert.doesNotMatch(content, /The output was long/u, `${tool}: 道具の流れで切られない`);
+  }
+  assert.equal(r.driver.current!.pageList[0]!.acts.length, 0);
+});
+
 test('P3a: モデルに見せていない番号（表の 300 件より後ろ）は、表に持っていても押せない', async t => {
   const r = rig(t);
   const MANY = 'https://example.com/many';

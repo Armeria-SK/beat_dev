@@ -21,6 +21,8 @@ export const REF_MAX = 999_999;
 const REF_START_SPAN = 9_000;
 export const randomRefStart = (): number => 1 + randomInt(REF_START_SPAN);
 const NAME_SHOWN = 100;
+// 子から作った名前の長さの上限（字）
+const DERIVED_NAME_MAX = 900;
 // 組の最初の要素の前・最後の要素のあとに、手がかりに入れる行の数
 const EDGE_LINES = 8;
 // 使えなくなった番号を覚えておく数（断る文を「使えなくなりました」にするため）
@@ -279,8 +281,13 @@ function parseLines(snapshot: string, url: string): { lines: Line[]; entries: En
   for (let k = entries.length - 1; k >= 0; k--) {
     const entry = entries[k]!;
     if (!entry.derived) continue;
-    entry.name = subtreeName(lines, end, entry.line);
-    lines[entry.line]!.name = entry.name;
+    // 作った名前は 900 字まで（名前・承認の bind・画面に使う）。切ったときは、全体のまとめを手がかりにだけ入れる
+    const full = subtreeName(lines, end, entry.line);
+    const chars = [...full];
+    entry.name = chars.length > DERIVED_NAME_MAX ? chars.slice(0, DERIVED_NAME_MAX).join('') : full;
+    const line = lines[entry.line]!;
+    line.name = entry.name;
+    if (entry.name !== full) line.attrs += ` [name#${sha(full)}]`;
   }
   return { lines, entries: entries.filter(e => e.name !== ''), end };
 }
@@ -295,15 +302,22 @@ function endsOf(lines: readonly Line[]): number[] {
 // 名前の無い要素の名前を、下の行（子の名前と文）から作る。名前のある子はその名前だけ使い、その下は見ない。入力欄の値は入れない
 function subtreeName(lines: readonly Line[], end: readonly number[], at: number): string {
   const own = lines[at]!;
-  const parts: string[] = VALUE_ROLES.has(own.role) || own.inline === '' ? [] : [own.inline];
+  const parts: string[] = VALUE_ROLES.has(own.role) || own.inline === '' ? [] : [scalar(own.inline)];
   for (let i = at + 1; i <= end[at]!;) {
     const line = lines[i]!;
     if (line.inFrame || line.raw !== undefined || VALUE_ROLES.has(line.role)) { i = end[i]! + 1; continue; }
     if (line.name !== '') { parts.push(line.name); i = end[i]! + 1; continue; }
-    if (line.inline !== '') parts.push(line.inline);
+    if (line.inline !== '') parts.push(scalar(line.inline));
     i += 1;
   }
   return flatText(parts.join(' '));
+}
+
+// 行の「: 値」の YAML の引用（"…" と '…'）を外す（名前と同じ読み方）
+function scalar(raw: string): string {
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) return unquote(raw.slice(1, -1));
+  if (raw.length >= 2 && raw.startsWith('\'') && raw.endsWith('\'')) return raw.slice(1, -1).replaceAll('\'\'', '\'');
+  return raw;
 }
 
 // 番号の振り方。show: 見せる表を作る（先頭から 300 件まで、fits が false を返したところで止める。新しい番号は見せる要素にだけ振る）。

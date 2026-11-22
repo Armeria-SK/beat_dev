@@ -10,7 +10,7 @@ import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
 import { actPreview, browserActCheck, devServerPage, inspectAct, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
-import { formatElements, markShown, type ElementTable } from '../browser/elements.ts';
+import { elementLine, formatElements, markShown, type ElementTable, type ListedElement } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
@@ -88,6 +88,17 @@ interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; d
 const RENDER_MARGIN_CHARS = 400;
 const RENDER_MARGIN_TOKENS = 120;
 
+// pipeline の切り方（capOutput: 伏せ字のあと、文字数とトークンの上限）で残る部分に、行がそのまま入っている要素だけを返す
+function shownIn(items: readonly ListedElement[], content: string, outputTokens: number | undefined, secrets: readonly string[]): ListedElement[] {
+  const redacted = redactSecrets(content);
+  const kept = redacted.slice(0, prefixLength(redacted, TOOL_OUTPUT_LIMIT, outputTokens ?? Infinity));
+  const lines = kept.split('\n');
+  // 切られた最後の行は、途中までしか見えていない
+  if (kept.length < redacted.length) lines.pop();
+  const present = new Set(lines);
+  return items.filter(item => present.has(redactSecrets(block(elementLine(item), secrets))));
+}
+
 // タブの中身を、外の内容の見出し・枠・本文・触れるもの・足跡の形にする
 async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserTab, language: Language, secrets: readonly string[], options: ReadOptions): Promise<ToolOutput> {
   const page = tab.page;
@@ -101,41 +112,52 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   let chars = TOOL_OUTPUT_LIMIT - RENDER_MARGIN_CHARS - footerRoom - header.length;
   let tokens = (options.outputTokens ?? Infinity) - RENDER_MARGIN_TOKENS - estimateTextTokens(header) - footerRoom / 3.5;
   const raw = options.mode !== 'elements' ? await until(page.text(options.offset + pageChars + 1), api.signal) : '';
+  // 大きさは、送る形（block: 枠の文字の置き換え・伏せ字のあと）で測る
+  const size = (text: string): { chars: number; tokens: number } => ({ chars: text.length + 1, tokens: estimateTextTokens(text) + 1 });
   let table: ElementTable | undefined;
   let elementsText = '';
+  const parts: string[] = [];
   if (options.mode !== 'text') {
-    // 表は、両方を返すときは残りの半分まで（文が残りを使う）。番号は収まる行にだけ振り、その番号だけを「見せた」にする
+    // 表は文より前に置く（文があふれても番号が切られない）。両方を返すときは残りの半分まで（文が残りを使う）。
+    // 番号は収まる行にだけ振る
     const share = options.mode === 'elements' ? 1 : 0.5;
     const elementsTitle = toolText(language, 'browser.section_elements');
-    let usedChars = elementsTitle.length + 1 + 80;
-    let usedTokens = estimateTextTokens(elementsTitle) + 30;
+    const more = size(toolText(language, 'browser.more_elements', { count: 999_999 }));
+    let used = size(elementsTitle);
+    used = { chars: used.chars + more.chars, tokens: used.tokens + more.tokens };
     const fits = (line: string): boolean => {
-      const nextChars = usedChars + line.length + 1;
-      const nextTokens = usedTokens + estimateTextTokens(line) + 1;
-      if (nextChars > chars * share || nextTokens > tokens * share) return false;
-      usedChars = nextChars; usedTokens = nextTokens;
+      const one = size(block(line, secrets));
+      const next = { chars: used.chars + one.chars, tokens: used.tokens + one.tokens };
+      if (next.chars > chars * share || next.tokens > tokens * share) return false;
+      used = next;
       return true;
     };
     table = await rereadTab(tab, url, api.signal, { kind: 'show', fits });
     if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
     elementsText = block(formatElements(table, language), secrets);
-    chars -= elementsTitle.length + 1 + elementsText.length + 1;
-    tokens -= estimateTextTokens(elementsTitle) + estimateTextTokens(elementsText) + 2;
+    parts.push(elementsTitle, elementsText);
+    const spent = size(`${elementsTitle}\n${elementsText}`);
+    chars -= spent.chars;
+    tokens -= spent.tokens;
   }
-  const parts: string[] = [];
   if (options.mode !== 'elements') {
     const wanted = raw.slice(options.offset, options.offset + pageChars);
     const textTitle = toolText(language, 'browser.section_text');
-    const room = prefixLength(wanted, Math.max(0, chars - textTitle.length - 120), Math.max(0, tokens - estimateTextTokens(textTitle) - 40));
-    const slice = wanted.slice(0, room);
-    parts.push(textTitle, slice.length > 0 ? block(slice, secrets) : toolText(language, 'browser.empty_text'));
-    if (slice.length < wanted.length || raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + slice.length }));
+    const moreText = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
+    const roomChars = Math.max(0, chars - size(textTitle).chars - moreText.chars);
+    const roomTokens = Math.max(0, tokens - size(textTitle).tokens - moreText.tokens);
+    // 送る形で上限に収まるまで縮める（枠の文字の置き換えで、測った大きさより大きくなることがある）
+    let room = prefixLength(wanted, roomChars, roomTokens);
+    let sent = block(wanted.slice(0, room), secrets);
+    while (room > 0 && (sent.length > roomChars || estimateTextTokens(sent) > roomTokens)) {
+      room = Math.floor(room * 0.9);
+      sent = block(wanted.slice(0, room), secrets);
+    }
+    parts.push(textTitle, room > 0 ? sent : toolText(language, 'browser.empty_text'));
+    if (room < wanted.length || raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + room }));
   }
-  if (table !== undefined) parts.push(toolText(language, 'browser.section_elements'), elementsText);
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
-  // 返す表の番号を「見せた」にする（見せていない番号は押せない）
-  if (table !== undefined) markShown(tab.refs, table.items);
   api.touch(tab);
   const delta = api.proxyDelta();
   const mode = toolText(language, isLoopbackUrl(url) ? (options.devServer(url) ? 'browser.mode_dev_server' : 'browser.mode_loopback_other') : siteAllows(api.config.sites, url) ? 'browser.mode_listed' : 'browser.mode_unlisted');
@@ -147,7 +169,10 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     toolText(language, 'browser.footer', { tab: tab.id, blocked: delta.blocked, mode }),
   ];
   if (delta.busy > 0) lines.push(toolText(language, 'browser.busy_note', { busy: delta.busy }));
-  return { content: lines.join('\n'), fetched: true };
+  const content = lines.join('\n');
+  // 最後の守り: pipeline が切ったあとに残る行にある番号だけを「見せた」にする（見せていない番号は押せない）
+  if (table !== undefined) markShown(tab.refs, shownIn(table.items, content, options.outputTokens, secrets));
+  return { content, fetched: true };
 }
 
 // この会話にタブが無いとき、ブラウザを起動せずに断る

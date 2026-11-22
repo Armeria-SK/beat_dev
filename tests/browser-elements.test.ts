@@ -89,6 +89,20 @@ test('名前が子から来る要素（ai の形では親の行に名前が無�
   assert.equal(table.items[0]!.href, 'https://example.com/home');
 });
 
+test('子から作る名前は 900 字まで。切ったあとの中身の変化も、全体のまとめで手がかりに入る。値の YAML の引用は外す', () => {
+  const long = (tail: string): string => ai('- link [ref=e1]:', '  - /url: /card', ...Array.from({ length: 3000 }, (_, i) => `  - paragraph [ref=p${i}]: 長い説明 ${i}`), `  - paragraph [ref=pz]: ${tail}`, '- button "Next" [ref=e2]');
+  const book = newRefBook();
+  const first = readElements(long('A'), URL_FORM, book);
+  const card = first.items.find(e => e.role === 'link')!;
+  assert.equal([...card.name].length, 900);
+  assert.ok(first.items.some(e => e.name === 'Next'), '長い名前のあとの要素も見える');
+  const again = readElements(long('B'), URL_FORM, book).items.find(e => e.role === 'link')!;
+  assert.equal(again.name, card.name, '見える名前は同じ');
+  assert.notEqual(again.ref, card.ref, '切った後ろの中身が変わると、新しい番号');
+  const quoted = readElements(ai('- link [ref=e7]:', '  - /url: /p', '  - text: Product 1', '  - generic: "\\"9.99\\""', '  - generic: \'it\'\'s\''), URL_FORM).items[0]!;
+  assert.equal(quoted.name, 'Product 1 "9.99" it\'s');
+});
+
 test('名前を子から作った要素も、名前が手がかりに入る（子の名前が変われば番号が変わる）', () => {
   const book = newRefBook();
   const [before] = readElements(ai('- button [ref=e4]:', '  - img "Close" [ref=e5]'), URL_FORM, book).items;
