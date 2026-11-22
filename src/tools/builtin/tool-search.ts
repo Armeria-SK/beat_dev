@@ -5,6 +5,7 @@ import { neutralizeFence } from '../../shared/fence.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { ToolRegistry } from '../registry.ts';
 import type { ToolDef } from '../types.ts';
+import { isBrowserTool } from '../browser/names.ts';
 
 const MAX_EXACT = 10;
 const MAX_MATCHES = 3;
@@ -18,7 +19,7 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 
 export const DEFERRED_HEADER = 'Tools you can load (name and a short summary). To use one you have not loaded yet, first call tool_search with its name, then call it:';
 
-const inBrowserGroup = (t: ToolDef): boolean => !t.mcp && t.name.startsWith('browser_');
+const inBrowserGroup = (t: ToolDef): boolean => !t.mcp && isBrowserTool(t.name);
 
 const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 
