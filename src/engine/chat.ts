@@ -265,8 +265,6 @@ export type ContextUsageOutcome =
   | { ok: true; modelId: string; tokens: number; available: number; capacity: number; ratio: number }
   | (Extract<SendOutcome, { ok: false }> & { errorParams?: MessageParams });
 
-// 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
-// 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
 // 製品の中の実行（計画モードを除く）が頭で先読みする道具の名前（browser-rethink P1）。何も書かない（先読み・使用量・mesh-probe の見積もりが同じ答えを使う）
 export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: PermissionMode, model: Pick<ModelConfig, 'vision'>): string[] {
   if (!inProduct || mode === 'plan') return [];
@@ -274,6 +272,8 @@ export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: 
   return [...browser, 'pending_withdraw', 'deviation_add', ...(model.vision === true ? ['image_view'] : [])];
 }
 
+// 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
+// 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
 export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
   const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
   return preferred.length ? [...preferred] : config.models.map(m => m.id);
