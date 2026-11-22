@@ -19,6 +19,9 @@ export interface FakeEffect {
 }
 
 export interface FakeRow {
+  // 要素の消えない ID（本物の要素の同一性の代わり）。省くと「役割・名前・何番目か」が同じなら同じ要素とみなす（鍵の無い一覧の作り直しと同じ形）。
+  // 本物と同じく、名前が変わると別の印になる
+  id?: string;
   role: string;
   name: string;
   state?: ElementState;
@@ -63,12 +66,76 @@ export class FakePage implements PageHandle {
   #refusal: RouteRefusal | undefined;
   // いまの送信の許し（permitSubmits）
   permit: SubmitPermit | undefined;
+  // 数を確かめてから要素をつかむまでのあいだに呼ぶ（その隙にページが変わった、を作る）
+  beforePin: (() => void) | undefined;
+  // 文書の代（移動・再読み込みで進む。本物は主フレームの framenavigated）
+  #document = 1;
+  // この文書で要素に振った印の数と、要素の鍵 → 印の数
+  #ids = new Map<string, number>();
+  // 最後に撮った表の印 → 要素の鍵（本物の getByRef と同じく、最後の表に無い印は 0 件）
+  #lastRefs = new Map<string, string>();
   constructor(browser: FakeBrowser) { this.browser = browser; }
 
   url(): string { return this.#url; }
   async title(): Promise<string> { return this.#site?.title ?? ''; }
   async text(maxChars: number): Promise<string> { return (this.#site?.text ?? '').slice(0, maxChars); }
-  async snapshot(): Promise<string> { return this.#site?.snapshot ?? ''; }
+  documentId(): number { return this.#document; }
+
+  // 本物の ai の形をまねて、番号を振る役割の行に [ref=…] を付ける（印は文書ごと・要素ごとに 1 つ。iframe の中も付ける）
+  async snapshot(): Promise<string> {
+    const raw = this.#site?.snapshot ?? '';
+    const seen = new Map<string, number>();
+    this.#lastRefs = new Map();
+    return raw.split('\n').map(line => {
+      const m = /^( *- ([a-z]+) "((?:[^"\\]|\\.)*)"(?: \[[^\]]*\])*)(.*)$/u.exec(line);
+      if (!m || line.includes('[ref=')) return line;
+      const role = m[2]!;
+      let name: string;
+      try { name = JSON.parse(`"${m[3]!}"`) as string; } catch { return line; }
+      const group = `${role}\u0000${name}`;
+      const nth = seen.get(group) ?? 0;
+      seen.set(group, nth + 1);
+      const key = this.#keyOf(role, name, nth);
+      const ref = this.#refOf(key);
+      this.#lastRefs.set(ref, key);
+      return `${m[1]!} [ref=${ref}]${m[4]!}`;
+    }).join('\n');
+  }
+
+  #keyOf(role: string, name: string, nth: number): string {
+    const row = this.#rows(role, name)[nth];
+    return row?.id !== undefined ? `id\u0000${row.id}\u0000${role}\u0000${name}` : `at\u0000${role}\u0000${name}\u0000${nth}`;
+  }
+
+  #refOf(key: string): string {
+    let id = this.#ids.get(key);
+    if (id === undefined) { id = this.#ids.size + 1; this.#ids.set(key, id); }
+    return `f${this.#document}e${id}`;
+  }
+
+  // 印 → いまの要素（と、同じ役割・名前の何番目か）。最後の表に無い印・いまは無い要素は undefined
+  #resolve(ref: string): { row: FakeRow; nth: number } | undefined {
+    const key = this.#lastRefs.get(ref);
+    if (key === undefined) return undefined;
+    for (const row of this.#site?.rows ?? []) {
+      const rows = this.#rows(row.role, row.name);
+      const nth = rows.indexOf(row);
+      if (this.#keyOf(row.role, row.name, nth) === key) return { row, nth };
+    }
+    return undefined;
+  }
+
+  // 試験から表を撮らずに直接押すための印（その要素の印を、最後の表に入れたことにする）
+  refFor(role: string, name: string, nth = 0): string {
+    const key = this.#keyOf(role, name, nth);
+    const ref = this.#refOf(key);
+    this.#lastRefs.set(ref, key);
+    return ref;
+  }
+
+  #newDocument(): void { this.#document += 1; this.#ids = new Map(); this.#lastRefs = new Map(); }
+  // 同じ URL のまま新しい文書になった（再読み込み・POST の結果）
+  reload(site?: FakeSite): void { if (site) this.#site = site; this.#newDocument(); }
   lastRefusal(): RouteRefusal | undefined { return this.#refusal; }
 
   async goto(url: string, _timeoutMs: number): Promise<{ status: number | undefined }> {
@@ -81,42 +148,50 @@ export class FakePage implements PageHandle {
     if (site?.fail) throw new BrowserFailure('nav_failed', 'browser.nav_failed', { reason: site.fail });
     this.#site = site;
     this.#url = site?.finalUrl ?? url.replace(/#.*$/u, '');
+    this.#newDocument();
     return { status: site ? 200 : 404 };
   }
 
   // 次の読みのために、ページの中身を差し替える（ページが変わった、を作る）
   mutate(site: FakeSite): void { this.#site = site; }
-  navigateTo(url: string): void { this.#url = url; }
+  navigateTo(url: string): void { this.#url = url; this.#newDocument(); }
 
   #rows(role: string, name: string): FakeRow[] { return (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name); }
 
   async locate(target: ElementTarget): Promise<ElementDetail | undefined> {
-    const rows = this.#rows(target.role, target.name);
-    const row = rows[target.nth];
-    if (rows.length !== target.count || row === undefined) return undefined;
+    const row = this.#resolve(target.ref)?.row;
+    if (row === undefined) return undefined;
     return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete, form: { inForm: row.submits === true, submits: row.submits === true } };
   }
 
-  #act(act: FakeAct, target: ElementTarget, effect: FakeEffect | undefined): ActionEvents {
-    // 本物と同じ: 実行の直前に数が違えば、触らない
-    if (this.#rows(target.role, target.name).length !== target.count) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    this.acts.push({ ...act, permit: this.permit });
+  async #act(kind: 'click' | 'fill', target: ElementTarget, extra: Pick<FakeAct, 'text' | 'submit'>, submit: boolean): Promise<ActionEvents> {
+    // 本物と同じ: 印が引けなければ触らない。つかんだあとの確かめ（verify）が false でも、確かめのあとに印が引けなくなっても触らない
+    // （偽のブラウザの要素は鍵で決まるので、引き直した要素がつかんだ要素と違う形は、本物の driver の試験 browser-driver-locator で見る）
+    if (this.#resolve(target.ref) === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    this.beforePin?.();
+    if (target.verify !== undefined && !(await target.verify().catch(() => false))) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    const found = this.#resolve(target.ref);
+    if (found === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    const { row, nth } = found;
+    const effect = kind === 'click' || submit ? row.effect : undefined;
+    this.acts.push({ kind, role: row.role, name: row.name, nth, ...extra, permit: this.permit });
     if (effect?.fail === 'act_failed') throw new BrowserFailure('act_failed', 'browser.act_failed');
     if (effect?.fail === 'timeout') throw new BrowserFailure('timeout', 'browser.timeout', { sec: 1 });
     if (effect?.navigate !== undefined) {
       this.#site = this.browser.driver.sites.get(effect.navigate);
       this.#url = effect.navigate;
+      this.#newDocument();
     }
     for (let i = 0; i < (effect?.popups ?? 0); i++) this.browser.popup();
     return { dialogs: effect?.dialogs ?? 0, downloads: effect?.downloads ?? 0, fileChoosers: effect?.fileChoosers ?? 0, blocked: effect?.blocked ?? 0 };
   }
 
   async click(target: ElementTarget, _timeoutMs: number): Promise<ActionEvents> {
-    return this.#act({ kind: 'click', role: target.role, name: target.name, nth: target.nth }, target, this.#rows(target.role, target.name)[target.nth]?.effect);
+    return this.#act('click', target, {}, false);
   }
 
   async fill(target: ElementTarget, text: string, submit: boolean, _timeoutMs: number): Promise<ActionEvents> {
-    return this.#act({ kind: 'fill', role: target.role, name: target.name, nth: target.nth, text, submit }, target, submit ? this.#rows(target.role, target.name)[target.nth]?.effect : undefined);
+    return this.#act('fill', target, { text, submit }, submit);
   }
 
   permitSubmits(permit: SubmitPermit | undefined): void { this.permit = permit; }

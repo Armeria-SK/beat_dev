@@ -1,5 +1,5 @@
 import { Type } from '@sinclair/typebox';
-import { IMAGE_TOKENS } from '../../engine/tokens.ts';
+import { estimateTextTokens, IMAGE_TOKENS, prefixLength } from '../../engine/tokens.ts';
 import { neutralizeFence } from '../../shared/fence.ts';
 import { IMAGE_MAX_BYTES } from '../../shared/image-info.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -8,13 +8,14 @@ import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import { actPreview, browserActCheck, devServerPage, inspectAct, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
-import { BrowserFailure, REFUSAL_KEYS, type ActionEvents } from '../browser/driver.ts';
-import { formatElements, readElements } from '../browser/elements.ts';
+import { actPreview, browserActCheck, devServerPage, inspectAct, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
+import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
+import { elementLine, formatElements, markShown, type ElementTable, type ListedElement } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
 import { siteAllows } from '../browser/sites.ts';
+import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { clip, pageUrl, RetrievalFailure } from '../web/public-page.ts';
 import { ROOM_MARGIN_TOKENS } from './image.ts';
@@ -41,16 +42,6 @@ const tabKindFor = (grant: BrowserGrant, kind: 'public' | 'loopback'): BrowserTa
 // 鍵の値を伏せ、1 行にして切り、枠に見える並びを無害にする（題・URL・要素の名前に使う）
 const oneLine = (text: string, secrets: readonly string[]): string => neutralizeFence(clip(redactSecrets(text, secrets).replace(/\s+/gu, ' ').trim(), SHOWN_MAX));
 const block = (text: string, secrets: readonly string[]): string => redactSecrets(neutralizeFence(text), secrets);
-
-// 中止の信号と競わせる。中止されたら待たずに aborted で終える（ページの仕事は続いても、結果は誰も受け取らない）
-function until<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) { work.catch(() => undefined); return Promise.reject(new BrowserFailure('aborted', 'browser.aborted')); }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => { reject(new BrowserFailure('aborted', 'browser.aborted')); };
-    signal.addEventListener('abort', onAbort, { once: true });
-    work.then(resolve, reject).finally(() => { signal.removeEventListener('abort', onAbort); });
-  });
-}
 
 function failureOutput(thrown: unknown, ctx: ToolContext, secrets: readonly string[]): ToolOutput {
   const language = languageOf(ctx.config);
@@ -91,7 +82,21 @@ function assertTabUrl(browser: BrowserSession, api: BrowserApi, tab: BrowserTab,
   }
 }
 
-interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean }
+// replay: Pending の承認のあとの再実行。結果はそのままモデルに届かない（末尾だけが知らせになる）ので、番号を「見せた」にしない
+interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; devServer: (url: string) => boolean; outputTokens: number | undefined; replay: boolean }
+
+// 道具の結果の上限（文字数は pipeline の TOOL_OUTPUT_LIMIT、トークンはその呼び出しに許された量）から、見出し・足跡・伏せ字の揺れの分を引いた残り
+const RENDER_MARGIN_CHARS = 400;
+const RENDER_MARGIN_TOKENS = 120;
+
+// pipeline の切り方（capOutput: 伏せ字のあと、文字数とトークンの上限）で残る部分に、行がそのまま入っている要素だけを返す。
+// 途中で切れた最後の行は、番号が同じ行がほかに無いので、どの要素の行とも一致しない
+export function shownIn(items: readonly ListedElement[], content: string, outputTokens: number | undefined, secrets: readonly string[]): ListedElement[] {
+  const redacted = redactSecrets(content);
+  const kept = redacted.slice(0, prefixLength(redacted, TOOL_OUTPUT_LIMIT, outputTokens ?? Infinity));
+  const present = new Set(kept.split('\n'));
+  return items.filter(item => present.has(redactSecrets(block(elementLine(item), secrets))));
+}
 
 // タブの中身を、外の内容の見出し・枠・本文・触れるもの・足跡の形にする
 async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserTab, language: Language, secrets: readonly string[], options: ReadOptions): Promise<ToolOutput> {
@@ -100,17 +105,55 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   assertTabUrl(browser, api, tab, url);
   const pageChars = api.config.limits.pageChars;
   const title = await until(page.title(), api.signal);
+  const header = toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) });
+  const footerRoom = 300;
+  // 結果は道具の結果の上限の中に収める（収まらない分は pipeline が切り、切られた番号は見せていないのに押せてしまう）
+  let chars = TOOL_OUTPUT_LIMIT - RENDER_MARGIN_CHARS - footerRoom - header.length;
+  let tokens = (options.outputTokens ?? Infinity) - RENDER_MARGIN_TOKENS - estimateTextTokens(header) - footerRoom / 3.5;
+  const raw = options.mode !== 'elements' ? await until(page.text(options.offset + pageChars + 1), api.signal) : '';
+  // 大きさは、送る形（block: 枠の文字の置き換え・伏せ字のあと）で測る
+  const size = (text: string): { chars: number; tokens: number } => ({ chars: text.length + 1, tokens: estimateTextTokens(text) + 1 });
+  let table: ElementTable | undefined;
+  let elementsText = '';
   const parts: string[] = [];
-  if (options.mode !== 'elements') {
-    const raw = await until(page.text(options.offset + pageChars + 1), api.signal);
-    const slice = raw.slice(options.offset, options.offset + pageChars);
-    parts.push(toolText(language, 'browser.section_text'), slice.length > 0 ? block(slice, secrets) : toolText(language, 'browser.empty_text'));
-    if (raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + pageChars }));
-  }
   if (options.mode !== 'text') {
-    const table = readElements(await until(page.snapshot(), api.signal), url);
-    tab.table = table;
-    parts.push(toolText(language, 'browser.section_elements'), block(formatElements(table, language), secrets));
+    // 表は文より前に置く（文があふれても番号が切られない）。両方を返すときは残りの半分まで（文が残りを使う）。
+    // 番号は収まる行にだけ振る
+    const share = options.mode === 'elements' ? 1 : 0.5;
+    const elementsTitle = toolText(language, 'browser.section_elements');
+    const more = size(toolText(language, 'browser.more_elements', { count: 999_999 }));
+    let used = size(elementsTitle);
+    used = { chars: used.chars + more.chars, tokens: used.tokens + more.tokens };
+    const fits = (line: string): boolean => {
+      const one = size(block(line, secrets));
+      const next = { chars: used.chars + one.chars, tokens: used.tokens + one.tokens };
+      if (next.chars > chars * share || next.tokens > tokens * share) return false;
+      used = next;
+      return true;
+    };
+    table = await rereadTab(tab, url, api.signal, { kind: 'show', fits });
+    if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    elementsText = block(formatElements(table, language), secrets);
+    parts.push(elementsTitle, elementsText);
+    const spent = size(`${elementsTitle}\n${elementsText}`);
+    chars -= spent.chars;
+    tokens -= spent.tokens;
+  }
+  if (options.mode !== 'elements') {
+    const wanted = raw.slice(options.offset, options.offset + pageChars);
+    const textTitle = toolText(language, 'browser.section_text');
+    const moreText = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
+    const roomChars = Math.max(0, chars - size(textTitle).chars - moreText.chars);
+    const roomTokens = Math.max(0, tokens - size(textTitle).tokens - moreText.tokens);
+    // 送る形で上限に収まるまで縮める（枠の文字の置き換えで、測った大きさより大きくなることがある）
+    let room = prefixLength(wanted, roomChars, roomTokens);
+    let sent = block(wanted.slice(0, room), secrets);
+    while (room > 0 && (sent.length > roomChars || estimateTextTokens(sent) > roomTokens)) {
+      room = Math.floor(room * 0.9);
+      sent = block(wanted.slice(0, room), secrets);
+    }
+    parts.push(textTitle, room > 0 ? sent : toolText(language, 'browser.empty_text'));
+    if (room < wanted.length || raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + room }));
   }
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
@@ -118,14 +161,18 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   const delta = api.proxyDelta();
   const mode = toolText(language, isLoopbackUrl(url) ? (options.devServer(url) ? 'browser.mode_dev_server' : 'browser.mode_loopback_other') : siteAllows(api.config.sites, url) ? 'browser.mode_listed' : 'browser.mode_unlisted');
   const lines = [
-    toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) }),
+    header,
     '<<<',
     ...parts,
     '>>>',
     toolText(language, 'browser.footer', { tab: tab.id, blocked: delta.blocked, mode }),
   ];
   if (delta.busy > 0) lines.push(toolText(language, 'browser.busy_note', { busy: delta.busy }));
-  return { content: lines.join('\n'), fetched: true };
+  if (options.replay && table !== undefined) lines.push(toolText(language, 'browser.replay_read_again'));
+  const content = lines.join('\n');
+  // 最後の守り: pipeline が切ったあとに残る行にある番号だけを「見せた」にする（見せていない番号は押せない）
+  if (table !== undefined && !options.replay) markShown(tab.refs, shownIn(table.items, content, options.outputTokens, secrets));
+  return { content, fetched: true };
 }
 
 // この会話にタブが無いとき、ブラウザを起動せずに断る
@@ -165,7 +212,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
     return { ...base, reasons: [...base.reasons, reason], askKinds: [...(base.askKinds ?? base.reasons.map((): 'web' => 'web')), 'web'], outbound };
   },
   summarize: (input, language) => ({ title: toolText(language, 'summary.browser_open'), body: input.url }),
-  execute(input, ctx) {
+  execute(input, ctx, info) {
     return guarded(ctx, async (browser, language, secrets, grant) => {
       let url: URL;
       let kind: 'public' | 'loopback';
@@ -186,7 +233,7 @@ export const browserOpen: ToolDef<{ url: string; tab?: string }> = {
           const refusal = tab.page.lastRefusal();
           if (refusal !== undefined) throw new BrowserFailure('blocked', REFUSAL_KEYS[refusal]);
           assertTabUrl(browser, api, tab, tab.page.url());
-          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx) });
+          return await renderTab(browser, api, tab, language, secrets, { offset: 0, mode: undefined, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens, replay: info?.approvedOnce === true });
         } catch (thrown) {
           // 開けなかった・行き先が公開でなかったタブは、中身を残さない（新しく作ったタブは上限も使わせない）
           if (created || (thrown instanceof BrowserFailure && thrown.code === 'blocked')) await api.closeTab(tab.id).catch(() => false);
@@ -209,13 +256,13 @@ export const browserRead: ToolDef<{ tab?: string; offset?: number; mode?: 'text'
   allowedIn: ['chat', 'task', 'agent'],
   preCheck: (_input, ctx) => entryCheck(ctx) ?? allow(),
   summarize: (_input, language) => ({ title: toolText(language, 'summary.browser_read'), body: '' }),
-  execute(input, ctx) {
+  execute(input, ctx, info) {
     return guarded(ctx, async (browser, language, secrets, grant) => {
       if (input.tab === undefined && browser.tabCount(ctx.conversationId) === 0) return { content: toolText(language, 'browser.no_tabs') };
       requireTabs(browser, ctx, input.tab);
       return browser.run({ grant, signal: ctx.signal }, async api => {
         const tab = api.tab(input.tab);
-        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx) });
+        return renderTab(browser, api, tab, language, secrets, { offset: input.offset ?? 0, mode: input.mode, devServer: url => devServerPage(url, ctx), outputTokens: ctx.outputTokens, replay: info?.approvedOnce === true });
       });
     });
   },
@@ -286,7 +333,7 @@ export const browserClose: ToolDef<{ tab?: string }> = {
   },
 };
 
-const REF = Type.String({ pattern: '^e[0-9]{1,4}$', description: 'The number of an element you can touch (such as e12 in the list from browser_open / browser_read)' });
+const REF = Type.String({ pattern: '^e[0-9]{1,6}$', description: 'The number of an element you can touch (such as e12 in the list from browser_open / browser_read)' });
 
 // 押す・入れる。事前の判定（checks.ts）は聞く（ask）か断る（deny）。
 // 実行の直前の探し直し（inspectAct）は、通った理由に関わらず必ずやる。
@@ -319,7 +366,17 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       // 探し直しで送信の部品に変わっていたら、送信として承認されていない呼び出しは押さない
       const permit = submitPermit(found, ctx, info);
       if (permit === 'refuse') return { content: guardText(language, 'browser.act.became_submit', { ref: input.ref }), isError: true, noRemoteContent: true };
-      const { tab, target } = found;
+      const { tab } = found;
+      // 要素をつかんだあとにページを読み直し、番号がまだ同じ印の要素と同じ中身（役割・名前・手がかり）を指すときだけ押す。
+      // driver は加えて、引き直した要素がつかんだ要素と同じものかを見る（探し直しからつかむまでの書き換えを塞ぐ）
+      const target: ElementTarget = {
+        ...found.target,
+        verify: async () => {
+          const table = await rereadTab(tab, found.pageUrl, api.signal);
+          const now = table?.items.find(e => e.ref === input.ref);
+          return now !== undefined && now.pwRef === found.item.pwRef && now.role === found.item.role && now.name === found.item.name;
+        },
+      };
       const timeoutMs = api.config.limits.actionTimeoutSec * 1000;
       const text = input.text ?? '';
       tab.page.permitSubmits(permit);

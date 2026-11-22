@@ -45,6 +45,8 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.mcpConnect ? { mcpConnect: options.mcpConnect } : {}),
     ...(options.browserDriver ? { browserDriver: options.browserDriver } : {}),
+    // 試験の台本は e1 からの番号を書くので、番号の始まりを決めておく
+    browserRefStart: 1,
     ...(options.browserDisplay !== undefined ? { browserDisplay: options.browserDisplay } : {}),
     ...(options.projectFolderExempt ? { projectFolderExempt: options.projectFolderExempt } : {}),
     ...(options.downloadNetwork ? { downloadNetwork: options.downloadNetwork } : {}),

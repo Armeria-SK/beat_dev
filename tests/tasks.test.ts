@@ -692,7 +692,7 @@ test('画面の「止める」で止めたタスクは、20 秒ほど休んで�
   assert.equal(after.attempts, 0, '失敗として数えない');
   const requeued = s.app.tasks.events(task.id).find(e => e.kind === 'requeued');
   assert.match(requeued?.content ?? '', /It was stopped/u);
-  assert.doesNotMatch(requeued?.content ?? '', /hours?/u);
+  assert.doesNotMatch(requeued?.content ?? '', /\bhours?\b/u);
   assert.equal(await s.app.worker.tick(), 'idle', '20 秒たつまでは動かない');
   s.adapter().scripts.push(toolCall('task_complete', { summary: '終わりました', notify: false }));
   s.clock.now = stoppedAt + 20_000;

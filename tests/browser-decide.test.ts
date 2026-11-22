@@ -652,18 +652,22 @@ test('elementFacts: 送信の部品・フォームの外・label の先・中の
 
 test('本物の PlaywrightPage: 要素の見分けが読めない形なら送信とみなす。入れる（submit なし）は Enter を押さない', async () => {
   const pressed: string[] = [];
+  const main = {};
+  const element = {
+    ownerFrame: async () => main, evaluate: async () => true,
+    click: async (o?: { trial?: boolean }) => { if (!o?.trial) pressed.push('click'); }, fill: async (text: string) => { pressed.push(`fill ${text}`); }, press: async (key: string) => { pressed.push(`press ${key}`); }, waitForElementState: async () => {}, dispose: async () => {},
+  };
   const make = (facts: unknown) => new PlaywrightBrowser({} as BrowserContext).wrap({
     on: () => {},
-    getByRole: () => ({
+    mainFrame: () => main,
+    getByRef: () => ({
       count: async () => 1,
-      nth: () => ({
-        isVisible: async () => true, isEnabled: async () => true, evaluate: async () => facts,
-        click: async () => { pressed.push('click'); }, fill: async (text: string) => { pressed.push(`fill ${text}`); }, press: async (key: string) => { pressed.push(`press ${key}`); },
-      }),
+      isVisible: async () => true, isEnabled: async () => true, evaluate: async () => facts,
+      elementHandle: async () => element,
     }),
     waitForLoadState: async () => {},
   } as unknown as Page);
-  const target = { role: 'textbox', name: 'Search', nth: 0, count: 1 };
+  const target = { ref: 'e5', role: 'textbox', name: 'Search' };
   assert.equal((await make({ type: null, autocomplete: null, inForm: true }).locate(target))!.form.submits, true, 'submits が無い');
   assert.equal((await make({ type: null, autocomplete: null, inForm: true, submits: 'yes' }).locate(target))!.form.submits, true, '形が違う');
   assert.equal((await make({ type: null, autocomplete: null, inForm: true, submits: false }).locate(target))!.form.submits, false);
@@ -715,9 +719,11 @@ test('T12: 持ち主が見ている文脈で、許しの無い POST の遷移（
 test('T12: 押すあいだにページが出した送信を横取りが断ると、その数が押した結果（events.blocked）に入り、道具の結果に断った旨が出る', async t => {
   const r = routeRig('attended');
   await r.install();
-  const tab = { ...r.tab, getByRole: () => ({ count: async () => 1, nth: () => ({ click: async () => { assert.equal(await r.fire(tab as never, 'POST', 'https://shop.example.org/send'), 'abort'); } }) }), waitForLoadState: async () => {} };
+  const main = {};
+  const element = { ownerFrame: async () => main, evaluate: async () => true, click: async (o?: { trial?: boolean }) => { if (!o?.trial) assert.equal(await r.fire(tab as never, 'POST', 'https://shop.example.org/send'), 'abort'); }, dispose: async () => {} };
+  const tab = { ...r.tab, mainFrame: () => main, getByRef: () => ({ count: async () => 1, elementHandle: async () => element }), waitForLoadState: async () => {} };
   const page = r.browser.wrap(tab as unknown as Page);
-  const events = await page.click({ role: 'button', name: 'More', nth: 0, count: 1 }, 1000);
+  const events = await page.click({ ref: 'e5', role: 'button', name: 'More' }, 1000);
   assert.equal(events.blocked, 1);
   const tool = rig(t, { judge: 'allow' });
   tool.driver.site(UNLISTED, { ...site(), rows: site().rows!.map(row => row.name === 'More' ? { ...row, effect: { blocked: 2 } } : row) });

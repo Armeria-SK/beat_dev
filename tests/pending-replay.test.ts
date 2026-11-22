@@ -18,15 +18,18 @@ import { PlanStore } from '../src/projects/plan.ts';
 import { ProjectStore } from '../src/projects/store.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { TaskStore } from '../src/tasks/store.ts';
+import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { BrowserSession } from '../src/tools/browser/session.ts';
 import { BROWSER_TOOLS } from '../src/tools/builtin/browser.ts';
 import { fileRead } from '../src/tools/builtin/files.ts';
 import { planWrite } from '../src/tools/builtin/plan.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
-import { readFilesOf } from '../src/tools/pipeline.ts';
+import { readFilesOf, runToolCall } from '../src/tools/pipeline.ts';
 import { taskCreate } from '../src/tools/builtin/tasks.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
+import { FakeBrowserDriver, type FakePage, type FakeRow, type FakeSite } from './helpers/fake-browser.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 type Seen = { home?: string | undefined; parent?: ToolContext['parent']; task?: string | undefined; tainted: boolean; conversationTainted: boolean };
@@ -772,4 +775,98 @@ test('フォルダの緩い控え: 1 回の控えで読む index は合わせて
   rmSync(inner, { recursive: true, force: true });
   writeFileSync(index, withExtension(readFileSync(index), 'XXXX', 32 * 1_048_576));
   assert.equal(boundFacts([root])[0]!.relaxed, undefined, 'ひとつで 65 MB');
+});
+
+// ── P3a: ブラウザの承認の bind は番号の振り方に依らない。承認のあと組が変わっていたら再実行しない ──
+
+const ROWS_URL = 'https://example.com/rows';
+// 組の最初の要素の手がかり（前の 8 行）より上に、増える要素を置くための前置き
+const PREAMBLE = ['- heading "材料の一覧" [level=1]', ...Array.from({ length: 7 }, (_, i) => `- paragraph: 説明 ${i + 1}`)];
+const rowsSite = (names: readonly string[], head: readonly string[] = []): FakeSite => ({
+  title: 'Rows', text: names.join('\n'),
+  snapshot: [...head, ...PREAMBLE, '- table:', '  - rowgroup:', ...names.flatMap(n => [`    - row "${n} 削除":`, `      - cell "${n}"`, '      - cell "削除":', '        - button "削除"'])].join('\n'),
+  // 削除は送信の部品（会話では Pending に積まれる）
+  rows: [...head.map((line): FakeRow => ({ role: 'button', name: /"(.*)"/u.exec(line)![1]! })), ...names.map((): FakeRow => ({ role: 'button', name: '削除', submits: true }))],
+});
+
+function browserSetup(t: { after: (fn: () => void | Promise<void>) => void }) {
+  const paths = resolvePaths(tempDir(t));
+  mkdirSync(paths.workspace, { recursive: true });
+  const raw = testConfig();
+  raw.tools.browser.enabled = true;
+  raw.tools.browser.sites = ['example.com'];
+  const config = parseConfig(raw);
+  const start = (names: readonly string[]) => {
+    const made = new FakeBrowserDriver().site(ROWS_URL, rowsSite(names));
+    return { driver: made, session: new BrowserSession({ driver: made, config: () => config, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] }) };
+  };
+  let { driver, session } = start(['材料 1', '材料 2', '材料 3']);
+  t.after(() => session.close());
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const registry = new ToolRegistry();
+  for (const def of BROWSER_TOOLS) registry.register(def as never);
+  const store = new PendingStore(db, { tools: registry, dataDir: paths.data });
+  const policy = buildPolicy(config, paths);
+  const ctx = {
+    runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
+    workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: 'auto',
+    services: { browser: session }, model: { id: 'm', vision: false },
+  } as unknown as ToolContext;
+  const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, {
+    registry, approvals: new ApprovalBroker(db), pending: store, db, emit: () => undefined, permissionMode: () => 'auto',
+  });
+  const approve = () => replayAction(store.claim(store.list({ status: 'waiting' })[0]!.id), {
+    db, store, registry, config: () => config, paths, conversationExists: () => true, services: () => ({ browser: session }) as ToolContext['services'],
+  });
+  const tool = (name: string) => registry.get(name)!;
+  const open = async (): Promise<FakePage> => {
+    const out = await tool('browser_open').execute({ url: ROWS_URL } as never, ctx);
+    assert.equal(out.isError, undefined, out.content);
+    return driver.current!.pageList[0]!;
+  };
+  const read = () => tool('browser_read').execute({ mode: 'elements' } as never, ctx);
+  // beat を起動し直したことにする: ブラウザを閉じ、新しい BrowserSession（タブも番号も 1 から）。積んだ承認は DB に残る
+  const restart = async (names: readonly string[]): Promise<void> => {
+    await session.close();
+    ({ driver, session } = start(names));
+    (ctx as { services: ToolContext['services'] }).services = { browser: session } as ToolContext['services'];
+  };
+  return { call, approve, open, read, restart };
+}
+
+test('P3a: beat を起動し直す前に積んだ承認は、起動し直したあとの同じ番号（e2）が別の行になっていても押さない（bind に起動ごとの印）', async t => {
+  const s = browserSetup(t);
+  await s.open();
+  assert.equal((await s.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+  await s.restart(['材料 1', '材料 3', '材料 2']);
+  const page = await s.open();
+  const result = await s.approve();
+  assert.notEqual(result.status, 'ran', result.output);
+  assert.equal(page.acts.length, 0, '起動し直したあとの e2（材料 3 の行）を押さない');
+});
+
+test('P3a: 承認を待つあいだに、前に別の要素が増えて読み直されても、番号も bind も変わらず、承認で同じ行を押す', async t => {
+  const s = browserSetup(t);
+  const page = await s.open();
+  assert.equal((await s.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+  page.mutate(rowsSite(['材料 1', '材料 2', '材料 3'], ['- button "お知らせを閉じる"']));
+  const read = await s.read();
+  assert.match(read.content, /e4 button "お知らせを閉じる"\ne1 button "削除"/u, '増えた要素は新しい番号、削除の番号は同じ');
+  const result = await s.approve();
+  assert.equal(result.status, 'ran', result.output);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1]]);
+});
+
+test('P3a: 承認を待つあいだに、押す行の中身が変わったら（鍵の無い一覧の並べ替え・1 行消えた）、承認しても再実行せず、どの行も押さない', async t => {
+  for (const after of [['材料 1', '材料 3', '材料 2'], ['材料 1', '材料 3']]) {
+    const s = browserSetup(t);
+    const page = await s.open();
+    assert.equal((await s.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
+    page.mutate(rowsSite(after));
+    const result = await s.approve();
+    assert.equal(result.status, 'failed', after.join());
+    assert.match(result.output ?? '', /e2 can no longer be used/u);
+    assert.equal(page.acts.length, 0, after.join());
+  }
 });

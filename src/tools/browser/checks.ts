@@ -1,8 +1,9 @@
 // browser_click / browser_type の事前の判定と、実行の直前の探し直し（同じ判定を 2 回通す）。
 // 守り（どれも、方針が allow でも・「この会話では許可」でも外れない。preCheck が deny を返し、execute も同じ判定をもう一度通す）:
 //   - 押せるのは、そのタブで許されたページ（公開のページ、または作業用のタブで許しのある実行の許されたループバック）だけ
-//   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否
-//   - 実行の直前に、役割・名前・nth で探し直し、数が読んだときと同じで、見えていて、有効でなければ実行しない
+//   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否。
+//     番号は、判定のたびにその場で取り直した表から引く（要素が変わった・中身が変わって使えなくなった番号、モデルに見せていない番号は拒否。elements.ts）
+//   - 実行の直前に、番号が結ぶ Playwright の印で要素を引き直し、1 つの主フレームの要素で、見えていて、有効でなければ実行しない
 //   - browser_type は、パスワード・認証コード・カード番号の欄（type=password・autocomplete・名前）に入れない
 // 通り方（9-1b。PLAN Approach 4 の順）: 秘密に見える文を入れる → 公開のページ・開発サーバーでないループバックは断る、開発サーバーは判定役 /
 //   その実行の開発サーバー（持ち主が書いたループバックのポート・この会話かタスクの裏のコマンドが出力に出したポート）→ 判定役なし（送信も）/
@@ -15,8 +16,8 @@ import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { pageUrl } from '../web/public-page.ts';
-import { BrowserFailure, type ElementDetail, type ElementTarget } from './driver.ts';
-import type { ListedElement } from './elements.ts';
+import { BrowserFailure, until, type ElementDetail, type ElementTarget } from './driver.ts';
+import { readElements, retiredRef, shownRef, type ElementTable, type ListedElement, type Numbering } from './elements.ts';
 import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
 import { ownerHostAllows, ownerLoopbackPorts, siteAllows } from './sites.ts';
@@ -57,6 +58,17 @@ function placeOf(tab: BrowserTab, api: BrowserApi, url: string, denied: Readonly
   try { pageUrl(url); return 'public'; } catch { return undefined; }
 }
 
+// タブの表をその場で撮り直して番号の対応を更新する。撮るあいだに URL か文書が変わったら undefined（古い表として断る側）。
+// numbering は既定で check（新しい番号を振らず、前の番号のうちまだ使えるものだけ残す）。見せる表を作るときだけ show
+export async function rereadTab(tab: BrowserTab, pageUrl: string, signal: AbortSignal, numbering: Numbering = { kind: 'check' }): Promise<ElementTable | undefined> {
+  const document = tab.page.documentId();
+  const snapshot = await until(tab.page.snapshot(), signal);
+  if (tab.page.url() !== pageUrl || tab.page.documentId() !== document) return undefined;
+  const table = readElements(snapshot, pageUrl, tab.refs, document, numbering);
+  tab.table = table;
+  return table;
+}
+
 // タブ・ページ・番号・探し直しを確かめる。ブラウザの呼び出しの中（run のロックの下）で呼ぶ
 export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input: ActInput, language: Language, denied: ReadonlySet<number>): Promise<Inspected> {
   let tab: BrowserTab;
@@ -67,16 +79,19 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input:
   const pageUrl = tab.page.url();
   const place = placeOf(tab, api, pageUrl, denied);
   if (place === undefined) return refuse(guardText(language, 'browser.act.not_allowed_page'));
-  const table = tab.table;
-  if (table === undefined) return refuse(guardText(language, 'browser.act.no_table'));
-  if (table.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  if (tab.table === undefined) return refuse(guardText(language, 'browser.act.no_table'));
+  if (tab.table.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  // 番号は、いつもその場で取り直した表から引く（読んだあとに要素が作り直された・中身が入れ替わった番号は、ここで使えなくなる）
+  const table = await rereadTab(tab, pageUrl, api.signal);
+  if (table === undefined) return refuse(guardText(language, 'browser.act.stale'));
   const item = table.items.find(e => e.ref === input.ref);
-  if (item === undefined) return refuse(guardText(language, 'browser.act.no_ref', { ref: input.ref }));
+  // 使えなくなった番号には、新しい番号を添えない（周りを見ずに並びで選び直させない）。読み直させる。見せていない番号は無い番号と同じ
+  if (item === undefined || !shownRef(tab.refs, item.ref)) return refuse(guardText(language, retiredRef(tab.refs, input.ref) ? 'browser.act.retired' : 'browser.act.no_ref', { ref: input.ref }));
   if (item.frameUrl !== undefined && hostOf(item.frameUrl) !== hostOf(pageUrl)) return refuse(guardText(language, 'browser.act.frame', { ref: input.ref }));
   if (kind === 'type' && !TEXT_ROLES.has(item.role)) return refuse(guardText(language, 'browser.act.not_text', { ref: input.ref, role: item.role }));
-  const target: ElementTarget = { role: item.role, name: item.name, nth: item.nth, count: item.count };
+  const target: ElementTarget = { ref: item.pwRef, role: item.role, name: item.name };
   const detail = await tab.page.locate(target);
-  // 探し直せない（数が違う・無い）、属性が読めないものは、実行しない
+  // 引き直せない（印が無い・主フレームでない）、属性が読めないものは、実行しない
   if (detail === undefined) return refuse(guardText(language, 'browser.act.changed', { ref: input.ref }));
   if (!detail.visible) return refuse(guardText(language, 'browser.act.hidden', { ref: input.ref }));
   if (!detail.enabled) return refuse(guardText(language, 'browser.act.disabled', { ref: input.ref }));
@@ -146,7 +161,9 @@ export function actPreview(kind: 'click' | 'type', input: ActInput, found: Extra
     lines.push(guardText(language, input.submit === true ? 'browser.act.preview_submit' : 'browser.act.preview_no_submit'));
   }
   // 札を出したときのページ・タブ・要素。承認のあとに同じ判定をもう一度走らせて、これが変わっていたら実行しない（別のページ・別の要素に押さない）
-  const bind = JSON.stringify([found.tab.id, found.pageUrl, found.item.role, found.item.name, found.item.nth, found.item.frameUrl ?? null]);
+  // 要素の番号は、同じ要素で中身も変わっていないあいだだけ生きているので、それ自体が指紋。
+  // タブの番号と要素の番号は beat を起動し直すと振り直すので、起動ごとの印（instance）も入れる（起動し直す前の承認は、あとの起動では押さない）
+  const bind = JSON.stringify([found.tab.instance, found.tab.id, found.pageUrl, found.item.ref, found.item.role, found.item.name]);
   return { preview: [{ path: guardText(language, 'browser.act.preview_page', { url: found.pageUrl }), text: lines.join('\n'), truncated: false }], bind };
 }
 

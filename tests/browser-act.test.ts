@@ -10,14 +10,17 @@ import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
-import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
-import { runToolCall } from '../src/tools/pipeline.ts';
+import { elementLine, retiredRef, type ListedElement } from '../src/tools/browser/elements.ts';
+import { Type } from '@sinclair/typebox';
+import { BROWSER_TOOLS, browserClick, browserOpen, browserRead, browserType, shownIn } from '../src/tools/builtin/browser.ts';
+import { runToolCall, TOOL_OUTPUT_LIMIT } from '../src/tools/pipeline.ts';
+import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { replayAction } from '../src/pending/replay.ts';
-import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-browser.ts';
+import { FakeBrowserDriver, type FakePage, type FakeRow, type FakeSite } from './helpers/fake-browser.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 // T-20〜T-29（AU-6b）: browser_click / browser_type。偽の driver で、パイプライン込みの流れを確かめる（本物のブラウザは起動しない）
@@ -60,7 +63,7 @@ type Rig = ReturnType<typeof rig>;
 const withoutSubmits = (def: ToolDef): ToolDef => Object.fromEntries(Object.entries(def).filter(([key]) => key !== 'submits')) as unknown as ToolDef;
 
 function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
-  mutate?: (c: AppConfig) => void; mode?: PermissionMode; classify?: (prompt: ClassifierPrompt) => Promise<string> | string; plain?: boolean;
+  mutate?: (c: AppConfig) => void; mode?: PermissionMode; classify?: (prompt: ClassifierPrompt) => Promise<string> | string; plain?: boolean; refStart?: number;
 } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
@@ -70,7 +73,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, options: {
   options.mutate?.(config);
   const parsed = parseConfig(config);
   const driver = new FakeBrowserDriver().site(PAGE, SITE).site(OTHER, OTHER_SITE);
-  const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [] });
+  const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [], ...(options.refStart !== undefined ? { refStart: options.refStart } : {}) });
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
   const approvals = new ApprovalBroker(db);
@@ -122,7 +125,7 @@ test('T-20: 送信の事前の判定は ask。sends・submits・askKinds web・b
   assert.equal(check.submits, true);
   assert.deepEqual(check.askKinds, ['web']);
   assert.equal(check.fetched, true);
-  assert.equal(check.bind, JSON.stringify(['t1', PAGE, 'textbox', 'Search', 0, null]));
+  assert.equal(check.bind, JSON.stringify([r.session.instance, 't1', PAGE, 'e1', 'textbox', 'Search']));
   const file = check.preview![0]!;
   assert.ok(file.path.includes(PAGE));
   assert.ok(file.text.includes('textbox') && file.text.includes('Search'));
@@ -210,15 +213,18 @@ test('T-22: 承認のあいだに遷移したら、実行しない（同じ呼�
   assert.equal(page.acts.length, 1);
 });
 
-test('T-22: 承認のあいだに同じ番号が別の要素になったら、実行しない（bind の不一致）', async t => {
+test('T-22: 承認のあいだに同じ位置の要素が別の名前になったら、番号は使えなくなり実行しない（番号は位置ではなく組で持つ）', async t => {
   const r = rig(t);
   const page = await opened(r);
   assert.equal((await r.call('browser_click', { ref: 'e2' })).decidedBy, 'pending');
-  // ページが書き換わり、読み直したら e2 は別の名前のボタンになった（同じ URL）
+  // ページが書き換わり、Send の位置に別の名前のボタンが来た（同じ URL）。読み直すと、新しいボタンは新しい番号になる
   page.mutate({ ...SITE, snapshot: SNAPSHOT.replace('button "Send"', 'button "Delete account"'), rows: SITE.rows!.map(x => x.name === 'Send' ? { ...x, name: 'Delete account' } : x) });
-  await browserRead.execute({ mode: 'elements' }, r.ctx);
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e10 button "Delete account"/u);
+  assert.doesNotMatch(read.content, /e2 /u);
   const result = await r.approve(parkedId(r));
-  assert.equal(result.status, 'stale');
+  assert.equal(result.status, 'failed');
+  assert.match(result.output ?? '', /e2 can no longer be used/u);
   assert.equal(page.acts.length, 0);
 });
 
@@ -285,6 +291,36 @@ test('T-23: 自動承認モードでも、送信の押す・入れるは送る�
   assert.equal(page.acts.length, 0);
 });
 
+test('P3a: shownIn は、道具の流れ（runToolCall の切り方）で実際に残る行の番号だけを返す。途中で切れた最後の行の番号は入れない（文字数でもトークンでも）', async t => {
+  const r = rig(t);
+  const echo: ToolDef<{ text: string }> = {
+    name: 'echo_probe', description: 'echo', effect: 'read', allowedIn: ['chat'],
+    input: Type.Object({ text: Type.String() }, { additionalProperties: false }),
+    execute: async input => ({ content: input.text }),
+  };
+  const registry = new ToolRegistry();
+  registry.register(echo as never);
+  const items: ListedElement[] = Array.from({ length: 900 }, (_, i) => ({ ref: `e${i + 1}`, role: 'button', name: `品物 ${i + 1} の説明 abc`, pwRef: `p${i}`, frameUrl: undefined, href: undefined, states: [] }));
+  const content = ['header line', '<<<', ...items.map(elementLine), '>>>', 'footer'].join('\n');
+  assert.ok(content.length > TOOL_OUTPUT_LIMIT, `${content.length}`);
+  let partialSeen = 0;
+  for (const tokens of [undefined, 900, 3_000]) {
+    (r.ctx as { outputTokens?: number | undefined }).outputTokens = tokens;
+    const out = await runToolCall({ id: `echo-${tokens}`, name: 'echo_probe', arguments: { text: content } }, r.ctx, { registry, approvals: r.approvals, pending: r.pending, db: r.db, emit: () => undefined, permissionMode: () => 'auto' });
+    const returned = out.output.content;
+    const body = returned.slice(0, returned.indexOf('\n\n[The output was long'));
+    assert.ok(body.length > 0 && content.startsWith(body), `${tokens}: 先頭が残る`);
+    const lines = body.split('\n');
+    // 本文の続きが改行でなければ、最後の行は途中で切れている
+    if (content[body.length] !== '\n') { lines.pop(); partialSeen += 1; }
+    const survived = new Set(lines);
+    const expected = items.filter(item => survived.has(elementLine(item))).map(item => item.ref);
+    assert.ok(expected.length > 0 && expected.length < items.length, `${tokens}: ${expected.length}`);
+    assert.deepEqual(shownIn(items, content, tokens, []).map(item => item.ref), expected, `${tokens}`);
+  }
+  assert.ok(partialSeen > 0, '途中で切れた行の場合を 1 つ以上通る');
+});
+
 test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きなら（外を読んだかを問わず）送るに数え、判定役が allow と答える設定でも判定役を呼ばずに send の Pending に積まれる', async t => {
   const classified: ClassifierPrompt[] = [];
   const r = rig(t, { mode: 'auto', classify: prompt => { classified.push(prompt); return '{"decision":"allow","reason":"x"}'; } });
@@ -301,6 +337,29 @@ test('4-3b-2: 一覧のサイトの browser_open は、クエリ付きなら（�
     const result = await r.approve(row.id);
     assert.equal(result.status, 'ran', `持ち主が通せば開く: ${JSON.stringify(result)}`);
   }
+});
+
+test('P3a: Pending の承認のあとの再実行で開いた（読んだ）ページの番号は、モデルに届く知らせ（末尾）に無いので押せない。知らせは読み直しを求める', async t => {
+  const r = rig(t, { mode: 'auto' });
+  const QUERY = 'https://example.com/list?q=1';
+  const names = Array.from({ length: 30 }, (_, i) => `品物 ${i + 1}`);
+  const queued = await r.call('browser_open', { url: QUERY });
+  assert.equal(queued.decidedBy, 'pending');
+  r.driver.site(QUERY, { title: 'List', text: 'く'.repeat(5_000), snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  const row = r.pending.list({ status: 'waiting' })[0]!;
+  const result = await r.approve(row.id);
+  assert.equal(result.status, 'ran', JSON.stringify(result));
+  const preview = (r.db.prepare('SELECT output_preview FROM pending_actions WHERE id = ?').get(row.id) as { output_preview: string | null }).output_preview ?? '';
+  assert.match(preview, /Read the page again with browser_read before you click or type/u, '知らせの末尾に読み直しを求める文');
+  for (let n = 1; n <= 60; n++) {
+    const ref = `e${n}`;
+    const decision = (await preCheck(r, browserClick, { ref })).decision;
+    if (decision !== 'deny') assert.ok(new RegExp(`^${ref} `, 'mu').test(preview), `${ref} は押せるのに、知らせに無い`);
+  }
+  // 読み直せば押せる
+  const read = await r.call('browser_read', {});
+  const [first] = [...read.output.content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
+  assert.notEqual((await preCheck(r, browserClick, { ref: first! })).decision, 'deny');
 });
 
 test('4-3b-2: 一覧外のサイトの browser_open と、一覧のサイトでもクエリなしの browser_open は、外を読んだあとでも積まずに開く（P3）', async t => {
@@ -486,4 +545,203 @@ test('T-29: 方針が allow でも、password 欄の拒否は外れず、サイ�
   assert.equal(result.outcome.decidedBy, 'pending');
   assert.deepEqual(outside.pending.list({ status: 'waiting' }).map(row => row.kind), ['send']);
   assert.equal(page.acts.length + outsidePage.acts.length, 0);
+});
+
+// ── P3a: 番号は、押す・入れるの直前にその場で取り直した表から引く ──
+
+const ROWS = 'https://example.com/rows';
+const rowsSite = (names: readonly string[]): FakeSite => ({
+  title: 'Rows', text: names.join('\n'),
+  snapshot: ['- button "並べ替え"', '- table:', '  - rowgroup:', ...names.flatMap(n => [`    - row "${n} 削除":`, `      - cell "${n}"`, '      - cell "削除":', '        - button "削除"'])].join('\n'),
+  rows: [{ role: 'button', name: '並べ替え' }, ...names.map((): FakeRow => ({ role: 'button', name: '削除' }))],
+});
+const ROW_NAMES = ['材料 1', '材料 2', '材料 3'];
+// 並べ替え e1 / 削除 e2・e3・e4
+
+test('P3a: 表を読んだあとに、鍵の無い一覧の行の中身が並べ替わってから押すと、中身が変わった行の古い番号は断る（別の行を押さない）。中身が同じ行・新しい番号なら押せる', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  const page = await opened(r, ROWS);
+  // 同じ数のまま並べ替わった（同じ URL。偽のブラウザでは要素はそのままで、行の文だけが入れ替わる）。モデルはまだ読み直していない
+  page.mutate(rowsSite([...ROW_NAMES].reverse()));
+  const outcome = await r.call('browser_click', { ref: 'e2' });
+  assert.equal(outcome.decision, 'deny');
+  assert.match(outcome.output.content, /e2 can no longer be used: the page changed after it was read/u);
+  assert.doesNotMatch(outcome.output.content.replace(/\be2\b/gu, ''), /\be\d+\b/u, '新しい番号を並びだけで選ばせない（番号は添えない）');
+  // 事前の判定を通らない直接の実行でも、その場で取り直して断る
+  const direct = await browserClick.execute({ ref: 'e4' }, r.ctx);
+  assert.equal(direct.isError, true);
+  assert.match(direct.content, /e4 can no longer be used/u);
+  assert.equal(page.acts.length, 0, '古い番号では、どの行も押さない');
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne3 button "削除"\ne6 button "削除"/u, '真ん中の行（材料 2）は中身が同じなので同じ番号');
+  const ok = await r.call('browser_click', { ref: 'e3' });
+  assert.equal(ok.decision, 'allow', ok.output.content);
+  const last = await r.call('browser_click', { ref: 'e6' });
+  assert.equal(last.decision, 'allow', last.output.content);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 1], ['削除', 2]]);
+});
+
+test('P3a: 探し直してから要素をつかむまでのあいだに並べ替わると、つかんだあとの読み直しで断り、押さない', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  const page = await opened(r, ROWS);
+  page.beforePin = () => { page.mutate(rowsSite([...ROW_NAMES].reverse())); };
+  const outcome = await r.call('browser_click', { ref: 'e2' });
+  assert.equal(outcome.output.isError, true);
+  assert.match(outcome.output.content, /The page has changed/u);
+  assert.equal(page.acts.length, 0, '並べ替わったあとの行は押さない');
+  // 並べ替えのない読み直しなら押せる（確かめが毎回断るわけではない）
+  page.beforePin = undefined;
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e1 button "並べ替え"\ne5 button "削除"\ne3 button "削除"\ne6 button "削除"/u);
+  const ok = await r.call('browser_click', { ref: 'e5' });
+  assert.equal(ok.decision, 'allow', ok.output.content);
+  assert.deepEqual(page.acts.map(x => [x.name, x.nth]), [['削除', 0]]);
+});
+
+test('P3a: 使えなくなった番号の文（その組がもう無い）と、振っていない番号の文は分ける', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  const page = await opened(r, ROWS);
+  page.mutate(rowsSite([]));
+  const gone = await preCheck(r, browserClick, { ref: 'e2' });
+  assert.equal(gone.decision, 'deny');
+  assert.match(gone.reasons[0]!, /e2 can no longer be used: the page changed after it was read/u);
+  const never = await preCheck(r, browserClick, { ref: 'e99' });
+  assert.match(never.reasons[0]!, /Number e99 is not in the list for this tab/u);
+  // 名前が 1 つだけの要素（並べ替え）は、周りが変わっても同じ番号のまま押せる
+  assert.equal((await preCheck(r, browserClick, { ref: 'e1' })).decision, 'allow');
+});
+
+test('P3a: 番号は会話のタブで共通の続きの数。別のタブの番号は当たらず、移動しても振り直さない', async t => {
+  const r = rig(t);
+  r.driver.site(ROWS, rowsSite(ROW_NAMES));
+  await opened(r);
+  // 新しいタブ t2 の番号は、t1（e1〜e9）の続きから
+  const second = await browserOpen.execute({ url: ROWS }, r.ctx);
+  assert.match(second.content, /e10 button "並べ替え"\ne11 button "削除"/u);
+  const other = await preCheck(r, browserClick, { tab: 't2', ref: 'e2' });
+  assert.equal(other.decision, 'deny');
+  assert.match(other.reasons[0]!, /Number e2 is not in the list for this tab/u);
+  // t1 を別の URL へ移すと、t1 の番号は全部使えなくなり、続きの番号になる
+  const moved = await browserOpen.execute({ url: OTHER, tab: 't1' }, r.ctx);
+  assert.match(moved.content, /e14 textbox "Search"\ne15 button "Send"/u);
+  assert.equal(r.driver.current!.pageList[1]!.acts.length, 0);
+});
+
+test('P3a: 番号の始まりは BrowserSession ごとに決められ（beat の起動では乱数）、承認の bind には起動ごとの印が入る', async t => {
+  const r = rig(t, { refStart: 123_456 });
+  const out = await browserOpen.execute({ url: PAGE }, r.ctx);
+  assert.match(out.content, /e123456 textbox "Search"\ne123457 button "Send"/u);
+  const other = rig(t);
+  assert.notEqual(other.session.instance, r.session.instance);
+  assert.match(r.session.instance, /^[0-9a-f]{16}$/u);
+  const check = await preCheck(r, browserClick, { ref: 'e123457' });
+  assert.equal(JSON.parse(check.bind!)[0], r.session.instance);
+});
+
+test('P3a: 長いページでも、道具の結果は上限（16,000 文字）の中に収まり、収まらなかった番号は見せていないので押せない（道具の流れを通して）', async t => {
+  const r = rig(t);
+  const LONG = 'https://example.com/long';
+  const names = Array.from({ length: 150 }, (_, i) => `品物 ${String(i + 1).padStart(3, '0')} ${'くわしい説明'.repeat(16)}`);
+  r.driver.site(LONG, { title: 'Long', text: 'あ'.repeat(30_000), snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  const open = await r.call('browser_open', { url: LONG });
+  const content = open.output.content;
+  assert.ok(content.length <= 16_000, `${content.length}`);
+  assert.doesNotMatch(content, /The output was long/u, '道具の流れで切られていない');
+  assert.match(content, /Continue with offset=/u, '文は残りを offset で読ませる');
+  const shown = [...content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
+  assert.ok(shown.length > 10 && shown.length < 150, `${shown.length}`);
+  assert.match(content, new RegExp(`\\(${150 - shown.length} more elements are omitted\\)`, 'u'));
+  const unseen = `e${Number(shown[shown.length - 1]!.slice(1)) + 1}`;
+  const refused = await r.call('browser_click', { ref: unseen });
+  assert.equal(refused.decision, 'deny', '見せていない番号は押せない');
+  const page = r.driver.current!.pageList[0]!;
+  assert.equal(page.acts.length, 0);
+  const allowed = await r.call('browser_click', { ref: shown[shown.length - 1]! });
+  assert.notEqual(allowed.decision, 'deny', '見せた最後の番号は押せる');
+  // その呼び出しに許された量（トークン）が小さいときも、その中に収める
+  (r.ctx as { outputTokens?: number }).outputTokens = 2_000;
+  const small = await r.call('browser_read', { tab: 't1' });
+  assert.ok(estimateTextTokens(small.output.content) <= 2_000, `${estimateTextTokens(small.output.content)}`);
+  assert.doesNotMatch(small.output.content, /The output was long/u);
+  const few = [...small.output.content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
+  assert.ok(few.length > 0 && few.length < shown.length, `${few.length}`);
+});
+
+test('P3a: 名前に「>>>」が並ぶ（送る形では全角に置き換わって大きくなる）ページでも、見せた番号は全部、道具の流れで切られたあとの結果にある。無い番号は押せない', async t => {
+  const r = rig(t);
+  const FENCE = 'https://example.com/fence';
+  const names = Array.from({ length: 200 }, (_, i) => `品 ${i + 1} ${'>>>'.repeat(30)}`);
+  r.driver.site(FENCE, { title: 'Fence', text: `本文 ${'<<<>>>'.repeat(2000)}`, snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  (r.ctx as { outputTokens?: number }).outputTokens = 1_500;
+  const seen = new Set<string>();
+  for (const [tool, args] of [['browser_open', { url: FENCE }], ['browser_read', { tab: 't1', mode: 'elements' }], ['browser_read', { tab: 't1' }]] as const) {
+    const out = await r.call(tool, args);
+    const content = out.output.content;
+    const visible = new Set([...content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!));
+    for (const ref of visible) seen.add(ref);
+    assert.ok(visible.size > 0, `${tool}: ${content.slice(0, 300)}`);
+    const highest = Math.max(...[...visible].map(ref => Number(ref.slice(1))));
+    for (let n = 1; n <= highest + 30; n++) {
+      const ref = `e${n}`;
+      const decision = (await preCheck(r, browserClick, { ref })).decision;
+      if (decision !== 'deny') assert.ok(seen.has(ref), `${tool}: ${ref} は押せるのに、どの結果にも無い`);
+    }
+    const unseen = `e${Math.max(...[...seen].map(ref => Number(ref.slice(1)))) + 1}`;
+    assert.equal((await r.call('browser_click', { ref: unseen })).decision, 'deny', `${tool}: 見せていない ${unseen}`);
+    assert.doesNotMatch(content, /The output was long/u, `${tool}: 道具の流れで切られない`);
+  }
+  assert.equal(r.driver.current!.pageList[0]!.acts.length, 0);
+});
+
+test('P3a: 番号があり表にもあるが「見せた」に入っていない番号（結果の最後の守りが落とした行など）は、モデルと同じ道で押しても断る', async t => {
+  const r = rig(t);
+  const open = await r.call('browser_open', { url: PAGE });
+  const [ref] = [...open.output.content.matchAll(/^(e\d+) button "Send"/gmu)].map(m => m[1]!);
+  assert.ok(ref, open.output.content);
+  // 見せた番号から 1 つだけ外す（renderTab が shownIn で 1 行を落としたのと同じ形）
+  const grant = { conversationId: 'c1', runId: 'r1', attended: true, loopback: false };
+  await r.session.run({ grant, signal: new AbortController().signal }, async api => {
+    const tab = api.tab('t1');
+    assert.ok(tab.table?.items.some(e => e.ref === ref), '表にある');
+    assert.equal(retiredRef(tab.refs, ref), false, '使えなくなった番号ではない');
+    tab.refs.shown.delete(ref);
+  });
+  const pre = await preCheck(r, browserClick, { ref });
+  assert.equal(pre.decision, 'deny');
+  assert.match(pre.reasons[0]!, new RegExp(`Number ${ref} is not in the list for this tab`, 'u'));
+  const outcome = await r.call('browser_click', { ref });
+  assert.equal(outcome.decision, 'deny');
+  const direct = await browserClick.execute({ ref }, r.ctx);
+  assert.equal(direct.isError, true, '事前の判定を通らない直接の実行でも押さない');
+  assert.equal(r.driver.current!.pageList[0]!.acts.length, 0);
+});
+
+test('P3a: モデルに見せていない番号（表の 300 件より後ろ）は、表に持っていても押せない', async t => {
+  const r = rig(t);
+  const MANY = 'https://example.com/many';
+  const names = Array.from({ length: 350 }, (_, i) => `品番 ${i + 1}`);
+  r.driver.site(MANY, { title: 'Many', snapshot: names.map(n => `- button "${n}"`).join('\n'), rows: names.map((n): FakeRow => ({ role: 'button', name: n })) });
+  const page = await opened(r, MANY);
+  const hidden = await preCheck(r, browserClick, { ref: 'e301' });
+  assert.equal(hidden.decision, 'deny');
+  assert.match(hidden.reasons[0]!, /Number e301 is not in the list for this tab/u);
+  const direct = await browserClick.execute({ ref: 'e301' }, r.ctx);
+  assert.equal(direct.isError, true);
+  assert.equal((await preCheck(r, browserClick, { ref: 'e300' })).decision, 'allow', '見せた番号は押せる');
+  assert.equal(page.acts.length, 0);
+});
+
+test('P3a: 同じ URL のまま新しい文書になった（再読み込み・POST の結果）ら、前の番号は全部使えず、押さない', async t => {
+  const r = rig(t);
+  const page = await opened(r);
+  page.reload();
+  const outcome = await r.call('browser_click', { ref: 'e8' });
+  assert.equal(outcome.decision, 'deny');
+  assert.match(outcome.output.content, /e8 can no longer be used/u);
+  assert.equal(page.acts.length, 0);
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /e10 textbox "Search"/u, '読み直すと続きの番号');
 });

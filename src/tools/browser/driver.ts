@@ -2,7 +2,7 @@
 // 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は BEAT_BROWSER_LIVE=1 のときだけ動かす
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Browser, BrowserContext, Frame, Locator, Page, Request, Route } from 'playwright-core';
+import type { Browser, BrowserContext, ElementHandle, Frame, Locator, Page, Request, Route } from 'playwright-core';
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { isEdgeExecutable } from '../../shared/browser-path.ts';
@@ -13,7 +13,7 @@ import { listedNavigationVerdict, loopbackVerdict, navigationMethodVerdict, rout
 
 export type BrowserFailureCode =
   | 'disabled' | 'no_browser' | 'launch_failed' | 'profile_busy' | 'paused' | 'tab_limit' | 'no_tab'
-  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed' | 'login_open' | 'no_display';
+  | 'timeout' | 'aborted' | 'lost' | 'blocked' | 'nav_failed' | 'page_changed' | 'act_failed' | 'login_open' | 'no_display' | 'ref_limit';
 
 // 文の鍵は道具の文（tools.ts）か、守りの文（guard.ts。9-1a で足したループバックなどの文）
 export type BrowserMessageKey = ToolMessageKey | GuardMessageKey;
@@ -33,6 +33,16 @@ export class BrowserFailure extends Error {
   text(language: Language): string { return browserText(language, this.key, this.params); }
   // 文が全部アプリの決まった文か（そうなら、外から読んだ内容を含まない）
   get appTextOnly(): boolean { return this.code !== 'nav_failed'; }
+}
+
+// 中止の信号と競わせる。中止されたら待たずに aborted で終える（ページの仕事は続いても、結果は誰も受け取らない）
+export function until<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) { work.catch(() => undefined); return Promise.reject(new BrowserFailure('aborted', 'browser.aborted')); }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(new BrowserFailure('aborted', 'browser.aborted')); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => { signal.removeEventListener('abort', onAbort); });
+  });
 }
 
 export const REFUSAL_KEYS: Record<RouteRefusal, BrowserMessageKey> = {
@@ -79,8 +89,9 @@ export interface WorkBrowserHandle {
 
 export interface ElementState { visible: boolean; enabled: boolean }
 
-// 探し直す要素: 役割・名前（完全一致）・何番目か・読んだときの全部の数（数が違えば別のページとみなして触らない）
-export interface ElementTarget { role: string; name: string; nth: number; count: number }
+// 探し直す要素: ref は Playwright の印（ai の形の表の [ref=…]。その表の、その要素そのもの）。role・name は Browser の欄の表示と記録に使う。
+// verify: 要素をつかんだあと、押す前に呼ぶ確かめ（ページを読み直して、番号がまだ同じ要素と同じ中身を指すか）。false なら押さない
+export interface ElementTarget { ref: string; role: string; name: string; verify?: () => Promise<boolean> }
 // 探し直した要素の属性（パスワード欄などの判定に使う。ariaSnapshot からは分からないので、要素そのものから読む）
 export interface ElementDetail extends ElementState {
   // <input> は DOM の type（ブラウザが正規化したもの）、それ以外は type 属性。小文字。無ければ undefined
@@ -123,12 +134,14 @@ export interface PageHandle {
   title(): Promise<string>;
   // 見えている本文（innerText 相当）。maxChars を超える分は切る
   text(maxChars: number): Promise<string>;
-  // ariaSnapshot（elements.ts が読む）
+  // ai の形の ariaSnapshot（各行に Playwright の印 [ref=…]。elements.ts が読む）。ふつうの形は撮らない（撮ると印が引けなくなる）
   snapshot(): Promise<string>;
+  // 文書の代。主フレームが移動するたび（再読み込み・POST の結果・pushState も）に 1 つ進む
+  documentId(): number;
   goto(url: string, timeoutMs: number): Promise<{ status: number | undefined }>;
-  // 数が読んだときと同じで nth 番目があるときだけ、その要素の状態と属性。そうでなければ undefined
+  // 印がいまも 1 つの主フレームの要素を指すときだけ、その要素の状態と属性。そうでなければ undefined
   locate(target: ElementTarget): Promise<ElementDetail | undefined>;
-  // 押す / 文字を入れる（submit なら最後に Enter）。実行の直前に数をもう一度確かめ、違えば page_changed。
+  // 押す / 文字を入れる（submit なら最後に Enter）。実行の直前に印を引き直し、要素をつかみ、確かめ（verify）と、引き直した要素がつかんだ要素と同じかを見て、違えば page_changed。
   // ダイアログは閉じ（beforeunload だけ離れる）、ダウンロードは断り、ファイル選択は閉じて、数を返す
   click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents>;
   fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents>;
@@ -290,6 +303,8 @@ export async function frameSource(frame: Frame): Promise<string | undefined> {
 const SETTLE_MS = 250;
 const SETTLE_LOAD_MS = 1000;
 const BOX_TIMEOUT_MS = 1000;
+// 確かめたあと、本当の操作が待ってよい時間（操作できる形になるのは先に待つので、ふだんはすぐ終わる）
+const ACT_AFTER_CHECK_MS = 1000;
 
 class PlaywrightPage implements PageHandle {
   readonly page: Page;
@@ -299,8 +314,10 @@ class PlaywrightPage implements PageHandle {
   // 送信の許し（permitSubmits）。押す・入れるの終わり（遷移を待つ間も）まで効く
   permit: SubmitPermit | undefined;
   #events: ActionEvents = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
+  #document = 0;
   constructor(page: Page) {
     this.page = page;
+    page.on('framenavigated', frame => { if (frame === page.mainFrame()) this.#document += 1; });
     // ページ側の出来事には、いつも自分で答える（放っておくとページが止まる）。中身は読まない
     page.on('dialog', dialog => {
       this.#events.dialogs++;
@@ -318,7 +335,8 @@ class PlaywrightPage implements PageHandle {
     return text.length > maxChars ? text.slice(0, maxChars) : text;
   }
 
-  snapshot(): Promise<string> { return this.page.locator('body').ariaSnapshot(); }
+  snapshot(): Promise<string> { return this.page.ariaSnapshot({ mode: 'ai' }); }
+  documentId(): number { return this.#document; }
 
   async goto(url: string, timeoutMs: number): Promise<{ status: number | undefined }> {
     this.refusal = undefined;
@@ -336,10 +354,17 @@ class PlaywrightPage implements PageHandle {
     }
   }
 
+  // 印の要素。最後の表に無い印は 0 件（数えずに押すと時間切れまで待つので、先に数える）。1 件で、主フレームの要素のときだけ
   async #locator(target: ElementTarget): Promise<Locator | undefined> {
-    const all = this.page.getByRole(target.role as Parameters<Page['getByRole']>[0], { name: target.name, exact: true });
-    if (target.nth >= target.count || await all.count() !== target.count) return undefined;
-    return all.nth(target.nth);
+    const one = this.page.getByRef(target.ref);
+    if (await one.count() !== 1) return undefined;
+    const handle = await one.elementHandle({ timeout: BOX_TIMEOUT_MS }).catch(() => null);
+    if (!handle) return undefined;
+    try {
+      return (await handle.ownerFrame()) === this.page.mainFrame() ? one : undefined;
+    } finally {
+      await handle.dispose().catch(() => undefined);
+    }
   }
 
   async locate(target: ElementTarget): Promise<ElementDetail | undefined> {
@@ -356,31 +381,64 @@ class PlaywrightPage implements PageHandle {
     };
   }
 
+  // 確かめ（verify）のあと、印を引き直した要素が、つかんだ要素と同じものか
+  async #samePinned(target: ElementTarget, pinned: ElementHandle): Promise<boolean> {
+    const again = await this.#locator(target);
+    const handle = again ? await again.elementHandle({ timeout: BOX_TIMEOUT_MS }).catch(() => null) : null;
+    if (!handle) return false;
+    try {
+      return await pinned.evaluate((a, b) => a === b, handle).catch(() => false);
+    } finally {
+      await handle.dispose().catch(() => undefined);
+    }
+  }
+
   // 操作の前に出来事の数を 0 に戻し、あとで返す
-  async #act(target: ElementTarget, timeoutMs: number, work: (one: Locator) => Promise<void>): Promise<ActionEvents> {
+  // 印の要素をつかんで（ElementHandle）操作する。まず操作できる形になるまで待ち（ready: 試しの押し・入れられる状態。長く待ちうる）、
+  // そのあとで確かめ（ページを読み直して番号がまだ同じ要素と中身を指すか）と、引き直した要素がつかんだ要素と同じかを見て（どちらかが違えば押さない）、
+  // 最後に短い時間の上限（ACT_AFTER_CHECK_MS）で本当の操作をする（確かめてから操作までのあいだを短くする）
+  async #act(target: ElementTarget, timeoutMs: number, ready: (one: ElementHandle) => Promise<void>, work: (one: ElementHandle, timeout: number) => Promise<void>): Promise<ActionEvents> {
     const one = await this.#locator(target);
     if (!one) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
+    const pinned = await one.elementHandle({ timeout: BOX_TIMEOUT_MS }).catch(() => null);
+    if (!pinned) throw new BrowserFailure('page_changed', 'browser.page_changed');
     try {
-      await work(one);
-    } catch (e) {
-      if ((e as { name?: string }).name === 'TimeoutError') throw new BrowserFailure('timeout', 'browser.timeout', { sec: Math.round(timeoutMs / 1000) });
-      // Playwright の文にはページの文字が入りうるので、そのままは出さない
-      throw new BrowserFailure('act_failed', 'browser.act_failed');
+      await this.#step(timeoutMs, () => ready(pinned));
+      const confirmed = (target.verify === undefined || await target.verify().catch(() => false)) && await this.#samePinned(target, pinned).catch(() => false);
+      if (!confirmed) throw new BrowserFailure('page_changed', 'browser.page_changed');
+      this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
+      const after = Math.min(timeoutMs, ACT_AFTER_CHECK_MS);
+      await this.#step(after, () => work(pinned, after));
+    } finally {
+      await pinned.dispose().catch(() => undefined);
     }
     await new Promise<void>(resolve => { setTimeout(resolve, SETTLE_MS); });
     await this.page.waitForLoadState('domcontentloaded', { timeout: SETTLE_LOAD_MS }).catch(() => undefined);
     return { ...this.#events };
   }
 
+  // Playwright の失敗を beat の失敗にする（Playwright の文にはページの文字が入りうるので、そのままは出さない）
+  async #step(timeoutMs: number, run: () => Promise<void>): Promise<void> {
+    try {
+      await run();
+    } catch (e) {
+      if (e instanceof BrowserFailure) throw e;
+      if ((e as { name?: string }).name === 'TimeoutError') throw new BrowserFailure('timeout', 'browser.timeout', { sec: Math.max(1, Math.round(timeoutMs / 1000)) });
+      throw new BrowserFailure('act_failed', 'browser.act_failed');
+    }
+  }
+
   click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents> {
-    return this.#act(target, timeoutMs, one => one.click({ timeout: timeoutMs }));
+    return this.#act(target, timeoutMs, one => one.click({ trial: true, timeout: timeoutMs }), (one, timeout) => one.click({ timeout }));
   }
 
   fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents> {
     return this.#act(target, timeoutMs, async one => {
-      await one.fill(text, { timeout: timeoutMs });
-      if (submit) await one.press('Enter', { timeout: timeoutMs });
+      await one.waitForElementState('stable', { timeout: timeoutMs });
+      await one.waitForElementState('editable', { timeout: timeoutMs });
+    }, async (one, timeout) => {
+      await one.fill(text, { timeout });
+      if (submit) await one.press('Enter', { timeout });
     });
   }
 
