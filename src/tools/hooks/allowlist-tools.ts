@@ -161,7 +161,8 @@ register(SH_CD_NAMES, (words, acc) => {
   const target = args[0];
   if (!target || (literal(target) && target.text === '-')) { acc.cwd = { word: null }; return; }
   acc.read(target);
-  acc.cwd = { word: target };
+  // -P・-L は、link/.. の .. を実体の親で解くかが変わる。見張りは文字で解くので、旗があれば行き先を決められないとする
+  acc.cwd = { word: args.length < words.length - 1 ? null : target };
 }, true);
 register(SH_POP_NAMES, (_words, acc) => { acc.cwd = { word: null }; }, true);
 
