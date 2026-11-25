@@ -17,8 +17,10 @@ afterEach(async () => {
 });
 
 const BATCH = '0f0e0d0c-1111-4222-8333-444455556666';
-const queue: ChangedFile = { path: 'src/upload/queue.ts', status: 'modified', added: 2, removed: 1, hidden: false, undo: true, hunks: [['@@ -1,3 +1,4 @@', ' async function send(chunk: Chunk) {', '-  await put(chunk);', `+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { ${'x'.repeat(200)} }`, '+  throw new UploadFailed(chunk.id);'], ['@@ -40,1 +41,1 @@', ' }']] };
-const backoff: ChangedFile = { path: 'src/upload/backoff.ts', status: 'added', added: 1, removed: 0, hidden: false, undo: true, hunks: [['@@ -0,0 +1,1 @@', '+export const MAX_ATTEMPTS = 3;']] };
+const QUEUE_HASH = 'a'.repeat(64);
+const BACKOFF_HASH = 'b'.repeat(64);
+const queue: ChangedFile = { path: 'src/upload/queue.ts', status: 'modified', added: 2, removed: 1, hidden: false, undo: true, hash: QUEUE_HASH, hunks: [['@@ -1,3 +1,4 @@', ' async function send(chunk: Chunk) {', '-  await put(chunk);', `+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) { ${'x'.repeat(200)} }`, '+  throw new UploadFailed(chunk.id);'], ['@@ -40,1 +41,1 @@', ' }']] };
+const backoff: ChangedFile = { path: 'src/upload/backoff.ts', status: 'added', added: 1, removed: 0, hidden: false, undo: true, hash: BACKOFF_HASH, hunks: [['@@ -0,0 +1,1 @@', '+export const MAX_ATTEMPTS = 3;']] };
 const old: ChangedFile = { path: 'src/old.ts', status: 'deleted', added: 0, removed: 4, hidden: false, undo: true, hunks: [['@@ -1,4 +0,0 @@', '-a', '-b', '-c', '-d']] };
 const env: ChangedFile = { path: '.env', status: 'modified', added: 0, removed: 0, hidden: true, undo: false, hunks: null };
 const big: ChangedFile = { path: 'assets/logo.png', status: 'modified', added: 0, removed: 0, hidden: false, undo: true, hunks: null };
@@ -110,7 +112,7 @@ test('ui/ChangesPane（DOM）: ファイルの Undo は確かめなしで口を�
   const { container, state, notices } = await show([queue, backoff]);
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
-  assert.deepEqual(state.bodies[0], { base: 'build', paths: ['src/upload/queue.ts'] }, '見ている元と、そのファイルだけ');
+  assert.deepEqual(state.bodies[0], { base: 'build', paths: ['src/upload/queue.ts'], hashes: { 'src/upload/queue.ts': QUEUE_HASH } }, '見ている元と、そのファイルだけ。差分を出した時点のハッシュを付ける');
   assert.ok(block(container, 'src/upload/queue.ts')!.classList.contains('is-leaving'), '塊が去る');
   assert.deepEqual(notices, [{ projectId: 'p1', batch: BATCH, undone: 1, refused: 0, more: 0 }]);
   await wait(300);
@@ -131,7 +133,7 @@ test('ui/ChangesPane（DOM）: Undo all は欄に出ている戻せるファイ�
   const { container, state, notices } = await show([queue, backoff, env], {}, { more: 7 });
   await click(byText(container, '.bt-pane__bar button', 'Undo all'));
   await wait(300);
-  assert.deepEqual(state.bodies[0], { base: 'build', paths: ['src/upload/queue.ts', 'src/upload/backoff.ts'] });
+  assert.deepEqual(state.bodies[0], { base: 'build', paths: ['src/upload/queue.ts', 'src/upload/backoff.ts'], hashes: { 'src/upload/queue.ts': QUEUE_HASH, 'src/upload/backoff.ts': BACKOFF_HASH } });
   assert.deepEqual(notices, [{ projectId: 'p1', batch: BATCH, undone: 2, refused: 0, more: 7 }]);
   assert.deepEqual([...container.querySelectorAll('.bt-diff')].map(b => b.getAttribute('data-path')), ['.env'], 'hidden だけ残る');
 });
@@ -164,7 +166,7 @@ test('ui/ChangesPane（DOM）: 測る点を変えて読み直しを待つあい�
   await settle();
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
-  assert.deepEqual(state.bodies, [{ base: 'commit', paths: ['src/upload/queue.ts'] }]);
+  assert.deepEqual(state.bodies, [{ base: 'commit', paths: ['src/upload/queue.ts'], hashes: { 'src/upload/queue.ts': QUEUE_HASH } }]);
   await wait(LEAVE);
 });
 
@@ -175,7 +177,7 @@ test('ui/ChangesPane（DOM）: 「この会話」で読んだ一覧の Undo は�
   await settle();
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
-  assert.deepEqual(state.bodies, [{ base: 'records', conversation: 'c1', paths: ['src/upload/queue.ts'] }]);
+  assert.deepEqual(state.bodies, [{ base: 'records', conversation: 'c1', paths: ['src/upload/queue.ts'], hashes: { 'src/upload/queue.ts': QUEUE_HASH } }]);
   await wait(LEAVE);
 });
 
@@ -219,7 +221,7 @@ test('ui/ChangesPane（DOM）: 測る点を切り替えると、その元で読�
   assert.equal(state.calls.at(-1), 'GET /api/projects/p1/changes?base=commit');
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await settle();
-  assert.deepEqual(state.bodies[0], { base: 'commit', paths: ['src/upload/queue.ts'] }, 'Undo も見ている元で');
+  assert.deepEqual(state.bodies[0], { base: 'commit', paths: ['src/upload/queue.ts'], hashes: { 'src/upload/queue.ts': QUEUE_HASH } }, 'Undo も見ている元で');
   await wait(LEAVE);
 });
 

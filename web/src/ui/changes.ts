@@ -1,4 +1,4 @@
-import type { ChangedFile, ChangeRefusal, ChangesScope, RefusedChange } from '../api.ts';
+import type { ChangedFile, ChangeHashes, ChangeRefusal, ChangesScope, RefusedChange } from '../api.ts';
 import type { t } from '../i18n/index.ts';
 import type { PlainKey } from '../i18n/types.ts';
 
@@ -23,6 +23,14 @@ export function diffLines(hunks: readonly (readonly string[])[]): DiffLine[] {
 
 export const changeTotals = (files: readonly ChangedFile[]): { files: number; added: number; removed: number } =>
   files.reduce((sum, f) => ({ files: sum.files + 1, added: sum.added + f.added, removed: sum.removed + f.removed }), { files: 0, added: 0, removed: 0 });
+
+// Undo の頼みに付ける、差分を出した時点の各ファイルの中身のハッシュ。ハッシュを持たないファイルは付けない（サーバーが断る）
+export function shownHashes(files: readonly ChangedFile[], paths: readonly string[]): ChangeHashes {
+  const wanted = new Set(paths);
+  const out: ChangeHashes = {};
+  for (const file of files) if (wanted.has(file.path) && file.hash !== undefined) out[file.path] = file.hash;
+  return out;
+}
 
 export function changePicks({ isGit, hasBuild, conversation }: { isGit: boolean; hasBuild: boolean; conversation: string | undefined }): ChangesPick[] {
   const picks: ChangesPick[] = isGit ? [...(hasBuild ? ['build' as const] : []), 'commit'] : ['records'];

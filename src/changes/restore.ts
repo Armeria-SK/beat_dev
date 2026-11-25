@@ -92,7 +92,8 @@ const sizeOf = (content: Buffer | null): number => content?.length ?? 0;
 const hashOrNull = (content: Buffer | null): string | null => (content === null ? null : sha256(content));
 
 // Undo: 元の中身（entry.before）を書き戻す。書く前に今の中身を Redo の控えに取り、取れないファイルは断る
-export function undoEntries(deps: UndoDeps, entries: readonly ChangeEntry[], paths: readonly string[] | 'all'): UndoResult {
+// expected: 画面が差分を出した時点の各ファイルの中身のハッシュ（無い = null）。渡されたときは、今の中身が違うファイル（差分のあとに書き足された・消された・作られた）と、表に無いファイルは書き戻さず changed で断る
+export function undoEntries(deps: UndoDeps, entries: readonly ChangeEntry[], paths: readonly string[] | 'all', expected?: ReadonlyMap<string, string | null>): UndoResult {
   const byPath = new Map(entries.map(entry => [entry.path, entry]));
   const chosen: Array<{ path: string; entry: ChangeEntry | undefined }> = paths === 'all'
     ? entries.filter(entry => !entry.hidden).map(entry => ({ path: entry.path, entry }))
@@ -110,6 +111,7 @@ export function undoEntries(deps: UndoDeps, entries: readonly ChangeEntry[], pat
     const current = readCurrent(deps.realRoot, entry.path);
     if (current === 'unknown') { out.refused.push({ path: entry.path, reason: 'link' }); continue; }
     if (current === 'large') { out.refused.push({ path: entry.path, reason: 'cannot_keep' }); continue; }
+    if (expected && (!expected.has(entry.path) || expected.get(entry.path) !== hashOrNull(current))) { out.refused.push({ path: entry.path, reason: 'changed' }); continue; }
     let kept: string | null = null;
     if (current !== null) {
       if (current.length > KEEP_MAX_BYTES) { out.refused.push({ path: entry.path, reason: 'cannot_keep' }); continue; }

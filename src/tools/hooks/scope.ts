@@ -28,6 +28,15 @@ const SECRET_PATTERNS = [
   /\.tfstate(?:\.backup)?$/iu,
   /(?:^|\/)\.config\/gh\/hosts\.yml$/iu,
 ];
+// SECRET_PATTERNS と同じ名前を git の pathspec（glob）で探す一覧。名前が増えたら両方に足す（tests/bl-owner-files-secrets.test.ts が突き合わせる）。service-account*.json は片付けだけが止める名前で、isSecretPath には入れない
+export const SECRET_GLOBS: readonly string[] = [
+  '**/.env*', '**/*.env', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx', '**/*.keystore', '**/*.jks',
+  '**/id_rsa*', '**/id_dsa*', '**/id_ecdsa*', '**/id_ed25519*', '**/.netrc', '**/.npmrc', '**/.pypirc', '**/.git-credentials',
+  '**/.ssh/**', '**/.aws/**', '**/.gnupg/**', '**/.docker/**', '**/.kube/**', '**/secret/**', '**/secrets/**',
+  '**/_netrc', '**/.envrc', '**/.pgpass', '**/.yarnrc.yml', '**/.vault-token', '**/.s3cfg', '**/.boto',
+  '**/*.ppk', '**/*.tfvars', '**/*.tfvars.json', '**/*.tfstate', '**/*.tfstate.backup', '**/.config/gh/hosts.yml',
+  '**/credentials.json', '**/secrets.*', '**/service-account*.json',
+];
 // 名前が secrets・secret のフォルダ（中のファイルも）。名前だけを出すコマンドでは、これだけでは止めない
 const SECRET_FOLDER = /(?:^|\/)secrets?(?:\/|$)/iu;
 // 依存パッケージのフォルダの中。再帰して読む歩きで、ここで見つけた秘密らしい名前は、止めずに今回だけの確かめにする
