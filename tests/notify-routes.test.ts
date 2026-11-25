@@ -202,3 +202,30 @@ test('配線: お知らせが作られると送り先へ届く（題はそのま
   assert.equal(alerts.length, 1);
   assert.equal(s.sent.length, 2);
 });
+
+test('A3: 画面で既読にする（POST /api/notifications/read）と notification.read が流れ、別のタブのベルの数が合う', async t => {
+  const s = await start(t);
+  const seen: Array<{ type: string; ids?: number[]; unread?: number }> = [];
+  s.app.bus.subscribe(e => { if (e.event.type === 'notification.read') seen.push(e.event); });
+  const a = s.app.notifications.notify({ kind: 'info', title: 'a' })!;
+  const b = s.app.notifications.notify({ kind: 'info', title: 'b' })!;
+  s.app.notifications.notify({ kind: 'info', title: 'c' });
+  // 渡した id だけ: ids はそのまま、unread は既読にしたあとの今の数
+  assert.equal((await s.json('/api/notifications/read', 'POST', { ids: [a.id, b.id] })).body.unread, 1);
+  assert.deepEqual(seen, [{ type: 'notification.read', ids: [a.id, b.id], unread: 1 }]);
+  // ids を渡さない（全部）: ids は空の配列
+  assert.equal((await s.json('/api/notifications/read', 'POST', {})).body.unread, 0);
+  assert.deepEqual(seen[1], { type: 'notification.read', ids: [], unread: 0 });
+  assert.equal(seen.length, 2);
+});
+
+test('A3: 断った呼び出し（ids の形が悪い）は何も流さない。Notifications.markRead そのものは流さない（起動の掃除から直に呼ぶ道がある）', async t => {
+  const s = await start(t);
+  const seen: string[] = [];
+  s.app.bus.subscribe(e => { seen.push(e.event.type); });
+  const n = s.app.notifications.notify({ kind: 'info', title: 'a' })!;
+  seen.length = 0;
+  assert.equal((await s.json('/api/notifications/read', 'POST', { ids: ['x'] })).status, 400);
+  s.app.notifications.markRead([n.id]);
+  assert.deepEqual(seen, []);
+});
