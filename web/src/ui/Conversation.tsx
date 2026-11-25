@@ -19,13 +19,13 @@ import { RedoAction } from './ChangesRedo.tsx';
 import { Checklist } from './Checklist.tsx';
 import { useNow } from './hooks.ts';
 import { latestOnly } from './latest.ts';
-import { menuStep } from './menu.ts';
 import { newSessionHash, sendOptions } from './product-nav.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { notePath } from './memory-notes.ts';
 import { routeHash } from './routes.ts';
+import { SessionMenu } from './SessionMenu.tsx';
 import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem, type ToolItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
 
@@ -186,49 +186,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function SessionMenu({ conversation, onRename, onSummary, onClose }: { conversation: ConversationRow; onRename: () => void; onSummary: () => void; onClose: () => void }) {
-  const t = useT();
-  const [confirming, setConfirming] = useState(false);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const first = useRef<HTMLButtonElement>(null);
-  const confirm = useRef<HTMLButtonElement>(null);
-  useEffect(() => { first.current?.focus(); }, []);
-  useEffect(() => { if (confirming) confirm.current?.focus(); }, [confirming]);
-  const act = async (run: () => Promise<unknown>, after: () => void) => {
-    setBusy(true); setError('');
-    try { await run(); after(); } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); setBusy(false); }
-  };
-  return (
-    <ul className="bt-menu ui-sessionmenu" role="menu" aria-label={t('ui.session.menu')}
-      onKeyDown={e => {
-        if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
-        const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')];
-        const next = menuStep(items.indexOf(document.activeElement as HTMLElement), items.length, e.key);
-        if (next !== null) { e.preventDefault(); items[next]?.focus(); }
-      }}>
-      <li role="none"><button ref={first} type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={onRename}>{t('ui.session.rename')}</button></li>
-      {conversation.has_summary && <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={onSummary}>{t('ui.session.summary')}</button></li>}
-      {conversation.archived !== 1 && (
-        <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" disabled={busy}
-          onClick={() => void act(() => api.archiveConversation(conversation.id), onClose)}>{t('ui.session.archive')}</button></li>
-      )}
-      {confirming ? (
-        <li role="none" className="ui-menu__confirm">
-          <span className="bt-meta">{t(conversation.project_id ? 'ui.session.deleteWhatProduct' : 'ui.session.deleteWhat')}</span>
-          <span className="ui-menu__confirmrow">
-            <Button ref={confirm} role="menuitem" variant="danger" small disabled={busy} onClick={() => void act(() => api.deleteConversation(conversation.id), () => location.replace('#/'))}>{t('ui.session.deleteConfirm')}</Button>
-            <Button role="menuitem" variant="ghost" small onClick={() => setConfirming(false)}>{t('ui.session.keep')}</Button>
-          </span>
-        </li>
-      ) : (
-        <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn ui-danger" onClick={() => setConfirming(true)}>{t('ui.session.delete')}</button></li>
-      )}
-      {error && <li role="alert" className="bt-meta ui-danger ui-menu__error">{error}</li>}
-    </ul>
-  );
-}
-
 function Bar({ conversation: row, readOnly, title, product, meter, panes, onRenamed, onSummary }: {
   conversation: ConversationRow | null; readOnly: boolean; title: string; product: Project | undefined; meter: { value: number; high: boolean } | null; panes: PanesToggle | undefined; onRenamed: (title: string) => void; onSummary: () => void;
 }) {
@@ -247,7 +204,7 @@ function Bar({ conversation: row, readOnly, title, product, meter, panes, onRena
     addEventListener('pointerdown', onDown);
     return () => removeEventListener('pointerdown', onDown);
   }, [menu]);
-  const closeMenu = () => { setMenu(false); menuButton.current?.focus(); };
+  const closeMenu = (refocus = true) => { setMenu(false); if (refocus) menuButton.current?.focus(); };
   const save = async () => {
     if (finished.current) return;
     finished.current = true;
@@ -282,7 +239,16 @@ function Bar({ conversation: row, readOnly, title, product, meter, panes, onRena
           <button ref={menuButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.session.menu')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(open => !open)}>
             <Icon name="more" />
           </button>
-          {menu && <SessionMenu conversation={conversation} onRename={startRename} onSummary={() => { setMenu(false); onSummary(); }} onClose={closeMenu} />}
+          {menu && (
+            <SessionMenu conversation={conversation} label={t('ui.session.menu')} opener={menuButton} className="ui-sessionmenu" onClose={closeMenu}
+              onArchived={() => closeMenu()} onDeleted={() => location.replace('#/')}
+              lead={(
+                <>
+                  <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={startRename}>{t('ui.session.rename')}</button></li>
+                  {conversation.has_summary && <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={() => { setMenu(false); onSummary(); }}>{t('ui.session.summary')}</button></li>}
+                </>
+              )} />
+          )}
         </div>
       )}
     </header>
