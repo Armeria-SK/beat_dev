@@ -177,9 +177,9 @@ test('ui/folder-pick: フォルダの名前・作る口へ送る形', () => {
   assert.equal(folderName('C:\\work\\uploader\\'), 'uploader');
   assert.equal(folderName('/home/me/field-notes'), 'field-notes');
   assert.equal(folderName('   '), '');
-  assert.equal(newProjectInput('  ', 'n', ''), null);
-  assert.deepEqual(newProjectInput(' C:\\work\\a ', ' A ', '  '), { root: 'C:\\work\\a', name: 'A' });
-  assert.deepEqual(newProjectInput('C:\\work\\a', '', 'npm test'), { root: 'C:\\work\\a', checkCommand: 'npm test' });
+  assert.equal(newProjectInput('  ', 'n'), null);
+  assert.deepEqual(newProjectInput(' C:\\work\\a ', ' A '), { root: 'C:\\work\\a', name: 'A' });
+  assert.deepEqual(newProjectInput('C:\\work\\a', '  '), { root: 'C:\\work\\a' }, '名前が空（打っていない）なら名前を送らない。確かめのコマンドは作るときには送らない');
   assert.deepEqual(noteKeys(['nested_inside', 'not_git', 'something_new']).map(k => t(k)), ['This folder is inside another product.', 'Not a git folder.']);
   assert.match(t(noteKeys(['config_root_read_only'])[0]!), /refused/u, '2-1b は設定で読むだけのフォルダへの書き込みを断る（聞かない）');
 });

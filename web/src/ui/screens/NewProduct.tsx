@@ -65,7 +65,6 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
   const [folderOk, setFolderOk] = useState<string | null>(null);
   const [root, setRoot] = useState('');
   const [name, setName] = useState('');
-  const [check, setCheck] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const loads = useRef(latestOnly());
@@ -132,7 +131,7 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
     }
   };
 
-  const input = newProjectInput(root, name, check);
+  const input = newProjectInput(root, name);
 
   const create = async () => {
     if (!input || busy) return;
@@ -195,11 +194,6 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
           <span className="bt-label">{t('ui.np.name')}</span>
           <input className="bt-field" type="text" value={name} maxLength={100} autoComplete="off" placeholder={folderName(root) || t('ui.np.nameHint')}
             onChange={e => setName(e.target.value)} />
-        </label>
-        <label className="bt-form-row">
-          <span className="bt-label">{t('ui.np.check')}</span>
-          <input className="bt-field bt-field--mono" type="text" value={check} spellCheck={false} autoComplete="off" onChange={e => setCheck(e.target.value)} />
-          <span className="bt-meta">{t('ui.np.checkHint')}</span>
         </label>
         <p className="bt-meta">{t('ui.np.agents')}</p>
         {error && <p className="bt-meta ui-danger" role="alert">{error}</p>}

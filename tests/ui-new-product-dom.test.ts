@@ -113,6 +113,24 @@ test('ui/NewProduct（DOM）: 名前を打って作ると、打った文字が�
   window.location.hash = '';
 });
 
+test('ui/NewProduct（DOM）: Check command の欄は無く（製品の設定にある）、作るときに確かめのコマンドを送らない', async () => {
+  const sent = serve((path, method) => {
+    if (path === '/api/projects' && method === 'POST') return { status: 201, body: { project: { id: 'p9zzzz', name: 'kakeibo' }, notes: [] } };
+    return base(path, method);
+  });
+  const { container: c } = await show();
+  assert.equal(text(c).includes(en['ui.np.check']), false, 'Check command の見出しが無い');
+  assert.equal(text(c).includes(en['ui.np.checkHint']), false, 'Check command の説明が無い');
+  assert.equal(c.querySelectorAll('input').length, 2, '欄は Folder と Name の 2 つだけ');
+  await input(field(c), 'C:\\work\\kakeibo');
+  await click(byText(c, 'button', en['ui.np.create']));
+  await settle();
+  const body = sent.find(s => s.path === '/api/projects' && s.method === 'POST')?.body as Record<string, unknown> | undefined;
+  assert.ok(body);
+  assert.equal('checkCommand' in body, false);
+  window.location.hash = '';
+});
+
 test('ui/NewProduct（DOM）: 窓で選んだフォルダが製品のフォルダにできない（ホームなど）なら、その理由をすぐ欄の下に出す', async () => {
   serve((path, method) => {
     if (path === '/api/folders/pick' && method === 'POST') return { body: { path: 'C:\\Users\\me' } };
