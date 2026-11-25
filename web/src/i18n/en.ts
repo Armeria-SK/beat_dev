@@ -215,7 +215,7 @@ export const en = {
   'tool.browser_close': 'Close a browser tab (all tabs of this conversation when none is given)',
   'tool.browser_click': 'Click an element on the browser page (on listed sites and addresses you wrote it clicks without asking, elsewhere it is checked first; submitting a form always waits in Pending for your OK, and in tasks it is refused)',
   'tool.browser_type': 'Type into a field on the browser page (never into password fields; pressing Enter to submit always waits in Pending for your OK, and in tasks it is refused)',
-  'tool.browser_act': 'Do several clicks, typed fields and short waits on the browser page in one go (only steps that browser_click and browser_type would do without asking; it stops at the first step that needs a check or your OK, and never types into password fields)',
+  'tool.browser_act': 'Do several clicks, typed fields, choices in select boxes, navigation keys (Tab, Escape, arrows, Home, End, Page Up/Down; never Enter) and short waits on the browser page in one go (only steps that browser_click and browser_type would do without asking; it stops at the first step that needs a check or your OK, and never types into password fields)',
   'tool.agent_run': 'Hand work to a helper agent and get its result',
   'tool.shell_output': 'Read the new output of a background command (only in product conversations and tasks)',
   'tool.shell_stop': 'Stop a background command (only in product conversations and tasks)',

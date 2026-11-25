@@ -14,7 +14,7 @@ import { rereadTab } from '../src/tools/browser/checks.ts';
 import { BrowserFailure, LAUNCH_TIMEOUT_MS, PlaywrightDriver, playwrightOptions, seedPreferences, systemLocale, type ElementTarget, type LaunchOptions, type PageHandle } from '../src/tools/browser/driver.ts';
 import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
-import { browserClick, browserFind, browserOpen } from '../src/tools/builtin/browser.ts';
+import { actSteps, browserClick, browserFind, browserOpen } from '../src/tools/builtin/browser.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { testConfig } from './helpers.ts';
 
@@ -522,4 +522,127 @@ test('P3a: 押す要素が動いているあいだに行の文が入れ替わる
   t.diagnostic(`answered in ${Date.now() - started} ms: ${out.content.slice(0, 120)}`);
   assert.equal(out.isError, true, out.content);
   assert.equal(await r.title(), 'start', '入れ替わったあとの行を押さない');
+});
+
+// ---------------------------------------------------------------- P6: select / press（本物の Chrome）
+
+const PICK_PAGE = `<select aria-label="Size" id="size" onchange="document.title = 'picked ' + this.value + ' ' + this.selectedOptions.length"><option value="1">One</option><option value="2">Two words</option><option value="3" disabled>Off</option></select>
+<select aria-label="Tags" id="tags" multiple onchange="document.title = 'tags ' + [...this.selectedOptions].map(o => o.value).join('+')"><option value="a">Red</option><option value="b">Blue</option></select>
+<div role="combobox" aria-label="Fake menu" tabindex="0">Fake</div>
+<script>document.addEventListener('focusin', e => { document.title = 'focus ' + (e.target.id || e.target.tagName); });</script>`;
+const FOCUS_PAGE = `<input id="first" aria-label="First"><input id="second" aria-label="Second"><input id="pw" type="password" aria-label="Secret">
+<iframe id="frame" tabindex="0" srcdoc="<input id='inside'>"></iframe>
+<script>document.addEventListener('focusin', e => { document.title = 'focus ' + (e.target.id || e.target.tagName); });</script>`;
+
+const refOf = (content: string, role: string, name: string): string => {
+  const ref = new RegExp(`^(e\\d+) ${role} "${name}"`, 'mu').exec(content)?.[1];
+  assert.ok(ref, content);
+  return ref;
+};
+
+test('P6 select: 本物の <select> をラベルで選び、change が起きる。大小違い・無効な選択肢・自前のコンボボックスは選ばない。複数選択の <select> も 1 つに置き換えて選べる', options, async t => {
+  const r = await refRig(t, { '/pick': PICK_PAGE });
+  const content = await r.open('/pick');
+  const size = refOf(content, 'combobox', 'Size');
+  const fake = refOf(content, 'combobox', 'Fake menu');
+  const ok = await actSteps({ steps: [{ select: size, option: 'Two words' }] }, r.ctx);
+  assert.equal(ok.isError, undefined, ok.content);
+  assert.match(ok.content, /^1\. Selected an option in e\d+\./u);
+  assert.doesNotMatch(ok.content.split('\n')[0]!, /Two words/u, '選んだラベルは結果の行に写さない');
+  assert.equal(await r.title(), 'picked 2 1', 'change が起き、値は 2');
+  for (const option of ['two words', 'Two words ', 'Off', '2']) {
+    const refused = await actSteps({ steps: [{ select: size, option }] }, r.ctx);
+    assert.equal(refused.isError, true, option);
+    assert.match(refused.content, /^1\. Failed: The select box has no enabled option with that label/u, `${option}: ${refused.content}`);
+  }
+  assert.equal(await r.title(), 'picked 2 1', '断ったあとも選びは変わらない');
+  const notSelect = await actSteps({ steps: [{ select: fake, option: 'Fake' }] }, r.ctx);
+  assert.match(notSelect.content, /^1\. Not done: e\d+ \(combobox\) is not a select box/u, notSelect.content);
+  // 1 つ目の選びで要素の状態が変わるので、2 つ目からは番号でなく名前で指す（開発サーバーだけ）
+  const multi = await actSteps({ steps: [{ select: { role: 'listbox', name: 'Tags' }, option: 'Red' }, { select: { role: 'listbox', name: 'Tags' }, option: 'Blue' }] }, r.ctx);
+  assert.equal(multi.isError, undefined, multi.content);
+  assert.equal(await r.title(), 'tags b', '2 回目は 1 つに置き換わる');
+  const named = await actSteps({ steps: [{ select: { role: 'combobox', name: 'Size' }, option: 'One' }] }, r.ctx);
+  assert.equal(named.isError, undefined, named.content);
+  assert.equal(await r.title(), 'picked 1 1', '名前で指しても、開発サーバーでは進む');
+});
+
+test('P6 press: Tab は焦点を進める。Enter・Space・修飾つきは入力の確かめで断る。パスワード欄・枠（iframe）の中に焦点があれば鍵を送らない', options, async t => {
+  const r = await refRig(t, { '/focus': FOCUS_PAGE });
+  await r.open('/focus');
+  const page = await r.raw();
+  const moved = await actSteps({ steps: [{ press: 'Tab' }, { press: 'Tab' }] }, r.ctx);
+  assert.equal(moved.isError, undefined, moved.content);
+  assert.match(moved.content, /^1\. Pressed Tab\.\n2\. Pressed Tab\./u);
+  assert.equal(await page.title(), 'focus second');
+  for (const key of ['Enter', 'Space', ' ', 'Shift+Tab', 'Control+a', 'a']) {
+    const out = await actSteps({ steps: [{ press: key }] } as never, r.ctx);
+    assert.equal(out.isError, true, key);
+    assert.equal(await page.title(), 'focus second', `${key}: 何も押されない`);
+  }
+  await page.evaluate(() => document.getElementById('pw')!.focus());
+  const secret = await actSteps({ steps: [{ press: 'Tab' }] }, r.ctx);
+  assert.match(secret.content, /^1\. Not done: The keyboard focus is on a password, verification code or card number field/u, secret.content);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'pw', '鍵を送っていないので焦点はそのまま');
+  await page.evaluate(() => document.getElementById('frame')!.focus());
+  const inFrame = await actSteps({ steps: [{ press: 'Tab' }] }, r.ctx);
+  assert.match(inFrame.content, /^1\. Not done: The keyboard focus is inside a frame/u, inFrame.content);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'frame');
+});
+
+test('P6 press: 焦点が <select> の上なら、矢印キーで選択が動く（select と同じ通り方）', options, async t => {
+  const r = await refRig(t, { '/pick': PICK_PAGE });
+  await r.open('/pick');
+  const page = await r.raw();
+  await page.evaluate(() => document.getElementById('size')!.focus());
+  const out = await actSteps({ steps: [{ press: 'ArrowDown' }] }, r.ctx);
+  assert.equal(out.isError, undefined, out.content);
+  assert.equal(await page.evaluate(() => (document.getElementById('size') as HTMLSelectElement).value), '2', 'ArrowDown で 1 つ進む');
+});
+
+// 閉じた shadow DOM の中の入力欄・枠は、ページの外から見ると host（div・section・body）が焦点に見える。keydown は window の手前で数える（枠の中は、枠の中の keydown を親の配列へ）
+const KEYS_SEEN = `window.__keys = []; window.addEventListener('keydown', e => window.__keys.push(e.key), true);`;
+const CLOSED_PAGE = `<div id="d"></div><section id="s"></section><div id="host" tabindex="0">plain host</div><input id="plain" aria-label="Plain">
+<script>${KEYS_SEEN}
+const dRoot = document.getElementById('d').attachShadow({ mode: 'closed' });
+dRoot.innerHTML = '<input id="pw" type="password" aria-label="Host">';
+const sRoot = document.getElementById('s').attachShadow({ mode: 'closed' });
+const frame = document.createElement('iframe');
+frame.srcdoc = '<input id="in"><scr' + 'ipt>addEventListener("keydown", e => parent.__keys.push("frame:" + e.key), true)</scr' + 'ipt>';
+sRoot.appendChild(frame);
+window.__focus = { pw: () => dRoot.getElementById('pw').focus(), frame: () => frame.focus() };</script>`;
+const BODY_PAGE = `<script>${KEYS_SEEN}
+const root = document.body.attachShadow({ mode: 'closed' });
+root.innerHTML = '<input id="pw" type="password" aria-label="Body">';
+window.__focus = { pw: () => root.getElementById('pw').focus() };</script>`;
+
+test('P6 press（M1）: 閉じた shadow DOM を持つ標準の要素（div・section・body）の中の入力欄・枠に焦点があれば、鍵を送らない。ふつうの要素・tabindex のある div には送る', options, async t => {
+  const r = await refRig(t, { '/closed': CLOSED_PAGE, '/body': BODY_PAGE });
+  const keys = async (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __keys: string[] }).__keys);
+  const focus = (page: Page, name: string): Promise<void> => page.evaluate((n: string) => (window as unknown as { __focus: Record<string, () => void> }).__focus[n]!(), name);
+  await r.open('/closed');
+  const page = await r.raw();
+  for (const [name, key, refusal] of [['pw', 'ArrowLeft', /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u], ['frame', 'ArrowDown', /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u]] as const) {
+    await focus(page, name);
+    assert.equal(await page.evaluate(() => document.activeElement?.tagName), name === 'pw' ? 'DIV' : 'SECTION', `${name}: ページの外からは host（div・section）が焦点に見える`);
+    const out = await actSteps({ steps: [{ press: key }] }, r.ctx);
+    assert.equal(out.isError, true, `${name}: ${out.content}`);
+    assert.match(out.content, refusal, name);
+    assert.deepEqual(await keys(page), [], `${name}: 鍵は 1 つも届いていない`);
+  }
+  await page.evaluate(() => document.getElementById('plain')!.focus());
+  const plain = await actSteps({ steps: [{ press: 'ArrowLeft' }] }, r.ctx);
+  assert.equal(plain.isError, undefined, plain.content);
+  await page.evaluate(() => document.getElementById('host')!.focus());
+  const host = await actSteps({ steps: [{ press: 'ArrowDown' }] }, r.ctx);
+  assert.equal(host.isError, undefined, `tabindex のある ふつうの div は、閉じた shadow DOM が無いので通る: ${host.content}`);
+  assert.deepEqual(await keys(page), ['ArrowLeft', 'ArrowDown'], '許した 2 つだけが届いた（対照: 数える仕組みは働いている）');
+  await r.open('/body');
+  const body = await r.raw();
+  await focus(body, 'pw');
+  assert.equal(await body.evaluate(() => document.activeElement?.tagName), 'BODY', 'ページの外からは body が焦点に見える（焦点なしと同じ）');
+  const refused = await actSteps({ steps: [{ press: 'End' }] }, r.ctx);
+  assert.equal(refused.isError, true, refused.content);
+  assert.match(refused.content, /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u);
+  assert.deepEqual(await keys(body), [], 'body の閉じた shadow DOM の中の入力欄に、鍵は届いていない');
 });

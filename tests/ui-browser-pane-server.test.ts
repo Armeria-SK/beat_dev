@@ -91,6 +91,30 @@ test('view.pointer: locate のあとに押すと、その要素の中心。入�
   assert.equal(session.view('p-a', conversations)?.pointer, null, '開き直したら指は消える');
 });
 
+test('P6 view.pointer / action: select は押すと同じ（locate で読んだ要素の中心・欄の言葉は click）。press は指を動かさず、欄の言葉は type（名前なし）', async t => {
+  const session = rig(t, { Size: { x: 600, y: 380, width: 80, height: 40 } });
+  drivers.get(session)!.sites.get(PAGE_A)!.rows!.push({ role: 'combobox', name: 'Size', tag: 'select', options: ['Small', 'Large'] });
+  const tab = await session.run({ grant, signal: new AbortController().signal }, async api => {
+    const opened = await api.openTab('work');
+    await opened.page.goto(PAGE_A, 1000);
+    return opened;
+  });
+  const size: ElementTarget = { ref: fakePage(session).refFor('combobox', 'Size'), role: 'combobox', name: 'Size' };
+  await session.run({ grant, signal: new AbortController().signal }, async api => {
+    const mine = api.tab(tab.id);
+    assert.ok(await mine.page.locate(size));
+    await mine.page.select(size, 'Large', 1000);
+  });
+  assert.deepEqual(session.view('p-a', conversations)?.pointer, { x: 640, y: 400 });
+  assert.deepEqual(session.view('p-a', conversations)?.action, { kind: 'click', target: 'Size' });
+  await session.run({ grant, signal: new AbortController().signal }, async api => {
+    await api.tab(tab.id).page.press('Tab', { where: 'none', tag: null, type: null, autocomplete: null, hint: '' }, 1000, { url: api.tab(tab.id).page.url(), documentId: api.tab(tab.id).page.documentId() });
+  });
+  assert.deepEqual(session.view('p-a', conversations)?.action, { kind: 'type', target: '' });
+  assert.deepEqual(session.view('p-a', conversations)?.pointer, { x: 640, y: 400 }, 'press は指を動かさない');
+  assert.deepEqual(fakePage(session).acts.map(a => a.kind), ['select', 'press']);
+});
+
 // 本物の PlaywrightPage.locate: 要素の位置（boundingBox）を box に。読めない・投げるときは box を持たず、事前の判定は今までどおり
 const MAIN_FRAME = {};
 function playwrightPage(boundingBox: (options?: { timeout?: number }) => Promise<{ x: number; y: number; width: number; height: number } | null>) {

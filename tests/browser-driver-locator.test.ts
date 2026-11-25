@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { BrowserContext, Page } from 'playwright-core';
-import { BrowserFailure, domQuiet, PlaywrightBrowser, QUIET_MAX_MS, QUIET_MS } from '../src/tools/browser/driver.ts';
+import { BrowserFailure, domQuiet, PlaywrightBrowser, PRESS_KEYS, QUIET_MAX_MS, QUIET_MS } from '../src/tools/browser/driver.ts';
 
 // 本物の PlaywrightPage の #locator: Playwright の印（getByRef）で要素を引く。印が 1 つの主フレームの要素を指さなければ、
 // 探し直しは undefined、押す・入れるは page_changed で動かさない。つかんだあと、確かめ（verify）と、引き直した要素がつかんだ要素と同じかを見る。
@@ -184,4 +184,277 @@ test('P3b: ページの中の見張り domQuiet: 静まれば true、動き続�
     g.MutationObserver = saved.observer;
     g.document = saved.document;
   }
+});
+
+// ── P6: select / press（本物の PlaywrightPage。Page の偽物で試す） ──
+
+// 本物の #act を通る select。evaluate は、文字列（ラベル）を渡されたら「その選択肢がある」答え、要素を渡されたら同じ要素かの比べ
+function selectRig(options: { hasOption?: boolean; elements?: string[]; quiet?: boolean } = {}) {
+  const acted: string[] = [];
+  let resolved = 0;
+  const elements = options.elements ?? ['A', 'A'];
+  const handleOf = (id: string) => ({
+    id,
+    ownerFrame: async () => MAIN,
+    click: async () => { acted.push(`click ${id}`); },
+    fill: async () => { acted.push(`fill ${id}`); },
+    press: async (key: string) => { acted.push(`press ${key} ${id}`); },
+    waitForElementState: async (state: string) => { acted.push(`wait ${state} ${id}`); },
+    selectOption: async (value: unknown, o?: { timeout?: number }) => { acted.push(`select ${JSON.stringify(value)} ${id} ${o?.timeout}`); return ['v']; },
+    dispose: async () => { acted.push(`dispose ${id}`); },
+    evaluate: async (fn: (a: unknown, b: unknown) => boolean, arg: unknown) => (typeof arg === 'string' ? (options.hasOption ?? true) : fn(id, (arg as { id: string }).id)),
+  });
+  const page = {
+    on: () => {},
+    mainFrame: () => MAIN,
+    getByRef: () => ({
+      count: async () => 1,
+      isVisible: async () => true,
+      isEnabled: async () => true,
+      evaluate: async () => ({ type: null, autocomplete: null, inForm: false, submits: false, tag: 'select' }),
+      elementHandle: async () => handleOf(elements[Math.min(resolved++, elements.length - 1)]!),
+    }),
+    waitForLoadState: async () => {},
+  } as unknown as Page;
+  return { handle: new PlaywrightBrowser({} as BrowserContext).wrap(page), acted };
+}
+
+const selectTarget = { ref: 'f3e7', role: 'combobox', name: 'Size' };
+
+test('P6 本物の select: 操作できる形（安定・有効）を待ち、選択肢があるのを見てから、確かめ（verify）のあと、ラベルだけで選ぶ（値・番号では選ばない）', async () => {
+  const r = selectRig({ elements: ['A', 'A'] });
+  const locate = await r.handle.locate(selectTarget);
+  assert.equal(locate?.tag, 'select', '要素のタグを返す（select かの判定に使う）');
+  r.acted.length = 0;
+  await r.handle.select({ ...selectTarget, verify: async () => { r.acted.push('verify'); return true; } }, 'Medium', 1000);
+  assert.deepEqual(r.acted.filter(a => !a.startsWith('dispose')), ['wait stable A', 'wait enabled A', 'verify', 'select {"label":"Medium"} A 1000']);
+  assert.ok(r.acted.includes('dispose A'), '離す');
+});
+
+test('P6 本物の select: 有効な選択肢が無ければ、確かめにも選ぶにも進まず、アプリの決まった文で断る（Playwright の待ちに入らない）', async () => {
+  const r = selectRig({ hasOption: false });
+  let verified = 0;
+  await assert.rejects(r.handle.select({ ...selectTarget, verify: async () => { verified += 1; return true; } }, 'Huge', 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'act_failed' && e.key === 'browser.select_no_option' && !JSON.stringify(e.params).includes('Huge'));
+  assert.equal(verified, 0);
+  assert.ok(!r.acted.some(a => a.startsWith('select')));
+  assert.ok(r.acted.includes('dispose A'));
+});
+
+test('P6 本物の select: 確かめ（verify）が false、または引き直した要素がつかんだ要素と違えば、選ばない', async () => {
+  const refused = selectRig();
+  await assert.rejects(refused.handle.select({ ...selectTarget, verify: async () => false }, 'Medium', 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
+  assert.deepEqual(refused.acted.filter(a => a.startsWith('select')), []);
+  const swapped = selectRig({ elements: ['A', 'A', 'A', 'B'] });
+  await assert.rejects(swapped.handle.select({ ...selectTarget, verify: async () => true }, 'Medium', 1000), (e: unknown) => e instanceof BrowserFailure && e.code === 'page_changed');
+  assert.deepEqual(swapped.acted.filter(a => a.startsWith('select')), [], 'つかんだ要素と違う要素は選ばない');
+  const kept = selectRig();
+  await kept.handle.select({ ...selectTarget, verify: async () => true }, 'Medium', 1000);
+  assert.deepEqual(kept.acted.filter(a => a.startsWith('select')), ['select {"label":"Medium"} A 1000']);
+});
+
+const NO_FOCUS = { where: 'none', tag: null, type: null, autocomplete: null, hint: '' } as const;
+const ON_INPUT = { where: 'element', tag: 'input', type: 'text', autocomplete: null, hint: 'Name' } as const;
+const AT = { url: 'https://site.test/a', documentId: 0 } as const;
+const isGone = (e: unknown, code = 'page_changed') => e instanceof BrowserFailure && e.code === code;
+const sent = (acted: string[]) => acted.some(a => a.startsWith('element.press') || a.startsWith('keyboard'));
+
+// 焦点の読み: evaluateHandle（ページの中の activeElementOf）→ asElement → evaluate（focusFacts）→
+// 閉じた shadow DOM の確かめ（DevTools の道 CDP: Runtime.evaluate で同じ関数の要素、DOM.describeNode で shadowRoots）→ evaluate（isActiveElement: 確かめのあいだに焦点が動いていないか）。
+// facts は読むたびに先頭から出す（尽きたら最後のもの）。ページの URL は navigate で変える（文書の代も進む）
+interface PressRigOptions {
+  element?: boolean;
+  reads?: 'throw';
+  // DOM.describeNode が返す shadowRoots（既定は無し）
+  roots?: Array<{ shadowRootType: string }>;
+  // CDP の道の失敗: unavailable は newCDPSession が投げる / throw は send が投げる / null は Runtime.evaluate が要素を返さない
+  cdp?: 'unavailable' | 'throw' | 'null';
+  // 確かめのあとの isActiveElement が false（焦点が動いた）
+  moved?: boolean;
+  // 最初の facts を読んでいる最中に呼ぶ
+  onFacts?: () => void;
+}
+function pressRig(facts: Array<Record<string, unknown>>, options: PressRigOptions = {}) {
+  const acted: string[] = [];
+  const queue = [...facts];
+  let current: string = AT.url;
+  const handlers: Record<string, (frame: unknown) => void> = {};
+  let reads = 0;
+  const element = {
+    evaluate: async (fn: { name: string }) => {
+      if (fn.name === 'isActiveElement') { acted.push('still active?'); return options.moved !== true; }
+      acted.push('facts');
+      reads += 1;
+      if (reads === 1) options.onFacts?.();
+      if (options.reads === 'throw') throw new Error('Execution context was destroyed');
+      return queue.length > 1 ? queue.shift() : queue[0];
+    },
+    press: async (key: string, o?: { timeout?: number }) => { acted.push(`element.press ${key} ${o?.timeout}`); },
+    dispose: async () => { acted.push('element.dispose'); },
+  };
+  const cdp = {
+    send: async (method: string) => {
+      acted.push(`cdp ${method}`);
+      if (options.cdp === 'throw') throw new Error('Protocol error (Runtime.evaluate): Target closed');
+      if (method === 'Runtime.evaluate') return options.cdp === 'null' ? { result: { type: 'object', subtype: 'null' } } : { result: { type: 'object', objectId: 'active-1' } };
+      if (method === 'DOM.describeNode') return { node: { nodeName: 'DIV', shadowRoots: options.roots ?? [] } };
+      return {};
+    },
+    detach: async () => { acted.push('cdp.detach'); },
+  };
+  const page = {
+    on: (event: string, cb: (frame: unknown) => void) => { handlers[event] = cb; },
+    mainFrame: () => MAIN,
+    url: () => current,
+    context: () => ({ newCDPSession: async () => { acted.push('cdp.new'); if (options.cdp === 'unavailable') throw new Error('CDPSession is only available in Chromium'); return cdp; } }),
+    evaluateHandle: async () => {
+      acted.push('evaluateHandle');
+      if (options.reads === 'throw') throw new Error('Target closed');
+      return { asElement: () => (options.element === false ? null : element), dispose: async () => { acted.push('js.dispose'); } };
+    },
+    keyboard: { press: async (key: string) => { acted.push(`keyboard.press ${key}`); } },
+    waitForLoadState: async () => {},
+  } as unknown as Page;
+  const navigate = (to: string): void => { current = to; handlers['framenavigated']?.(MAIN); };
+  // URL だけ先に変わって見える（framenavigated の知らせがまだ届いていない）瞬間
+  const setUrl = (to: string): void => { current = to; };
+  return { handle: new PlaywrightBrowser({} as BrowserContext).wrap(page), acted, navigate, setUrl };
+}
+
+test('P6 本物の focus: 焦点のある要素の事実を返す。要素が無い（焦点が無い）なら none。読めなければ page_changed', async () => {
+  assert.deepEqual(await pressRig([ON_INPUT]).handle.focus(), ON_INPUT);
+  assert.deepEqual(await pressRig([], { element: false }).handle.focus(), NO_FOCUS);
+  const gone = pressRig([ON_INPUT], { reads: 'throw' });
+  await assert.rejects(gone.handle.focus(), (e: unknown) => isGone(e));
+});
+
+test('P6 本物の focus（M1）: 焦点のある要素が閉じた shadow DOM を持つなら、中の焦点は読めないので、要素の事実があっても frame（div・section・body など標準の要素でも）。user-agent・開いた shadow は数えない', async () => {
+  const div = { where: 'element', tag: 'div', type: null, autocomplete: null, hint: 'host' } as const;
+  for (const base of [ON_INPUT, NO_FOCUS, div]) {
+    const r = pressRig([base], { roots: [{ shadowRootType: 'closed' }] });
+    assert.deepEqual(await r.handle.focus(), { where: 'frame', tag: base.tag, type: null, autocomplete: null, hint: '' }, JSON.stringify(base));
+    assert.ok(r.acted.includes('cdp.detach'), '離す');
+    assert.ok(r.acted.includes('element.dispose'));
+  }
+  const mixed = pressRig([div], { roots: [{ shadowRootType: 'user-agent' }, { shadowRootType: 'closed' }] });
+  assert.equal((await mixed.handle.focus()).where, 'frame');
+  for (const roots of [[], [{ shadowRootType: 'user-agent' }], [{ shadowRootType: 'open' }]]) {
+    assert.deepEqual(await pressRig([div], { roots }).handle.focus(), div, JSON.stringify(roots));
+  }
+});
+
+test('P6 本物の focus（M1）: 閉じた shadow DOM の確かめが読めない（Chromium でない・DevTools の道の失敗・要素が無いと言われる）・確かめのあいだに焦点が動いたときは、読めたことにせず page_changed。道は必ず閉じる', async () => {
+  for (const options of [{ cdp: 'unavailable' }, { cdp: 'throw' }, { cdp: 'null' }, { moved: true }] as const) {
+    const r = pressRig([ON_INPUT], options);
+    await assert.rejects(r.handle.focus(), (e: unknown) => isGone(e), JSON.stringify(options));
+    assert.ok(r.acted.includes('element.dispose'), `${JSON.stringify(options)}: 離す`);
+    if (options.cdp !== 'unavailable') assert.ok(r.acted.includes('cdp.detach'), `${JSON.stringify(options)}: 道を閉じる`);
+    const p = pressRig([ON_INPUT], options);
+    await assert.rejects(p.handle.press('Tab', ON_INPUT, 1000, AT), (e: unknown) => isGone(e), JSON.stringify(options));
+    assert.ok(!sent(p.acted), `${JSON.stringify(options)}: 鍵は送らない`);
+  }
+});
+
+test('P6 本物の focus（M1）: 確かめは、焦点の要素を読んだあと・要素が同じと見たあとの順（読む → 閉じた shadow か → まだ同じ要素か）', async () => {
+  const r = pressRig([ON_INPUT]);
+  await r.handle.focus();
+  assert.deepEqual(r.acted, ['evaluateHandle', 'facts', 'cdp.new', 'cdp Runtime.evaluate', 'cdp DOM.describeNode', 'cdp.detach', 'still active?', 'element.dispose']);
+});
+
+test('P6 本物の press: 焦点のある要素の事実が判定したときと同じなら、その要素をつかんだまま、その要素に押す（ページの焦点に送らない）。押したら離す', async () => {
+  const r = pressRig([ON_INPUT, ON_INPUT]);
+  await r.handle.press('Tab', ON_INPUT, 1000, AT);
+  assert.deepEqual(r.acted, ['evaluateHandle', 'facts', 'cdp.new', 'cdp Runtime.evaluate', 'cdp DOM.describeNode', 'cdp.detach', 'still active?', 'element.press Tab 1000', 'element.dispose']);
+  assert.ok(!r.acted.some(a => a.startsWith('keyboard')));
+});
+
+test('P6 本物の press: 焦点が無い（none）なら、ページのキーボードに送る', async () => {
+  const r = pressRig([NO_FOCUS]);
+  await r.handle.press('ArrowDown', NO_FOCUS, 1000, AT);
+  assert.ok(r.acted.includes('keyboard.press ArrowDown'));
+  assert.ok(!r.acted.some(a => a.startsWith('element.press')));
+  assert.ok(r.acted.includes('element.dispose'), 'つかんだ body は離す');
+  const empty = pressRig([], { element: false });
+  await empty.handle.press('Tab', NO_FOCUS, 1000, AT);
+  assert.ok(empty.acted.includes('keyboard.press Tab'));
+  assert.ok(!empty.acted.some(a => a.startsWith('cdp')), '焦点の要素が無ければ、確かめるものも無い');
+});
+
+test('P6 本物の press（M1）: 焦点が閉じた shadow DOM の部品にあるときは、判定したときと同じ事実でも押さない（none の body も）', async () => {
+  const div = { where: 'element', tag: 'div', type: null, autocomplete: null, hint: 'host' } as const;
+  for (const base of [ON_INPUT, NO_FOCUS, div]) {
+    const r = pressRig([base], { roots: [{ shadowRootType: 'closed' }] });
+    await assert.rejects(r.handle.press('ArrowLeft', base, 1000, AT), (e: unknown) => isGone(e), JSON.stringify(base));
+    assert.ok(!sent(r.acted), JSON.stringify(base));
+  }
+});
+
+test('P6 本物の press: 焦点の事実が、判定したときと違えば（種類・タグ・属性・手がかり・場所のどれか）押さない', async () => {
+  const changes: Array<Record<string, unknown>> = [
+    { ...ON_INPUT, type: 'password' }, { ...ON_INPUT, tag: 'select' }, { ...ON_INPUT, autocomplete: 'cc-number' }, { ...ON_INPUT, hint: 'Card number' },
+    { where: 'frame', tag: 'iframe', type: null, autocomplete: null, hint: '' }, NO_FOCUS,
+  ];
+  for (const now of changes) {
+    const r = pressRig([now]);
+    await assert.rejects(r.handle.press('Tab', ON_INPUT, 1000, AT), (e: unknown) => isGone(e), JSON.stringify(now));
+    assert.ok(!sent(r.acted), JSON.stringify(now));
+    assert.ok(r.acted.includes('element.dispose'), '離す');
+  }
+  const none = pressRig([ON_INPUT]);
+  await assert.rejects(none.handle.press('Tab', NO_FOCUS, 1000, AT), (e: unknown) => isGone(e), '焦点が無いと判定したあとに、要素に焦点が移った');
+  assert.ok(!sent(none.acted));
+});
+
+test('P6 本物の press: 焦点が枠（iframe など）の中にあるときは、判定したときと同じ事実でも押さない（呼び出す側が通しても、driver が断る）', async () => {
+  const frame = { where: 'frame', tag: 'iframe', type: null, autocomplete: null, hint: '' } as const;
+  const r = pressRig([frame]);
+  await assert.rejects(r.handle.press('Tab', frame, 1000, AT), (e: unknown) => isGone(e));
+  assert.ok(!sent(r.acted));
+  assert.ok(!r.acted.some(a => a.startsWith('cdp')), '枠の中と分かれば、閉じた shadow DOM は確かめない（確かめの道の失敗が、枠の断りを page_changed に変えない）');
+});
+
+test('P6 本物の press（M3）: 判定したページ（URL と文書）でなければ、焦点が同じでも押さない。移ったのが読む前でも、同じ URL の読み込み直しでも、読むあいだでも', async () => {
+  const before = pressRig([NO_FOCUS]);
+  before.navigate('https://other.test/b');
+  await assert.rejects(before.handle.press('Tab', NO_FOCUS, 1000, AT), (e: unknown) => isGone(e), '読む前に別の URL へ移っていた');
+  assert.ok(!sent(before.acted));
+  const reload = pressRig([ON_INPUT]);
+  reload.navigate(AT.url);
+  await assert.rejects(reload.handle.press('Tab', ON_INPUT, 1000, AT), (e: unknown) => isGone(e), '同じ URL のまま新しい文書になった');
+  assert.ok(!sent(reload.acted));
+  const urlOnly = pressRig([NO_FOCUS]);
+  urlOnly.setUrl('https://other.test/d');
+  await assert.rejects(urlOnly.handle.press('Tab', NO_FOCUS, 1000, AT), (e: unknown) => isGone(e), 'URL だけ先に変わって見える（文書の代の知らせがまだ）');
+  assert.ok(!sent(urlOnly.acted));
+  const rig: { current?: ReturnType<typeof pressRig> } = {};
+  rig.current = pressRig([NO_FOCUS], { onFacts: () => rig.current!.navigate('https://other.test/c') });
+  await assert.rejects(rig.current.handle.press('Tab', NO_FOCUS, 1000, AT), (e: unknown) => isGone(e), '焦点を読んでいるあいだに移った');
+  assert.ok(!sent(rig.current.acted));
+  const same = pressRig([NO_FOCUS]);
+  await same.handle.press('Tab', NO_FOCUS, 1000, AT);
+  assert.ok(same.acted.includes('keyboard.press Tab'), '同じページなら押す');
+  const second = pressRig([NO_FOCUS]);
+  await assert.rejects(second.handle.press('Tab', NO_FOCUS, 1000, { url: AT.url, documentId: 3 }), (e: unknown) => isGone(e), '判定したのと違う文書の代');
+});
+
+test('P6 本物の press: 決めた 10 個以外の鍵は、ページに何もせずに断る（Enter・Space・修飾つき・削除・文字・大小違い・前後の空白）', async () => {
+  for (const key of ['Enter', 'NumpadEnter', 'Space', ' ', 'Shift+Tab', 'Control+a', 'Alt+ArrowLeft', 'Meta+ArrowLeft', 'Delete', 'Backspace', 'a', 'F5', 'tab', 'ESCAPE', 'Tab ', 'Tab+Enter', '', 'Enter\n', 'toString', '__proto__', 'constructor']) {
+    const r = pressRig([NO_FOCUS]);
+    await assert.rejects(r.handle.press(key, NO_FOCUS, 1000, AT), (e: unknown) => e instanceof BrowserFailure && e.code === 'blocked' && e.key === 'browser.press_key', JSON.stringify(key));
+    assert.deepEqual(r.acted, [], `${JSON.stringify(key)}: ページに触らない`);
+  }
+  for (const key of PRESS_KEYS) {
+    const r = pressRig([NO_FOCUS]);
+    await r.handle.press(key, NO_FOCUS, 1000, AT);
+    assert.ok(r.acted.includes(`keyboard.press ${key}`), key);
+  }
+});
+
+test('P6 本物の press: 読む・押すの途中で投げても、離して page_changed で止まる。待ちは 1 秒まで・押したあとの待ちは click と同じ', async () => {
+  const gone = pressRig([ON_INPUT], { reads: 'throw' });
+  await assert.rejects(gone.handle.press('Tab', ON_INPUT, 1000, AT), (e: unknown) => isGone(e));
+  const slow = pressRig([ON_INPUT, ON_INPUT]);
+  await slow.handle.press('Tab', ON_INPUT, 30_000, AT);
+  assert.ok(slow.acted.includes('element.press Tab 1000'), '本当の操作の待ちは 1 秒まで（確かめてから押すまでを短くする）');
+  const ms = await timed(() => pressRig([NO_FOCUS]).handle.press('Home', NO_FOCUS, 1000, AT));
+  assert.ok(ms >= 200 && ms < 250 + 400, `押したあとは、click と同じ待ち（250 ms と読み込みの合図）: ${Math.round(ms)} ms`);
 });

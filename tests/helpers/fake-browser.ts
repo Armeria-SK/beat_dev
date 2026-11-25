@@ -1,4 +1,4 @@
-import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle, type WorkContextOptions, type WorkLaunchOptions } from '../../src/tools/browser/driver.ts';
+import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type FocusFacts, type LaunchOptions, type PageHandle, type PressAt, type WorkBrowserHandle, type WorkContextOptions, type WorkLaunchOptions } from '../../src/tools/browser/driver.ts';
 import type { RouteRefusal, SubmitPermit } from '../../src/tools/browser/route.ts';
 
 // 試験用の偽のブラウザ。ページの URL・題・本文・ariaSnapshot の文・要素の状態を持ち、開いた記録を残す
@@ -32,10 +32,15 @@ export interface FakeRow {
   autocomplete?: string;
   // 押すとフォームを送る部品か（本物では elementFacts が要素から読む）
   submits?: boolean;
+  // 要素のタグ（本物では elementFacts が読む。select を選ぶには 'select'）
+  tag?: string;
+  // select の選択肢のラベル（選べるのは、ここにあるもの）
+  options?: string[];
+  // 押したとき・選んだとき（select の change）にページ側で起きること
   effect?: FakeEffect;
 }
 
-export interface FakeAct { kind: 'click' | 'fill'; role: string; name: string; nth: number; text?: string; submit?: boolean; permit?: SubmitPermit | undefined }
+export interface FakeAct { kind: 'click' | 'fill' | 'select' | 'press'; role: string; name: string; nth: number; text?: string; submit?: boolean; permit?: SubmitPermit | undefined }
 
 export interface FakeSite {
   title?: string;
@@ -70,6 +75,11 @@ export class FakePage implements PageHandle {
   permit: SubmitPermit | undefined;
   // 数を確かめてから要素をつかむまでのあいだに呼ぶ（その隙にページが変わった、を作る）
   beforePin: (() => void) | undefined;
+  // いま焦点のある要素の事実（press の判定に使う。試験が直接決める）と、press したときに起きること（キーごと。無ければ何も起きない）
+  focusFacts: FocusFacts = { where: 'none', tag: null, type: null, autocomplete: null, hint: '' };
+  pressEffects: Record<string, FakeEffect> = {};
+  // press が焦点を読み直す直前に呼ぶ（判定のあと押すまでに、ページが移った、を作る）
+  beforePress: (() => void) | undefined;
   // 文書の代（移動・再読み込みで進む。本物は主フレームの framenavigated）
   #document = 1;
   // この文書で要素に振った印の数と、要素の鍵 → 印の数
@@ -157,26 +167,19 @@ export class FakePage implements PageHandle {
   // 次の読みのために、ページの中身を差し替える（ページが変わった、を作る）
   mutate(site: FakeSite): void { this.#site = site; }
   navigateTo(url: string): void { this.#url = url; this.#newDocument(); }
+  // 文書の代を進めずに URL だけ変わった瞬間（本物では、URL の更新が framenavigated の知らせより先に見えうる）
+  setUrlOnly(url: string): void { this.#url = url; }
 
   #rows(role: string, name: string): FakeRow[] { return (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name); }
 
   async locate(target: ElementTarget): Promise<ElementDetail | undefined> {
     const row = this.#resolve(target.ref)?.row;
     if (row === undefined) return undefined;
-    return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete, form: { inForm: row.submits === true, submits: row.submits === true } };
+    return { ...(row.state ?? { visible: true, enabled: true }), type: row.type, autocomplete: row.autocomplete, form: { inForm: row.submits === true, submits: row.submits === true }, ...(row.tag !== undefined ? { tag: row.tag } : {}) };
   }
 
-  async #act(kind: 'click' | 'fill', target: ElementTarget, extra: Pick<FakeAct, 'text' | 'submit'>, submit: boolean): Promise<ActionEvents> {
-    // 本物と同じ: 印が引けなければ触らない。つかんだあとの確かめ（verify）が false でも、確かめのあとに印が引けなくなっても触らない
-    // （偽のブラウザの要素は鍵で決まるので、引き直した要素がつかんだ要素と違う形は、本物の driver の試験 browser-driver-locator で見る）
-    if (this.#resolve(target.ref) === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    this.beforePin?.();
-    if (target.verify !== undefined && !(await target.verify().catch(() => false))) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    const found = this.#resolve(target.ref);
-    if (found === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    const { row, nth } = found;
-    const effect = kind === 'click' || submit ? row.effect : undefined;
-    this.acts.push({ kind, role: row.role, name: row.name, nth, ...extra, permit: this.permit });
+  // 操作の結果としてページ側で起きること
+  #apply(effect: FakeEffect | undefined): ActionEvents {
     if (effect?.fail === 'act_failed') throw new BrowserFailure('act_failed', 'browser.act_failed');
     if (effect?.fail === 'timeout') throw new BrowserFailure('timeout', 'browser.timeout', { sec: 1 });
     if (effect?.mutate !== undefined) this.#site = effect.mutate;
@@ -189,12 +192,47 @@ export class FakePage implements PageHandle {
     return { dialogs: effect?.dialogs ?? 0, downloads: effect?.downloads ?? 0, fileChoosers: effect?.fileChoosers ?? 0, blocked: effect?.blocked ?? 0 };
   }
 
+  async #act(kind: 'click' | 'fill' | 'select', target: ElementTarget, extra: Pick<FakeAct, 'text' | 'submit'>, submit: boolean): Promise<ActionEvents> {
+    // 本物と同じ: 印が引けなければ触らない。つかんだあとの確かめ（verify）が false でも、確かめのあとに印が引けなくなっても触らない
+    // （偽のブラウザの要素は鍵で決まるので、引き直した要素がつかんだ要素と違う形は、本物の driver の試験 browser-driver-locator で見る）
+    if (this.#resolve(target.ref) === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    this.beforePin?.();
+    if (target.verify !== undefined && !(await target.verify().catch(() => false))) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    const found = this.#resolve(target.ref);
+    if (found === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    const { row, nth } = found;
+    // 本物の select は、ラベルが完全に一致する有効な選択肢が無ければ選ばない
+    if (kind === 'select' && !(row.options ?? []).includes(extra.text ?? '')) throw new BrowserFailure('act_failed', 'browser.select_no_option');
+    const effect = kind === 'click' || kind === 'select' || submit ? row.effect : undefined;
+    this.acts.push({ kind, role: row.role, name: row.name, nth, ...extra, permit: this.permit });
+    return this.#apply(effect);
+  }
+
   async click(target: ElementTarget, _timeoutMs: number): Promise<ActionEvents> {
     return this.#act('click', target, {}, false);
   }
 
   async fill(target: ElementTarget, text: string, submit: boolean, _timeoutMs: number): Promise<ActionEvents> {
     return this.#act('fill', target, { text, submit }, submit);
+  }
+
+  async select(target: ElementTarget, label: string, _timeoutMs: number): Promise<ActionEvents> {
+    return this.#act('select', target, { text: label }, false);
+  }
+
+  async focus(): Promise<FocusFacts> { return { ...this.focusFacts }; }
+
+  // 本物と同じ: 判定したときと同じページ（URL・文書）で、焦点のある要素の事実が判定したときと同じときだけ押す（違えば触らない）。
+  // at を渡さない呼び出しは、ページの同じさを見ない（試験が呼び出し側の渡し忘れを見つけるため、本物と違って許す）
+  async press(key: string, expected: FocusFacts, _timeoutMs: number, at?: PressAt): Promise<ActionEvents> {
+    this.beforePress?.();
+    if (at !== undefined && (at.url !== this.#url || at.documentId !== this.#document)) throw new BrowserFailure('page_changed', 'browser.page_changed');
+    const now = this.focusFacts;
+    if (now.where !== expected.where || now.tag !== expected.tag || now.type !== expected.type || now.autocomplete !== expected.autocomplete || now.hint !== expected.hint) {
+      throw new BrowserFailure('page_changed', 'browser.page_changed');
+    }
+    this.acts.push({ kind: 'press', role: '', name: key, nth: 0, permit: this.permit });
+    return this.#apply(this.pressEffects[key]);
   }
 
   permitSubmits(permit: SubmitPermit | undefined): void { this.permit = permit; }

@@ -16,7 +16,7 @@ import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { pageUrl } from '../web/public-page.ts';
-import { BrowserFailure, until, type ElementDetail, type ElementTarget } from './driver.ts';
+import { BrowserFailure, until, type ElementDetail, type ElementTarget, type FocusFacts } from './driver.ts';
 import { readElements, retiredRef, shownRef, type ElementTable, type ListedElement, type Numbering } from './elements.ts';
 import { allowedLoopbackUrl, grantOf, isLoopbackUrl } from './loopback.ts';
 import type { BrowserApi, BrowserSession, BrowserTab } from './session.ts';
@@ -25,6 +25,8 @@ import type { Language } from '../../config/schema.ts';
 import type { StoppedPort } from '../shell/background.ts';
 
 export const TEXT_ROLES: ReadonlySet<string> = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
+// 本物の <select> の役割（1 つ選ぶ = combobox、複数・表示行数が 2 以上 = listbox）。役割だけでは自前の部品と見分けられないので、要素のタグも見る
+export const SELECT_ROLES: ReadonlySet<string> = new Set(['combobox', 'listbox']);
 export const TYPE_TEXT_MAX = 2000;
 const NAME_SHOWN = 120;
 const SECRET_AUTOCOMPLETE = new Set(['current-password', 'new-password', 'one-time-code']);
@@ -51,13 +53,13 @@ export interface ActPick {
   shape?: boolean | undefined;
 }
 
-const refuse = (reason: string): Inspected => ({ ok: false, reason });
+const refuse = (reason: string): { ok: false; reason: string } => ({ ok: false, reason });
 
 function hostOf(url: string): string | undefined {
   try { return new URL(url).host.toLowerCase(); } catch { return undefined; }
 }
 
-export function isSecretField(detail: ElementDetail, name: string): boolean {
+export function isSecretField(detail: { type?: string | null | undefined; autocomplete?: string | null | undefined }, name: string): boolean {
   if (detail.type === 'password') return true;
   for (const token of (detail.autocomplete ?? '').split(/\s+/u)) {
     if (SECRET_AUTOCOMPLETE.has(token) || token.startsWith('cc-')) return true;
@@ -98,7 +100,7 @@ export function namedItem(table: ElementTable, target: NamedTarget): ListedEleme
 }
 
 // タブ・ページ・番号・探し直しを確かめる。ブラウザの呼び出しの中（run のロックの下）で呼ぶ
-export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input: ActInput, language: Language, denied: ReadonlySet<number>, pick: ActPick = {}): Promise<Inspected> {
+export async function inspectAct(api: BrowserApi, kind: 'click' | 'type' | 'select', input: ActInput, language: Language, denied: ReadonlySet<number>, pick: ActPick = {}): Promise<Inspected> {
   let tab: BrowserTab;
   try { tab = api.tab(input.tab); } catch (thrown) {
     if (thrown instanceof BrowserFailure) return refuse(thrown.text(language));
@@ -132,16 +134,54 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input:
   }
   if (item.frameUrl !== undefined && hostOf(item.frameUrl) !== hostOf(pageUrl)) return refuse(guardText(language, 'browser.act.frame', { ref: input.ref }));
   if (kind === 'type' && !TEXT_ROLES.has(item.role)) return refuse(guardText(language, 'browser.act.not_text', { ref: input.ref, role: item.role }));
+  if (kind === 'select' && !SELECT_ROLES.has(item.role)) return refuse(guardText(language, 'browser.act.not_select', { ref: input.ref, role: item.role }));
   const target: ElementTarget = { ref: item.pwRef, role: item.role, name: item.name };
   const detail = await tab.page.locate(target);
   // 引き直せない（印が無い・主フレームでない）、属性が読めないものは、実行しない
   if (detail === undefined) return refuse(guardText(language, 'browser.act.changed', { ref: input.ref }));
   if (!detail.visible) return refuse(guardText(language, 'browser.act.hidden', { ref: input.ref }));
   if (!detail.enabled) return refuse(guardText(language, 'browser.act.disabled', { ref: input.ref }));
+  if (kind === 'select' && detail.tag !== 'select') return refuse(guardText(language, 'browser.act.not_select', { ref: input.ref, role: item.role }));
   if (kind === 'type' && isSecretField(detail, item.name)) return refuse(guardText(language, 'browser.act.secret_field', { ref: input.ref }));
-  // 入れるは submit（Enter）のときだけ送信。押すは要素で決める
+  if (kind === 'select' && isSecretField(detail, item.name)) return refuse(guardText(language, 'browser.act.secret_select', { ref: input.ref }));
+  // 入れるは submit（Enter）のときだけ送信。押すは要素で決める。選ぶは <select> で、送信の部品ではない（change が送ろうとするのは、送信の守りが断る）
   const submits = kind === 'type' ? input.submit === true : detail.form.submits;
   return { ok: true, tab, pageUrl, item, target, detail, place, submits, ...(table.shape !== undefined ? { shape: table.shape } : {}) };
+}
+
+// press（P6）の探し直し: 押す先は番号の要素でなく、いまキーボードの焦点がある要素。ページの置き場所を同じ決まりで確かめ、焦点を読んで、枠の中・秘密に見える欄なら鍵を送らない。
+// read（呼び出す側が決める。開発サーバー以外）が true なら、鍵は読んだページにだけ送る: そのタブの表が、いまの URL を読んだものであること（click・type・select と同じ）。
+// そのとき shape（いまの画面のまとめ）も返し、呼び出す側が 2 つ目からの step で、呼び出しの始めの画面と同じかを見る。
+// 読んだ焦点の事実は、押す直前に driver がもう一度読んで比べる（判定したときと違えば押さない）。そのとき比べるページ（URL と文書の代）も、ここで読んだもの
+export type InspectedPress =
+  | { ok: true; tab: BrowserTab; pageUrl: string; documentId: number; place: 'public' | 'loopback'; focus: FocusFacts; read: boolean; shape?: string | undefined }
+  | { ok: false; reason: string };
+
+export async function inspectPress(api: BrowserApi, input: { tab?: string | undefined }, language: Language, denied: ReadonlySet<number>, mustHaveRead: (pageUrl: string, place: 'public' | 'loopback') => boolean): Promise<InspectedPress> {
+  let tab: BrowserTab;
+  try { tab = api.tab(input.tab); } catch (thrown) {
+    if (thrown instanceof BrowserFailure) return refuse(thrown.text(language));
+    throw thrown;
+  }
+  const pageUrl = tab.page.url();
+  const place = placeOf(tab, api, pageUrl, denied);
+  if (place === undefined) return refuse(guardText(language, 'browser.act.not_allowed_page'));
+  const read = mustHaveRead(pageUrl, place);
+  let shape: string | undefined;
+  if (read) {
+    const before = tab.table;
+    if (before === undefined) return refuse(guardText(language, 'browser.act.no_table'));
+    if (before.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+    const table = await rereadTab(tab, pageUrl, api.signal, { kind: 'check', shape: true });
+    if (table === undefined) return refuse(guardText(language, 'browser.act.stale'));
+    shape = table.shape;
+  }
+  const document = tab.page.documentId();
+  const focus = await until(tab.page.focus(), api.signal);
+  if (tab.page.url() !== pageUrl || tab.page.documentId() !== document) return refuse(guardText(language, 'browser.act.stale'));
+  if (focus.where === 'frame') return refuse(guardText(language, 'browser.act.press_frame'));
+  if (focus.where === 'element' && isSecretField(focus, focus.hint)) return refuse(guardText(language, 'browser.act.press_secret'));
+  return { ok: true, tab, pageUrl, documentId: document, place, focus, read, shape };
 }
 
 // 通り方（Approach 4 の順 2〜6）。loopback: 許されたループバック（送信も判定役なし）/ submit: フォームの送信（送る）/
@@ -183,7 +223,7 @@ export function stoppedServerText(pageUrl: string, ctx: Pick<ToolContext, 'servi
 }
 
 // 入れる文が API の鍵・トークンに見えるか（web_fetch と同じ見分け）
-export const secretText = (kind: 'click' | 'type', input: ActInput): boolean => kind === 'type' && sanitizeModelInputText(input.text ?? '').redaction_count > 0;
+export const secretText = (kind: 'click' | 'type' | 'select', input: ActInput): boolean => kind === 'type' && sanitizeModelInputText(input.text ?? '').redaction_count > 0;
 
 // 持ち主が書いた文の束。読めないときは空（判定役へ行く側）
 export function ownerTextsOf(ctx: Pick<ToolContext, 'ownerText'>): string[] {

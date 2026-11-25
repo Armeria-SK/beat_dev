@@ -147,6 +147,7 @@ function trackPointer(page: PageHandle, mirror: TabMirror): PageHandle {
         };
         case 'click': return (element: ElementTarget, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.click(element, timeoutMs); };
         case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.fill(element, text, submit, timeoutMs); };
+        case 'select': return (element: ElementTarget, label: string, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.select(element, label, timeoutMs); };
         case 'goto': return (url: string, timeoutMs: number) => { mirror.pointer = undefined; mirror.located = undefined; return target.goto(url, timeoutMs); };
         default: return Reflect.get(target, prop, target);
       }
