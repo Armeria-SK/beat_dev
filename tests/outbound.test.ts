@@ -554,3 +554,23 @@ test('v3 P1b: その場のコードのメソッドの .exec( は送信に数え�
     `ruby -e "Process.exec('x')"`, `ruby -e "require 'pty'; PTY.spawn('x')"`, `node -e "require('shelljs').exec('id')"`,
   ]);
 });
+
+// 2026-11-26 shell-judge A4: process-starting APIs that the first list missed (a name with a letter after spawn, a name after an underscore or a dot, and calls that were never listed)
+test('A4 その場のコードが別のプログラムを起こす入口の取りこぼし（os.exec*・os.spawn*・posix_spawn・startfile・os.fork・asyncio の subprocess・Open3・process.execve・cluster.fork・Deno.run・pcntl_exec）は send。普通のコードは今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `python -c "import os; os.execv('/bin/sh', ['sh'])"`, `python -c "import os; os.execvp('sh', ['sh'])"`, `python -c "import os; os.execle('/bin/sh', 'sh', {})"`,
+    `python -c "import os; os.spawnl(os.P_NOWAIT, '/bin/sh', 'sh')"`, `python -c "import os; os.spawnvp(os.P_WAIT, 'sh', ['sh'])"`, `python -c "import os; os.posix_spawn('/bin/sh', ['sh'], {})"`,
+    `python -c "import os; os.posix_spawnp('sh', ['sh'], {})"`, `python -c "import os; os.startfile('x.exe')"`, `python -c "import os; os.fork()"`, `python -c "import os; os.forkpty()"`,
+    `python -c "import asyncio; asyncio.create_subprocess_shell('id')"`, `python -c "import asyncio; asyncio.create_subprocess_exec('id')"`,
+    `python -c "import os as o; o.execv('/bin/sh', ['sh'])"`, `python -c "from os import execv; execv('/bin/sh', ['sh'])"`, `python -c "import os as o; o.spawnvp(o.P_WAIT, 'sh', ['sh'])"`,
+    `ruby -e "require 'open3'; Open3.capture2('id')"`, `ruby -e "Open3.popen3('id')"`,
+    `node -e "process.execve('/bin/sh', ['sh'])"`, `node -e "require('cluster').fork()"`, `node -e "const cluster = require('node:cluster'); cluster.fork()"`,
+    `node -e "import('node:cluster')"`, `deno eval "Deno.run({ cmd: ['id'] })"`, `php -r 'pcntl_exec("/bin/sh");'`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    `node -e "console.log(1)"`, `python -c "print(1)"`, `python -c "import os; print(os.getcwd(), os.path.join('a', 'b'))"`, `node -e "console.log(Object.keys({ execute: 1, spawned: 2 }))"`,
+    `python -c "print('forked'.upper())"`, `node -e "const re = /a/; console.log(re.exec('a'))"`, `ruby -e "puts Time.now"`, `php -r 'echo 1;'`, `node -e "console.log(['cluster', 'fork'].join(' '))"`,
+  ]);
+  expectKinds(f.kindOf, 'powershell', 'send', [`python -c "import os; os.execv('/bin/sh', ['sh'])"`, `node -e "require('cluster').fork()"`]);
+});
