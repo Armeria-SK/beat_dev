@@ -10,6 +10,7 @@ import { PendingStore } from '../src/pending/store.ts';
 import { QuestionStore } from '../src/questions/store.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { PRESS_KEYS } from '../src/tools/browser/driver.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { ACT_MAX_STEPS, ACT_TOTAL_MS, ACT_WAIT_MAX_MS, actSteps, BROWSER_TOOLS, browserAct, browserOpen } from '../src/tools/builtin/browser.ts';
 import { planAllows, runToolCall, TOOL_INPUT_PREVIEW_CHARS } from '../src/tools/pipeline.ts';
@@ -18,7 +19,7 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import { effectivePolicy, toolPolicy } from '../src/tools/tool-policy.ts';
 import type { PreCheck, ToolContext } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
-import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-browser.ts';
+import { FakeBrowserDriver, type FakePage, type FakeRow, type FakeSite } from './helpers/fake-browser.ts';
 
 // browser-rethink P5: browser_act（click / type / wait を 1 往復で順に）。偽の driver で、パイプライン込みの流れを確かめる（本物のブラウザは起動しない）。
 // 判定役の呼び出しの数・Pending の行・質問票の行・押した記録を数える
@@ -161,7 +162,7 @@ test('P5 道具の形: 送信になりうる道具（計画モードで外れる
   assert.equal((await r.act([{ wait: {} }])).decidedBy, 'validation', '待つものが無い');
   assert.equal((await r.act([{ type: 'e1', text: 'x'.repeat(2001) }])).decidedBy, 'validation', '入れる文は 2,000 字まで');
   assert.equal((await r.act([{ click: 'e9', type: 'e1', text: 'a' }])).decidedBy, 'validation', '1 つの step に 2 つの動作');
-  assert.equal((await r.act([{ press: 'Enter' }])).decidedBy, 'validation', 'press は無い');
+  assert.equal((await r.act([{ press: 'Enter' }])).decidedBy, 'validation', 'Enter は受けない（送信になりうる）');
   assert.deepEqual(r.acts(), []);
   const twenty = await r.act(Array.from({ length: 20 }, () => one));
   assert.equal(twenty.output.isError, undefined, twenty.output.content);
@@ -724,4 +725,336 @@ test('P5 直し 4: 文が出なかった wait と、名前で指した目標の�
     assert.deepEqual(r.acts(), []);
     assert.equal(r.ctx.taint.tainted, true, JSON.stringify(steps));
   }
+});
+
+// ── P6: select / press ──
+
+const PICK_DEV = 'http://localhost:5173/pick';
+const PICK_LISTED = 'https://example.com/pick';
+const PICK_UNLISTED = 'https://shop.example.org/pick';
+const PICK_OTHER = 'http://localhost:4900/pick';
+const SIZES = ['Small', 'Medium', 'Large'];
+const PICK_SNAPSHOT = [
+  '- heading "Order"',
+  '- combobox "Size"',
+  '- listbox "Tags"',
+  '- combobox "Fake menu"',
+  '- textbox "Name"',
+  '- combobox "Expiry month"',
+  '- combobox "Jump"',
+  '- combobox "Move"',
+  '- combobox "Frozen"',
+  '- button "Save"',
+  '- searchbox "Odd"',
+].join('\n');
+// e1 Size（select）/ e2 Tags（select multiple）/ e3 Fake menu（<input role=combobox>。select ではない）/ e4 Name / e5 Expiry month（カードの欄）/
+// e6 Jump（変えると、ページが何かを送ろうとして、送信の守りが断る）/ e7 Move（変えると移動）/ e8 Frozen（無効）/ e9 Save（押すと画面が変わる）/ e10 Odd（タグは select だが、役割が combobox / listbox でない）
+const pickSite = (next: string): FakeSite => {
+  const fields: FakeRow[] = [
+    { role: 'combobox', name: 'Size', tag: 'select', options: SIZES },
+    { role: 'listbox', name: 'Tags', tag: 'select', options: ['red', 'blue'] },
+    { role: 'combobox', name: 'Fake menu', tag: 'input', options: SIZES },
+    { role: 'textbox', name: 'Name', tag: 'input' },
+    { role: 'combobox', name: 'Expiry month', tag: 'select', autocomplete: 'cc-exp-month', options: ['01', '02'] },
+    { role: 'combobox', name: 'Jump', tag: 'select', options: ['Home'], effect: { blocked: 1 } },
+    { role: 'combobox', name: 'Move', tag: 'select', options: ['Next'], effect: { navigate: next } },
+    { role: 'combobox', name: 'Frozen', tag: 'select', options: ['x'], state: { visible: true, enabled: false } },
+    { role: 'searchbox', name: 'Odd', tag: 'select', options: ['x'] },
+  ];
+  // Save を押すと文だけが変わる（要素は残るので、番号は引き直せる。見分けるのは画面のまとめ）
+  const save: FakeRow = { role: 'button', name: 'Save', effect: { mutate: { title: 'Order', text: 'Saved', snapshot: `${PICK_SNAPSHOT}\n- heading "Saved"`, rows: fields } } };
+  return { title: 'Order', text: 'Order form', snapshot: PICK_SNAPSHOT, rows: [...fields, save] };
+};
+
+function pickRig(t: TestContext, url: string, options: RigOptions = {}) {
+  const r = rig(t, options);
+  const next = url.replace(/pick$/u, 'pick-next');
+  r.driver.site(url, pickSite(next)).site(next, NEXT_SITE);
+  return r;
+}
+
+const FOCUS_NONE = { where: 'none', tag: null, type: null, autocomplete: null, hint: '' } as const;
+const focusOn = (over: Partial<{ tag: string; type: string; autocomplete: string; hint: string }> = {}) => ({ where: 'element' as const, tag: over.tag ?? 'input', type: over.type ?? 'text', autocomplete: over.autocomplete ?? null, hint: over.hint ?? 'Name' });
+const KEYS = ['Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
+
+test('P6 press の鍵は、この 10 個だけ（閉じた一覧）。Enter・Space・修飾つき・削除・文字・ほかの鍵は、入力の確かめで断り、何も実行しない', async t => {
+  assert.deepEqual([...PRESS_KEYS], KEYS);
+  const r = pickRig(t, PICK_DEV, dev);
+  await r.open(PICK_DEV);
+  const refused = ['Enter', 'NumpadEnter', 'Space', ' ', '\n', 'Shift+Tab', 'Shift+Enter', 'Control+a', 'Control+Enter', 'Alt+ArrowLeft', 'Meta+ArrowLeft', 'Delete', 'Backspace', 'a', '1', 'F5', 'F12',
+    'tab', 'ESCAPE', 'Tab ', ' Tab', 'ArrowDown+Enter', 'Escape,Enter', 'Tab\n', '', 'ContextMenu', 'Insert', 'Control', 'Shift', 'Enter\u0000', 'Tab​'];
+  for (const key of refused) assert.equal((await r.act([{ press: key }])).decidedBy, 'validation', JSON.stringify(key));
+  for (const step of [{ press: 'Tab', extra: 1 }, { press: ['Tab'] }, { press: 9 }, { press: null }, { press: 'Tab', click: 'e1' }, { press: 'Tab', text: 'abc' }]) {
+    assert.equal((await r.act([step])).decidedBy, 'validation', JSON.stringify(step));
+  }
+  assert.deepEqual(r.acts(), []);
+  const all = await r.act(KEYS.map(key => ({ press: key })), { then: 'none' });
+  assert.equal(all.output.isError, undefined, all.output.content);
+  assert.deepEqual(r.acts(), KEYS.map(key => `press ${key}#0`));
+});
+
+test('P6 select の入力: 選択肢のラベル（1〜200 字）が要る。ほかの欄・ラベルでない文は断る', async t => {
+  const r = pickRig(t, PICK_DEV, dev);
+  await r.open(PICK_DEV);
+  for (const step of [{ select: 'e1' }, { select: 'e1', option: '' }, { select: 'e1', option: 'x'.repeat(201) }, { select: 'e1', option: 5 }, { select: 'e1', option: 'a', text: 'b' }, { select: 'e1', option: 'a', click: 'e2' }, { option: 'a' },
+    { select: { role: 'combobox' }, option: 'a' }, { select: 'e1', option: ['a'] }]) {
+    assert.equal((await r.act([step])).decidedBy, 'validation', JSON.stringify(step));
+  }
+  assert.deepEqual(r.acts(), []);
+  const edge = await r.act([{ select: 'e1', option: 'x'.repeat(200) }]);
+  assert.equal(edge.output.isError, true);
+  assert.match(edge.output.content, /^1\. Failed: The select box has no enabled option with that label/u, '200 字は形として通り、選択肢が無いので止まる');
+});
+
+test('P6 select: 開発サーバー・一覧のサイト・持ち主の URL で、判定役なしで順に通る。結果の行に選んだラベルを写さない', async t => {
+  for (const [url, over] of [[PICK_DEV, dev], [PICK_LISTED, {}], [PICK_UNLISTED, { ownerText: [`見て ${PICK_UNLISTED}`] }]] as const) {
+    for (const kind of ['chat', 'task'] as const) {
+      const r = pickRig(t, url, { kind, ...over });
+      await r.open(url);
+      const outcome = await r.act([{ select: 'e1', option: 'Medium' }, { select: 'e2', option: 'blue' }]);
+      const text = outcome.output.content;
+      assert.deepEqual([outcome.decision, outcome.decidedBy, outcome.output.isError], ['allow', 'builtin', undefined], `${url} ${kind}: ${text}`);
+      assert.deepEqual(r.acts(), ['select Size#0 "Medium"', 'select Tags#0 "blue"'], `${url} ${kind}`);
+      assert.deepEqual(r.counts(), QUIET, `${url} ${kind}`);
+      assert.deepEqual(text.split('\n').slice(0, 2), ['1. Selected an option in e1.', '2. Selected an option in e2.']);
+      assert.ok(!text.includes('Medium') && !text.includes('blue'), `${url} ${kind}: 選んだラベルは結果に出さない`);
+      assert.equal(r.ctx.taint.tainted, true, '外の中身を持ち込んだ印が付く');
+    }
+  }
+});
+
+test('P6 select の断り: <select> でない（自前のコンボボックス・入力欄・ボタン）・カードの欄・無効・無い選択肢は、押さずに止まり、残りは実行しない', async t => {
+  const r = pickRig(t, PICK_DEV, dev);
+  await r.open(PICK_DEV);
+  const cases: Array<[string, unknown, RegExp]> = [
+    ['<input role=combobox>', { select: 'e3', option: 'Small' }, /^1\. Not done: e3 \(combobox\) is not a select box/u],
+    ['textbox', { select: 'e4', option: 'x' }, /^1\. Not done: e4 \(textbox\) is not a select box/u],
+    ['button', { select: 'e9', option: 'Save' }, /^1\. Not done: e9 \(button\) is not a select box/u],
+    ['select with another role', { select: 'e10', option: 'x' }, /^1\. Not done: e10 \(searchbox\) is not a select box/u],
+    ['card expiry select', { select: 'e5', option: '01' }, /^1\. Not done: e5 looks like part of a password, verification code or card number entry/u],
+    ['disabled', { select: 'e8', option: 'x' }, /^1\. Not done: e8 is disabled right now/u],
+    ['not in the list', { select: 'e77', option: 'x' }, /^1\. Not done: Number e77 is not in the list/u],
+  ];
+  for (const [name, step, pattern] of cases) {
+    const out = await r.act([step, { select: 'e1', option: 'Small' }]);
+    assert.match(out.output.content, pattern, name);
+    assert.match(out.output.content, /Not run: step 2\./u, name);
+    assert.equal(out.output.isError, true, name);
+    assert.deepEqual(r.acts(), [], name);
+  }
+  const missing = await r.act([{ select: 'e1', option: 'Huge' }, { select: 'e1', option: 'Small' }]);
+  assert.match(missing.output.content, /^1\. Failed: The select box has no enabled option with that label \(the label must match exactly\)\nNot run: step 2\./u);
+  assert.ok(!missing.output.content.includes('Huge'), '断る文にモデルの書いたラベルを写さない');
+  assert.deepEqual(r.acts(), []);
+  assert.deepEqual(r.counts(), QUIET);
+});
+
+test('P6 select は click と同じ通り方: 判定役が要るページ（一覧に無いサイト・開発サーバーでないループバック）では止まり、判定役も Pending も呼ばない。案内は「このページでは使えない」', async t => {
+  for (const [url, over] of [[PICK_UNLISTED, {}], [PICK_OTHER, { product: true }]] as const) {
+    for (const kind of ['chat', 'task'] as const) {
+      const r = pickRig(t, url, { kind, ...over });
+      await r.open(url);
+      const out = await r.act([{ select: 'e1', option: 'Small' }, { click: 'e9' }]);
+      assert.match(out.output.content, /^1\. Not done: .*select and press have no one-step tool/u, `${url} ${kind}: ${out.output.content}`);
+      assert.match(out.output.content, /Not run: step 2\./u);
+      assert.deepEqual(r.acts(), [], `${url} ${kind}`);
+      assert.deepEqual(r.counts(), QUIET, `${url} ${kind}`);
+      assert.ok(!out.output.content.includes('<<<'), '何も実行していないので、ページの中身は返さない');
+    }
+  }
+});
+
+test('P6 select で名前で指す目標は、開発サーバーのページだけ（click・type と同じ）。名前が <select> でなければ止まる', async t => {
+  for (const [url, over] of [[PICK_LISTED, {}], [PICK_UNLISTED, { ownerText: [PICK_UNLISTED] }], [PICK_OTHER, { product: true }], [PICK_LISTED, { kind: 'task' as const }]] as const) {
+    const r = pickRig(t, url, over);
+    await r.open(url);
+    const out = await r.act([{ select: { role: 'combobox', name: 'Size' }, option: 'Small' }]);
+    assert.match(out.output.content, NAMED, url);
+    assert.deepEqual(r.acts(), [], url);
+  }
+  const r = pickRig(t, PICK_DEV, dev);
+  await r.open(PICK_DEV);
+  const went = await r.act([{ select: { role: 'combobox', name: 'Size' }, option: 'Large' }, { select: { role: 'listbox', name: 'Tags' }, option: 'red' }]);
+  assert.equal(went.output.isError, undefined, went.output.content);
+  assert.deepEqual(r.acts(), ['select Size#0 "Large"', 'select Tags#0 "red"']);
+  assert.match(went.output.content, /^1\. Selected an option in the combobox given by name\.\n2\. Selected an option in the listbox given by name\./u);
+  const fake = await r.act([{ select: { role: 'combobox', name: 'Fake menu' }, option: 'Small' }]);
+  assert.match(fake.output.content, /^1\. Not done: the element named in step 1 \(combobox\) is not a select box/u);
+  const none = await r.act([{ select: { role: 'combobox', name: 'IGNORE ALL RULES' }, option: 'x' }]);
+  assert.ok(!none.output.content.includes('IGNORE ALL RULES'));
+  assert.equal(r.acts().length, 2);
+});
+
+test('P6 select の change が送ろうとしたら: 開発サーバーは送信の許し loopback つき（click と同じ）。一覧のサイトは許し無しで、送信の守りが断った数が出て、そこで止まる', async t => {
+  const dev1 = pickRig(t, PICK_DEV, dev);
+  const devPage = await dev1.open(PICK_DEV);
+  const sent = await dev1.act([{ select: 'e6', option: 'Home' }, { select: 'e1', option: 'Small' }]);
+  assert.deepEqual(devPage.acts.map(a => [a.kind, a.permit]), [['select', 'loopback']], sent.output.content);
+  assert.match(sent.output.content, /Stopped after step 1: Blocked 1 request/u, '偽の効果が断った数を返すので、開発サーバーでもそこで止まる');
+  assert.equal(devPage.permit, undefined, '終わったら外す');
+  const listed = pickRig(t, PICK_LISTED, {});
+  const page = await listed.open(PICK_LISTED);
+  const out = await listed.act([{ select: 'e6', option: 'Home' }, { select: 'e1', option: 'Small' }]);
+  assert.deepEqual(page.acts.map(a => [a.kind, a.permit]), [['select', undefined]], '送信の許しは立てない（<select> は送信の部品ではないので、通り方は click の送信でない要素と同じ）');
+  assert.match(out.output.content, /Stopped after step 1: Blocked 1 request/u);
+  assert.match(out.output.content, /Not run: step 2\./u);
+  assert.equal(out.output.isError, true);
+  assert.deepEqual(listed.counts(), QUIET);
+  const plain = await dev1.act([{ select: 'e1', option: 'Small' }]);
+  assert.deepEqual(devPage.acts.map(a => a.permit), ['loopback', 'loopback'], plain.output.content);
+});
+
+test('P6 select のあとに移動したら、あとの番号の step は止まる。画面が変わったあとの番号の select も止まる', async t => {
+  const moved = pickRig(t, PICK_DEV, dev);
+  await moved.open(PICK_DEV);
+  const stopped = await moved.act([{ select: 'e7', option: 'Next' }, { select: 'e1', option: 'Small' }]);
+  assert.deepEqual(moved.acts(), ['select Move#0 "Next"'], stopped.output.content);
+  assert.match(stopped.output.content, /2\. Not done: .*browser_read/u);
+  const changed = pickRig(t, PICK_DEV, dev);
+  await changed.open(PICK_DEV);
+  const out = await changed.act([{ click: 'e9' }, { select: 'e1', option: 'Small' }]);
+  assert.deepEqual(changed.acts(), ['click Save#0'], out.output.content);
+  assert.match(out.output.content, /2\. Not done: The page changed during this call/u);
+  assert.equal(out.output.isError, true);
+});
+
+test('P6 select / press: 止まった開発サーバー・方針・長さの上限・計画モードは、click / type と同じ決まりで効く', async t => {
+  const ended = pickRig(t, PICK_DEV, { product: true, printed: [] });
+  await ended.open(PICK_DEV);
+  (ended.ctx.services as unknown as { background: { stoppedPort: unknown } }).background.stoppedPort = () => ({ port: 5173, jobId: 'bg-1' });
+  const stopped = await ended.act([{ select: 'e1', option: 'Small' }, { press: 'Tab' }]);
+  assert.match(stopped.output.content, /^1\. Not done: bg-1, which printed port 5173, has ended/u, stopped.output.content);
+  assert.deepEqual(ended.acts(), []);
+  for (const name of ['browser_click', 'browser_type']) {
+    const r = pickRig(t, PICK_DEV, { ...dev, mutate: c => { c.tools.policies = { [name]: 'block' }; } });
+    await r.open(PICK_DEV);
+    for (const step of [{ select: 'e1', option: 'Small' }, { press: 'Tab' }]) assert.deepEqual([(await r.act([step])).decidedBy, r.acts()], ['policy', []], `${name} ${JSON.stringify(step)}`);
+  }
+  const r = pickRig(t, PICK_DEV, dev);
+  await r.open(PICK_DEV);
+  const long = await r.act(Array.from({ length: 20 }, () => ({ select: 'e1', option: 'Small'.padEnd(190, 'x') })));
+  assert.equal(long.decision, 'deny');
+  assert.match(long.output.content, /Split it into smaller browser_act calls/u);
+  assert.deepEqual(r.acts(), []);
+  assert.equal(planAllows(browserAct), false);
+});
+
+test('P6 press: 焦点が無い・ふつうの入力欄にあるとき、開発サーバー・一覧のサイト・持ち主の URL で、判定役なしで通る。結果の行は鍵の名前だけ', async t => {
+  for (const [url, over] of [[PICK_DEV, dev], [PICK_LISTED, {}], [PICK_UNLISTED, { ownerText: [PICK_UNLISTED] }]] as const) {
+    for (const kind of ['chat', 'task'] as const) {
+      const r = pickRig(t, url, { kind, ...over });
+      const page = await r.open(url);
+      const outcome = await r.act([{ press: 'Tab' }, { press: 'ArrowDown' }]);
+      assert.deepEqual([outcome.decision, outcome.decidedBy, outcome.output.isError], ['allow', 'builtin', undefined], `${url} ${kind}: ${outcome.output.content}`);
+      page.focusFacts = focusOn({ hint: 'Name' });
+      await r.act([{ press: 'PageDown' }]);
+      assert.deepEqual(r.acts(), ['press Tab#0', 'press ArrowDown#0', 'press PageDown#0'], `${url} ${kind}`);
+      assert.deepEqual(outcome.output.content.split('\n').slice(0, 2), ['1. Pressed Tab.', '2. Pressed ArrowDown.']);
+      assert.deepEqual(r.counts(), QUIET, `${url} ${kind}`);
+      assert.equal(r.ctx.taint.tainted, true);
+    }
+  }
+});
+
+test('P6 press の断り: 焦点が枠（iframe・object・embed）の中・パスワード / 認証コード / カードの欄（属性でも、名前の手がかりでも）にあれば、鍵を送らず止まる', async t => {
+  const r = pickRig(t, PICK_DEV, dev);
+  const page = await r.open(PICK_DEV);
+  const frame = (tag: string) => ({ where: 'frame' as const, tag, type: null, autocomplete: null, hint: '' });
+  for (const tag of ['iframe', 'frame', 'object', 'embed']) {
+    page.focusFacts = frame(tag);
+    const out = await r.act([{ press: 'Tab' }, { press: 'Tab' }]);
+    assert.match(out.output.content, /^1\. Not done: The keyboard focus is inside a frame/u, tag);
+    assert.match(out.output.content, /Not run: step 2\./u, tag);
+  }
+  for (const over of [{ type: 'password' }, { autocomplete: 'current-password' }, { autocomplete: 'new-password' }, { autocomplete: 'one-time-code' }, { autocomplete: 'cc-number' }, { autocomplete: 'cc-exp' },
+    { hint: 'Card number' }, { hint: 'パスワード' }, { hint: 'Security code' }, { hint: 'enter your password here' }, { hint: 'CVC' }]) {
+    page.focusFacts = focusOn(over);
+    const out = await r.act([{ press: 'ArrowDown' }, { press: 'Tab' }]);
+    assert.match(out.output.content, /^1\. Not done: The keyboard focus is on a password, verification code or card number field/u, JSON.stringify(over));
+    assert.match(out.output.content, /Not run: step 2\./u);
+    assert.equal(out.output.isError, true);
+  }
+  assert.deepEqual(r.acts(), []);
+  assert.deepEqual(r.counts(), QUIET);
+  page.focusFacts = focusOn({ tag: 'select', type: 'select-one', hint: 'Size' });
+  assert.equal((await r.act([{ press: 'ArrowDown' }])).output.isError, undefined, '<select> の上の矢印は通る（select と同じ通り方）');
+  page.focusFacts = focusOn({ tag: 'button', type: 'submit', hint: 'Save' });
+  assert.equal((await r.act([{ press: 'Tab' }])).output.isError, undefined, '送信ボタンに焦点があっても、この鍵では押されない');
+  assert.deepEqual(r.acts(), ['press ArrowDown#0', 'press Tab#0']);
+});
+
+test('P6 press は click と同じ通り方: 判定役が要るページでは止まり、判定役も Pending も呼ばない。止まった開発サーバーでも止まる', async t => {
+  for (const [url, over] of [[PICK_UNLISTED, {}], [PICK_OTHER, { product: true }]] as const) {
+    for (const kind of ['chat', 'task'] as const) {
+      const r = pickRig(t, url, { kind, ...over });
+      await r.open(url);
+      const out = await r.act([{ press: 'Tab' }]);
+      assert.match(out.output.content, /^1\. Not done: .*select and press have no one-step tool/u, `${url} ${kind}`);
+      assert.deepEqual(r.acts(), [], `${url} ${kind}`);
+      assert.deepEqual(r.counts(), QUIET, `${url} ${kind}`);
+    }
+  }
+  const ended = pickRig(t, PICK_DEV, { product: true, printed: [] });
+  await ended.open(PICK_DEV);
+  (ended.ctx.services as unknown as { background: { stoppedPort: unknown } }).background.stoppedPort = () => ({ port: 5173, jobId: 'bg-1', stoppedBy: 'owner' });
+  const out = await ended.act([{ press: 'Tab' }]);
+  assert.match(out.output.content, /^1\. Not done: The owner stopped bg-1/u);
+  assert.deepEqual(ended.acts(), []);
+});
+
+test('P6 press: 判定したあと押すまでに焦点が変わったら（枠の中へ移った）押さない。2 つ目からの press も、その時点の焦点で判定する', async t => {
+  const r = pickRig(t, PICK_DEV, dev);
+  const page = await r.open(PICK_DEV);
+  const real = page.focus.bind(page);
+  let reads = 0;
+  page.focus = async () => {
+    const facts = await real();
+    reads += 1;
+    // 判定のために読んだ直後に、焦点が枠の中へ移る
+    if (reads === 1) page.focusFacts = { where: 'frame', tag: 'iframe', type: null, autocomplete: null, hint: '' };
+    return facts;
+  };
+  const moved = await r.act([{ press: 'Tab' }]);
+  assert.match(moved.output.content, /^1\. Failed: The page has changed/u, moved.output.content);
+  assert.deepEqual(r.acts(), []);
+  const mid = pickRig(t, PICK_DEV, dev);
+  const p3 = await mid.open(PICK_DEV);
+  // 1 つ目の press のあとに、焦点がパスワード欄へ移る: 2 つ目はその時点で判定して止まる
+  const realPress = p3.press.bind(p3);
+  p3.press = async (key, expected, timeout) => { const events = await realPress(key, expected, timeout); p3.focusFacts = focusOn({ type: 'password' }); return events; };
+  const chain = await mid.act([{ press: 'Tab' }, { press: 'Tab' }, { press: 'Tab' }]);
+  assert.deepEqual(mid.acts(), ['press Tab#0'], chain.output.content);
+  assert.match(chain.output.content, /^1\. Pressed Tab\.\n2\. Not done: The keyboard focus is on a password/u);
+  assert.match(chain.output.content, /Not run: step 3\./u);
+});
+
+test('P6 press が起こした変化: 送信の守りが断ったらそこで止まる（一覧のサイトは許し無し、開発サーバーは loopback）。画面が変わったあとの番号の step は止まる', async t => {
+  const listed = pickRig(t, PICK_LISTED, {});
+  const page = await listed.open(PICK_LISTED);
+  page.pressEffects['ArrowDown'] = { blocked: 1 };
+  const out = await listed.act([{ press: 'ArrowDown' }, { press: 'Tab' }]);
+  assert.deepEqual(page.acts.map(a => [a.kind, a.permit]), [['press', undefined]]);
+  assert.match(out.output.content, /^1\. Pressed ArrowDown\.\nStopped after step 1: Blocked 1 request/u);
+  assert.match(out.output.content, /Not run: step 2\./u);
+  const dev1 = pickRig(t, PICK_DEV, dev);
+  const devPage = await dev1.open(PICK_DEV);
+  devPage.pressEffects['Escape'] = { mutate: { ...pickSite(PICK_DEV), snapshot: `${PICK_SNAPSHOT}\n- heading "Closed"` } };
+  const flow = await dev1.act([{ press: 'Escape' }, { select: 'e1', option: 'Small' }]);
+  assert.deepEqual(devPage.acts.map(a => [a.kind, a.permit]), [['press', 'loopback']]);
+  assert.match(flow.output.content, /^1\. Pressed Escape\.\n2\. Not done: The page changed during this call/u);
+  const named = await dev1.act([{ select: { role: 'combobox', name: 'Size' }, option: 'Small' }]);
+  assert.equal(named.output.isError, undefined, '名前で指せば、開発サーバーでは進む');
+  const popup = pickRig(t, PICK_DEV, dev);
+  const p = await popup.open(PICK_DEV);
+  p.pressEffects['Escape'] = { dialogs: 1 };
+  const closed = await popup.act([{ press: 'Escape' }, { press: 'Tab' }]);
+  assert.match(closed.output.content, /Stopped after step 1: Closed 1 dialog/u);
+  assert.deepEqual(popup.acts(), ['press Escape#0']);
+});
+
+test('P6 道具の行（summarize）に select / press の step が読める形で出る。press の鍵と、選ぶラベル・名前で指す目標', () => {
+  const body = browserAct.summarize!({ steps: [{ select: 'e1', option: 'Medium' }, { select: { role: 'combobox', name: 'Size' }, option: 'L'.repeat(150) }, { press: 'Tab' }, { click: 'e2' }] }, 'en').body;
+  assert.equal(body.split('\n')[0], '1. select e1: Medium');
+  assert.equal(body.split('\n')[1], `2. select combobox "Size": ${'L'.repeat(100)}`);
+  assert.equal(body.split('\n')[2], '3. press Tab');
 });

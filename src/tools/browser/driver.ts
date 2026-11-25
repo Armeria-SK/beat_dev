@@ -2,7 +2,7 @@
 // 試験は偽の driver（tests/helpers/fake-browser.ts）を使う。本物は BEAT_BROWSER_LIVE=1 のときだけ動かす
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Browser, BrowserContext, ElementHandle, Frame, Locator, Page, Request, Route } from 'playwright-core';
+import type { Browser, BrowserContext, ElementHandle, Frame, JSHandle, Locator, Page, Request, Route } from 'playwright-core';
 import type { Language } from '../../config/schema.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { isEdgeExecutable } from '../../shared/browser-path.ts';
@@ -97,6 +97,8 @@ export interface ElementDetail extends ElementState {
   // <input> は DOM の type（ブラウザが正規化したもの）、それ以外は type 属性。小文字。無ければ undefined
   type: string | undefined;
   autocomplete: string | undefined;
+  // 要素のタグ名（小文字）。select が本物の <select> かの判定に使う（役割だけでは自前の部品と見分けられない）
+  tag?: string | undefined;
   // フォームとの関係（D-5）。submits: 押すとフォームが送られる部品（form に属する submit / image、formaction・formmethod を持つボタン。label は label.control、部品の中の要素はその部品で見る）
   form: { inForm: boolean; submits: boolean };
   // 見えている範囲での要素の位置（CSS ピクセル。Browser の欄の AI の指に使う。9-2b）。読めなければ undefined
@@ -108,7 +110,7 @@ export interface ActionEvents { dialogs: number; downloads: number; fileChoosers
 
 // 探し直した要素の属性とフォームとの関係を、要素から読む。ブラウザの中で動く（locator.evaluate に渡す）ので、この関数の外の名前を使わない。
 // 試験は jsdom の要素で同じ関数を呼ぶ
-export function elementFacts(el: Element): { type: string | null; autocomplete: string | null; inForm: boolean; submits: boolean } {
+export function elementFacts(el: Element): { type: string | null; autocomplete: string | null; inForm: boolean; submits: boolean; tag: string } {
   const tagOf = (node: Element): string => node.tagName.toLowerCase();
   const typed = tagOf(el) === 'input' ? (el as HTMLInputElement).type : el.getAttribute('type');
   const autocomplete = (el.getAttribute('autocomplete') ?? '').trim().toLowerCase() || null;
@@ -126,7 +128,65 @@ export function elementFacts(el: Element): { type: string | null; autocomplete: 
     autocomplete,
     inForm: owned || node.closest('form') !== null,
     submits: (owned && submitPart) || overrides,
+    tag: tagOf(el),
   };
+}
+
+// browser_act の press で押せる鍵（閉じた一覧）。Enter（送信になりうる）・Space（押すのと同じになりうる）・修飾つき・削除・文字は入れない。
+// 入力の確かめ（browser.ts の STEP）と、driver の press の両方がこの一覧を使う
+export const PRESS_KEYS = ['Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'] as const;
+export type PressKey = typeof PRESS_KEYS[number];
+export const isPressKey = (key: string): key is PressKey => (PRESS_KEYS as readonly string[]).includes(key);
+
+// キーボードの焦点がどこにあるか（press の判定に使う）。none: 焦点が無い（body）/ element: 主文書の要素（shadow DOM の中も辿る）/
+// frame: 枠（iframe・frame・object・embed）の中、または中を読めない部品（閉じた shadow DOM を持つ部品）。枠の中は見えないので、鍵は送らない。
+// tag・type・autocomplete・hint は element のときの要素の手がかり（hint はページが付けた名前などを 200 字までつないだもの。判定と比べるだけで、出力には出さない）
+export interface FocusFacts { where: 'none' | 'element' | 'frame'; tag: string | null; type: string | null; autocomplete: string | null; hint: string }
+export const NO_FOCUS: FocusFacts = { where: 'none', tag: null, type: null, autocomplete: null, hint: '' };
+
+// 焦点のある要素。ブラウザの中で動く（page.evaluateHandle に渡す）ので、この関数の外の名前を使わない。shadow DOM（開いたもの）は中まで辿る
+export function activeElementOf(): Element | null {
+  let active: Element | null = (globalThis as { document?: Document }).document?.activeElement ?? null;
+  for (let depth = 0; active !== null && active.shadowRoot !== null && depth < 16; depth += 1) {
+    const inner: Element | null = active.shadowRoot.activeElement;
+    if (inner === null) break;
+    active = inner;
+  }
+  return active;
+}
+
+// 焦点のある要素の事実。ブラウザの中で動く（handle.evaluate に渡す）ので、この関数の外の名前を使わない。試験は jsdom の要素で同じ関数を呼ぶ
+export function focusFacts(el: Element): FocusFacts {
+  const doc = (globalThis as { document?: Document }).document;
+  if (el === doc?.body || el === doc?.documentElement) return { where: 'none', tag: null, type: null, autocomplete: null, hint: '' };
+  const tag = el.tagName.toLowerCase();
+  // 枠の中は見えない。閉じた shadow DOM（shadowRoot が読めない）を持ちうる部品（名前に - を含むカスタム要素）も、中を読めないので同じに扱う
+  if (tag === 'iframe' || tag === 'frame' || tag === 'object' || tag === 'embed' || (tag.includes('-') && el.shadowRoot === null)) {
+    return { where: 'frame', tag, type: null, autocomplete: null, hint: '' };
+  }
+  const type = tag === 'input' ? (el as HTMLInputElement).type : el.getAttribute('type');
+  const autocomplete = (el.getAttribute('autocomplete') ?? '').trim().toLowerCase() || null;
+  const parts: string[] = [];
+  for (const name of ['aria-label', 'placeholder', 'name', 'id', 'title']) parts.push(el.getAttribute(name) ?? '');
+  const labels = (el as HTMLInputElement).labels;
+  if (labels) for (const label of Array.from(labels)) parts.push(label.textContent ?? '');
+  const by = el.getAttribute('aria-labelledby');
+  if (by !== null && doc) for (const id of by.split(/\s+/u)) parts.push(doc.getElementById(id)?.textContent ?? '');
+  const hint = parts.join(' ').replace(/\s+/gu, ' ').trim().slice(0, 200);
+  return { where: 'element', tag, type: type ? type.trim().toLowerCase() : null, autocomplete, hint };
+}
+
+// <select> に、そのラベルの（使える）選択肢があるか。ブラウザの中で動く（handle.evaluate に渡す）ので、この関数の外の名前を使わない
+export function optionExists(el: Element, label: string): boolean {
+  const options = (el as HTMLSelectElement).options;
+  if (!options) return false;
+  for (let i = 0; i < options.length; i += 1) {
+    const option = options[i]!;
+    const group = option.parentElement;
+    const off = option.disabled || (group !== null && group.tagName === 'OPTGROUP' && (group as HTMLOptGroupElement).disabled);
+    if (option.label === label && !off) return true;
+  }
+  return false;
 }
 
 export interface PageHandle {
@@ -145,6 +205,13 @@ export interface PageHandle {
   // ダイアログは閉じ（beforeunload だけ離れる）、ダウンロードは断り、ファイル選択は閉じて、数を返す
   click(target: ElementTarget, timeoutMs: number): Promise<ActionEvents>;
   fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents>;
+  // <select> の選択肢をラベル（完全一致）で選ぶ。click と同じ道（つかむ・確かめ・同じ要素か）。有効な選択肢が無ければ act_failed（browser.select_no_option）
+  select(target: ElementTarget, label: string, timeoutMs: number): Promise<ActionEvents>;
+  // いまのキーボードの焦点の事実（枠の中・要素・無し）。読めなければ page_changed
+  focus(): Promise<FocusFacts>;
+  // 焦点に鍵（PRESS_KEYS のどれか）を押す。一覧外の鍵は blocked。押す直前に焦点を読み直し、expected（判定したときの事実）と同じでなければ、また枠の中なら page_changed で押さない。
+  // 焦点が要素なら、その読んだ要素に押す（ページの焦点が移っても、判定した要素に届く）
+  press(key: string, expected: FocusFacts, timeoutMs: number): Promise<ActionEvents>;
   // 押す・入れるのあいだだけ効く送信の許し（D-8）。any: 承認された送信 / loopback: 許されたループバックで通った操作（ループバックへの送信だけ）/ undefined: 許しなし
   permitSubmits(permit: SubmitPermit | undefined): void;
   // 見えている範囲だけの PNG
@@ -283,6 +350,8 @@ function classifyLaunchError(error: unknown): BrowserFailure {
   return new BrowserFailure('launch_failed', 'browser.launch_failed');
 }
 
+const sameFocus = (a: FocusFacts, b: FocusFacts): boolean => a.where === b.where && a.tag === b.tag && a.type === b.type && a.autocomplete === b.autocomplete && a.hint === b.hint;
+
 const clipLine = (text: string, max: number) => text.replace(/\s+/gu, ' ').trim().slice(0, max);
 
 // 要求を出した枠の出どころの URL。空の枠（about:blank / about:srcdoc）は親の枠、空の窓は開いた元のページの URL。読めなければ undefined
@@ -398,7 +467,7 @@ class PlaywrightPage implements PageHandle {
     try { box = await one.boundingBox({ timeout: BOX_TIMEOUT_MS }); } catch { box = null; }
     return {
       ...(box ? { box: { x: box.x, y: box.y, width: box.width, height: box.height } } : {}),
-      visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined,
+      visible: await one.isVisible(), enabled: await one.isEnabled(), type: attrs.type ?? undefined, autocomplete: attrs.autocomplete ?? undefined, ...(attrs.tag ? { tag: attrs.tag } : {}),
       // 読めない形なら送信とみなす（迷ったら聞く側）
       form: { inForm: attrs.inForm === true, submits: attrs.submits !== false },
     };
@@ -435,6 +504,11 @@ class PlaywrightPage implements PageHandle {
     } finally {
       await pinned.dispose().catch(() => undefined);
     }
+    return this.#settled();
+  }
+
+  // 操作のあと、遷移や新しい窓・ダイアログが起きるのを少し待ち、DOM が静まるのを待って、起きた出来事の数を返す
+  async #settled(): Promise<ActionEvents> {
     await new Promise<void>(resolve => { setTimeout(resolve, SETTLE_MS); });
     await this.page.waitForLoadState('domcontentloaded', { timeout: SETTLE_LOAD_MS }).catch(() => undefined);
     await this.#quiet();
@@ -476,6 +550,54 @@ class PlaywrightPage implements PageHandle {
       await one.fill(text, { timeout });
       if (submit) await one.press('Enter', { timeout });
     });
+  }
+
+  // 選ぶのはラベルだけ（値・番号では選ばない）。操作できる形になるのを待ったあと、有効な選択肢があることを先に見る（無いまま Playwright に任せると、時間切れまで待つ）
+  select(target: ElementTarget, label: string, timeoutMs: number): Promise<ActionEvents> {
+    return this.#act(target, timeoutMs, async one => {
+      await one.waitForElementState('stable', { timeout: timeoutMs });
+      await one.waitForElementState('enabled', { timeout: timeoutMs });
+      if (!await one.evaluate(optionExists, label)) throw new BrowserFailure('act_failed', 'browser.select_no_option');
+    }, async (one, timeout) => { await one.selectOption({ label }, { timeout }); });
+  }
+
+  // 焦点のある要素をつかんで、その事実を読む。要素が無ければ（焦点が無い）つかむものは無い。読めなければ（ページが閉じた・移った）page_changed
+  async #focused(): Promise<{ facts: FocusFacts; element: ElementHandle<Element> | null }> {
+    let js: JSHandle | undefined;
+    let element: ElementHandle<Element> | null = null;
+    try {
+      js = await this.page.evaluateHandle(activeElementOf);
+      element = js.asElement() as ElementHandle<Element> | null;
+      if (element === null) { await js.dispose().catch(() => undefined); return { facts: NO_FOCUS, element: null }; }
+      return { facts: await element.evaluate(focusFacts), element };
+    } catch {
+      await (element ?? js)?.dispose().catch(() => undefined);
+      throw new BrowserFailure('page_changed', 'browser.page_changed');
+    }
+  }
+
+  async focus(): Promise<FocusFacts> {
+    const { facts, element } = await this.#focused();
+    await element?.dispose().catch(() => undefined);
+    return facts;
+  }
+
+  async press(key: string, expected: FocusFacts, timeoutMs: number): Promise<ActionEvents> {
+    if (!isPressKey(key)) throw new BrowserFailure('blocked', 'browser.press_key');
+    const { facts, element } = await this.#focused();
+    try {
+      // 判定したときと同じ焦点でなければ押さない。枠の中は、同じでも押さない
+      if (facts.where === 'frame' || !sameFocus(facts, expected)) throw new BrowserFailure('page_changed', 'browser.page_changed');
+      this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
+      const after = Math.min(timeoutMs, ACT_AFTER_CHECK_MS);
+      await this.#step(after, async () => {
+        if (facts.where === 'element' && element !== null) await element.press(key, { timeout: after });
+        else await this.page.keyboard.press(key);
+      });
+    } finally {
+      await element?.dispose().catch(() => undefined);
+    }
+    return this.#settled();
   }
 
   permitSubmits(permit: SubmitPermit | undefined): void { this.permit = permit; }

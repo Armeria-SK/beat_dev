@@ -17,7 +17,7 @@ import { QuestionStore } from '../src/questions/store.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { actRoute } from '../src/tools/browser/checks.ts';
-import { elementFacts, PlaywrightBrowser, type LaunchOptions, type WorkContextOptions } from '../src/tools/browser/driver.ts';
+import { activeElementOf, elementFacts, focusFacts, optionExists, PlaywrightBrowser, type LaunchOptions, type WorkContextOptions } from '../src/tools/browser/driver.ts';
 import { navigationMethodVerdict, type SendGuard, type SubmitPermit } from '../src/tools/browser/route.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { ownerHostAllows, ownerLoopbackPorts } from '../src/tools/browser/sites.ts';
@@ -641,13 +641,95 @@ test('elementFacts: 送信の部品・フォームの外・label の先・中の
   </body>`);
   const doc = dom.window.document;
   const facts = (id: string) => elementFacts(doc.getElementById(id)!);
-  assert.deepEqual(facts('text'), { type: 'text', autocomplete: null, inForm: true, submits: false });
+  assert.deepEqual(facts('text'), { type: 'text', autocomplete: null, inForm: true, submits: false, tag: 'input' });
   for (const id of ['plain', 'typed', 'inner', 'submit', 'image', 'owned', 'lab', 'ibutton', 'method']) assert.equal(facts(id).submits, true, id);
   for (const id of ['button', 'reset', 'link', 'outside', 'lab2', 'secret']) assert.equal(facts(id).submits, false, id);
   assert.equal(facts('link').inForm, true);
   assert.equal(facts('outside').inForm, false);
   assert.equal(facts('owned').inForm, true, 'form 属性でフォームに属す');
   assert.deepEqual([facts('secret').type, facts('secret').autocomplete], ['password', 'current-password']);
+});
+
+// ── P6: select / press の判定に使う、ページの中で動く関数（jsdom。ページの globalThis.document を差し替えて呼ぶ） ──
+
+function inDocument<T>(doc: Document, work: () => T): T {
+  const g = globalThis as { document?: unknown };
+  const saved = g.document;
+  g.document = doc;
+  try { return work(); } finally { g.document = saved; }
+}
+
+const FOCUS_DOM = `<!doctype html><body>
+  <input id="pw" type="password" autocomplete="Current-Password" aria-label="Secret" placeholder="••••">
+  <label for="named">Card number</label><input id="named" name="field1">
+  <span id="legend">Security code</span><input id="by" aria-labelledby="legend missing">
+  <input id="long" aria-label="${'x'.repeat(300)}">
+  <iframe id="frame" tabindex="0"></iframe><object id="object" tabindex="0"></object><embed id="embed" tabindex="0">
+  <my-open id="open"></my-open><my-closed id="closed" tabindex="0"></my-closed><my-plain id="plain" tabindex="0"></my-plain>
+  <div id="notes" contenteditable="true" aria-label="Notes"></div>
+  <select id="size"><option>Small</option></select>
+  <button id="save" type="submit">Save</button>
+</body>`;
+
+function focusDom() {
+  const doc = new JSDOM(FOCUS_DOM).window.document;
+  doc.getElementById('open')!.attachShadow({ mode: 'open' }).innerHTML = '<input id="inner" type="password" aria-label="Inside">';
+  doc.getElementById('closed')!.attachShadow({ mode: 'closed' }).innerHTML = '<input id="hidden" type="password">';
+  const facts = (id: string) => { doc.getElementById(id)!.focus(); return inDocument(doc, () => focusFacts(activeElementOf()!)); };
+  return { doc, facts };
+}
+
+test('P6 focusFacts: 焦点が無ければ none。入力欄は型・autocomplete・手がかり（名前・label・aria-labelledby。200 字まで）を返す', () => {
+  const { doc, facts } = focusDom();
+  assert.deepEqual(inDocument(doc, () => focusFacts(activeElementOf()!)), { where: 'none', tag: null, type: null, autocomplete: null, hint: '' }, 'body');
+  assert.deepEqual(inDocument(doc, () => focusFacts(doc.documentElement)), { where: 'none', tag: null, type: null, autocomplete: null, hint: '' }, 'html');
+  assert.deepEqual(facts('pw'), { where: 'element', tag: 'input', type: 'password', autocomplete: 'current-password', hint: 'Secret •••• pw' });
+  assert.equal(facts('named').hint, 'field1 named Card number');
+  assert.equal(facts('by').hint, 'by Security code');
+  assert.equal(facts('long').hint.length, 200);
+  assert.deepEqual(facts('notes'), { where: 'element', tag: 'div', type: null, autocomplete: null, hint: 'Notes notes' });
+  assert.deepEqual(facts('size'), { where: 'element', tag: 'select', type: null, autocomplete: null, hint: 'size' });
+  assert.deepEqual(facts('save'), { where: 'element', tag: 'button', type: 'submit', autocomplete: null, hint: 'save' });
+});
+
+test('P6 focusFacts: 枠（iframe・object・embed・frame）の中と、中を読めない部品（閉じた shadow DOM かもしれないカスタム要素）は frame。開いた shadow DOM は中の要素まで辿る', () => {
+  const { doc, facts } = focusDom();
+  for (const id of ['frame', 'object', 'embed']) assert.deepEqual(facts(id), { where: 'frame', tag: id === 'frame' ? 'iframe' : id, type: null, autocomplete: null, hint: '' }, id);
+  assert.equal(inDocument(doc, () => focusFacts(doc.createElement('frame'))).where, 'frame', '<frame>');
+  assert.equal(facts('closed').where, 'frame', '閉じた shadow DOM の部品');
+  assert.equal(facts('plain').where, 'frame', 'shadow DOM の無いカスタム要素も、中を読めないものとして frame（見分けられないので安全側）');
+  doc.getElementById('open')!.shadowRoot!.getElementById('inner')!.focus();
+  const inner = inDocument(doc, () => activeElementOf());
+  assert.equal(inner?.id, 'inner', '開いた shadow DOM の中の要素');
+  assert.deepEqual(inDocument(doc, () => focusFacts(inner!)), { where: 'element', tag: 'input', type: 'password', autocomplete: null, hint: 'Inside inner' });
+});
+
+test('P6 activeElementOf: 焦点が無ければ body、document が無ければ null', () => {
+  const { doc } = focusDom();
+  assert.equal(inDocument(doc, () => activeElementOf())?.tagName, 'BODY');
+  const g = globalThis as { document?: unknown };
+  const saved = g.document;
+  g.document = undefined;
+  try { assert.equal(activeElementOf(), null); } finally { g.document = saved; }
+});
+
+test('P6 optionExists: ラベルが完全に同じ（大小・前後の空白も区別）で、使える選択肢だけ。無効な選択肢・無効なグループの中・<select> でない要素は false', () => {
+  const dom = new JSDOM(`<!doctype html><body>
+    <select id="s"><option>Small</option><option value="m" label="Medium">M text</option><option disabled>Gone</option>
+      <optgroup label="Group" disabled><option>Locked</option></optgroup><optgroup label="Open"><option>Inside</option></optgroup></select>
+    <div id="d"></div>
+  </body>`);
+  const doc = dom.window.document;
+  const has = (id: string, label: string) => optionExists(doc.getElementById(id)!, label);
+  for (const label of ['Small', 'Medium', 'Inside']) assert.equal(has('s', label), true, label);
+  for (const label of ['small', ' Small', 'Small ', 'M text', 'm', 'Gone', 'Locked', 'Huge', '']) assert.equal(has('s', label), false, JSON.stringify(label));
+  assert.equal(has('d', 'Small'), false, '<select> でない');
+});
+
+test('P6 elementFacts: 要素のタグ名を返す（select かの判定。役割だけでは自前の部品と見分けられない）', () => {
+  const dom = new JSDOM('<!doctype html><body><select id="s"></select><input id="i" role="combobox"><div id="d" role="listbox"></div><SVG></SVG></body>');
+  const doc = dom.window.document;
+  assert.deepEqual(['s', 'i', 'd'].map(id => elementFacts(doc.getElementById(id)!).tag), ['select', 'input', 'div']);
 });
 
 test('本物の PlaywrightPage: 要素の見分けが読めない形なら送信とみなす。入れる（submit なし）は Enter を押さない', async () => {
