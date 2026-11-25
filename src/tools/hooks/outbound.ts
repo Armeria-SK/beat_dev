@@ -44,6 +44,12 @@ const NET_API = /\b(?:fetch|https?|net\.connect|tls\.connect|dgram|XMLHttpReques
 // 別のプログラムを起こす入口。os.exec*・os.spawn*（後ろに文字が付く形）・posix_spawn・asyncio の create_subprocess_*（_ の後ろ）・fork・Open3・cluster・Deno.run・pcntl_exec・process.execve を含む（2026-11-26）。
 // exec[vl]*・spawn[vl]* は os を別名にした呼び出し（o.execv）や from os import execv も受ける。メソッドの .exec(（正規表現・DB）は数えない
 const PROCESS_API = /\b(?:child_process|execSync|spawnSync|execFile\w*|spawn|subprocess|os\.system|system|popen|Start-Process|Deno\.Command|Bun\.spawn|shell_exec|passthru|proc_open|getline|process\.binding|internalBinding|spawn_sync|process\.dlopen|Kernel\.(?:system|exec|spawn)|Process\.(?:spawn|exec)|IO\.popen|[Pp][Tt][Yy]\.spawn|shelljs|os\.(?:exec\w*|spawn\w*|posix_spawn\w*|startfile|fork\w*)|exec[vl]\w*|spawn[vl]\w*|posix_spawn\w*|create_subprocess_(?:shell|exec)|Open3|cluster\.fork|Deno\.run|pcntl_exec|process\.execve)\b|(?<![.\w$])exec\b|(?:require\(\s*|import\(\s*|from\s+)['"](?:node:)?cluster['"]|`|\|\s*"/u;
+// プログラムごとの見張り（PROCESS_API は JS・Python が大文字小文字を区別する言葉で書いてあるので変えない）: PHP は関数名の大文字小文字を問わない。Perl の qx・Ruby の %x は引用の形で別のプログラムを起こす
+const PROGRAM_PROCESS_API: ReadonlyArray<readonly [RegExp, RegExp]> = [
+  [/^php[\d.]*$/u, /\b(?:system|exec|shell_exec|passthru|proc_open|popen|pcntl_exec|pcntl_fork)\s*\(/iu],
+  [/^perl[\d.]*$/u, /\bqx\s*[^\w\s]/u],
+  [/^ruby[\d.]*$/u, /%x[^\w\s]/u],
+];
 const DELETE_API = /\b(?:rmSync|rmdirSync|unlinkSync|unlink|rmdir|rm|rmtree|os\.remove|removedirs|remove_tree|rm_rf|Remove-Item|Clear-Content|truncate)\b/u;
 const READ_METHODS = /^(?:get|head)$/iu;
 
@@ -170,22 +176,36 @@ function ghSends(words: readonly FactWord[]): Hit | undefined {
   return hit('send', upload ? 'send.upload' : 'send.service', { cmd: `gh ${group} ${action}`.trim() });
 }
 
+// python の -m <名前>（小文字にした名前の一覧）。-m 名前・-m名前（くっつけた形）・値を取らない旗をくっつけた -Bm 名前・-Bm名前 も読む
+const PYTHON_MODULE_FLAG = /^-[bdehioqsuvx]*m(.*)$/iu;
+function pythonModules(words: StatementFacts['words']): string[] {
+  const names: string[] = [];
+  for (let i = 1; i < words.length; i++) {
+    const m = PYTHON_MODULE_FLAG.exec(words[i]!.text);
+    const name = m ? (m[1] || words[i + 1]?.text) : undefined;
+    if (name) names.push(name.toLowerCase());
+  }
+  return names;
+}
+
 function uploadOf(st: StatementFacts): Hit | undefined {
   const w = st.words.map(x => x.text.toLowerCase());
   const p = st.program;
   const sub = w[1] ?? '';
+  const python = /^(?:python[\d.]*|py)$/u.test(p);
+  const modules = python ? pythonModules(st.words) : [];
   const up = (cmd: string): Hit => hit('send', 'send.upload', { cmd });
   if ((p === 'npm' || p === 'yarn' || p === 'pnpm') && w.slice(1).includes('publish')) return up(`${p} publish`);
   if (p === 'cargo' && sub === 'publish') return up('cargo publish');
   if (p === 'twine' && sub === 'upload') return up('twine upload');
-  if (/^(?:python[\d.]*|py)$/u.test(p) && w.includes('-m') && w[w.indexOf('-m') + 1] === 'twine' && w.includes('upload')) return up('twine upload');
+  if (modules.includes('twine') && w.includes('upload')) return up('twine upload');
   if (p === 'gem' && sub === 'push') return up('gem push');
   if (p === 'dotnet' && sub === 'nuget' && w[2] === 'push') return up('dotnet nuget push');
   if ((p === 'docker' || p === 'podman') && (sub === 'push' || (sub === 'image' && w[2] === 'push'))) return up(`${p} push`);
   if (p === 'hg' && (sub === 'push' || sub === 'email')) return up(`hg ${sub}`);
   if (p === 'svn' && ['commit', 'ci', 'import'].includes(sub)) return up(`svn ${sub}`);
   if (p === 'openssl' && sub === 's_client') return hit('send', 'send.network_program', { cmd: 'openssl s_client' });
-  if (/^(?:python[\d.]*|py)$/u.test(p) && w.includes('-m') && ['http.server', 'simplehttpserver'].includes(w[w.indexOf('-m') + 1] ?? '')) return hit('send', 'send.network_program', { cmd: 'python -m http.server' });
+  if (modules.some(name => name === 'http.server' || name === 'simplehttpserver')) return hit('send', 'send.network_program', { cmd: 'python -m http.server' });
   if (p === 'certreq' && w.slice(1).some(a => a === '-post' || a === '/post')) return hit('send', 'send.network_program', { cmd: 'certreq -post' });
   if (p === 'tailscale' && sub === 'file' && w[2] === 'cp') return up('tailscale file cp');
   return undefined;
@@ -297,8 +317,9 @@ function interpreterHit(st: StatementFacts): Hit | undefined {
     const value = t === flag ? st.words[i + 1] : { text: t.slice(flag.length + 1), dynamic: st.words[i]!.dynamic };
     if (!value || value.dynamic || /^(?:data|https?):/iu.test(value.text)) return hit('send', 'send.inline_code', { cmd });
   }
+  const own = PROGRAM_PROCESS_API.find(([who]) => who.test(cmd))?.[1];
   for (const code of st.code) {
-    if (NET_API.test(code) || PROCESS_API.test(code)) return hit('send', 'send.inline_code', { cmd });
+    if (NET_API.test(code) || PROCESS_API.test(code) || own?.test(code) === true) return hit('send', 'send.inline_code', { cmd });
     if (DELETE_API.test(code)) return hit('delete', 'delete.inline_code', { cmd });
   }
   const positional = st.words.slice(1).some(w => !w.text.startsWith('-'));

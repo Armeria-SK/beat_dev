@@ -17,13 +17,16 @@ const ZONE = /^(\[[^%\]]+)%[^\]]*\]$/u;
 const IPV6_LITERAL = /^\[[^[\]]+\]$/u;
 const GROUP_AT = /\{([^{}]*)\}|\[([^[\]]*)\]/gu;
 const SPAN = /^(?:(\d+)-(\d+)|([a-z])-([a-z]))(?::(\d+))?$/iu;
-const SEQUENCE = /^(?:(\d+)\.\.(\d+)|([a-z])\.\.([a-z]))(?:\.\.(\d+))?$/iu;
+const SEQUENCE = /^(?:(\d+)\.\.(\d+)|([a-z])\.\.([a-z]))(?:\.\.(-?\d+))?$/iu;
 const FULL_SPAN = 64;
 const SPAN_DIGITS = 10;
 const SPAN_TEXT = 32;
 const MAX_FORMS = 512;
 const MAX_DEPTH = 6;
 const WORK_BUDGET = 300_000;
+const AUTHORITY_BUDGET = 20_000;
+const PREFIX = /^(?:-{1,2}[A-Za-z][\w-]*=)?([a-z][a-z0-9+.-]*:\/{1,3})?/iu;
+const HOST_TEXT = new RegExp(String.raw`^(?:${HOST_CHAR}|[:[\]])*$`, 'u');
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
 export function loopbackHost(host: string): boolean {
@@ -68,7 +71,8 @@ function expandingHost(before: string): string | undefined {
 }
 
 function spanItems(match: RegExpExecArray, ports: ReadonlySet<number>): string[] | undefined {
-  const step = Number(match[5] ?? 1) || 1;
+  // bash は刻みの符号を見ない（{4779..4775..-2} は 4779 4777 4775）。向きは両端で決まる
+  const step = Math.abs(Number(match[5] ?? 1)) || 1;
   if (!Number.isSafeInteger(step)) return undefined;
   if (match[3] !== undefined) {
     const [from, to] = [match[3].charCodeAt(0), match[4]!.charCodeAt(0)];
@@ -90,7 +94,10 @@ function spanItems(match: RegExpExecArray, ports: ReadonlySet<number>): string[]
   return [...near].filter(value => value >= Math.min(first, last) && value <= Math.max(first, last) && Math.abs(value - first) % step === 0).map(show);
 }
 
-interface Budget { left: number }
+// cut: 組み合わせを全部は作らずに終わった（512 を超えて括弧を 1 つずつ動かした・仕事量が尽きた・深さの上限で括弧が残った）。1 つの括弧だけを 1 つずつ動かすのは全部を作るので数えない
+interface Budget { left: number; cut: boolean }
+
+const hasGroup = (form: string): boolean => /[{[]/u.test(form.replace(BRACKETED, group => (isIP(group.slice(1, -1)) === 6 ? '' : group)));
 
 function expandedForms(word: string, ports: ReadonlySet<number>, budget: Budget, depth = 0): string[] {
   const group = new RegExp(GROUP_AT.source, 'gu');
@@ -111,7 +118,7 @@ function expandedForms(word: string, ports: ReadonlySet<number>, budget: Budget,
   const build = (pick: (index: number) => string): boolean => {
     const form = choices.map((_, index) => texts[index]! + pick(index)).join('') + tail;
     budget.left -= form.length + 1;
-    if (budget.left < 0) return false;
+    if (budget.left < 0) { budget.cut = true; return false; }
     built.add(form);
     return true;
   };
@@ -123,14 +130,18 @@ function expandedForms(word: string, ports: ReadonlySet<number>, budget: Budget,
       for (let index = choices.length - 1; index >= 0 && ++picked[index]! === choices[index]!.length; index--) picked[index] = 0;
     }
   } else {
+    budget.cut ||= choices.length > 1;
     varied: for (let turn = 0; turn < choices.length; turn++) {
       for (const item of choices[turn]!) if (!build(index => (index === turn ? item : choices[index]![0]!))) break varied;
     }
   }
-  if (depth >= MAX_DEPTH) return [...built];
+  if (depth >= MAX_DEPTH) {
+    budget.cut ||= [...built].some(hasGroup);
+    return [...built];
+  }
   const out: string[] = [];
   for (const form of built) {
-    if (budget.left < 0) break;
+    if (budget.left < 0) { budget.cut = true; break; }
     if (/[{[]/u.test(form)) out.push(...expandedForms(form, ports, budget, depth + 1)); else out.push(form);
   }
   return out;
@@ -155,6 +166,63 @@ function literalTarget(plain: string, ports: ReadonlySet<number>, hosts: readonl
   return undefined;
 }
 
+interface Authority { text: string; host: string; hostGroup: boolean }
+
+// 語の「ホスト:ポート」の部分（--url=・scheme://・ユーザー情報・最初の括弧の外の / ? # 以降を除く）。展開の括弧があり、scheme:// か :ポート のある、ホストの形の語だけ。それ以外は undefined
+// host はホストの部分から括弧を除いた文字（[::1] の IPv6 はそのまま）、hostGroup はホストの部分に展開の括弧があるか
+function authorityOf(word: string): Authority | undefined {
+  const prefix = PREFIX.exec(word)!;
+  const text = word.slice(prefix[0].length);
+  let depth = 0;
+  let start = 0;
+  let end = text.length;
+  let host = '';
+  let hostGroup = false;
+  let group = false;
+  let port = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (depth > 0) {
+      if (ch === '{' || ch === '[') depth++;
+      else if ((ch === '}' || ch === ']') && --depth === 0) { group = true; hostGroup ||= !port; }
+      continue;
+    }
+    if (ch === '/' || ch === '?' || ch === '#') { end = i; break; }
+    if (ch === '@') { start = i + 1; host = ''; hostGroup = false; group = false; port = false; continue; }
+    if (ch === ':') { port = true; continue; }
+    if (ch === '[') {
+      const close = text.indexOf(']', i);
+      if (close > i && isIP(text.slice(i + 1, close)) === 6) {
+        if (!port) host += text.slice(i, close + 1);
+        i = close;
+        continue;
+      }
+    }
+    if (ch === '{' || ch === '[') depth = 1;
+    else if (!port) host += ch;
+  }
+  return group && (port || prefix[1] !== undefined) && HOST_TEXT.test(host) ? { text: text.slice(start, end), host, hostGroup } : undefined;
+}
+
+function selfHost(host: string, hosts: readonly string[]): boolean {
+  const normal = normalHost(host.replace(ZONE, '$1]'));
+  return normal !== undefined && (loopbackHost(normal) || hosts.includes(normal));
+}
+
+// 広げきれなかった語（budget.cut）の「ホスト:ポート」の部分だけをもう一度広げる。全部を広げ終えて beat 自身でなければ通す。
+// 括弧の組み合わせが多すぎて全部を作れないときは、残りの組み合わせの中に beat 自身があるかを言えないので、ホストに括弧がある（何に広がるか分からない）か、括弧を外したホストが手元か beat の別名なら当たりとする
+function authorityHit(word: string, ports: ReadonlySet<number>, hosts: readonly string[], own: Budget): boolean {
+  const target = authorityOf(word);
+  if (target === undefined) return false;
+  for (const form of expandedForms(target.text, ports, own)) {
+    if (form === target.text) continue;
+    own.left -= form.length;
+    if (own.left < 0) { own.cut = true; break; }
+    if (literalTarget(form, ports, hosts) !== undefined) return true;
+  }
+  return own.cut && (target.hostGroup || selfHost(target.host, hosts));
+}
+
 export function selfTarget(text: string, server: SelfServer): string | undefined {
   const { ports, hosts } = selfPortsOf(server);
   const plain = text.replace(/["'`]/gu, '');
@@ -169,19 +237,25 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
     }
     grouped.add(word);
   }
-  const budget: Budget = { left: 0 };
+  const budget: Budget = { left: 0, cut: false };
   let spare = WORK_BUDGET;
   let waiting = grouped.size;
   for (const word of [...grouped].sort((a, b) => a.length - b.length)) {
     budget.left = Math.floor(spare / waiting--);
+    budget.cut = false;
     spare -= budget.left;
     for (const form of expandedForms(word, ports, budget)) {
       if (form === word) continue;
       budget.left -= form.length;
-      if (budget.left < 0) break;
+      if (budget.left < 0) { budget.cut = true; break; }
       if (literalTarget(form, ports, hosts) !== undefined) return word;
     }
     spare += Math.max(0, budget.left);
+    if (!budget.cut) continue;
+    const own: Budget = { left: Math.min(AUTHORITY_BUDGET, spare), cut: false };
+    spare -= own.left;
+    if (authorityHit(word, ports, hosts, own)) return word;
+    spare += Math.max(0, own.left);
   }
   for (const match of plain.matchAll(PORT)) {
     if (!ports.has(Number(match[1]))) continue;

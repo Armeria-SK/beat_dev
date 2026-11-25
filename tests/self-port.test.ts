@@ -191,3 +191,29 @@ test('selfTarget: 形が上限を超える語は、括弧を 1 つずつ動か�
   const free = [`curl "127.0.0.1:{8080,9090}/${tails}"`, `curl "127.0.0.1:{${decoys},9}/"`, 'curl 127.0.0.1:{4813..4750..21}', 'curl {a,{b,{c,{d,127.0.0.1}}}}:9', 'echo {4750..4813..23}'];
   assert.deepEqual(free.filter(command => selfTarget(command, server) !== undefined).map(command => command.slice(0, 50)), []);
 });
+
+// 2026-11-26 shell-rest S6: beat's port 4777 hidden in a range that is too big to expand in full, and a bash sequence with a negative step
+const beat = { port: 4777, origins: [] as string[] };
+
+test('S6 負の刻みの {4779..4775..-2}（bash は刻みの符号を無視する）も展開して beat 自身として断る', () => {
+  const reached = ['curl http://127.0.0.1:{4779..4775..-2}/', 'curl http://127.0.0.1:{4775..4779..-2}/', 'curl "http://127.0.0.1:{4778..4776..-1}/"', 'curl localhost:{4781..4773..-4}'];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined), []);
+  const free = ['curl http://127.0.0.1:{4779..4771..-4}/', 'curl http://127.0.0.1:{3000..3004..-2}/', 'echo {4779..4775..-2}'];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
+});
+
+test('S6 ホストとポートの括弧の組み合わせが 512 を超えて全部は確かめきれないとき、手元（か括弧つきのホスト）へのものは断る。パスだけの括弧・手元でないホスト・全部確かめ終えたものは今のまま', () => {
+  const nine = `{${'{'.repeat(8)}4777${'}'.repeat(8)}}`;
+  const reached = [
+    'curl "127.0.0.1:4[0-9][0-9][0-9]/"', 'curl "http://127.0.0.1:4[0-9][0-9][0-9]/"', 'curl "localhost:[4-4][0-9][0-9][0-9]"', 'curl "https://localhost:4[0-9][0-9][0-9]"',
+    'curl "http://127.0.0.{1,2}:4[0-9][0-9][0-9]/"', 'curl "http://[::1]:4[0-9][0-9][0-9]/"', 'curl "http://user@127.0.0.1:4[0-9][0-9][0-9]/"', 'curl --url=127.0.0.1:4[0-9][0-9][0-9]',
+    'curl "{127.0.0.1,localhost}:4[0-9][0-9][0-9]"', 'curl "http://{a,b}[0-9][0-9][0-9][0-9]:[0-9][0-9][0-9]/"', `curl "127.0.0.1:${nine}"`,
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined), []);
+  const free = [
+    'curl "http://127.0.0.1:3000/p/[000-999]/[a-z].png"', 'curl "example.com:[1-9][0-9][0-9][0-9]"', 'curl "http://example.com:[1-9][0-9][0-9][0-9]/"',
+    'curl "http://127.0.0.1:3000/[a-z][a-z][a-z][a-z]/x"', 'curl "http://127.0.0.1:{3000,3001}/[a-z][a-z][a-z][a-z]/x"', 'curl "http://127.0.0.1:4[0-9]/"',
+    'curl "http://example.com/img[0-9][0-9][0-9][0-9]-{a,b,c}.png"', 'echo {a,b}{c,d}[0-9][0-9][0-9][0-9]x', 'ls [a-z][a-z][a-z][a-z]',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
+});
