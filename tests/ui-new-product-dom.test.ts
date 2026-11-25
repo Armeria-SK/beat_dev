@@ -126,7 +126,7 @@ test('ui/NewProduct（DOM）: 窓で選んだフォルダが製品のフォル�
   assert.equal(text(c).includes(en['ui.np.folderOk']), false);
 });
 
-test('ui/NewProduct（DOM）: 窓を閉じた（cancelled）ら何も変えない。欄の値は窓の出発点として送る。窓が開いている間は案内を出す', async () => {
+test('ui/NewProduct（DOM）: 窓を閉じた（cancelled）ら何も変えない。欄の値は窓の出発点として送る。窓が開いている間は Open を押せないが、案内の行は出さない', async () => {
   let answer: (value: Response) => void = () => undefined;
   const sent: Sent[] = [];
   globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
@@ -139,13 +139,14 @@ test('ui/NewProduct（DOM）: 窓を閉じた（cancelled）ら何も変えな�
   const { container: c } = await show();
   await input(field(c), 'C:\\work');
   await click(openButton(c));
-  assert.ok(text(c).includes(en['ui.np.picking']));
-  assert.equal(openButton(c)?.disabled, true);
+  assert.equal(text(c).includes('window that opened'), false, '窓が開いている間の案内の行は出さない');
+  assert.equal(c.querySelector('[role="status"]'), null);
+  assert.equal(openButton(c)?.disabled, true, '窓が開いている間は Open を押せない');
   await update(() => { answer(new Response(JSON.stringify({ cancelled: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })); });
   await settle();
   assert.deepEqual(posts(sent), [['/api/folders/pick', { path: 'C:\\work' }]]);
   assert.equal(field(c).value, 'C:\\work');
-  assert.equal(text(c).includes(en['ui.np.picking']), false);
+  assert.equal(openButton(c)?.disabled, false, '窓が閉じたら Open は押せる');
 });
 
 test('ui/NewProduct（DOM）: 窓が断られた（409）ら、その理由を欄の下に出す', async () => {

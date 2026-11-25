@@ -145,7 +145,6 @@ export const EXPLAIN_KEYS = [
   'ui.np.folderField',
   'ui.np.folderFieldPick',
   'ui.np.checkFailed',
-  'ui.np.picking',
   'ui.np.pickFailed',
   'ui.np.notAnswering',
   'ui.np.nameHint',

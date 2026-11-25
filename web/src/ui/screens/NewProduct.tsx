@@ -187,7 +187,6 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
               ? <Button small disabled={picking} onClick={() => void browse()}>{t('ui.np.open')}</Button>
               : <Button small disabled={!root.trim()} onClick={() => void runCheck(root.trim())}>{t('ui.np.open')}</Button>}
           </div>
-          {picking && <p className="bt-meta" role="status">{t('ui.np.picking')}</p>}
           {folderError && <p className="bt-meta ui-danger" role="alert">{folderError}</p>}
           {folderOk !== null && <p className="bt-meta" role="status">{folderOk ? `${t('ui.np.folderOk')} · ${folderOk}` : t('ui.np.folderOk')}</p>}
         </div>
