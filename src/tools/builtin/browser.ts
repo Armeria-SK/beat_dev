@@ -9,7 +9,7 @@ import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactJsonValue, redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import { actPreview, actRoute, browserActCheck, devServerPage, inspectAct, inspectPress, namedItem, ownerTextsOf, peekTab, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type ActPick, type Inspected, type NamedTarget } from '../browser/checks.ts';
+import { actPreview, actRoute, browserActCheck, devServerPage, inspectAct, inspectPress, isSecretField, namedItem, ownerTextsOf, peekTab, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type ActPick, type Inspected, type NamedTarget } from '../browser/checks.ts';
 import { BrowserFailure, PRESS_KEYS, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget, type PageHandle, type PressKey } from '../browser/driver.ts';
 import { diffLine, elementLine, findText, formatElements, groupLine, markShown, type ElementTable, type ListedElement } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
@@ -888,9 +888,11 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
             if (happened.length > 0) { lines.push(toolText(language, 'browser.act_stopped_after', { n, reason: happened.join(' ') })); stop.at = i; }
           };
           if ('press' in step) {
-            // 鍵は、いま焦点のある要素に届く。番号を使わないので画面の同じさは見ず、置き場所・焦点・通り方をその時点で判定する
-            const where = await inspectPress(api, { tab: tab.id }, language, browser.loopbackDenied());
+            // 鍵は、いま焦点のある要素に届く。置き場所・焦点・通り方をその時点で判定する。開発サーバー以外（判定役なしで通るサイト）では、読んだページ・読んだ画面にだけ送る:
+            // そのタブの表がいまの URL のものであること、2 つ目からの step は画面が呼び出しの始めと同じであること（番号の step と同じ）
+            const where = await inspectPress(api, { tab: tab.id }, language, browser.loopbackDenied(), (url, place) => !(place === 'loopback' && devServer(url)));
             if (!where.ok) { refuse(where.reason); break; }
+            if (where.read && i > 0 && !sameScreen(where.shape, where.pageUrl)) { refuse(guardText(language, 'browser.act.press_screen_changed')); break; }
             const dev = where.place === 'loopback' && devServer(where.pageUrl);
             const stopped = where.place === 'loopback' && !dev ? stoppedServerText(where.pageUrl, ctx, language) : undefined;
             if (stopped !== undefined) { refuse(stopped); break; }
@@ -899,7 +901,7 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
             const permit = submitPermit(here, ctx, undefined);
             if (route === 'submit' || route === 'judge' || permit === 'refuse') { refuse(guardText(language, 'browser.act.step_needs_ok_here')); break; }
             const timeoutMs = Math.max(1, Math.min(api.config.limits.actionTimeoutSec * 1000, deadline - Date.now()));
-            finish(await perform(browser, api, where, permit, page => page.press(step.press, where.focus, timeoutMs)), toolText(language, 'browser.act_step_press', { n, key: step.press }));
+            finish(await perform(browser, api, where, permit, page => page.press(step.press, where.focus, timeoutMs, { url: where.pageUrl, documentId: where.documentId })), toolText(language, 'browser.act_step_press', { n, key: step.press }));
             continue;
           }
           const kind = 'click' in step ? 'click' : 'type' in step ? 'type' : 'select';
@@ -936,6 +938,11 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
               if (table === undefined) return false;
               const now = named === undefined ? table.items.find(e => e.ref === label) : namedItem(table, named);
               if (now === undefined || now === 'many' || now.pwRef !== found.item.pwRef || now.role !== found.item.role || now.name !== found.item.name) return false;
+              // 選ぶは、押す直前にも、要素が <select> のままか・秘密の欄になっていないかを読み直す（判定のあとに属性が変わった要素は選ばない）
+              if (kind === 'select') {
+                const detail = await found.tab.page.locate(found.target);
+                if (detail === undefined || detail.tag !== 'select' || isSecretField(detail, found.item.name)) return false;
+              }
               return named !== undefined || i === 0 || sameScreen(table.shape, found.pageUrl);
             },
           };

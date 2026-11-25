@@ -1,4 +1,4 @@
-import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type FocusFacts, type LaunchOptions, type PageHandle, type WorkBrowserHandle, type WorkContextOptions, type WorkLaunchOptions } from '../../src/tools/browser/driver.ts';
+import { BrowserFailure, REFUSAL_KEYS, type BrowserDriver, type ActionEvents, type BrowserHandle, type ElementDetail, type ElementState, type ElementTarget, type FocusFacts, type LaunchOptions, type PageHandle, type PressAt, type WorkBrowserHandle, type WorkContextOptions, type WorkLaunchOptions } from '../../src/tools/browser/driver.ts';
 import type { RouteRefusal, SubmitPermit } from '../../src/tools/browser/route.ts';
 
 // 試験用の偽のブラウザ。ページの URL・題・本文・ariaSnapshot の文・要素の状態を持ち、開いた記録を残す
@@ -78,6 +78,8 @@ export class FakePage implements PageHandle {
   // いま焦点のある要素の事実（press の判定に使う。試験が直接決める）と、press したときに起きること（キーごと。無ければ何も起きない）
   focusFacts: FocusFacts = { where: 'none', tag: null, type: null, autocomplete: null, hint: '' };
   pressEffects: Record<string, FakeEffect> = {};
+  // press が焦点を読み直す直前に呼ぶ（判定のあと押すまでに、ページが移った、を作る）
+  beforePress: (() => void) | undefined;
   // 文書の代（移動・再読み込みで進む。本物は主フレームの framenavigated）
   #document = 1;
   // この文書で要素に振った印の数と、要素の鍵 → 印の数
@@ -165,6 +167,8 @@ export class FakePage implements PageHandle {
   // 次の読みのために、ページの中身を差し替える（ページが変わった、を作る）
   mutate(site: FakeSite): void { this.#site = site; }
   navigateTo(url: string): void { this.#url = url; this.#newDocument(); }
+  // 文書の代を進めずに URL だけ変わった瞬間（本物では、URL の更新が framenavigated の知らせより先に見えうる）
+  setUrlOnly(url: string): void { this.#url = url; }
 
   #rows(role: string, name: string): FakeRow[] { return (this.#site?.rows ?? []).filter(r => r.role === role && r.name === name); }
 
@@ -218,8 +222,11 @@ export class FakePage implements PageHandle {
 
   async focus(): Promise<FocusFacts> { return { ...this.focusFacts }; }
 
-  // 本物と同じ: 焦点のある要素の事実が、判定したときと同じときだけ押す（違えば触らない）
-  async press(key: string, expected: FocusFacts, _timeoutMs: number): Promise<ActionEvents> {
+  // 本物と同じ: 判定したときと同じページ（URL・文書）で、焦点のある要素の事実が判定したときと同じときだけ押す（違えば触らない）。
+  // at を渡さない呼び出しは、ページの同じさを見ない（試験が呼び出し側の渡し忘れを見つけるため、本物と違って許す）
+  async press(key: string, expected: FocusFacts, _timeoutMs: number, at?: PressAt): Promise<ActionEvents> {
+    this.beforePress?.();
+    if (at !== undefined && (at.url !== this.#url || at.documentId !== this.#document)) throw new BrowserFailure('page_changed', 'browser.page_changed');
     const now = this.focusFacts;
     if (now.where !== expected.where || now.tag !== expected.tag || now.type !== expected.type || now.autocomplete !== expected.autocomplete || now.hint !== expected.hint) {
       throw new BrowserFailure('page_changed', 'browser.page_changed');

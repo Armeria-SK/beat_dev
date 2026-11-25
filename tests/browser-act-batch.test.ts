@@ -746,9 +746,11 @@ const PICK_SNAPSHOT = [
   '- combobox "Frozen"',
   '- button "Save"',
   '- searchbox "Odd"',
+  '- link "Onward"',
 ].join('\n');
 // e1 Size（select）/ e2 Tags（select multiple）/ e3 Fake menu（<input role=combobox>。select ではない）/ e4 Name / e5 Expiry month（カードの欄）/
-// e6 Jump（変えると、ページが何かを送ろうとして、送信の守りが断る）/ e7 Move（変えると移動）/ e8 Frozen（無効）/ e9 Save（押すと画面が変わる）/ e10 Odd（タグは select だが、役割が combobox / listbox でない）
+// e6 Jump（変えると、ページが何かを送ろうとして、送信の守りが断る）/ e7 Move（変えると移動）/ e8 Frozen（無効）/ e9 Save（押すと画面が変わる）/ e10 Odd（タグは select だが、役割が combobox / listbox でない）/
+// e11 Onward（リンク。押すと別のページへ移る）
 const pickSite = (next: string): FakeSite => {
   const fields: FakeRow[] = [
     { role: 'combobox', name: 'Size', tag: 'select', options: SIZES },
@@ -763,7 +765,8 @@ const pickSite = (next: string): FakeSite => {
   ];
   // Save を押すと文だけが変わる（要素は残るので、番号は引き直せる。見分けるのは画面のまとめ）
   const save: FakeRow = { role: 'button', name: 'Save', effect: { mutate: { title: 'Order', text: 'Saved', snapshot: `${PICK_SNAPSHOT}\n- heading "Saved"`, rows: fields } } };
-  return { title: 'Order', text: 'Order form', snapshot: PICK_SNAPSHOT, rows: [...fields, save] };
+  const onward: FakeRow = { role: 'link', name: 'Onward', effect: { navigate: next } };
+  return { title: 'Order', text: 'Order form', snapshot: PICK_SNAPSHOT, rows: [...fields, save, onward] };
 };
 
 function pickRig(t: TestContext, url: string, options: RigOptions = {}) {
@@ -1057,4 +1060,129 @@ test('P6 道具の行（summarize）に select / press の step が読める形�
   assert.equal(body.split('\n')[0], '1. select e1: Medium');
   assert.equal(body.split('\n')[1], `2. select combobox "Size": ${'L'.repeat(100)}`);
   assert.equal(body.split('\n')[2], '3. press Tab');
+});
+
+// ── P6 直し（安全の審査の指摘 M2・M3・L4。M1 の閉じた shadow DOM は driver・本物の Chrome の試験） ──
+
+test('P6 直し M2: 判定役なしで通るサイト（一覧・持ち主の URL）の press は、読んだページにだけ。移ったあとの press は止まる（開発サーバーは今までどおり）', async t => {
+  for (const [url, over] of [[PICK_LISTED, {}], [PICK_UNLISTED, { ownerText: [PICK_UNLISTED] }]] as const) {
+    const r = pickRig(t, url, over);
+    const page = await r.open(url);
+    const out = await r.act([{ click: 'e11' }, { press: 'ArrowDown' }, { press: 'Tab' }]);
+    assert.deepEqual(page.acts.map(a => a.kind), ['click'], `${url}: ${out.output.content}`);
+    assert.match(out.output.content, /^1\. Clicked e11\.\n2\. Not done: The list of elements for this tab has not been read yet/u, `${url} 移ったあとは古い表が捨てられている: ${out.output.content}`);
+    assert.match(out.output.content, /Not run: step 3\./u);
+    assert.equal(out.output.isError, true);
+    const behind = pickRig(t, url, over);
+    const there = await behind.open(url);
+    there.navigateTo(url.replace(/pick$/u, 'pick-next'));
+    const stale = await behind.act([{ press: 'Tab' }]);
+    assert.match(stale.output.content, /^1\. Not done: The page has changed \(it moved after it was read\)/u, `${url} 呼び出しの前に移っていた: ${stale.output.content}`);
+    assert.deepEqual(behind.acts(), [], url);
+  }
+  const dev1 = pickRig(t, PICK_DEV, dev);
+  const devPage = await dev1.open(PICK_DEV);
+  const went = await dev1.act([{ click: 'e11' }, { press: 'ArrowDown' }]);
+  assert.deepEqual(devPage.acts.map(a => a.kind), ['click', 'press'], '開発サーバーは、移ったあとも press が通る（今までどおり）');
+  assert.equal(went.output.isError, undefined, went.output.content);
+});
+
+test('P6 直し M2: 読んだ表の無いタブの press も止まる。2 つ目からの press は、画面が呼び出しの始めと同じときだけ（番号の step と同じ）。開発サーバーは今までどおり', async t => {
+  const none = pickRig(t, PICK_LISTED, {});
+  await none.open(PICK_LISTED);
+  await none.session.run({ grant: { conversationId: 'c1', runId: 'r1', attended: true, loopback: false, productId: undefined }, signal: new AbortController().signal }, async api => { api.tab().table = undefined; });
+  const unread = await none.act([{ press: 'Tab' }]);
+  assert.match(unread.output.content, /^1\. Not done: The list of elements for this tab has not been read yet/u, unread.output.content);
+  assert.deepEqual(none.acts(), []);
+  const listed = pickRig(t, PICK_LISTED, {});
+  const lp = await listed.open(PICK_LISTED);
+  lp.pressEffects['Escape'] = { mutate: { ...pickSite('https://example.com/pick-next'), snapshot: `${PICK_SNAPSHOT}\n- heading "Closed"` } };
+  const changed = await listed.act([{ press: 'Escape' }, { press: 'Tab' }, { press: 'Tab' }]);
+  assert.deepEqual(lp.acts.map(a => a.name), ['Escape'], changed.output.content);
+  assert.match(changed.output.content, /^1\. Pressed Escape\.\n2\. Not done: The page changed during this call .* so this key was not sent/u, changed.output.content);
+  assert.match(changed.output.content, /Not run: step 3\./u);
+  assert.equal(changed.output.isError, true);
+  const same = await listed.act([{ press: 'Tab' }, { press: 'ArrowDown' }]);
+  assert.equal(same.output.isError, undefined, '画面が同じなら、2 つ目の press も通る');
+  const racing = pickRig(t, PICK_LISTED, {});
+  const rp = await racing.open(PICK_LISTED);
+  const realSnapshot = rp.snapshot.bind(rp);
+  let snapshots = 0;
+  // 呼び出しの始めの読み（1 回目）のあと、press の探し直しの読み（2 回目）のあいだに、同じ URL のまま読み込み直される（URL の食い違いでは拾えない移動）
+  rp.snapshot = async () => { const text = await realSnapshot(); snapshots += 1; if (snapshots === 2) rp.reload(); return text; };
+  const unstable = await racing.act([{ press: 'Tab' }]);
+  assert.match(unstable.output.content, /^1\. Not done: The page has changed \(it moved after it was read\)/u, unstable.output.content);
+  assert.deepEqual(racing.acts(), []);
+  const dev1 = pickRig(t, PICK_DEV, dev);
+  const dp = await dev1.open(PICK_DEV);
+  dp.pressEffects['Escape'] = { mutate: { ...pickSite(PICK_DEV), snapshot: `${PICK_SNAPSHOT}\n- heading "Closed"` } };
+  const flow = await dev1.act([{ press: 'Escape' }, { press: 'Tab' }]);
+  assert.deepEqual(dp.acts.map(a => a.name), ['Escape', 'Tab'], '開発サーバーは、画面が変わったあとも press が通る（今までどおり）');
+  assert.equal(flow.output.isError, undefined, flow.output.content);
+});
+
+test('P6 直し M3: press は判定したページにだけ送る。判定のあと押すまでにページが移ったら（焦点は無いまま）、判定役の要るページでも押さない', async t => {
+  for (const [url, over] of [[PICK_DEV, dev], [PICK_LISTED, {}]] as const) {
+    for (const [how, move] of [['別の URL へ移った', (page: FakePage) => page.navigateTo(PICK_UNLISTED)], ['同じ URL で読み込み直された', (page: FakePage) => page.reload()]] as const) {
+      const r = pickRig(t, url, over);
+      r.driver.site(PICK_UNLISTED, pickSite('https://shop.example.org/pick-next'));
+      const page = await r.open(url);
+      page.beforePress = () => { page.beforePress = undefined; move(page); };
+      const out = await r.act([{ press: 'Tab' }]);
+      assert.match(out.output.content, /^1\. Failed: The page has changed/u, `${url} ${how}: ${out.output.content}`);
+      assert.deepEqual(r.acts(), [], `${url} ${how}: 移った先には鍵を送らない`);
+      assert.equal(page.permit, undefined, '許しは外れている');
+    }
+  }
+});
+
+test('P6 直し M3: 焦点を読むあいだにページが移った・読み込み直された press は、判定の時点で止まる（URL と文書のどちらでも）', async t => {
+  for (const move of [(page: FakePage) => page.navigateTo(PICK_UNLISTED), (page: FakePage) => page.reload(), (page: FakePage) => page.setUrlOnly(PICK_UNLISTED)]) {
+    const r = pickRig(t, PICK_DEV, dev);
+    const page = await r.open(PICK_DEV);
+    const real = page.focus.bind(page);
+    page.focus = async () => { const facts = await real(); move(page); return facts; };
+    const out = await r.act([{ press: 'Tab' }]);
+    assert.match(out.output.content, /^1\. Not done: The page has changed \(it moved after it was read\)/u, out.output.content);
+    assert.deepEqual(r.acts(), []);
+  }
+});
+
+test('P6 直し M3: 判定のあと、押す動作が始まるまでのあいだ（送信の許しを立てるとき）にページが移っても、判定したページに結んだままなので押さない', async t => {
+  for (const [url, over] of [[PICK_DEV, dev], [PICK_LISTED, {}]] as const) {
+    const r = pickRig(t, url, over);
+    r.driver.site(PICK_UNLISTED, pickSite('https://shop.example.org/pick-next'));
+    const page = await r.open(url);
+    const real = page.permitSubmits.bind(page);
+    let moved = false;
+    page.permitSubmits = permit => { real(permit); if (!moved) { moved = true; page.navigateTo(PICK_UNLISTED); } };
+    const out = await r.act([{ press: 'Tab' }]);
+    assert.match(out.output.content, /^1\. Failed: The page has changed/u, `${url}: ${out.output.content}`);
+    assert.deepEqual(r.acts(), [], `${url}: 移った先には鍵を送らない`);
+  }
+});
+
+test('P6 直し L4: select は、押す直前の確かめ（verify）で、<select> のままか・秘密の欄になっていないかも読み直す', async t => {
+  const next = 'http://localhost:5173/pick-next';
+  const turned: Array<[string, (row: FakeRow) => FakeRow]> = [
+    ['cc-exp-month', row => ({ ...row, autocomplete: 'cc-exp-month' })],
+    ['one-time-code', row => ({ ...row, autocomplete: 'one-time-code' })],
+    ['password', row => ({ ...row, type: 'password' })],
+    ['no longer a select', row => ({ ...row, tag: 'input' })],
+  ];
+  for (const [name, change] of turned) {
+    const r = pickRig(t, PICK_DEV, dev);
+    const page = await r.open(PICK_DEV);
+    page.beforePin = () => {
+      page.beforePin = undefined;
+      const swapped = pickSite(next);
+      page.mutate({ ...swapped, rows: swapped.rows!.map(row => (row.name === 'Size' ? change(row) : row)) });
+    };
+    const out = await r.act([{ select: 'e1', option: 'Small' }]);
+    assert.match(out.output.content, /^1\. Failed: The page has changed/u, `${name}: ${out.output.content}`);
+    assert.deepEqual(r.acts(), [], name);
+  }
+  const ok = pickRig(t, PICK_DEV, dev);
+  await ok.open(PICK_DEV);
+  assert.equal((await ok.act([{ select: 'e1', option: 'Small' }])).output.isError, undefined, '変わらなければ選べる');
 });

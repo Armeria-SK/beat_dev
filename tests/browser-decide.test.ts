@@ -17,7 +17,7 @@ import { QuestionStore } from '../src/questions/store.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { actRoute } from '../src/tools/browser/checks.ts';
-import { activeElementOf, elementFacts, focusFacts, optionExists, PlaywrightBrowser, type LaunchOptions, type WorkContextOptions } from '../src/tools/browser/driver.ts';
+import { activeElementOf, elementFacts, focusFacts, isActiveElement, optionExists, PlaywrightBrowser, type LaunchOptions, type WorkContextOptions } from '../src/tools/browser/driver.ts';
 import { navigationMethodVerdict, type SendGuard, type SubmitPermit } from '../src/tools/browser/route.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { ownerHostAllows, ownerLoopbackPorts } from '../src/tools/browser/sites.ts';
@@ -702,6 +702,59 @@ test('P6 focusFacts: 枠（iframe・object・embed・frame）の中と、中を�
   const inner = inDocument(doc, () => activeElementOf());
   assert.equal(inner?.id, 'inner', '開いた shadow DOM の中の要素');
   assert.deepEqual(inDocument(doc, () => focusFacts(inner!)), { where: 'element', tag: 'input', type: 'password', autocomplete: null, hint: 'Inside inner' });
+});
+
+// 開いた shadow DOM を depth 段重ねて、いちばん奥の入力欄に焦点を置く。host は h0（外）〜 h{depth-1}（奥）
+function nestedShadow(depth: number) {
+  const doc = new JSDOM('<!doctype html><body><div id="h0"></div></body>').window.document;
+  let host: Element = doc.getElementById('h0')!;
+  for (let i = 1; i < depth; i += 1) {
+    const next = doc.createElement('div');
+    next.id = `h${i}`;
+    host.attachShadow({ mode: 'open' }).appendChild(next);
+    host = next;
+  }
+  const input = doc.createElement('input');
+  input.id = 'deep';
+  input.type = 'password';
+  host.attachShadow({ mode: 'open' }).appendChild(input);
+  input.focus();
+  return { doc, input };
+}
+
+test('P6 focusFacts（M1）: 開いた shadow DOM を辿る段数の上限（16）を超えて奥に焦点があれば、手前の部品の事実を返さず frame（奥の要素を読めないので押さない）', () => {
+  const shallow = nestedShadow(3);
+  assert.deepEqual(inDocument(shallow.doc, () => focusFacts(activeElementOf()!)), { where: 'element', tag: 'input', type: 'password', autocomplete: null, hint: 'deep' }, '上限の内側は、奥の入力欄まで読む');
+  const edge = nestedShadow(16);
+  assert.equal(inDocument(edge.doc, () => activeElementOf())?.id, 'deep', '16 段の奥の入力欄は 16 回の下りで届く');
+  const over = nestedShadow(17);
+  assert.deepEqual(inDocument(over.doc, () => focusFacts(activeElementOf()!)).where, 'frame', '17 段の奥は届かない: 手前で止まった部品は frame');
+  const deep = nestedShadow(20);
+  const stopped = inDocument(deep.doc, () => activeElementOf());
+  assert.equal(stopped?.id, 'h16', '17 段目から先は辿らない');
+  assert.deepEqual(inDocument(deep.doc, () => focusFacts(stopped!)), { where: 'frame', tag: 'div', type: null, autocomplete: null, hint: '' }, '辿り終えた部品の中にまだ焦点がある');
+});
+
+test('P6 isActiveElement（M1）: activeElementOf と同じ辿り方で、いまの焦点の要素と同じ要素か（焦点が動いた・別の要素なら false）', () => {
+  const { doc, facts } = focusDom();
+  facts('pw');
+  const pw = doc.getElementById('pw')!;
+  assert.equal(inDocument(doc, () => isActiveElement(pw)), true);
+  assert.equal(inDocument(doc, () => isActiveElement(doc.getElementById('named')!)), false, '別の要素');
+  doc.getElementById('named')!.focus();
+  assert.equal(inDocument(doc, () => isActiveElement(pw)), false, '焦点が動いた');
+  assert.equal(inDocument(doc, () => isActiveElement(doc.getElementById('named')!)), true);
+  doc.getElementById('open')!.shadowRoot!.getElementById('inner')!.focus();
+  const inner = doc.getElementById('open')!.shadowRoot!.getElementById('inner')!;
+  assert.equal(inDocument(doc, () => isActiveElement(inner)), true, '開いた shadow DOM の中の要素');
+  assert.equal(inDocument(doc, () => isActiveElement(doc.getElementById('open')!)), false, '外側の部品ではない（activeElementOf は中まで下りる）');
+  const deep = nestedShadow(20);
+  assert.equal(inDocument(deep.doc, () => isActiveElement(activeElementOf()!)), true, '上限で止まった要素も、同じ辿り方で同じと答える');
+  assert.equal(inDocument(deep.doc, () => isActiveElement(deep.input)), false, '上限より奥の要素は、辿り終えた要素とは別');
+  const g = globalThis as { document?: unknown };
+  const saved = g.document;
+  g.document = undefined;
+  try { assert.equal(isActiveElement(pw), false, 'document が無い'); } finally { g.document = saved; }
 });
 
 test('P6 activeElementOf: 焦点が無ければ body、document が無ければ null', () => {

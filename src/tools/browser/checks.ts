@@ -150,12 +150,14 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type' | 'sele
 }
 
 // press（P6）の探し直し: 押す先は番号の要素でなく、いまキーボードの焦点がある要素。ページの置き場所を同じ決まりで確かめ、焦点を読んで、枠の中・秘密に見える欄なら鍵を送らない。
-// 読んだ焦点の事実は、押す直前に driver がもう一度読んで比べる（判定したときと違えば押さない）
+// read（呼び出す側が決める。開発サーバー以外）が true なら、鍵は読んだページにだけ送る: そのタブの表が、いまの URL を読んだものであること（click・type・select と同じ）。
+// そのとき shape（いまの画面のまとめ）も返し、呼び出す側が 2 つ目からの step で、呼び出しの始めの画面と同じかを見る。
+// 読んだ焦点の事実は、押す直前に driver がもう一度読んで比べる（判定したときと違えば押さない）。そのとき比べるページ（URL と文書の代）も、ここで読んだもの
 export type InspectedPress =
-  | { ok: true; tab: BrowserTab; pageUrl: string; place: 'public' | 'loopback'; focus: FocusFacts }
+  | { ok: true; tab: BrowserTab; pageUrl: string; documentId: number; place: 'public' | 'loopback'; focus: FocusFacts; read: boolean; shape?: string | undefined }
   | { ok: false; reason: string };
 
-export async function inspectPress(api: BrowserApi, input: { tab?: string | undefined }, language: Language, denied: ReadonlySet<number>): Promise<InspectedPress> {
+export async function inspectPress(api: BrowserApi, input: { tab?: string | undefined }, language: Language, denied: ReadonlySet<number>, mustHaveRead: (pageUrl: string, place: 'public' | 'loopback') => boolean): Promise<InspectedPress> {
   let tab: BrowserTab;
   try { tab = api.tab(input.tab); } catch (thrown) {
     if (thrown instanceof BrowserFailure) return refuse(thrown.text(language));
@@ -164,12 +166,22 @@ export async function inspectPress(api: BrowserApi, input: { tab?: string | unde
   const pageUrl = tab.page.url();
   const place = placeOf(tab, api, pageUrl, denied);
   if (place === undefined) return refuse(guardText(language, 'browser.act.not_allowed_page'));
+  const read = mustHaveRead(pageUrl, place);
+  let shape: string | undefined;
+  if (read) {
+    const before = tab.table;
+    if (before === undefined) return refuse(guardText(language, 'browser.act.no_table'));
+    if (before.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+    const table = await rereadTab(tab, pageUrl, api.signal, { kind: 'check', shape: true });
+    if (table === undefined) return refuse(guardText(language, 'browser.act.stale'));
+    shape = table.shape;
+  }
   const document = tab.page.documentId();
   const focus = await until(tab.page.focus(), api.signal);
   if (tab.page.url() !== pageUrl || tab.page.documentId() !== document) return refuse(guardText(language, 'browser.act.stale'));
   if (focus.where === 'frame') return refuse(guardText(language, 'browser.act.press_frame'));
   if (focus.where === 'element' && isSecretField(focus, focus.hint)) return refuse(guardText(language, 'browser.act.press_secret'));
-  return { ok: true, tab, pageUrl, place, focus };
+  return { ok: true, tab, pageUrl, documentId: document, place, focus, read, shape };
 }
 
 // 通り方（Approach 4 の順 2〜6）。loopback: 許されたループバック（送信も判定役なし）/ submit: フォームの送信（送る）/

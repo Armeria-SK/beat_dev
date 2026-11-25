@@ -599,3 +599,50 @@ test('P6 press: 焦点が <select> の上なら、矢印キーで選択が動く
   assert.equal(out.isError, undefined, out.content);
   assert.equal(await page.evaluate(() => (document.getElementById('size') as HTMLSelectElement).value), '2', 'ArrowDown で 1 つ進む');
 });
+
+// 閉じた shadow DOM の中の入力欄・枠は、ページの外から見ると host（div・section・body）が焦点に見える。keydown は window の手前で数える（枠の中は、枠の中の keydown を親の配列へ）
+const KEYS_SEEN = `window.__keys = []; window.addEventListener('keydown', e => window.__keys.push(e.key), true);`;
+const CLOSED_PAGE = `<div id="d"></div><section id="s"></section><div id="host" tabindex="0">plain host</div><input id="plain" aria-label="Plain">
+<script>${KEYS_SEEN}
+const dRoot = document.getElementById('d').attachShadow({ mode: 'closed' });
+dRoot.innerHTML = '<input id="pw" type="password" aria-label="Host">';
+const sRoot = document.getElementById('s').attachShadow({ mode: 'closed' });
+const frame = document.createElement('iframe');
+frame.srcdoc = '<input id="in"><scr' + 'ipt>addEventListener("keydown", e => parent.__keys.push("frame:" + e.key), true)</scr' + 'ipt>';
+sRoot.appendChild(frame);
+window.__focus = { pw: () => dRoot.getElementById('pw').focus(), frame: () => frame.focus() };</script>`;
+const BODY_PAGE = `<script>${KEYS_SEEN}
+const root = document.body.attachShadow({ mode: 'closed' });
+root.innerHTML = '<input id="pw" type="password" aria-label="Body">';
+window.__focus = { pw: () => root.getElementById('pw').focus() };</script>`;
+
+test('P6 press（M1）: 閉じた shadow DOM を持つ標準の要素（div・section・body）の中の入力欄・枠に焦点があれば、鍵を送らない。ふつうの要素・tabindex のある div には送る', options, async t => {
+  const r = await refRig(t, { '/closed': CLOSED_PAGE, '/body': BODY_PAGE });
+  const keys = async (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __keys: string[] }).__keys);
+  const focus = (page: Page, name: string): Promise<void> => page.evaluate((n: string) => (window as unknown as { __focus: Record<string, () => void> }).__focus[n]!(), name);
+  await r.open('/closed');
+  const page = await r.raw();
+  for (const [name, key, refusal] of [['pw', 'ArrowLeft', /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u], ['frame', 'ArrowDown', /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u]] as const) {
+    await focus(page, name);
+    assert.equal(await page.evaluate(() => document.activeElement?.tagName), name === 'pw' ? 'DIV' : 'SECTION', `${name}: ページの外からは host（div・section）が焦点に見える`);
+    const out = await actSteps({ steps: [{ press: key }] }, r.ctx);
+    assert.equal(out.isError, true, `${name}: ${out.content}`);
+    assert.match(out.content, refusal, name);
+    assert.deepEqual(await keys(page), [], `${name}: 鍵は 1 つも届いていない`);
+  }
+  await page.evaluate(() => document.getElementById('plain')!.focus());
+  const plain = await actSteps({ steps: [{ press: 'ArrowLeft' }] }, r.ctx);
+  assert.equal(plain.isError, undefined, plain.content);
+  await page.evaluate(() => document.getElementById('host')!.focus());
+  const host = await actSteps({ steps: [{ press: 'ArrowDown' }] }, r.ctx);
+  assert.equal(host.isError, undefined, `tabindex のある ふつうの div は、閉じた shadow DOM が無いので通る: ${host.content}`);
+  assert.deepEqual(await keys(page), ['ArrowLeft', 'ArrowDown'], '許した 2 つだけが届いた（対照: 数える仕組みは働いている）');
+  await r.open('/body');
+  const body = await r.raw();
+  await focus(body, 'pw');
+  assert.equal(await body.evaluate(() => document.activeElement?.tagName), 'BODY', 'ページの外からは body が焦点に見える（焦点なしと同じ）');
+  const refused = await actSteps({ steps: [{ press: 'End' }] }, r.ctx);
+  assert.equal(refused.isError, true, refused.content);
+  assert.match(refused.content, /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u);
+  assert.deepEqual(await keys(body), [], 'body の閉じた shadow DOM の中の入力欄に、鍵は届いていない');
+});

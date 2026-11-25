@@ -1,6 +1,6 @@
 // Browser の欄（持ち主の画面だけ）に配る、タブの画面の写し。会話ごとに最後の 1 枚だけを覚え、ディスクに書かない。モデルには渡さない（D-9）
 // 撮るのは session.ts: 操作（開く・押す・入れる・読む）のある呼び出しの終わりに 1 枚（ロックの中）と、見ている人がいて動いているあいだの一定間隔（ロックが空いているときだけ）
-import type { ElementTarget, FocusFacts, PageHandle } from './driver.ts';
+import type { ElementTarget, FocusFacts, PageHandle, PressAt } from './driver.ts';
 
 // 動いているとみなす、最後の操作からの時間
 export const DRIVING_MS = 60_000;
@@ -49,7 +49,7 @@ export function observePage(page: PageHandle, note: (action: MirrorAction) => vo
         case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { note({ kind: 'type', target: elementLabel(element) }); return target.fill(element, text, submit, timeoutMs); };
         // 選ぶは「押す」の言葉、鍵は「入れる」の言葉で映す（欄の言葉は増やさない）
         case 'select': return (element: ElementTarget, label: string, timeoutMs: number) => { note({ kind: 'click', target: elementLabel(element) }); return target.select(element, label, timeoutMs); };
-        case 'press': return (key: string, expected: FocusFacts, timeoutMs: number) => { note({ kind: 'type', target: '' }); return target.press(key, expected, timeoutMs); };
+        case 'press': return (key: string, expected: FocusFacts, timeoutMs: number, at: PressAt) => { note({ kind: 'type', target: '' }); return target.press(key, expected, timeoutMs, at); };
         case 'text': return (maxChars: number) => { note({ kind: 'read', target: '' }); return target.text(maxChars); };
         case 'snapshot': return () => { note({ kind: 'read', target: '' }); return target.snapshot(); };
         case 'screenshot': return () => { note({ kind: 'screenshot', target: '' }); return target.screenshot(); };

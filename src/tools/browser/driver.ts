@@ -138,8 +138,11 @@ export const PRESS_KEYS = ['Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft',
 export type PressKey = typeof PRESS_KEYS[number];
 export const isPressKey = (key: string): key is PressKey => (PRESS_KEYS as readonly string[]).includes(key);
 
-// キーボードの焦点がどこにあるか（press の判定に使う）。none: 焦点が無い（body）/ element: 主文書の要素（shadow DOM の中も辿る）/
-// frame: 枠（iframe・frame・object・embed）の中、または中を読めない部品（閉じた shadow DOM を持つ部品）。枠の中は見えないので、鍵は送らない。
+// キーボードの焦点がどこにあるか（press の判定に使う）。none: 焦点が無い（body）/ element: 主文書の要素（開いた shadow DOM の中も辿る）/
+// frame: 枠（iframe・frame・object・embed）の中、または中を読めない部品。枠の中は見えないので、鍵は送らない。
+//   中を読めない部品のうち、閉じた shadow DOM を持つ部品（div・section・body など標準の要素も持てる）は、ページの中からは見分けられない（host が焦点に見え、shadowRoot は null）ので、
+//   PlaywrightPage が DevTools の道（CDP）でブラウザ自身の DOM を読んで frame にする。ここ（focusFacts）で frame にするのは、枠の要素と、
+//   名前に - を含み shadowRoot が読めないカスタム要素（安全側。shadow を持たないものも断る）と、辿る段数の上限で止まった部品（奥にまだ焦点がある）だけ
 // tag・type・autocomplete・hint は element のときの要素の手がかり（hint はページが付けた名前などを 200 字までつないだもの。判定と比べるだけで、出力には出さない）
 export interface FocusFacts { where: 'none' | 'element' | 'frame'; tag: string | null; type: string | null; autocomplete: string | null; hint: string }
 export const NO_FOCUS: FocusFacts = { where: 'none', tag: null, type: null, autocomplete: null, hint: '' };
@@ -160,8 +163,9 @@ export function focusFacts(el: Element): FocusFacts {
   const doc = (globalThis as { document?: Document }).document;
   if (el === doc?.body || el === doc?.documentElement) return { where: 'none', tag: null, type: null, autocomplete: null, hint: '' };
   const tag = el.tagName.toLowerCase();
-  // 枠の中は見えない。閉じた shadow DOM（shadowRoot が読めない）を持ちうる部品（名前に - を含むカスタム要素）も、中を読めないので同じに扱う
-  if (tag === 'iframe' || tag === 'frame' || tag === 'object' || tag === 'embed' || (tag.includes('-') && el.shadowRoot === null)) {
+  // 枠の中は見えない。閉じた shadow DOM（shadowRoot が読めない）を持ちうる部品（名前に - を含むカスタム要素）も、中を読めないので同じに扱う。
+  // 辿る段数の上限（activeElementOf）で止まった部品は、開いた shadow DOM の奥にまだ焦点がある（shadowRoot.activeElement が残っている）。奥は読んでいないので同じに扱う
+  if (tag === 'iframe' || tag === 'frame' || tag === 'object' || tag === 'embed' || (tag.includes('-') && el.shadowRoot === null) || (el.shadowRoot !== null && el.shadowRoot.activeElement !== null)) {
     return { where: 'frame', tag, type: null, autocomplete: null, hint: '' };
   }
   const type = tag === 'input' ? (el as HTMLInputElement).type : el.getAttribute('type');
@@ -189,6 +193,20 @@ export function optionExists(el: Element, label: string): boolean {
   return false;
 }
 
+// press を送ってよいページ: 焦点を判定したときの URL と文書の代（driver は、押す直前にいまのページと比べる）
+export interface PressAt { url: string; documentId: number }
+
+// いまの焦点の要素が el と同じか。activeElementOf と同じ辿り方（ブラウザの中で動く関数は互いを呼べないので、同じ形を持つ）。ブラウザの中で動く（handle.evaluate に渡す）ので、この関数の外の名前を使わない
+export function isActiveElement(el: Element): boolean {
+  let active: Element | null = (globalThis as { document?: Document }).document?.activeElement ?? null;
+  for (let depth = 0; active !== null && active.shadowRoot !== null && depth < 16; depth += 1) {
+    const inner: Element | null = active.shadowRoot.activeElement;
+    if (inner === null) break;
+    active = inner;
+  }
+  return active === el;
+}
+
 export interface PageHandle {
   url(): string;
   title(): Promise<string>;
@@ -207,11 +225,12 @@ export interface PageHandle {
   fill(target: ElementTarget, text: string, submit: boolean, timeoutMs: number): Promise<ActionEvents>;
   // <select> の選択肢をラベル（完全一致）で選ぶ。click と同じ道（つかむ・確かめ・同じ要素か）。有効な選択肢が無ければ act_failed（browser.select_no_option）
   select(target: ElementTarget, label: string, timeoutMs: number): Promise<ActionEvents>;
-  // いまのキーボードの焦点の事実（枠の中・要素・無し）。読めなければ page_changed
+  // いまのキーボードの焦点の事実（枠の中・閉じた shadow DOM の部品・要素・無し）。読めなければ（閉じた shadow DOM の確かめが使えないときも）page_changed
   focus(): Promise<FocusFacts>;
-  // 焦点に鍵（PRESS_KEYS のどれか）を押す。一覧外の鍵は blocked。押す直前に焦点を読み直し、expected（判定したときの事実）と同じでなければ、また枠の中なら page_changed で押さない。
+  // 焦点に鍵（PRESS_KEYS のどれか）を押す。一覧外の鍵は blocked。押す直前に焦点を読み直し、いまのページが at（判定したときの URL と文書の代）と同じで、
+  // 焦点が expected（判定したときの事実）と同じでなければ、また枠の中・閉じた shadow DOM の部品なら page_changed で押さない。
   // 焦点が要素なら、その読んだ要素に押す（ページの焦点が移っても、判定した要素に届く）
-  press(key: string, expected: FocusFacts, timeoutMs: number): Promise<ActionEvents>;
+  press(key: string, expected: FocusFacts, timeoutMs: number, at: PressAt): Promise<ActionEvents>;
   // 押す・入れるのあいだだけ効く送信の許し（D-8）。any: 承認された送信 / loopback: 許されたループバックで通った操作（ループバックへの送信だけ）/ undefined: 許しなし
   permitSubmits(permit: SubmitPermit | undefined): void;
   // 見えている範囲だけの PNG
@@ -561,7 +580,24 @@ class PlaywrightPage implements PageHandle {
     }, async (one, timeout) => { await one.selectOption({ label }, { timeout }); });
   }
 
-  // 焦点のある要素をつかんで、その事実を読む。要素が無ければ（焦点が無い）つかむものは無い。読めなければ（ページが閉じた・移った）page_changed
+  // 焦点のある要素が閉じた shadow DOM を持つか。ページの中からは読めない（host が焦点に見え、中の入力欄・枠は見えない）ので、
+  // DevTools の道（CDP）でブラウザ自身の DOM を読む（activeElementOf と同じ要素を引き、DOM.describeNode の shadowRoots に closed があるか）。
+  // 道が使えない（Chromium でない）・要素が返らないときは投げる（読めなかったものは通さない）。道は必ず閉じる
+  async #hostsClosedShadow(): Promise<boolean> {
+    const session = await this.page.context().newCDPSession(this.page);
+    try {
+      const { result } = await session.send('Runtime.evaluate', { expression: `(${activeElementOf.toString()})()` });
+      if (result.objectId === undefined) throw new Error('no active element');
+      const { node } = await session.send('DOM.describeNode', { objectId: result.objectId });
+      return (node.shadowRoots ?? []).some(root => root.shadowRootType === 'closed');
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  }
+
+  // 焦点のある要素をつかんで、その事実を読む。要素が無ければ（焦点が無い）つかむものは無い。
+  // 読んだ要素が閉じた shadow DOM を持つなら frame にする（中の焦点は読めない）。確かめのあいだに焦点が動いていたら（別の要素を確かめたかもしれない）読めなかったことにする。
+  // 読めなければ（ページが閉じた・移った・確かめの道が使えない）page_changed
   async #focused(): Promise<{ facts: FocusFacts; element: ElementHandle<Element> | null }> {
     let js: JSHandle | undefined;
     let element: ElementHandle<Element> | null = null;
@@ -569,7 +605,13 @@ class PlaywrightPage implements PageHandle {
       js = await this.page.evaluateHandle(activeElementOf);
       element = js.asElement() as ElementHandle<Element> | null;
       if (element === null) { await js.dispose().catch(() => undefined); return { facts: NO_FOCUS, element: null }; }
-      return { facts: await element.evaluate(focusFacts), element };
+      let facts = await element.evaluate(focusFacts);
+      if (facts.where !== 'frame') {
+        const closed = await this.#hostsClosedShadow();
+        if (!await element.evaluate(isActiveElement)) throw new Error('focus moved');
+        if (closed) facts = { where: 'frame', tag: facts.tag, type: null, autocomplete: null, hint: '' };
+      }
+      return { facts, element };
     } catch {
       await (element ?? js)?.dispose().catch(() => undefined);
       throw new BrowserFailure('page_changed', 'browser.page_changed');
@@ -582,11 +624,14 @@ class PlaywrightPage implements PageHandle {
     return facts;
   }
 
-  async press(key: string, expected: FocusFacts, timeoutMs: number): Promise<ActionEvents> {
+  async press(key: string, expected: FocusFacts, timeoutMs: number, at: PressAt): Promise<ActionEvents> {
     if (!isPressKey(key)) throw new BrowserFailure('blocked', 'browser.press_key');
     const { facts, element } = await this.#focused();
     try {
-      // 判定したときと同じ焦点でなければ押さない。枠の中は、同じでも押さない
+      // 判定したときと同じページ（URL と文書の代）でなければ、焦点が同じでも押さない（通り方も許しも、判定したページのものなので）。
+      // 焦点を読んだあとに見る（読むあいだに移ったものも拾う）
+      if (this.page.url() !== at.url || this.#document !== at.documentId) throw new BrowserFailure('page_changed', 'browser.page_changed');
+      // 判定したときと同じ焦点でなければ押さない。枠の中・閉じた shadow DOM の部品は、同じでも押さない
       if (facts.where === 'frame' || !sameFocus(facts, expected)) throw new BrowserFailure('page_changed', 'browser.page_changed');
       this.#events = { dialogs: 0, downloads: 0, fileChoosers: 0, blocked: 0 };
       const after = Math.min(timeoutMs, ACT_AFTER_CHECK_MS);

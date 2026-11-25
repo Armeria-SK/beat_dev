@@ -263,6 +263,7 @@ const en = {
   'browser.act.not_select': '{ref} ({role}) is not a select box. A select step works only on a <select> element (a menu drawn by the page is not one: click it and choose its items instead)',
   'browser.act.secret_select': '{ref} looks like part of a password, verification code or card number entry, so choosing an option is refused. Logging in and paying are for the owner to do',
   'browser.act.press_frame': 'The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read, so no key is sent. Click an element of the page itself first',
+  'browser.act.press_screen_changed': 'The page changed during this call (an earlier step, or the page itself, changed what is on it), so this key was not sent: it would land on a screen you have not read. Read the page again with browser_read, then continue',
   'browser.act.press_secret': 'The keyboard focus is on a password, verification code or card number field, so no key is sent. Logging in and paying are for the owner to do',
   'browser.act.step_needs_ok_here': 'This step needs a check or the owner\'s approval, and browser_act never asks for one. select and press have no one-step tool, so they work only on pages where clicking runs without asking (the dev server of this run, sites in the operation list, addresses the owner wrote)',
   'browser.act.step_secret': 'The text of this step looks like a key or token, so browser_act does not type it. If it is a test value for the dev server of this run, do this one step with browser_type',

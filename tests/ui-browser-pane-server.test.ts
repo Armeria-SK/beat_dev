@@ -108,7 +108,7 @@ test('P6 view.pointer / action: select は押すと同じ（locate で読んだ�
   assert.deepEqual(session.view('p-a', conversations)?.pointer, { x: 640, y: 400 });
   assert.deepEqual(session.view('p-a', conversations)?.action, { kind: 'click', target: 'Size' });
   await session.run({ grant, signal: new AbortController().signal }, async api => {
-    await api.tab(tab.id).page.press('Tab', { where: 'none', tag: null, type: null, autocomplete: null, hint: '' }, 1000);
+    await api.tab(tab.id).page.press('Tab', { where: 'none', tag: null, type: null, autocomplete: null, hint: '' }, 1000, { url: api.tab(tab.id).page.url(), documentId: api.tab(tab.id).page.documentId() });
   });
   assert.deepEqual(session.view('p-a', conversations)?.action, { kind: 'type', target: '' });
   assert.deepEqual(session.view('p-a', conversations)?.pointer, { x: 640, y: 400 }, 'press は指を動かさない');
