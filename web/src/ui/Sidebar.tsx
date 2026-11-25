@@ -6,6 +6,7 @@ import type { AgentState, FootLine } from './agent-state.ts';
 import { Avatar, CountBadge, Icon, JudgeOffChip } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
 import { memoryHash, productNav } from './product-nav.ts';
+import { moreCount } from './products.ts';
 import { parseRoute, routeHash, type Route } from './routes.ts';
 import { searchView, type SearchState } from './search-state.ts';
 import { SessionMenu } from './SessionMenu.tsx';
@@ -102,6 +103,8 @@ function SessionRow({ conversation: c, route, running, pending }: { conversation
   const passFocus = () => {
     const mine = row.current;
     if (!mine) return;
+    const held = document.activeElement;
+    if (held !== null && held !== document.body && !mine.contains(held)) return;
     const nav = mine.closest('nav');
     const links = [...(nav?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])];
     const at = links.indexOf(mine.querySelector<HTMLElement>('.ui-side-row__link')!);
@@ -135,33 +138,47 @@ function SessionRow({ conversation: c, route, running, pending }: { conversation
   );
 }
 
-function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<string, Conversation[]>; expand: (projectId: string) => void } {
+function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<string, Conversation[]>; rest: Readonly<Record<string, number>>; expand: (projectId: string) => void } {
   const t = useT();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [extra, setExtra] = useState<ReadonlyMap<string, Conversation[]>>(new Map());
+  const [rest, setRest] = useState<Readonly<Record<string, number>>>({});
   useEffect(() => {
     let live = true;
     for (const id of expanded) {
-      void api.conversationsOf(id).then(r => { if (live) setExtra(old => new Map(old).set(id, r.conversations)); })
+      void api.conversationsOf(id).then(r => { if (!live) return; setExtra(old => new Map(old).set(id, r.conversations)); setRest(old => ({ ...old, [id]: moreCount(r.more, id) })); })
         .catch(() => { if (!live) return; setExpanded(old => { const next = new Set(old); next.delete(id); return next; }); toast({ icon: 'alert', title: t('ui.product.moreFailed') }); });
     }
     return () => { live = false; };
   }, [conversations, expanded, t]);
   const expand = useCallback((projectId: string) => setExpanded(old => new Set(old).add(projectId)), []);
-  return { extra, expand };
+  return { extra, rest, expand };
 }
 
 export function Sidebar({ state, route, foot, kanban, questions, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup, judgeOff }: SidebarProps) {
   const t = useT();
-  const { extra, expand } = useMoreSessions(conversations);
-  const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra), [projects, conversations, conversationsMore, extra]);
+  const { extra, rest, expand } = useMoreSessions(conversations);
+  const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra, rest), [projects, conversations, conversationsMore, extra, rest]);
   const [searching, setSearching] = useState(false);
   const searchButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
   useEffect(() => { if (!searching && refocus.current) { refocus.current = false; searchButton.current?.focus(); } }, [searching]);
+  const navRef = useRef<HTMLElement>(null);
+  const landing = useRef<{ id: string; seen: ReadonlySet<string> } | null>(null);
+  useEffect(() => {
+    const want = landing.current;
+    if (!want || !extra.has(want.id)) return;
+    landing.current = null;
+    const held = document.activeElement;
+    if (held !== null && held !== document.body) return;
+    const first = nav.rows.find(r => r.project.id === want.id)?.sessions.find(c => !want.seen.has(c.id));
+    if (!first) return;
+    const href = routeHash({ view: 'chat', id: first.id });
+    [...(navRef.current?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])].find(a => a.getAttribute('href') === href)?.focus();
+  }, [extra, nav]);
   const at = (view: Route['view']) => route.view === view;
   return (
-    <nav className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
+    <nav ref={navRef} className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
       <div className="bt-sidebar__head">
         <a className="bt-wordmark" href="#/">{t('ui.wordmark')}</a>
         {judgeOff && <JudgeOffChip />}
@@ -196,11 +213,15 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
                 <CountBadge n={row.waiting} label={t('ui.count.waiting', row.waiting)} />
               </div>
               {row.sessions.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
-              {row.more > 0 && (
-                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={() => expand(project.id)}>
+              {row.more > 0 && (extra.has(project.id) ? (
+                <div className="bt-side bt-side--session ui-side-more" style={{ pointerEvents: 'none' }}>
+                  <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
+                </div>
+              ) : (
+                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={e => { landing.current = e.detail === 0 ? { id: project.id, seen: new Set(row.sessions.map(c => c.id)) } : null; expand(project.id); }}>
                   <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
                 </button>
-              )}
+              ))}
               <a className={`bt-side bt-side--session ui-side-new${fresh ? ' is-active' : ''}`} href={routeHash({ view: 'productNew', id: project.id })} aria-current={fresh ? 'page' : undefined}>
                 <Icon name="plus" /><span className="bt-side__name">{t('ui.session.new')}</span>
               </a>
