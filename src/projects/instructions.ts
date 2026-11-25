@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { prefixLength } from '../engine/tokens.ts';
 import { isRemotePath, isSecretPath, windowsHazard } from '../tools/hooks/scope.ts';
@@ -39,7 +39,7 @@ type Log = (line: string) => void;
 function readHead(path: string, maxBytes: number): { text: string; whole: boolean } | 'refused' {
   const checked = lstatSync(path, { bigint: true });
   if (!checked.isFile() || checked.nlink !== 1n) return 'refused';
-  const fd = openSync(path, 'r');
+  const fd = openSync(path, WINDOWS ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile() || opened.nlink !== 1n || opened.ino !== checked.ino || opened.dev !== checked.dev) return 'refused';
