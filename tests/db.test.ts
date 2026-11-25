@@ -210,3 +210,26 @@ test('walk-1118 D4: 最初の発言からの題は 40 字に収め、長いと�
   assert.ok([...titled('word '.repeat(20))!].length <= 40);
   db.close();
 });
+test('A6: 自動の題は、絵文字・国旗・結合文字の途中では切らない（見た目の 1 文字の境目で切る。40 字までの決まりと単語の切れ目は今のまま）', () => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  const conversations = new Conversations(db);
+  const titled = (text: string) => {
+    const c = conversations.create({});
+    conversations.autoTitle(c.id, text);
+    return conversations.get(c.id)!.title;
+  };
+  const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'; // 家族の絵文字（8 つ分。ZWJ でつながる）
+  assert.equal(titled(`${'a'.repeat(34)}${family}b tail`), `${'a'.repeat(34)}…`, 'ZWJ でつながる絵文字を、途中の別の絵文字にして残さない');
+  assert.equal(titled(`${'a'.repeat(37)}\u{1F1EF}\u{1F1F5} tail`), `${'a'.repeat(37)}…`, '国旗（地域の記号 2 つ）の片方だけを残さない');
+  assert.equal(titled(`${'a'.repeat(38)}e\u0301${'b'.repeat(10)}`), `${'a'.repeat(38)}…`, '結合文字だけを切り落として、字の形を変えない');
+  assert.equal(titled(`${'a'.repeat(37)}\u{1F44D}\u{1F3FD}${'b'.repeat(10)}`), `${'a'.repeat(37)}…`, '肌の色の指定だけを切り落とさない');
+  // 収まるものは今までどおり、切れ目で切る・字数で切る
+  assert.equal(titled(`${'a'.repeat(30)}${family}`), `${'a'.repeat(30)}${family}`, '40 字に収まるときは切らない');
+  assert.equal(titled(`${'a'.repeat(30)}${'\u{1F600}'.repeat(6)}`),`${'a'.repeat(30)}\u{1F600}\u{1F600}\u{1F600}\u{1F600}…`, '1 つで 1 文字の絵文字は、境目のところまで残す（サロゲートの片割れを残さない）');
+  assert.equal(titled(`a${'\u0301'.repeat(60)}`), `a${'\u0301'.repeat(38)}…`, '先頭の 1 文字が上限より長いときだけ、字数で切る（題を空にしない）');
+  assert.equal(titled('Please create hello.txt with the word hello in it'), 'Please create hello.txt with the word…');
+  assert.equal(titled('a'.repeat(60)), `${'a'.repeat(39)}…`);
+  assert.equal(titled('あ'.repeat(50)), `${'あ'.repeat(39)}…`);
+  assert.equal(titled(`${'a'.repeat(38)}\u{1F600} tail text`), `${'a'.repeat(38)}…`);
+  db.close();
+});
