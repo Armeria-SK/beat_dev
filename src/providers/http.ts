@@ -1,5 +1,6 @@
+import { Agent, fetch as undiciFetch } from 'undici';
 import { redactExact, redactSecrets } from '../shared/redaction.ts';
-import { ProviderError, providerError, type Env } from './types.ts';
+import { ProviderError, providerError, type Env, type FetchLike } from './types.ts';
 import type { ProviderConfig } from '../config/schema.ts';
 
 export { checkBaseUrl, isLoopbackHost } from '../shared/url.ts';
@@ -140,7 +141,17 @@ export function classifyFetchError(error: unknown, signal: AbortSignal, timeoutS
   if (signal.aborted && !timeoutSignal?.aborted) return providerError('cancelled', 'cancelled', {}, { retryable: false });
   if (timeoutSignal?.aborted) return providerError('timeout', 'timeout');
   const code = (error as { cause?: { code?: string } })?.cause?.code;
+  if (code === 'UND_ERR_HEADERS_TIMEOUT' || code === 'UND_ERR_BODY_TIMEOUT') return providerError('timeout', 'timeout');
   return code ? providerError('provider_error', 'connect.code', { code }, { retryable: true }) : providerError('provider_error', 'connect', {}, { retryable: true });
+}
+
+// Node 標準の fetch は返事の頭・本文を 300 秒待って切る。手元のモデルの長い待ちが設定の timeoutMs まで続くよう、頭・本文の待ちを timeoutMs にした fetch（同じ undici の fetch と Agent の組）
+export function longWaitFetch(timeoutMs: number): FetchLike {
+  let dispatcher: Agent | undefined;
+  return (input, init) => undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+    ...(init as Parameters<typeof undiciFetch>[1]),
+    dispatcher: (dispatcher ??= new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs })),
+  }) as unknown as Promise<Response>;
 }
 
 export function withTimeout(signal: AbortSignal, timeoutMs: number): { signal: AbortSignal; timeout: AbortSignal } {

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
+import { acquireInstanceLock } from './instance-lock.ts';
 import { enterKillOnCloseJob } from './os/win-job.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
 import { createShutdown, installProcessGuards } from './process-guards.ts';
@@ -19,6 +20,13 @@ async function start(): Promise<void> {
   loadEnvFile();
   const paths = resolvePaths(dataDir);
   mkdirSync(paths.data, { recursive: true });
+  const lock = acquireInstanceLock(paths.data);
+  if (!lock.held) {
+    process.stderr.write(`Could not start: another beat (pid ${lock.pid}) is using this data folder. Stop it first, or delete ${lock.path} if no beat is running\n`);
+    process.exitCode = 1;
+    return;
+  }
+  process.on('exit', lock.release);
   const app = new App({ paths, log });
   const config = app.config();
   // 待ち受けと認証は、起動したときの値（app.bootServer）で決める。起動の準備のあいだに設定ファイルが変わっても、反映は画面の「再起動する」から

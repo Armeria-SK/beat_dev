@@ -88,6 +88,7 @@ export class CreatedFiles {
   readonly #log: (line: string) => void;
   readonly #limit: number;
   readonly #runs = new Map<string, RunRecord>();
+  readonly #nestedWarned = new Set<string>();
 
   constructor(options: { kv: KV; dataDir: string; log?: (line: string) => void; limit?: number }) {
     this.#kv = options.kv;
@@ -114,7 +115,10 @@ export class CreatedFiles {
       const dotGit = lstatSync(join(real, '.git'), { throwIfNoEntry: false });
       if (!dotGit) {
         if (!inspectRepo(real).found) { record.mode = 'plain'; return; }
-        this.#log(`[WARN] The folder of run ${runId} is inside another git repository, so nothing it makes counts as made by this work`);
+        if (!this.#nestedWarned.has(fold(real))) {
+          this.#nestedWarned.add(fold(real));
+          this.#log(`[WARN] The folder ${real} is inside another git repository, so nothing a run makes there counts as made by this work`);
+        }
         return;
       }
       const out = dotGit.isSymbolicLink() ? null : await this.#git(real, [['rev-parse', '--verify', '-q', 'HEAD'], ['ls-files', '-z', '--others', '--directory'], ['ls-files', '-z'], ['ls-tree', '-r', '-z', '--name-only', 'HEAD']]);
