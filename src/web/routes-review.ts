@@ -1,7 +1,8 @@
 import type { App } from '../app.ts';
-import { CuriosityError, type CuriosityStatus } from '../curiosity/store.ts';
+import { CuriosityError, type CuriosityItem, type CuriosityStatus } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import { reviewLabel } from '../memory/review.ts';
 import { growSkills, SkillError } from '../tools/skills/store.ts';
 import { askReadAsBlock, defaultPolicy, isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
@@ -14,6 +15,13 @@ import { maskedTaskView } from './task-view.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const STATUSES: readonly CuriosityStatus[] = ['open', 'researching', 'done', 'dropped'];
+
+// 好奇心の行の出口。結果の要約は終わったタスクの文をそのまま写すので、登録済みの鍵と鍵の形を伏せて返す（DB の値は変えない）
+function maskedCuriosity(app: App, item: CuriosityItem): CuriosityItem {
+  const secrets = app.registry.secrets();
+  const mask = (text: string | null): string | null => (text === null ? null : redactSecrets(text, secrets));
+  return { ...item, topic: redactSecrets(item.topic, secrets), why: mask(item.why), result: mask(item.result) };
+}
 
 function domainFailure(error: unknown): never {
   if (error instanceof SkillError || error instanceof CuriosityError) throw domainProblem(400, 'invalid', error);
@@ -132,13 +140,13 @@ export function registerReviewRoutes(router: Router, app: App): void {
 
   // ── 好奇心リスト ──
   router.add('GET', '/api/curiosity', ({ res, url }) => sendJson(res, 200, {
-    items: app.curiosity.list({ includeClosed: url.searchParams.get('all') === '1' }),
+    items: app.curiosity.list({ includeClosed: url.searchParams.get('all') === '1' }).map(item => maskedCuriosity(app, item)),
   }));
   router.add('POST', '/api/curiosity', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const topic = requireString(body, 'topic', { max: 200 })!;
     const why = requireString(body, 'why', { optional: true, max: 500 });
-    try { sendJson(res, 201, { item: app.curiosity.add({ topic, why, source: 'user' }) }); } catch (error) { domainFailure(error); }
+    try { sendJson(res, 201, { item: maskedCuriosity(app, app.curiosity.add({ topic, why, source: 'user' })) }); } catch (error) { domainFailure(error); }
   });
   router.add('PATCH', '/api/curiosity/:id', async ({ req, res, params }) => {
     const body = requireObject(await readJson(req));
@@ -149,10 +157,10 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const why = requireString(body, 'why', { optional: true, max: 500 });
     const result = requireString(body, 'result', { optional: true, max: 4000 });
     try {
-      sendJson(res, 200, { item: app.curiosity.update(idOf(params[0]!), {
+      sendJson(res, 200, { item: maskedCuriosity(app, app.curiosity.update(idOf(params[0]!), {
         ...(topic !== undefined ? { topic } : {}), ...(why !== undefined ? { why } : {}), ...(result !== undefined ? { result } : {}),
         ...(body.status !== undefined ? { status: body.status as CuriosityStatus } : {}),
-      }) });
+      })) });
     } catch (error) { domainFailure(error); }
   });
   router.add('POST', '/api/curiosity/:id/task', ({ res, params }) => {

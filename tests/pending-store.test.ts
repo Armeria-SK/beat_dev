@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { PendingError, PendingStore, type PendingChange } from '../src/pending/store.ts';
+import { cleanReason, PendingError, PendingStore, type PendingChange } from '../src/pending/store.ts';
 import { compareSnapshot, fileFacts, pathFact } from '../src/pending/snapshot.ts';
 import { agentRun } from '../src/tools/builtin/agent.ts';
 import { fileWrite } from '../src/tools/builtin/files.ts';
@@ -501,4 +501,78 @@ test('B1: 預かった鍵が改行を含む値（複数行の鍵）でも、理�
   assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set');
   assert.equal(saved.output_preview, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set');
   assert.ok(!dump(saved).includes('abcDEF123456abcDEF'));
+});
+
+// BL-secret-marks M4: 改行を含む預かった値が、理由の中で見えない文字（U+200B）でも割られているとき。
+// 消す前の印は割れ目で外れ、制御文字を全部消したあとの印は改行が無くなって外れる。書式の文字（Cf）だけを先に消して、改行を残したまま印にする回が要る
+test('M4: 改行を含む預かった値が、理由の中で U+200B でも割られていても、reject_reason は印になる（値の一部が残らない）', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const zwsp = String.fromCharCode(0x200b);
+  const multi = ['line1-first-part', 'line2-secret-part'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const cases = [
+    `line1-first-part${lf}${zwsp}line2-secret-part`,
+    `line1-first-part${zwsp}${lf}line2-secret-part`,
+    `line1-fi${zwsp}rst-part${lf}line2-secret-part`,
+    `line1-first-part${lf}line2-sec${zwsp}${zwsp}ret-part`,
+    `line1-first-part${lf}line2-secret-part`,
+    multi.replace(lf, `${zwsp}${lf}${zwsp}`),
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set', JSON.stringify(text));
+    assert.ok(!saved.reject_reason!.includes('line2'), `値の一部が残らない: ${JSON.stringify(saved.reject_reason)}`);
+  }
+});
+
+test('M4: 理由の見えない文字を消す今の動きは変わらない（預かった値の無い理由・長さの上限・前後の空白）', async t => {
+  const s = setup(t);
+  const zwsp = String.fromCharCode(0x200b);
+  const nul = String.fromCharCode(0);
+  const store = heldStore(s);
+  const row = await parkOn(store, s.dir);
+  store.closeStale(row.id, `  moved${zwsp} while${nul} idle\n `);
+  assert.equal(store.row(row.id)!.reject_reason, 'moved while idle');
+  const long = await parkOn(store, s.dir);
+  store.closeStale(long.id, 'x'.repeat(600));
+  assert.equal(store.row(long.id)!.reject_reason!.length, 500, '切る長さ（REASON_MAX）は今のまま');
+  assert.equal(cleanReason(undefined), null);
+  assert.equal(cleanReason(`${zwsp}`), null, '見えない文字だけの理由は null');
+});
+
+// M4 の続き: 改行の隣が書式の文字（Cf）でなく制御文字（NUL など）で割られた複数行の値も、理由の中で印になる。
+// 先に消すのは Cf と、空白（\t \n \v \f \r）でない制御文字。U+FEFF は \s に入るが Cf なので、行の中にあっても先に消える
+test('M4: 改行を含む預かった値が、理由の中で NUL など（Cf でない制御文字）でも割られていても、reject_reason は印になる', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const multi = ['line1-first-part', 'line2-secret-part'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const c = (code: number): string => String.fromCharCode(code);
+  const cases = [
+    `line1-first-part${lf}${c(0)}line2-secret-part`,
+    `line1-first-part${c(0)}${lf}line2-secret-part`,
+    `line1-first-part${lf}${c(1)}${c(0x7f)}line2-secret-part`,
+    `line1-first-part${lf}${c(0x85)}line2-secret-part`,
+    `line1-fi${c(0)}rst-part${lf}line2-sec${c(0x1f)}ret-part`,
+    `line1-fi${c(0xfeff)}rst-part${lf}line2-secret-part`,
+    `line1-first-part${lf}${c(0xfeff)}line2-sec${c(0xfeff)}ret-part`,
+    `line1-first-part${lf}${c(0x200b)}${c(0)}line2-secret-part`,
+    `line1-first-part${lf}line2-secret-part`,
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set', JSON.stringify(text));
+  }
+});
+
+test('M4: 空白（タブ・改行）を消す今の動きは変わらない', () => {
+  const tab = String.fromCharCode(9);
+  const lf = String.fromCharCode(10);
+  assert.equal(cleanReason(`a${tab}b${lf}c`), 'abc');
+  assert.equal(cleanReason(`a${String.fromCharCode(0)}b${String.fromCharCode(0x200b)}c`), 'abc');
 });
