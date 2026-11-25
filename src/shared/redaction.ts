@@ -220,7 +220,7 @@ function isBase64Url(code: number): boolean { return isWord(code) || code === 45
 const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/gu;
 
 // URL に入った値の符号化は、ブラウザ・フォームの送信・PHP・Python・ページの JS で違う。記号などの 1 文字ずつが、そのままか %XX か JSON の \uXXXX（16 進は大文字でも小文字でも。/ は \/ も）で書かれ、
-// 空白が %20 か + で書かれても、同じ値として伏せる。英数字と - _ . は、どの符号化もそのまま書くので、そのまま比べる
+// 空白が %20・+・JSON の \u0020 などで書かれても、同じ値として伏せる。英数字と - _ . は、どの符号化もそのまま書くので、そのまま比べる
 const PLAIN_CHAR = /^[A-Za-z0-9._-]$/u;
 const hexDigit = (digit: string): string => (/[a-f]/iu.test(digit) ? `[${digit.toUpperCase()}${digit.toLowerCase()}]` : digit);
 const hexUnit = (unit: number): string => [...unit.toString(16).padStart(4, '0')].map(hexDigit).join('');
@@ -231,7 +231,7 @@ function tolerantChar(char: string): string {
   const escaped = Array.from({ length: char.length }, (_, i) => `\\\\u${hexUnit(char.charCodeAt(i))}`).join('') + (char === '/' ? '|\\\\/' : '');
   return `(?:${literal}|${encoded}|${escaped})`;
 }
-const SPACE_RUN = '(?:\\s|\\+|%20|%09|%0[Aa]|%0[Dd])+';
+const SPACE_RUN = '(?:\\s|\\+|%20|%09|%0[Aa]|%0[Dd]|\\\\u0020|\\\\u0009|\\\\u000[Aa]|\\\\u000[Dd])+';
 
 // 鍵ごとの組み立て済みの正規表現。呼ぶたびに作り直すと、長い値を何本も持つとき（入れた値の覚えは 1 会話 16 本まで）1 回の出力ごとに数秒かかる。古いものから捨てる
 const PATTERNS = new Map<string, RegExp>();

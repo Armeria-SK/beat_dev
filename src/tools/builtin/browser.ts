@@ -9,7 +9,7 @@ import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactJsonValue, redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import { actPreview, actRoute, browserActCheck, devServerPage, fieldKind, inspectAct, inspectPress, isSecretField, namedItem, ownDevServer, ownerTextsOf, passwordRefusal, peekTab, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, typedInputRefusal, type ActInput, type ActPick, type Inspected, type NamedTarget } from '../browser/checks.ts';
+import { actPreview, actRoute, browserActCheck, devServerPage, fieldKind, inspectAct, inspectPress, isSecretField, namedItem, ownDevServer, ownerTextsOf, PASSWORD_MAX, passwordRefusal, peekTab, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, typedInputRefusal, type ActInput, type ActPick, type Inspected, type NamedTarget } from '../browser/checks.ts';
 import { BrowserFailure, PRESS_KEYS, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget, type PageHandle, type PressKey } from '../browser/driver.ts';
 import { diffLine, elementLine, findText, formatElements, groupLine, markShown, type ElementTable, type ListedElement } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
@@ -754,7 +754,7 @@ export const browserType: ToolDef<{ tab?: string; ref: string; text?: string; pa
     tab: Type.Optional(TAB_ID),
     ref: REF,
     text: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX })),
-    password: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX, description: `A test password or verification code for a password field of the dev server this run started (never a real one). Use this instead of text. ${DISTINCT_VALUE_ADVICE}` })),
+    password: Type.Optional(Type.String({ maxLength: PASSWORD_MAX, description: `A test password or verification code for a password field of the dev server this run started (never a real one). Use this instead of text. ${DISTINCT_VALUE_ADVICE}` })),
     submit: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'network',
@@ -794,7 +794,7 @@ const NAMED = Type.Object({
 const TARGET = Type.Union([REF, NAMED]);
 const STEP = Type.Union([
   Type.Object({ click: TARGET }, { additionalProperties: false }),
-  Type.Object({ type: TARGET, text: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX })), password: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX, description: DISTINCT_VALUE_ADVICE })), submit: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+  Type.Object({ type: TARGET, text: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX })), password: Type.Optional(Type.String({ maxLength: PASSWORD_MAX })), submit: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   Type.Object({ select: TARGET, option: Type.String({ minLength: 1, maxLength: ACT_OPTION_MAX }) }, { additionalProperties: false }),
   Type.Object({ press: Type.Union(PRESS_KEYS.map(key => Type.Literal(key))) }, { additionalProperties: false }),
   Type.Object({

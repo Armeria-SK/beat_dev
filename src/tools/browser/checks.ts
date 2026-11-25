@@ -30,6 +30,7 @@ export const TEXT_ROLES: ReadonlySet<string> = new Set(['textbox', 'searchbox', 
 // 本物の <select> の役割（1 つ選ぶ = combobox、複数・表示行数が 2 以上 = listbox）。役割だけでは自前の部品と見分けられないので、要素のタグも見る
 export const SELECT_ROLES: ReadonlySet<string> = new Set(['combobox', 'listbox']);
 export const TYPE_TEXT_MAX = 2000;
+export const PASSWORD_MAX = 128;
 const NAME_SHOWN = 120;
 const PASSWORD_AUTOCOMPLETE = new Set(['current-password', 'new-password', 'one-time-code']);
 // ページが付けた名前が、暗証番号の欄・カードの欄だと言っているもの（属性で区別できない欄の安全側の追加）
@@ -312,7 +313,8 @@ export async function browserActCheck(kind: 'click' | 'type', input: ActInput, c
   if (grant === undefined) return { decision: 'deny', reasons: [guardText(language, 'browser.no_grant')] };
   const badInput = typedInputRefusal(kind, input, language);
   if (badInput !== undefined) return { decision: 'deny', reasons: [badInput] };
-  if (kind === 'type' && (input.text ?? input.password ?? '').length > TYPE_TEXT_MAX) return { decision: 'deny', reasons: [guardText(language, 'browser.act.too_long', { max: TYPE_TEXT_MAX })] };
+  const typedMax = input.password !== undefined ? PASSWORD_MAX : TYPE_TEXT_MAX;
+  if (kind === 'type' && (input.text ?? input.password ?? '').length > typedMax) return { decision: 'deny', reasons: [guardText(language, 'browser.act.too_long', { max: typedMax })] };
   if (browser.tabCount(ctx.conversationId) === 0) {
     const failure = input.tab === undefined ? new BrowserFailure('no_tab', 'browser.no_tabs') : new BrowserFailure('no_tab', 'browser.no_tab', { tab: input.tab });
     return { decision: 'deny', reasons: [failure.text(language)] };

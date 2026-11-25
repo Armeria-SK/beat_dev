@@ -440,11 +440,24 @@ test('伏せ字（exact）: 要素の番号が 5 桁（e14819）でも、4 文�
   assert.equal(redactSecrets('e1234567890 and 7890', ['7890']), 'e123456[REDACTED] and [REDACTED]', 'e のあとの数字が 6 桁以上のあとの位置は伏せる');
 });
 
+test('伏せ字（exact）: 値の中の空白（スペース・タブ・改行）を JSON の \\u0020・\\u0009・\\u000A・\\u000D で書いた写しも伏せる', () => {
+  const BS = String.fromCharCode(92);
+  const TAB = String.fromCharCode(9);
+  const LF = String.fromCharCode(10);
+  assert.equal(redactSecrets(`x Zq${BS}u0020Leak-55 y`, ['Zq Leak-55']), 'x [REDACTED] y');
+  assert.equal(redactSecrets(`x Zq${BS}u0009Leak-56 y`, [`Zq${TAB}Leak-56`]), 'x [REDACTED] y');
+  assert.equal(redactSecrets(`x Zq${BS}u000aLeak-57 Zq${BS}u000ALeak-57 Zq${BS}u000dLeak-57 Zq${BS}u000DLeak-57 y`, [`Zq${LF}Leak-57`]), 'x [REDACTED] [REDACTED] [REDACTED] [REDACTED] y');
+  assert.equal(redactSecrets(`x Zq${BS}u0021Leak-58 y`, ['Zq Leak-58']), `x Zq${BS}u0021Leak-58 y`, '空白でない字の u エスケープは空白の代わりにならない');
+});
+
 test('伏せ字（exact）: JSON の書き方（\\uXXXX は 16 進の大文字・小文字どちらでも、\\/ も）で書かれた値も伏せる。英数字だけの値は今までどおり', () => {
   const BS = String.fromCharCode(92);
   assert.equal(redactSecrets(`x P${BS}u0040ss-Leak-77 y`, ['P@ss-Leak-77']), 'x [REDACTED] y');
   assert.equal(redactSecrets(`x Zq${BS}u007ELeak-99 Zq${BS}u007eLeak-99 y`, ['Zq~Leak-99']), 'x [REDACTED] [REDACTED] y');
   assert.equal(redactSecrets(`x a${BS}/b-Leak-88 a/b-Leak-88 a${BS}u002Fb-Leak-88 y`, ['a/b-Leak-88']), 'x [REDACTED] [REDACTED] [REDACTED] y');
+  const emoji = String.fromCodePoint(0x1f600);
+  assert.equal(redactSecrets(`x Zq${emoji}Leak-77 Zq${BS}ud83d${BS}ude00Leak-77 Zq${BS}uD83D${BS}uDE00Leak-77 y`, [`Zq${emoji}Leak-77`]), 'x [REDACTED] [REDACTED] [REDACTED] y', '16 進が 2 つ続く形（BMP の外の字）も、大文字・小文字どちらでも');
+  assert.equal(redactSecrets(`x Zq${BS}ud83dLeak-77 y`, [`Zq${emoji}Leak-77`]), `x Zq${BS}ud83dLeak-77 y`, '2 つ目が欠けた形は伏せない');
   assert.equal(redactSecrets(`x a${BS}u0062 y`, ['abc12345']), `x a${BS}u0062 y`, '別の値は伏せない');
   assert.equal(redactSecrets(`x P${BS}u0041ss-Leak-77`, ['PAss-Leak-77']), `x P${BS}u0041ss-Leak-77`, '英数字を \\u で書いた形は、今までどおり伏せない（記録した穴）');
 });

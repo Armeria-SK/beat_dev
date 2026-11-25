@@ -740,11 +740,44 @@ test('P7: password の引数の説明は、目立つ値（8 文字以上・ペ�
   assert.match(description, /not a word or number shown on the page/u);
 });
 
-test('P7: browser_act の password（説明文と 1 手ごとの欄の説明）も、目立つ値を選ぶよう案内する', () => {
+type StepSchema = { properties?: Record<string, { description?: string; maxLength?: number }> };
+const typeStepSchema = (): StepSchema | undefined => {
+  const steps = (browserAct.input.properties as Record<string, { items?: { anyOf?: StepSchema[] } }>).steps;
+  return steps?.items?.anyOf?.find(step => step.properties?.password !== undefined);
+};
+
+test('P7: browser_act の password も、説明文（1 回だけ）で目立つ値を選ぶよう案内する。手ごとの欄の説明には同じ文を重ねない', () => {
   assert.match(browserAct.description, /give a test value as "password" instead of "text"\. Pick a distinctive value of 8 or more characters that is not a word or number shown on the page/u);
-  const steps = (browserAct.input.properties as Record<string, { items?: { anyOf?: Array<{ properties?: Record<string, { description?: string }> }> } }>).steps;
-  const typeStep = steps?.items?.anyOf?.find(step => step.properties?.password !== undefined);
-  assert.match(typeStep?.properties?.password?.description ?? '', /8 or more characters.*not a word or number shown on the page/u);
+  assert.equal(browserAct.description.split('Pick a distinctive value').length, 2, '説明文の中でも 1 回だけ');
+  assert.equal(typeStepSchema()?.properties?.password?.description, undefined);
+});
+
+test('P7: password は 128 文字まで（スキーマ 2 か所・実行前の確かめ）。ふつうの text は 2000 文字のまま。長い値は照合の手間を爆発させるので入れさせない', async t => {
+  const typeProps = browserType.input.properties as Record<string, { maxLength?: number }>;
+  assert.equal(typeProps.password?.maxLength, 128, 'browser_type');
+  assert.equal(typeStepSchema()?.properties?.password?.maxLength, 128, 'browser_act の手');
+  assert.equal(typeProps.text?.maxLength, 2000);
+  assert.equal(typeStepSchema()?.properties?.text?.maxLength, 2000);
+  const r = rig(t, own());
+  const { page } = await r.open(DEV);
+  const fits = 'Qw9-'.repeat(32);
+  assert.equal(fits.length, 128);
+  assert.equal((await preCheck(browserType, { ref: 'e2', password: fits }, r.ctx)).decision, 'allow', '128 文字は通る');
+  const over = `${fits}y`;
+  const check = await preCheck(browserType, { ref: 'e2', password: over }, r.ctx);
+  assert.equal(check.decision, 'deny', '129 文字は実行前の確かめで断る（スキーマを通らずに来ても）');
+  assert.ok(check.reasons[0]!.includes(gt('browser.act.too_long', { max: 128 })), check.reasons[0]);
+  const viaAct = await browserActCheck('type', { ref: 'e2', password: over }, r.ctx);
+  assert.equal(viaAct.decision, 'deny', 'browser_act の手の確かめも同じ');
+  assert.ok(viaAct.reasons[0]!.includes(gt('browser.act.too_long', { max: 128 })), viaAct.reasons[0]);
+  const text = await preCheck(browserType, { ref: 'e7', text: 'x'.repeat(2000) }, r.ctx);
+  assert.equal(text.decision, 'allow', 'text は 2000 文字まで');
+  for (const [name, input] of [['browser_type', { ref: 'e2', password: over }], ['browser_act', { steps: [{ type: 'e2', password: over }], then: 'none' }]] as const) {
+    const outcome = await r.call(name, input);
+    assert.equal(outcome.output.isError, true, `${name}: ${outcome.output.content}`);
+    assert.ok(!outcome.output.content.includes(over), name);
+  }
+  assert.deepEqual(page.acts, [], '長い値は欄に入れない');
 });
 
 // JSON の書き方で繰り返した値（\uXXXX・\/）も、保存される返事に残さない。16 進は大文字でも小文字でも
