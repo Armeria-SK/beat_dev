@@ -61,8 +61,9 @@ export function addText(prev: TermText, text: string, skipped = 0, max = MAX_LIN
   return { next: { lines: over ? lines.slice(lines.length - max) : lines, open, count, trimmed: prev.trimmed || over }, added };
 }
 
-// 宛先が localhost そのものの http だけ（localhost@… や localhost.… のようなよその宛先、ほかの語の続きは外す）
-const LOCALHOST = /(?<![\w/:.@-])http:\/\/localhost(?::\d{1,5})?(?![\w@-]|[.:]\S)(?:\/[^\s"'<>`]*)?/gu;
+// 宛先が localhost そのものの http だけ（localhost@… や localhost.… のようなよその宛先、ほかの語の続きは外す）。
+// 前が「Local:」のようなコロンでもよい。後ろに点やコロンが続いても、その次が語の字や - でなければ（「…」「.)」）リンクにする
+const LOCALHOST = /(?<![\w/.@-])http:\/\/localhost(?::\d{1,5})?(?![\w@-]|[.:][\w-])(?:\/[^\s"'<>`]*)?/gu;
 
 export type LinePart = { text: string; href?: string };
 
