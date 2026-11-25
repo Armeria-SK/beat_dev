@@ -5,7 +5,7 @@ import { languageOf } from '../src/shared/language.ts';
 import { guardText } from '../src/shared/messages/guard.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
-import { markShown, newRefBook, readElements } from '../src/tools/browser/elements.ts';
+import { findText, markShown, newRefBook, readElements } from '../src/tools/browser/elements.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { browserClick, browserClose, browserFind, browserOpen, browserRead, browserScreenshot, FIND_MAX_ELEMENTS, FIND_MAX_PLACES, FIND_READ_CHARS } from '../src/tools/builtin/browser.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
@@ -15,6 +15,8 @@ import { testConfig } from './helpers.ts';
 // T-07 / T-08 / T-10: browser_open / browser_read / browser_screenshot / browser_close
 
 const SECRET = 'sk-live-0123456789abcdefghij';
+// 鍵の形でない、一覧にだけある秘密
+const PLAIN = 'zanzibar plain value 42';
 
 interface Rig {
   driver: FakeBrowserDriver;
@@ -29,7 +31,7 @@ function rig(t: { after: (fn: () => void | Promise<void>) => void }, change: (co
   config.tools.browser.enabled = true;
   change(config);
   const driver = new FakeBrowserDriver();
-  const session = new BrowserSession({ driver, config: () => config, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [SECRET] });
+  const session = new BrowserSession({ driver, config: () => config, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [SECRET, PLAIN] });
   t.after(() => session.close());
   const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, workspace: 'C:\\work',
@@ -650,4 +652,68 @@ test('browser_find: 文は頭から 1,000,000 字までを探し、その先を�
   const inside = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
   assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
   assert.deepEqual(inside, [r.text('browser.section_found_text'), 'needle head', 'line', r.text('browser.find_text_limited', { chars: 12 + 5 * Math.floor((FIND_READ_CHARS - 12) / 5) })]);
+});
+
+test('browser_find: 移動のあとの最初の読みが検索だけのとき、次に押した結果は差分でなく表の形で返る（変わっていない要素を「増えた」と言わない）。読んだあとのページでは差分のまま', async t => {
+  const r = rig(t);
+  const URL1 = 'https://example.com/spa';
+  r.driver.site(URL1, { title: 'One', text: 'one', ...buttons(['A', 'B']) });
+  await run(browserOpen, { url: URL1 }, r.ctx());
+  const page = r.driver.current!.pageList[0]!;
+  // 同じ URL のまま新しい文書になる（再読み込み）。読み直さずに検索だけする
+  page.reload({ title: 'Two', text: 'two', ...buttons(['Save', 'Cancel', 'Help', 'Find me']) });
+  const found = await run(browserFind, { query: 'find', where: 'elements' }, r.ctx());
+  const ref = /^(e\d+) button "Find me"$/mu.exec(found.content)?.[1];
+  assert.ok(ref, found.content);
+  const clicked = await run(browserClick, { ref }, r.ctx());
+  assert.equal(clicked.isError, undefined, clicked.content);
+  assert.deepEqual(page.acts.map(act => act.name), ['Find me']);
+  const inside = inFrame(clicked.content);
+  assert.deepEqual(inside.filter(line => line.startsWith('+ ')), [], clicked.content);
+  assert.equal(inside[0], r.text('browser.section_navigated'));
+  assert.ok(inside.some(line => /^e\d+ button "Save"$/u.test(line)) && inside.includes(`${ref} button "Find me"`), clicked.content);
+  // 表を見せたあとは、検索を挟んでも差分の形のまま（検索は差分の元を動かさない）
+  await run(browserFind, { query: 'help', where: 'elements' }, r.ctx());
+  const again = await run(browserClick, { ref }, r.ctx());
+  assert.deepEqual(inFrame(again.content).slice(0, 2), [r.text('browser.section_changes'), r.text('browser.diff_none')], again.content);
+});
+
+test('browser_find: 長い行は、比べる形で長さが変わる文字が前にあっても、一致のあたりを見せる', () => {
+  for (const head of ['…'.repeat(400), '​'.repeat(400), 'ａ'.repeat(400)]) {
+    const found = findText(`${head} Needle ${'z'.repeat(600)}`, 'needle', 10, 300, () => true);
+    assert.equal(found.places, 1);
+    assert.ok(found.lines[0]!.includes('Needle'), JSON.stringify(head.slice(0, 2)));
+    assert.ok([...found.lines[0]!].length <= 302);
+  }
+  const context = findText(`${'y'.repeat(500)}\nneedle`, 'needle', 10, 300, () => true);
+  assert.equal(context.lines[0], `${'y'.repeat(300)}…`, '一致の無い前後の行は頭から');
+});
+
+test('browser_find: 一致はあるが収まらないときは「一致なし」と言わない。改行の無い長い文も、上限の手前まで探す', async t => {
+  const r = rig(t);
+  r.driver.site('https://example.com/tight', { title: 'T', text: 't', ...buttons(['Save one', 'Save two']) });
+  await run(browserOpen, { url: 'https://example.com/tight' }, r.ctx());
+  const tight = inFrame((await run(browserFind, { query: 'save', where: 'elements' }, r.ctx({ outputTokens: 50 }))).content);
+  assert.deepEqual(tight, [r.text('browser.section_found_elements'), r.text('browser.find_more_elements', { count: 2 })]);
+  r.driver.site('https://example.com/flat', { title: 'F', text: `needle ${'word '.repeat(200_100)}` });
+  await run(browserOpen, { url: 'https://example.com/flat', tab: 't1' }, r.ctx());
+  const flat = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
+  assert.equal(flat.length, 3, flat.join('\n').slice(0, 300));
+  assert.ok(flat[1]!.startsWith('needle word word'), flat[1]!.slice(0, 40));
+  const searched = Number(/first (\d+) characters/u.exec(flat[2]!)?.[1]);
+  assert.ok(searched > FIND_READ_CHARS - 2000 && searched < FIND_READ_CHARS, flat[2]);
+  r.driver.site('https://example.com/solid', { title: 'S', text: 'x'.repeat(FIND_READ_CHARS + 100) });
+  await run(browserOpen, { url: 'https://example.com/solid', tab: 't1' }, r.ctx());
+  const solid = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
+  assert.deepEqual(solid, [r.text('browser.section_found_text'), r.text('browser.find_text_limited', { chars: 0 })]);
+});
+
+test('browser_find: 鍵の形でない、一覧にだけある秘密も、伏せてから比べる（名前も文も）', async t => {
+  const r = rig(t);
+  r.driver.site('https://example.com/plain', { title: 'P', text: `note ${PLAIN} end`, ...buttons([`key ${PLAIN}`]) });
+  await run(browserOpen, { url: 'https://example.com/plain' }, r.ctx());
+  const probe = await run(browserFind, { query: PLAIN.slice(3, 14) }, r.ctx());
+  assert.deepEqual(inFrame(probe.content), [r.text('browser.section_found_elements'), r.text('browser.find_no_elements'), r.text('browser.section_found_text'), r.text('browser.find_no_text')]);
+  const seen = await run(browserFind, { query: 'note' }, r.ctx());
+  assert.ok(seen.content.includes('note [REDACTED] end') && !seen.content.includes(PLAIN), seen.content);
 });

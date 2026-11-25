@@ -14,7 +14,7 @@ import { diffLine, elementLine, findText, formatElements, groupLine, markShown, 
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
-import { pageText, sentText } from '../browser/sent.ts';
+import { pageText, sentText, TAIL_MARGIN } from '../browser/sent.ts';
 import { siteAllows } from '../browser/sites.ts';
 import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -229,7 +229,9 @@ async function renderFind(browser: BrowserSession, api: BrowserApi, tab: Browser
     };
     table = await rereadTab(tab, url, api.signal, { kind: 'find', query: input.query, role: input.role, limit: FIND_MAX_ELEMENTS, fits, secrets });
     if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    const found = [elementsTitle, table.items.length > 0 ? block(table.items.map(item => elementLine(item, secrets)).join('\n'), secrets) : toolText(language, 'browser.find_no_elements')];
+    const found = [elementsTitle];
+    if (table.items.length > 0) found.push(block(table.items.map(item => elementLine(item, secrets)).join('\n'), secrets));
+    else if (table.omitted === 0) found.push(toolText(language, 'browser.find_no_elements'));
     if (table.omitted > 0) found.push(toolText(language, 'browser.find_more_elements', { count: table.omitted }));
     parts.push(...found);
     const spent = size(found.join('\n'));
@@ -239,9 +241,11 @@ async function renderFind(browser: BrowserSession, api: BrowserApi, tab: Browser
   if (where !== 'elements') {
     const textTitle = toolText(language, 'browser.section_found_text');
     const raw = await until(page.text(FIND_READ_CHARS), api.signal);
-    // 読む上限で切れた読みは、途中で切れた最後の行を捨てる
+    // 読む上限で切れた読みは、途中で切れた最後の行を捨てる。改行の無い文は、上限の TAIL_MARGIN 字手前より前の、最後の空白まで
     const limited = raw.length >= FIND_READ_CHARS;
-    const whole = limited ? raw.slice(0, raw.lastIndexOf('\n') + 1) : raw;
+    let cut = raw.lastIndexOf('\n') + 1;
+    if (cut === 0) { cut = Math.max(0, raw.length - TAIL_MARGIN); while (cut > 0 && !/\s/u.test(raw[cut - 1]!)) cut -= 1; }
+    const whole = limited ? raw.slice(0, cut) : raw;
     const notes = size(`${textTitle}\n${toolText(language, 'browser.find_more_text', { count: 999_999 })}\n${toolText(language, 'browser.find_text_limited', { chars: FIND_READ_CHARS })}`);
     const roomChars = Math.min(FIND_TEXT_CHARS, chars - notes.chars);
     const roomTokens = tokens - notes.tokens;
@@ -251,7 +255,7 @@ async function renderFind(browser: BrowserSession, api: BrowserApi, tab: Browser
     });
     parts.push(textTitle);
     if (found.lines.length > 0) parts.push(block(found.lines.join('\n'), secrets));
-    else if (found.total === 0) parts.push(toolText(language, 'browser.find_no_text'));
+    else if (found.total === 0 && !(limited && whole === '')) parts.push(toolText(language, 'browser.find_no_text'));
     if (found.total > found.places) parts.push(toolText(language, 'browser.find_more_text', { count: found.total - found.places }));
     if (limited) parts.push(toolText(language, 'browser.find_text_limited', { chars: whole.length }));
   }

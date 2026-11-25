@@ -95,10 +95,13 @@ export interface RefBook {
   // seen: 最後に見せる形（show / diff）で読んだときの要素（印 → 役割と名前）。押す前の取り直し（check）では変えない
   readonly view: Map<string, string>;
   readonly seen: Map<string, string>;
+  // いまの URL・文書で、見せる形（show / diff）の読みを 1 回でもしたか。していなければ差分の元が無い
+  // （移動のあとの最初の読みが検索だけのとき）ので、次の差分は表の形で返す
+  based: boolean;
 }
 
 export function newRefBook(counter: RefCounter = { next: 1 }): RefBook {
-  return { counter, url: undefined, document: undefined, records: new Map(), retired: new Set(), shown: new Set(), view: new Map(), seen: new Map() };
+  return { counter, url: undefined, document: undefined, records: new Map(), retired: new Set(), shown: new Set(), view: new Map(), seen: new Map(), based: false };
 }
 
 const KEY = /^([a-z]+)(?: "((?:[^"\\]|\\.)*)")?((?: \[[^\]]*\])*)$/u;
@@ -250,6 +253,7 @@ function retireAll(book: RefBook): void {
   book.records.clear();
   book.view.clear();
   book.seen.clear();
+  book.based = false;
 }
 
 function parseLines(snapshot: string, url: string): { lines: Line[]; entries: Entry[]; end: number[] } {
@@ -369,12 +373,23 @@ export interface FoundText {
   total: number;
 }
 
-// 長い行は、一致のあたりの lineChars 字だけにする（切った側に「…」）。at は比べる形での一致の位置（元の行での位置の目安として使う）
-function clipLine(row: string, at: number, lineChars: number): string {
+// 長い行は lineChars 字だけにする（切った側に「…」）。needle があれば一致のあたり、無ければ頭から。
+// 一致の場所は元の行の上で探す: 比べる形にすると一致が入る、いちばん短い頭の長さ（比べる形の位置は、形が伸び縮みする行では元の行の位置とずれる）
+function clipLine(row: string, needle: string | undefined, lineChars: number): string {
   if (row.length <= lineChars) return row;
   const chars = [...row];
   if (chars.length <= lineChars) return row;
-  const from = Math.max(0, Math.min(at - Math.floor(lineChars / 3), chars.length - lineChars));
+  let end = 0;
+  if (needle !== undefined) {
+    let low = 1;
+    let high = chars.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (foldText(chars.slice(0, mid).join('')).includes(needle)) high = mid; else low = mid + 1;
+    }
+    end = low;
+  }
+  const from = Math.max(0, Math.min(end - Math.floor(lineChars * 2 / 3), chars.length - lineChars));
   return `${from > 0 ? '…' : ''}${chars.slice(from, from + lineChars).join('')}${from + lineChars < chars.length ? '…' : ''}`;
 }
 
@@ -383,14 +398,14 @@ function clipLine(row: string, at: number, lineChars: number): string {
 export function findText(text: string, query: string, maxPlaces: number, lineChars: number, room: (lines: readonly string[]) => boolean): FoundText {
   const needle = foldText(query);
   const rows = text.split(/\r?\n/u).map(row => row.trim()).filter(row => row !== '');
-  const hits = new Map<number, number>();
-  if (needle !== '') rows.forEach((row, i) => { const at = foldText(row).indexOf(needle); if (at >= 0) hits.set(i, at); });
+  const hits = new Set<number>();
+  if (needle !== '') rows.forEach((row, i) => { if (foldText(row).includes(needle)) hits.add(i); });
   const render = (kept: ReadonlySet<number>): string[] => {
     const lines: string[] = [];
     let last: number | undefined;
     for (const i of [...kept].sort((a, b) => a - b)) {
       if (last !== undefined && i !== last + 1) lines.push('…');
-      lines.push(clipLine(rows[i]!, hits.get(i) ?? 0, lineChars));
+      lines.push(clipLine(rows[i]!, hits.has(i) ? needle : undefined, lineChars));
       last = i;
     }
     return lines;
@@ -398,7 +413,7 @@ export function findText(text: string, query: string, maxPlaces: number, lineCha
   let kept = new Set<number>();
   let lines: string[] = [];
   let places = 0;
-  for (const i of hits.keys()) {
+  for (const i of hits) {
     if (places >= maxPlaces) break;
     const next = new Set(kept);
     for (const k of [i - 1, i, i + 1]) if (k >= 0 && k < rows.length) next.add(k);
@@ -437,7 +452,8 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   const keyOf = (e: Entry): string => `${e.role}\u0000${e.name}`;
   // diff: 差分で新しい番号を振ってよいのは、見せた番号の印でもなく、前に見せる形で読んだときにも無かった要素だけ
   const viewed = new Set(book.view.values());
-  const fresh = numbering.kind === 'diff' && !navigated ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
+  const unbased = navigated || !book.based;
+  const fresh = numbering.kind === 'diff' && !unbased ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
   // 番号を振るのは、押したあとのページで役割・名前が 1 つだけの要素だけ（同じ名前の組の要素は、並べ替え・作り直しで別の行の要素になりうる）
   // 同じかどうかは、モデルに見える形（伏せて 100 字で切った名前）で数える（伏せると同じに見える 2 つにも番号を振らない）
   const secrets = numbering.kind === 'diff' ? numbering.secrets ?? [] : [];
@@ -446,7 +462,7 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   if (fresh.length > 0) for (const e of entries) named.set(seenAs(e), (named.get(seenAs(e)) ?? 0) + 1);
   const wanted = fresh.filter(e => named.get(seenAs(e)) === 1);
   const tableLimit = numbering.kind === 'show' ? numbering.limit ?? MAX_ELEMENTS : numbering.kind === 'diff' ? numbering.tableLimit : 0;
-  let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (navigated ? 'show' : 'diff') : numbering.kind === 'find' ? 'show' : numbering.kind;
+  let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (unbased ? 'show' : 'diff') : numbering.kind === 'find' ? 'show' : numbering.kind;
   const needle = numbering.kind === 'find' ? foldText(numbering.query) : '';
   const found = numbering.kind === 'find' ? usable.filter(e => (numbering.role === undefined || e.role === numbering.role) && nameMatches(e.name, needle, numbering.secrets ?? [])) : undefined;
   let candidates = new Set(found ?? (form === 'show' ? usable.slice(0, tableLimit) : wanted));
@@ -528,6 +544,7 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   if (numbering.kind === 'find') return { url, items, omitted: skipped };
   // 見せる形で読んだ要素を、次の差分の元として覚える
   book.seen.clear();
+  book.based = true;
   for (const e of usable) book.seen.set(e.pwRef!, keyOf(e));
   // 使えなくなった見せた番号は元から外す。差分の形では、使えなくなったもの（dead）として知らせる（表の形では、表そのものが新しい元になる）
   const dead: Array<{ ref: string; present: boolean }> = [];
