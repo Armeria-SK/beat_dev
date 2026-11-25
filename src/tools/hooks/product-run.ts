@@ -199,20 +199,26 @@ const REPO_PARTS = ['objects', 'refs', 'index', 'HEAD'];
 const LINK_WALK_CAP = 20_000;
 const LINK_WALK_DEEP = new Set(['refs', 'logs']);
 
+// リンク（symlink）に加えて、ふつうのファイルのハードリンクも見る。git は reflog（logs/…）と COMMIT_EDITMSG をその場に書くので、
+// 外のファイルとハードリンクでつながっていれば、判定役を通らない commit が外のファイルを書き換える。見るのは .git の直下と refs・logs の下で、
+// objects の下は見ない（git clone --local は、オブジェクトを正しくハードリンクする）
 export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
   let seen = 0;
-  const clean = (dir: string, depth: number): boolean => {
+  const clean = (dir: string, depth: number, files: boolean): boolean => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (++seen > cap || entry.isSymbolicLink()) return false;
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory()) {
+        if (files && entry.isFile() && lstatSync(join(dir, entry.name)).nlink > 1) return false;
+        continue;
+      }
       const name = entry.name.toLowerCase();
       const below = depth > 0 ? depth - 1 : LINK_WALK_DEEP.has(name) ? Infinity : name === 'objects' ? 1 : 0;
-      if (below > 0 && !clean(join(dir, entry.name), below)) return false;
+      if (below > 0 && !clean(join(dir, entry.name), below, depth > 0 ? files : name !== 'objects')) return false;
     }
     return true;
   };
   try {
-    return !lstatSync(gitDir).isSymbolicLink() && clean(gitDir, 0);
+    return !lstatSync(gitDir).isSymbolicLink() && clean(gitDir, 0, true);
   } catch {
     return false;
   }

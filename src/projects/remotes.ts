@@ -12,7 +12,6 @@ const MAX_TEXT = 2000;
 export const HIDDEN_URL = '(hidden)';
 const HOST_PORT = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d*)?$/u;
 const SCP_PLAIN = /^(?:[^@/\s:?#]+@)?[^@/\s:?#]+:(?!\/\/)[^@?#]*$/u;
-const SCP_NAMED = /^[^@/\s:.?#]+:[^@/\s?#]*@([^@/\s:?#]+:(?!\/\/)[^@?#]*)$/u;
 
 export const withoutSecrets = (url: string): string => {
   if (/^[A-Za-z]:[\\/]/u.test(url) || /^\/(?!\/)/u.test(url)) return url;
@@ -26,7 +25,8 @@ export const withoutSecrets = (url: string): string => {
     return named || !after.includes('@') ? `${parts[1]}${host}${parts[3]}` : HIDDEN_URL;
   }
   if (!/[@?#]/u.test(url) || SCP_PLAIN.test(url)) return url;
-  return SCP_NAMED.exec(url)?.[1] ?? HIDDEN_URL;
+  // git は scp の形を「最初の : の前がホスト」と読む（user:pw@host:path の ssh の相手は user）。@ より後ろを見せると実際と違う送り先になるので、この形は丸ごと隠す
+  return HIDDEN_URL;
 };
 
 const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:', 'ssh+git:']);

@@ -96,7 +96,8 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
     for (const ref of db.prepare('SELECT full_ref FROM pending_actions WHERE conversation_id = ? AND full_ref IS NOT NULL').all(id) as Array<{ full_ref: string }>) {
       if (inside(deps.toolOutputsDir, ref.full_ref)) files.push(ref.full_ref);
     }
-    db.prepare("UPDATE pending_actions SET input = '', shown = '', cwd = NULL, reason = '', checks = '[]', state = NULL, files = NULL, output_preview = NULL, full_ref = NULL, reject_reason = NULL WHERE conversation_id = ?").run(id);
+    // 理由の中身（パス・変わったファイル）は消す。ただ beat が閉じた行（stale で理由あり）は、決まった印 'stale' だけ残す（消すと「古くなった（承認できる）」行に見え戻る。closedByBeat）
+    db.prepare("UPDATE pending_actions SET input = '', shown = '', cwd = NULL, reason = '', checks = '[]', state = NULL, files = NULL, output_preview = NULL, full_ref = NULL, reject_reason = CASE WHEN status = 'stale' AND reject_reason IS NOT NULL THEN 'stale' ELSE NULL END WHERE conversation_id = ?").run(id);
   }
 
   // 添付は、ほかの会話の発言が使っていなければ消す
