@@ -522,7 +522,7 @@ test('scout deepen: only an open proposal of the same product can be deepened (r
 });
 
 test('Think now: it runs past the cloud hourly count (D-7), and waits while a chat reply is being written (D-4)', async t => {
-  const s = await setup(t, { scout: ['c'], edit: c => { c.scout = { cloudRunsPerHour: 1 }; } });
+  const s = await setup(t, { scout: ['c'], edit: c => { c.scout = { cloudRunsPerHour: 1 }; c.providers[0]!.maxParallel = 1; } });
   s.adapter('far').scripts.push(reply('first'), reply('asked'), reply('after chat'));
   assert.equal(await s.app.worker.tick(), 'ran');
   s.later();
@@ -531,15 +531,19 @@ test('Think now: it runs past the cloud hourly count (D-7), and waits while a ch
   assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
   assert.equal(await s.app.worker.tick(), 'ran', 'Think now goes past the hourly count');
   assert.equal(s.scoutRows().length, 2);
-  let chatting = true;
-  Object.defineProperty(s.app.engine, 'chatting', { get: () => chatting, configurable: true });
-  // 会話の返事を書いている最中は、提供元に空きが無い（会話の実行がいるだけでは待たない。beat self-fix S1）
-  Object.defineProperty(s.app.engine, 'backgroundHasRoom', { value: () => !chatting, configurable: true });
+  // 会話の返事を書いている最中（本物の会話の実行。会話と裏の先頭は near で、maxParallel 1 なので会話だけで埋まる。beat self-fix S1）
+  const before = s.adapter().calls.length;
+  s.adapter().scripts.push(hangUntilAborted);
+  const sent = s.app.engine.send('c1', 'hello');
+  assert.ok(sent.ok, JSON.stringify(sent));
+  for (let i = 0; i < 400 && s.adapter().calls.length < before + 1; i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(s.adapter().calls.length, before + 1, 'a chat reply is being written');
   s.later();
   assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
   assert.equal(await s.app.worker.tick(), 'busy');
   assert.equal(s.scoutRows().length, 2, 'waits while a chat reply is being written');
-  chatting = false;
+  s.app.engine.stop(sent.runId);
+  await s.app.engine.wait(sent.runId);
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.equal(s.scoutRows().length, 3);
 });
@@ -762,4 +766,33 @@ test('worker: a poke that arrives while a tick is running is not lost (re-review
   worker.start();
   for (let i = 0; i < 50 && ticks < 3; i += 1) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(ticks, 3, 'the poke during the first tick gives a second tick right after it');
+});
+
+// 止められるまで返事を始めない台本（会話の返事を書いている最中を作る）
+const hangUntilAborted: Script = async function* (req) {
+  yield { type: 'text', delta: '…' };
+  await new Promise((_, reject) => {
+    if (req.signal.aborted) reject(req.signal.reason);
+    req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true });
+  });
+};
+
+test('Think now: it waits while a chat reply holds the scout\'s own provider, even when the background provider has room (S1 review HIGH)', async t => {
+  // 会話と考える役は near（maxParallel 1）、裏の振り分けは far（空きがある）
+  const s = await setup(t, { scout: ['m'], edit: c => { c.providers[0]!.maxParallel = 1; c.routing.background = ['c']; } });
+  s.adapter().scripts.push(hangUntilAborted);
+  const sent = s.app.engine.send('c1', 'hello');
+  assert.ok(sent.ok, JSON.stringify(sent));
+  for (let i = 0; i < 400 && s.adapter().calls.length < 1; i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(s.adapter().calls.length, 1, 'a chat reply is being written on near');
+  assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
+  // 始めてしまうと、考える実行は会話の返事を待たせる枠の待ちに入って tick が返らない
+  const outcome = await Promise.race([s.app.worker.tick(), new Promise<string>(resolve => setTimeout(() => resolve('started'), 500).unref())]);
+  assert.equal(outcome, 'idle', 'the scout does not start while the owner\'s reply needs that provider');
+  assert.equal(s.scoutRows().length, 0);
+  assert.equal(s.adapter().calls.length, 1, 'no scout call was made');
+  s.app.engine.stop(sent.runId);
+  await s.app.engine.wait(sent.runId);
+  s.adapter().scripts.push(reply('Thought.'));
+  assert.equal(await s.app.worker.tick(), 'ran', 'once the reply is finished, the asked scout runs');
 });

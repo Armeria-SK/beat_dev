@@ -346,8 +346,9 @@ export class Worker {
 
   #hold(): 'paused' | 'chat' | undefined {
     if (this.paused) return 'paused';
-    // 会話の返事を作っていても、提供元に空きがあれば裏の実行は動く（空きが無いときだけ待つ。会話の実行も空きの数に入る）
-    if (this.#d.engine.chatting && !this.#d.engine.backgroundHasRoom()) return 'chat';
+    // 会話の返事を作っていても、提供元に空きがあれば裏の実行は動く。待つのは、会話の実行のいる提供元（裏の実行が最初に使う提供元）が満杯のときだけ（会話の実行も空きの数に入る）。
+    // 裏の実行だけで埋まっているときは「会話」ではなく枠（slots）の待ち
+    if (this.#d.engine.chatHoldsBackground()) return 'chat';
     return undefined;
   }
 
@@ -961,7 +962,7 @@ export class Worker {
     return view('idle');
   }
 
-  // Think now（持ち主の頼み。D-4: worker が Off でも 1 回動く。一時停止・会話の返事中は tick の順で待つ。D-7: クラウドの 0 と休みのあいだは断る）
+  // Think now（持ち主の頼み。D-4: worker が Off でも 1 回動く。一時停止・会話の返事が提供元を埋めているあいだ（裏の先頭は #hold、考える役の提供元は scoutRoute の room）は tick の順で待つ。D-7: クラウドの 0 と休みのあいだは断る）
   scoutNow(projectId: string): ScoutAsk | undefined {
     const project = this.#d.projects?.get(projectId);
     if (!project) return undefined;

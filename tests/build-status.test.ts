@@ -186,3 +186,55 @@ test('Build が終わった（開いた Build が無くなった）次の往復�
   const third = await ask(s, 'ありがとう');
   assert.ok(!lastTail(third)?.includes('Build: none open now.'), '前に送ったので、もう送らない');
 });
+
+test('節 build: 止めた Build が同じ返事のあいだに動き直したら、paused ではなく running と伝える（S1 review LOW）', async t => {
+  const s = await taskApp(t, c => { c.providers[0]!.maxParallel = 2; c.worker.maxParallel = 2; });
+  // other が先に、Build があとに始まる（あとから始まった Build が止められる）
+  const other = s.userTask('other', { priority: 1 });
+  const build = open(s);
+  let finishOther!: () => void;
+  const otherGate = new Promise<void>(resolve => { finishOther = resolve; });
+  s.adapter().scripts.push(async function* (req) {
+    yield { type: 'text', delta: '…' };
+    await new Promise<void>((resolve, reject) => { if (req.signal.aborted) reject(req.signal.reason); req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }); void otherGate.then(resolve); });
+    yield* toolCall('task_complete', { summary: 'done', notify: false })(req);
+  });
+  const tickOther = s.app.worker.tick();
+  await waitFor(() => s.app.tasks.get(other.id)!.status === 'running', 'other が始まる');
+  s.adapter().scripts.push(async function* (req) {
+    yield { type: 'text', delta: '…' };
+    await new Promise((_, reject) => { if (req.signal.aborted) reject(req.signal.reason); req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }); });
+  });
+  const tickBuild = s.app.worker.tick();
+  await waitFor(() => s.app.tasks.get(build.id)!.status === 'running', 'Build が始まる');
+  // 会話の返事は、道具を 1 回呼ぶ前に待つ（その間に Build が動き直す）
+  let startChat!: () => void;
+  const chatGate = new Promise<void>(resolve => { startChat = resolve; });
+  s.adapter().scripts.push(async function* (req) {
+    await chatGate;
+    yield* toolCall('file_read', { path: 'notes.txt' })(req);
+  });
+  const sent = s.app.engine.send(C, 'こんにちは');
+  assert.ok(sent.ok, JSON.stringify(sent));
+  assert.equal(await tickBuild, 'ran', '前提: Build は、この返事に止められて実行待ちに戻った');
+  assert.equal(s.app.tasks.get(build.id)!.status, 'ready');
+  // other が終わって枠が空き、止められてから 2 分後の Build が、同じ返事のあいだに動き直す
+  finishOther();
+  assert.equal(await tickOther, 'ran');
+  s.clock.now += 3 * MIN;
+  s.adapter().scripts.push(async function* (req) {
+    yield { type: 'text', delta: '…' };
+    await new Promise((_, reject) => { if (req.signal.aborted) reject(req.signal.reason); req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }); });
+  });
+  const tickAgain = s.app.worker.tick();
+  await waitFor(() => s.app.tasks.get(build.id)!.status === 'running', 'Build が同じ返事のあいだに動き直す');
+  s.adapter().scripts.push(reply('読みました'));
+  startChat();
+  await s.app.engine.wait(sent.runId);
+  const second = s.adapter().calls.at(-1)!;
+  const tails = [second.system.tail, ...second.messages.flatMap(m => (m.role !== 'assistant' && m.tail ? [m.tail] : []))].join('\n');
+  assert.ok(tails.includes(`- [${short(build.id)}] running`), `動き直したので running と伝える: ${tails}`);
+  assert.ok(!tails.slice(tails.lastIndexOf(`[${short(build.id)}]`)).includes(PAUSED), '動き直したあとの行は paused ではない');
+  s.app.engine.stopAll();
+  await tickAgain;
+});

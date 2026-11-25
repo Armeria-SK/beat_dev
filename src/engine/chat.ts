@@ -728,8 +728,9 @@ export class ChatEngine {
     if (!first) return null;
     let host = '';
     try { host = first.provider.baseUrl ? new URL(first.provider.baseUrl).hostname : ''; } catch { host = ''; }
+    // 会話の実行も数える（会話の返事を書いている提供元に、考える実行を重ねない。`backgroundHasRoom` と同じ数え方）
     let running = 0;
-    for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
+    for (const active of this.#active.values()) if (active.primary === first.provider.id) running += 1;
     const { capacity, maxOutput } = this.#d.status.limits(first.model);
     return { modelId: first.model.id, providerId: first.provider.id, local: host !== '' && isLoopbackHost(host), room: running < first.provider.maxParallel, available: capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined };
   }
@@ -823,6 +824,21 @@ export class ChatEngine {
     return running < first.provider.maxParallel;
   }
 
+  // 裏の実行が最初に使う提供元が、会話の実行がいるせいで満杯か（ワーカーの待つ理由を「会話の返事」と言うか「枠」と言うかの区別。
+  // 満杯でも、そこに会話の実行がいなければ false。会話が別の提供元で動いているだけなら、待たせているのは裏の実行で埋まった枠）
+  chatHoldsBackground(): boolean {
+    const first = this.#chain('background').usable[0];
+    if (!first) return false;
+    let running = 0;
+    let chat = false;
+    for (const active of this.#active.values()) {
+      if (active.primary !== first.provider.id) continue;
+      running += 1;
+      if (active.kind === 'chat') chat = true;
+    }
+    return chat && running >= first.provider.maxParallel;
+  }
+
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
   // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
   memoryBudget(): number | undefined {
@@ -865,13 +881,14 @@ export class ChatEngine {
 
   // 会話の実行が始まるとき、裏の実行を止めるのは、会話が最初に使う提供元（routes[0]）に空きが無いときだけ（Q-SF-1）。
   // 数えるのは、その提供元を最初に使って動いている実行の全部（会話・子の担当・裏の実行。いま始める会話の実行はまだ入っていない）。maxParallel より少なければ何も止めない。
+  // すでに止めた（止めかけで、まだ終わりきっていない）実行は、数にも止める候補にも入れない（二重に知らせず、生きている実行を余計に止めない。枠の本当の同時数は、モデルを呼ぶ 1 回ごとに limiter が抑える）。
   // 空きが無ければ、足りない分（数 − maxParallel + 1 本）を、始まりの新しい順に止める。止める候補（会話・子の担当以外）が無ければ止めず、提供元の枠の待ち行列に任せる。
   // 会話の鎖の後ろにだけ同じ提供元がある裏の実行は止めない（会話が後ろへ落ちたら、モデルを呼ぶ 1 回ごとに枠を待つ）。止めたタスクの id と、止めた実行の数を返す
   #preemptFor(routes: Route[]): { tasks: string[]; count: number } {
     const first = routes[0];
     const stopped = { tasks: [] as string[], count: 0 };
     if (!first) return stopped;
-    const same = [...this.#active.values()].filter(active => active.primary === first.provider.id);
+    const same = [...this.#active.values()].filter(active => active.primary === first.provider.id && !this.#preempted.has(active.runId));
     const lack = same.length - first.provider.maxParallel + 1;
     if (lack <= 0) return stopped;
     for (const active of same.filter(a => a.kind !== 'chat' && a.kind !== 'agent').reverse().slice(0, lack)) {
@@ -1664,7 +1681,9 @@ export class ChatEngine {
     const checklist = checklistSection(list, language);
     const background = backgroundSection(jobs, language);
     // この会話の計画から作った、開いている Build の様子（会話の実行だけ。新しい順に 3 件まで。決まった英語の文と id・数字だけで、タスクの文は入れない）
-    const paused = new Set(p.runId ? this.#preemptedTasks.get(p.runId) ?? [] : []);
+    // 止めたタスクのうち、同じ返事のあいだに動き直したもの（止められていない実行がいる）は、止めた扱いにしない
+    const restarted = new Set([...this.#active.values()].filter(active => active.taskId !== undefined && !this.#preempted.has(active.runId)).map(active => active.taskId!));
+    const paused = new Set((p.runId ? this.#preemptedTasks.get(p.runId) ?? [] : []).filter(id => !restarted.has(id)));
     const openBuilds = p.kind === 'chat' ? (d.tasks?.buildsFrom(p.conversationId) ?? []).filter(task => task.status === 'ready' || task.status === 'running' || task.status === 'waiting').slice(-3).reverse() : [];
     const build = buildSection(openBuilds.map((task): BuildLine => ({ id: task.id, status: task.status as BuildLine['status'], pausedNow: paused.has(task.id), pending: task.status === 'waiting' ? openPendingIds(d.conversations.db, task.id) : [] })));
     const bare = p.forbid instanceof ResearchAllow;

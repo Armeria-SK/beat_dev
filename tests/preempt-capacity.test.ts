@@ -333,3 +333,86 @@ test('画面の文: task_paused の知らせは、画面の言語（en・ja）�
   assert.match(ja, /2 分後に実行待ちへ戻り/u);
   assert.equal(warningText({ code: 'task_paused', message: 'サーバーの文' }, 'ja'), 'サーバーの文', '件数が無ければサーバーの文');
 });
+
+// 止められても、release() を呼ぶまで終わらない台本（止められた実行が #active に残り続ける形）
+function lingering(): { script: Script; release: () => void } {
+  let release!: () => void;
+  const unwind = new Promise<void>(resolve => { release = resolve; });
+  const script: Script = async function* (req) {
+    yield { type: 'text', delta: '…' };
+    await new Promise<void>(resolve => {
+      if (req.signal.aborted) resolve();
+      req.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    await unwind;
+    throw req.signal.reason;
+  };
+  return { script, release };
+}
+
+test('続けて 2 回送っても、止めかけの実行は 2 回数えない（task_paused は 1 回目の返事にだけ付く）', async t => {
+  const s = await setup(t, { providerMax: 1 });
+  s.userTask('A');
+  const slow = lingering();
+  const { ticking, run } = await startTask(s, slow.script);
+  s.adapter().scripts.push(reply('はい'), reply('はい'));
+  const one = s.app.engine.send('c1', 'ひとつめ');
+  assert.ok(one.ok, JSON.stringify(one));
+  assert.equal(s.app.engine.wasPreempted(run.runId), true, '前提: 1 回目で止めた（まだ終わりきっていない）');
+  const two = s.app.engine.send('c2', 'ふたつめ');
+  assert.ok(two.ok, JSON.stringify(two));
+  slow.release();
+  await Promise.all([s.app.engine.wait(one.runId), s.app.engine.wait(two.runId), within(ticking, '止められて戻る')]);
+  assert.deepEqual(s.pausedWarnings(one.runId).map(e => e.params), [{ count: 1 }]);
+  assert.deepEqual(s.pausedWarnings(two.runId), [], '止めかけの実行をもう一度止めたことにしない');
+});
+
+test('止めかけの実行は、空きの数にも止める候補にも入れない（生きている裏の実行を、余計に止めない）', async t => {
+  const s = await setup(t, { providerMax: 2 });
+  const t2 = s.userTask('T2');
+  const t4 = s.userTask('T4');
+  const slow = lingering();
+  const first = await startTask(s, slow.script);
+  assert.equal(first.run.taskId, t2.id, '前提: T2 が先に始まった');
+  // 会話 X が動いているところへ会話 A が送られ、数が maxParallel に届いて T2 が止められる（止められても、台本が終わるまで残る）
+  s.adapter().scripts.push(hang());
+  const x = s.app.engine.send('cX', 'X');
+  assert.ok(x.ok);
+  await waitFor(() => s.adapter().calls.length === 2, '会話 X が始まる');
+  s.adapter().scripts.push(reply('はい'));
+  const a = s.app.engine.send('cA', 'A');
+  assert.ok(a.ok);
+  assert.equal(s.app.engine.wasPreempted(first.run.runId), true, '前提: T2 が止められた');
+  s.app.engine.stop(x.runId);
+  await Promise.all([s.app.engine.wait(x.runId), s.app.engine.wait(a.runId)]);
+  // T2 は止めかけのまま残り、あとから T4 が始まる（数は 2 のうち T2 と T4）
+  const g4 = gated();
+  const second = await startTask(s, g4.script);
+  assert.equal(second.run.taskId, t4.id, '前提: T4 があとから始まった');
+  s.adapter().scripts.push(reply('はい'));
+  const c = s.app.engine.send('cC', 'C');
+  assert.ok(c.ok);
+  slow.release();
+  await Promise.all([s.app.engine.wait(c.runId), within(first.ticking, 'T2 が止められて戻る')]);
+  assert.equal(s.app.engine.wasPreempted(second.run.runId), false, '生きている T4 は止めない（止めかけの T2 を除けば、数は maxParallel に収まる）');
+  assert.equal(s.app.tasks.get(t4.id)!.status, 'running');
+  assert.deepEqual(s.pausedWarnings(c.runId), []);
+  g4.release();
+  assert.equal(await within(second.ticking, 'T4 が終わる'), 'ran');
+});
+
+test('会話が別の提供元で動いていて、裏の先頭は裏の実行だけで埋まっているとき、待つ理由は chat ではなく slots', async t => {
+  const s = await setup(t, { providerMax: 1, split: true });
+  s.userTask('A');
+  const waiting = s.userTask('B');
+  const { ticking } = await startTask(s, hang(), 'local');
+  s.adapter('cloud').scripts.push(hang());
+  const chat = s.app.engine.send('c1', 'こんにちは');
+  assert.ok(chat.ok);
+  await waitFor(() => s.adapter('cloud').calls.length === 1, '会話が cloud で始まる');
+  assert.equal(s.app.engine.chatting, true, '前提: 会話の実行が動いている');
+  assert.deepEqual(s.app.worker.waitReason(s.app.tasks.get(waiting.id)!), { kind: 'slots' }, '待たせているのは会話ではなく、裏の実行で埋まった枠');
+  assert.equal(await within(s.app.worker.tick(), '始めずに返る'), 'busy');
+  s.app.engine.stopAll();
+  await Promise.all([s.app.engine.wait(chat.runId), within(ticking, '片付く')]);
+});
