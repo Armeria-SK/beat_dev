@@ -246,3 +246,39 @@ test('model-auto: OpenAI 互換のモデルも contextLength なしで保存で�
   onlyOut.models[2]!.maxOutputTokens = 100_000;
   assert.doesNotThrow(() => parseConfig(onlyOut), '長さを書いていなければ比べない');
 });
+
+// 手で直した・PowerShell 5.1 の Set-Content -Encoding utf8 で書いた設定ファイルは、先頭に BOM（U+FEFF）が付く。JSON としては読めないので、外してから読む
+test('A4: BOM つきの設定ファイルも、BOM なしと同じ設定として読める（.bak に退避もしない）', t => {
+  const dir = tempDir(t);
+  const body = JSON.stringify({ version: 1, timezone: 'UTC', server: { port: 4801 }, routing: {} }, null, 2);
+  const plain = join(dir, 'plain.json');
+  const bom = join(dir, 'bom.json');
+  writeFileSync(plain, body);
+  writeFileSync(bom, `\uFEFF${body}`);
+  const expected = new ConfigStore(plain).load();
+  const loaded = new ConfigStore(bom).load();
+  assert.deepEqual(loaded, expected);
+  assert.equal(loaded.timezone, 'UTC');
+  assert.equal(loaded.server.port, 4801);
+  assert.equal(existsSync(`${bom}.bak`), false, '壊れた扱いにしない');
+  assert.equal(readFileSync(bom, 'utf8'), `\uFEFF${body}`, '読むだけでは書き換えない');
+});
+
+test('A4: BOM つきの設定ファイルに hook を足せる。書き出しは今のまま（BOM なし）', t => {
+  const path = join(tempDir(t), 'config.json');
+  const store = new ConfigStore(path);
+  writeFileSync(path, `\uFEFF${JSON.stringify(store.load(), null, 2)}`);
+  const second = new ConfigStore(path);
+  second.appendPreToolHook({ matcher: 'shell', builtin: 'protect-files', always: ['.github/workflows/**'] });
+  const written = readFileSync(path, 'utf8');
+  assert.notEqual(written.charCodeAt(0), 0xFEFF, '書き出しに BOM は付けない');
+  assert.equal(JSON.parse(written).tools.hooks.preToolUse.length, 1);
+  assert.equal(second.load().tools.hooks.preToolUse.length, 1);
+});
+
+test('A4: BOM のあとが壊れていれば、今までどおり .bak に退避してエラーにする', t => {
+  const path = join(tempDir(t), 'config.json');
+  writeFileSync(path, '\uFEFF{ broken');
+  assert.throws(() => new ConfigStore(path).load(), ConfigError);
+  assert.equal(readFileSync(`${path}.bak`, 'utf8'), '\uFEFF{ broken');
+});

@@ -267,6 +267,11 @@ export function atomicWriteFile(path: string, content: string | Uint8Array, mode
   }
 }
 
+// 先頭の BOM（U+FEFF）を 1 つ外してから読む。PowerShell 5.1 の Set-Content -Encoding utf8 などが付ける。書き出しは BOM なしのまま
+function readConfigJson(path: string): unknown {
+  return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/u, ''));
+}
+
 function fileStamp(path: string): string {
   const s = statSync(path);
   return `${s.mtimeMs}:${s.size}`;
@@ -333,7 +338,7 @@ export class ConfigStore {
     const stamp = fileStamp(this.path);
     if (this.#cache && stamp === this.#stamp) return structuredClone(this.#cache);
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(this.path, 'utf8')); }
+    try { raw = readConfigJson(this.path); }
     catch {
       try { copyFileSync(this.path, `${this.path}.bak`); } catch { }
       throw new ConfigError(`The settings file ${this.path} is not valid JSON. It was copied to ${this.path}.bak. Fix it, then start again`);
@@ -363,7 +368,7 @@ export class ConfigStore {
   }
 
   appendPreToolHook(hook: HookConfig): void {
-    const raw = JSON.parse(readFileSync(this.path, 'utf8')) as Record<string, any>;
+    const raw = readConfigJson(this.path) as Record<string, any>;
     const tools = (raw.tools ??= {}) as Record<string, any>;
     const hooks = (tools.hooks ??= {}) as Record<string, any>;
     hooks.preToolUse = [...(Array.isArray(hooks.preToolUse) ? hooks.preToolUse : []), hook];
