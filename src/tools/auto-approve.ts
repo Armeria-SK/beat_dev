@@ -152,7 +152,23 @@ export class JudgeRefused extends Error {
 
 export interface ParsedVerdict { decision: 'allow' | 'ask'; reason: string }
 
-const oneLine = (text: string) => redactSecrets(text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, REASON_LIMIT);
+const flatten = (text: string): string => redactSecrets(text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim());
+
+const oneLine = (text: string) => flatten(text).slice(0, REASON_LIMIT);
+
+// 判定役の理由は、REASON_LIMIT を超えたら、文の終わり（. ! ? のあとが空白か末尾、または 。！？）で切る。半分より前にしか無ければ、語の切れ目、それも無ければ文字の途中で切って … を付ける（サロゲートペアは割らない）。
+// 秘密は flatten で先に伏せてあるので、切っても見えるものは増えない
+const SENTENCE_END = /^[.!?](?=\s|$)|^[\u{3002}\u{FF01}\u{FF1F}]/u;
+
+function fitReason(text: string): string {
+  if (text.length <= REASON_LIMIT) return text;
+  const floor = REASON_LIMIT / 2;
+  for (let at = REASON_LIMIT - 1; at >= floor; at -= 1) if (SENTENCE_END.test(text.slice(at, at + 2))) return text.slice(0, at + 1);
+  const space = text.lastIndexOf(' ', REASON_LIMIT - 2);
+  if (space >= floor) return `${text.slice(0, space).trimEnd()}…`;
+  const end = REASON_LIMIT - 1;
+  return `${text.slice(0, /[\uD800-\uDBFF]/u.test(text[end - 1]!) ? end - 1 : end)}…`;
+}
 
 // JSON の書き方になっている \（\" \\ \/ \b \f \n \r \t と \u + 16 進 4 けた）はそのまま、そうでない \ だけを \\ にする。理由に Windows のパス（C:\Users）を書いた答えが、それだけで読めなくなるのを防ぐ。
 // 足すのは \ だけ: 引用符は閉じず、構造（{ } , :）は作れない。ただし、読めなかった行が読めるようになる（そのとき後ろの decision が効く話は decisionKeys で止める）
@@ -194,7 +210,7 @@ export function parseVerdict(reply: string): ParsedVerdict | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const { decision, reason } = value as { decision?: unknown; reason?: unknown };
   if (decision !== 'allow' && decision !== 'ask') return undefined;
-  return { decision, reason: typeof reason === 'string' ? oneLine(reason) : '' };
+  return { decision, reason: typeof reason === 'string' ? fitReason(flatten(reason)) : '' };
 }
 
 // 判定役を呼べなかったときの種類。閉じた 7 語で、承認待ちの文（pending.ts の judge_failed_error_<語>）の鍵になる。例外の文そのものは種類にしない
@@ -226,14 +242,16 @@ export async function judgeOnce(
   const attempts: Array<Map<string, NonNullable<JudgeReply['usage']>>> = [];
   let model: string | undefined;
   const counted = async (prompt: ClassifierPrompt, combined: AbortSignal, call?: JudgeCall): Promise<string> => {
-    const byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
+    let byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
     attempts.push(byModel);
     const note = (id: unknown, usage: JudgeReply['usage']): void => {
       if (typeof id !== 'string' || !id) return;
       model = id.slice(0, 200);
       if (usage) byModel.set(model, usage);
     };
-    const reply = await (call ? ask(prompt, combined, { ...call, used: (id, usage) => { note(id, usage); call.used?.(id, usage); } }) : ask(prompt, combined));
+    // The judge list is tried in turn inside one call, and the same model can be listed twice: a call that starts after another one reported usage counts on its own, so it does not replace the usage of the one before it
+    const begun = (): void => { if (byModel.size) { byModel = new Map(); attempts.push(byModel); } };
+    const reply = await (call ? ask(prompt, combined, { ...call, started: () => { begun(); call.started(); }, used: (id, usage) => { note(id, usage); call.used?.(id, usage); } }) : ask(prompt, combined));
     if (typeof reply !== 'object' || reply === null) return reply;
     note(reply.model, reply.usage);
     return reply.text;

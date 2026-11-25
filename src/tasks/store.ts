@@ -141,6 +141,7 @@ const SOURCE_MARK_ACTORS = ['mesh', 'build'] as const;
 export const PLAN_GIST_LABEL = 'Plan the owner approved for this build (excerpt):';
 export const ACCEPTANCE_ITEMS_LABEL = 'Acceptance items the owner approved for this build:';
 export const OUTSIDE_PLAN_NOTE = 'note: this plan or its acceptance items were written by a run that had read text from elsewhere; the owner approved them by starting the build';
+export const RUN_EDIT_LABEL = 'The owner then changed the request for this one run to:';
 // aiText: 持ち主が承認・選んだが、文は AI が書いたもの（採った提案・選んだ質問の札・受け入れの結果を写した直しのタスク）。ownerRequestText に入れない（9-1b の D-7）
 interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string; items?: string[]; outside?: true; aiText?: true }
 
@@ -318,20 +319,26 @@ export class TaskStore {
       if (!root || this.beatDecided(root.id)) return undefined;
       base = root;
     }
-    const holder = base.owner_request === null && base.parent_id ? this.get(base.parent_id) : base;
+    // 繰り返しの 1 回は、直した文を持っていても、ブラウザが数える持ち主の文はひな形のものだけ（直した文は判定役にだけ届ける。#ownerText）
+    const holder = base.parent_id ? this.get(base.parent_id) : base;
     const owner = ownerRequestOf(holder?.owner_request);
     if (!owner || !holder || owner.outside || owner.aiText) return undefined;
     return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria].filter(Boolean).join('\n');
   }
 
+  // 繰り返しの 1 回は、ひな形の頼みの文（今までどおり頭にそのまま）のあとに、持ち主がその回だけ直した文を足す。ひな形の文は外さない
   #ownerText(task: Task): string | undefined {
-    const holder = task.owner_request === null && task.parent_id ? this.get(task.parent_id) : task;
+    const holder = task.parent_id ? this.get(task.parent_id) : task;
     const owner = ownerRequestOf(holder?.owner_request);
     if (!owner || !holder) return undefined;
-    return [
+    const text = [
       owner.title, ...(owner.outside ? [OUTSIDE_PLAN_NOTE] : []), holder.acceptance_items === null ? owner.body : '', owner.doneCriteria,
       ...(owner.items ? [ACCEPTANCE_ITEMS_LABEL, ...owner.items] : []), ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : []),
     ].filter(Boolean).join('\n');
+    const edit = task.parent_id ? ownerRequestOf(task.owner_request) : undefined;
+    if (!edit) return text;
+    const lines = (request: OwnerRequest): string => [request.title, holder.acceptance_items === null ? request.body : '', request.doneCriteria].filter(Boolean).join('\n');
+    return lines(edit) === lines(owner) ? text : [text, RUN_EDIT_LABEL, lines(edit)].join('\n');
   }
 
   #spawnChain(task: Task): Task[] | undefined {
@@ -349,7 +356,9 @@ export class TaskStore {
 
   ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined; aiText?: boolean | undefined }): void {
     const task = this.get(id);
-    const current = ownerRequestOf(task?.owner_request);
+    // 繰り返しの 1 回は自分の頼みを持たず、ひな形のものを読む。持ち主が直したときだけ、ひな形の頼みに直しを当てたものをその回に持たせる（#ownerText がひな形の文のあとに足す）
+    const template = task && task.owner_request === null && task.parent_id !== null ? this.get(task.parent_id) : undefined;
+    const current = ownerRequestOf(task?.owner_request ?? template?.owner_request);
     if (!task || !current) return;
     if (patch.body !== undefined && this.textTainted(id)) {
       this.#db.prepare('UPDATE tasks SET owner_request = NULL WHERE id = ?').run(id);
@@ -365,6 +374,7 @@ export class TaskStore {
       // AI の書いた文の印は、持ち主があとで書き直しても外さない（どこまで書き直したかを見分けないため）
       ...(current.aiText || patch.aiText === true ? { aiText: true as const } : {}),
     };
+    if (template && next.title === current.title && next.body === current.body && next.doneCriteria === current.doneCriteria) return;
     this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
   }
 
