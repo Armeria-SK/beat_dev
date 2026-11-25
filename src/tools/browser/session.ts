@@ -9,7 +9,7 @@ import type { AppConfig } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { selfPortsOf } from '../hooks/self-port.ts';
-import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type LaunchOptions, type PageHandle, type ViewportSize, type WorkBrowserHandle } from './driver.ts';
+import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type FocusFacts, type LaunchOptions, type PageHandle, type PressAt, type ViewportSize, type WorkBrowserHandle } from './driver.ts';
 import { newRefBook, type ElementTable, type RefBook, type RefCounter } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 import { allowedLoopbackUrl, deniedLoopbackPorts, type BrowserGrant } from './loopback.ts';
@@ -124,7 +124,9 @@ export interface BrowserView {
 export type MirrorConversation = (conversationId: string) => { attended: boolean } | undefined;
 
 // タブごとの写しの記録。raw は見張りを付ける前のページ（撮影が自分の見張りに数えられないため）
-interface TabMirror { raw: PageHandle; viewport: ViewportSize; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string; located: { target: ElementTarget; box: ElementBox } | undefined; pointer: { x: number; y: number } | undefined }
+interface TabMirror { raw: PageHandle; viewport: ViewportSize; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string; located: { target: ElementTarget; box: ElementBox } | undefined; pointer: { x: number; y: number } | undefined;
+  // まだ終わっていない押す・入れる・選ぶ・キー・開くの数（Stop で見捨てられた操作も、ページの側では動き続けて届くことがある）
+  pending: number }
 
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
@@ -140,7 +142,17 @@ export function pointerOf(located: { target: ElementTarget; box: ElementBox } | 
   return x >= 0 && y >= 0 && x <= viewport.width && y <= viewport.height ? { x, y } : undefined;
 }
 
-// 欄の AI の指: locate で要素の位置を覚え、押す・入れるでその中心を指に、開き直しで指を消す
+// 操作が終わる（成功も失敗も）まで、そのタブの未完の数に入れる
+function counted<R>(mirror: TabMirror, run: () => Promise<R>): Promise<R> {
+  mirror.pending += 1;
+  let work: Promise<R>;
+  try { work = run(); } catch (error) { mirror.pending -= 1; throw error; }
+  const done = (): void => { mirror.pending -= 1; };
+  work.then(done, done);
+  return work;
+}
+
+// 欄の AI の指: locate で要素の位置を覚え、押す・入れるでその中心を指に、開き直しで指を消す。操作の未完も数える
 function trackPointer(page: PageHandle, mirror: TabMirror): PageHandle {
   return new Proxy(page, {
     get(target, prop) {
@@ -150,10 +162,11 @@ function trackPointer(page: PageHandle, mirror: TabMirror): PageHandle {
           mirror.located = detail?.box ? { target: element, box: detail.box } : undefined;
           return detail;
         };
-        case 'click': return (element: ElementTarget, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return target.click(element, timeoutMs); };
-        case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return target.fill(element, text, submit, timeoutMs); };
-        case 'select': return (element: ElementTarget, label: string, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return target.select(element, label, timeoutMs); };
-        case 'goto': return (url: string, timeoutMs: number) => { mirror.pointer = undefined; mirror.located = undefined; return target.goto(url, timeoutMs); };
+        case 'click': return (element: ElementTarget, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return counted(mirror, () => target.click(element, timeoutMs)); };
+        case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return counted(mirror, () => target.fill(element, text, submit, timeoutMs)); };
+        case 'select': return (element: ElementTarget, label: string, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return counted(mirror, () => target.select(element, label, timeoutMs)); };
+        case 'goto': return (url: string, timeoutMs: number) => { mirror.pointer = undefined; mirror.located = undefined; return counted(mirror, () => target.goto(url, timeoutMs)); };
+        case 'press': return (key: string, expected: FocusFacts, timeoutMs: number, at: PressAt) => counted(mirror, () => target.press(key, expected, timeoutMs, at));
         default: return Reflect.get(target, prop, target);
       }
     },
@@ -356,9 +369,9 @@ export class BrowserSession {
     return this.#frames.frame(tab.conversationId, tab.id);
   }
 
-  // 呼び出しの最中か、最後の操作から DRIVING_MS 以内で、その実行がまだ動いているとき（終わった実行の札は、猶予を待たずに消す）
+  // 呼び出しの最中か、終わっていない操作があるとき（Stop のあとも、遅れて届く操作が残る）か、最後の操作から DRIVING_MS 以内で、その実行がまだ動いているとき（終わった実行の札は、猶予を待たずに消す）
   #driving(tab: BrowserTab, mirror: TabMirror, now: number): boolean {
-    if (this.#current?.call.grant.conversationId === tab.conversationId) return true;
+    if (this.#current?.call.grant.conversationId === tab.conversationId || mirror.pending > 0) return true;
     return now - mirror.actedAt < DRIVING_MS && (this.#d.runActive?.(mirror.runId) ?? true);
   }
 
@@ -732,7 +745,7 @@ export class BrowserSession {
   // タブを作る。ページの操作に見張りを付け、操作した実行・いまの操作を覚える（撮るのは呼び出しの終わり）
   #addTab(grant: BrowserGrant, kind: BrowserTabKind, raw: PageHandle, handle: BrowserHandle): BrowserTab {
     const id = `t${this.#nextTab++}`;
-    const mirror: TabMirror = { raw, viewport: { ...VIEWPORT }, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '', located: undefined, pointer: undefined };
+    const mirror: TabMirror = { raw, viewport: { ...VIEWPORT }, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '', located: undefined, pointer: undefined, pending: 0 };
     const note = (action: MirrorAction): void => {
       const current = this.#current;
       if (current) { mirror.action = mirror.call === current.no ? strongerAction(mirror.action, action) : action; mirror.call = current.no; mirror.runId = current.call.grant.runId; } else mirror.action = action;
