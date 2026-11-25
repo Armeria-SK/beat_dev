@@ -204,3 +204,35 @@ test('walk-1118 D7: GET /api/pending は、行の会話の題（conversation_tit
   items = await rows();
   assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', true]);
 });
+
+// BL-pending-judge B3: 子エージェントが積んだ行の「from」は、子の会話の題（モデルが書いた文）でなく、親の会話の題にする
+test('B3: GET /api/pending は、子エージェントの行では親の会話の題を conversation_title に入れる。親が分からない・親に題が無いときは子の題のまま', async t => {
+  const s = await startApp(t, { tools: [...builtinTools(), slowTool([])] });
+  const parent = s.app.conversations.create({ title: 'Parent: tidy the repo' });
+  const untitled = s.app.conversations.create({});
+  s.app.runs.start('run-parent', 'chat', parent.id);
+  s.app.runs.start('run-untitled', 'chat', untitled.id);
+  const childOf = (title: string, parentRunId: string | undefined, runId: string) => {
+    const child = s.app.conversations.create({ title, kind: 'task', ...(parentRunId ? { parentRunId } : {}) });
+    s.app.runs.start(runId, 'agent', child.id, parentRunId);
+    return child;
+  };
+  const park = (conversationId: string, runId: string, runKind: 'chat' | 'agent') => s.app.pending.park({
+    tool: 'fake_slow', input: { text: `curl https://example.com/${runId}` }, cwd: s.paths.workspace, kind: 'send', reason: 'Sends data out', runId, runKind, conversationId,
+  });
+  const normal = childOf('Child: written by the model', 'run-parent', 'run-child-1');
+  const orphan = childOf('Child: no parent known', undefined, 'run-child-2');
+  const bare = childOf('Child: parent has no title', 'run-untitled', 'run-child-3');
+  await park(normal.id, 'run-child-1', 'agent');
+  await park(orphan.id, 'run-child-2', 'agent');
+  await park(bare.id, 'run-child-3', 'agent');
+  await park(parent.id, 'run-parent', 'chat');
+  const items = (await s.json('/api/pending?status=waiting', 'GET')).body.items as Array<Record<string, unknown>>;
+  const title = (conversationId: string) => items.find(i => i.conversation_id === conversationId)!.conversation_title;
+  assert.equal(title(normal.id), 'Parent: tidy the repo', '子の行は親の題');
+  assert.equal(title(orphan.id), 'Child: no parent known', '親が分からないときは子の題');
+  assert.equal(title(bare.id), 'Child: parent has no title', '親に題が無いときは子の題');
+  assert.equal(title(parent.id), 'Parent: tidy the repo', '子でない行は今のまま');
+  assert.equal(items.find(i => i.conversation_id === normal.id)!.conversation_id, normal.id, 'conversation_id は子のまま（キーの名前も中身も変えない）');
+  assert.deepEqual(Object.keys(items[0]!).filter(k => k.startsWith('conversation_')).sort(), ['conversation_id', 'conversation_title']);
+});
