@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { App } from '../src/app.ts';
+import { ProviderError } from '../src/providers/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { UNTRUSTED_RUN, type Task } from '../src/tasks/store.ts';
+import { JUDGE_LIMITS, type JudgeLimitSet } from '../src/tools/pipeline.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
 import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { CONVERSATION, fakeModel, settled, startApp, waitFor } from './app-setup.ts';
@@ -22,6 +24,9 @@ const toolCall = (name: string, args: unknown, before = ''): Script => async fun
   for (const c of withLoad(call, req)) yield { type: 'tool_call', call: c };
   yield { type: 'done', stop: 'tool_use' as StopReason };
 };
+
+// 呼び直しの待ちを 0 にして、いつも投げる判定役の試験を速く保つ（S3）
+const FAST_JUDGE: JudgeLimitSet = { chat: { ...JUDGE_LIMITS.chat, retryDelayMs: 0 }, unattended: { ...JUDGE_LIMITS.unattended, retryDelayMs: 0 } };
 
 const ALLOW = '{"decision":"allow","reason":"依頼どおりに外のメモを読むだけです"}';
 const ASK = '{"decision":"ask","reason":"check"}';
@@ -101,17 +106,40 @@ test('自動承認（エンジン）: 判定役はその実行が使っている
 });
 
 test('自動承認（エンジン）: 判定役のモデルの呼び出しが失敗したら、judge_failed で Pending に積まれる。持ち主が許せば動く', async t => {
-  const s = await startApp(t);
+  const s = await startApp(t, { judgeLimits: FAST_JUDGE });
   const outside = outsideRead(s);
-  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), fail(new Error('接続できません')), say('読みました')];
+  // S3: a failure to call the judge is asked once more, so the judge fails twice before the run's last reply
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), fail(new Error('接続できません')), fail(new Error('接続できません')), say('読みました')];
   const sent = await post(s, REQUEST, { permissionMode: 'auto' });
   await settled(s.app, sent.body.runId);
   const [row] = s.app.pending.list({ status: 'waiting' });
   assert.equal(row?.kind, 'judge_failed');
   assert.match(row!.reason, /the judge could not be called/u);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 2, 'S3: 呼ぶのは合わせて 2 回');
   assert.equal(autoRows(s).length, 0);
   s.app.replayPending(s.app.pending.claim(row!.id));
   await waitFor(() => s.app.pending.row(row!.id)?.status === 'ran', '許した行が動く');
+});
+
+test('自動承認（エンジン）: routing.judge に 2 つ並べて全部が一瞬で失敗しても、呼び直しを入れて判定役への呼び出しは 4 回まで。judge_calls は 1 行で、judge_failed が積まれ、動かない（S3）', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], judgeLimits: FAST_JUDGE, configure: c => { c.routing.judge = ['m2', 'm3']; } });
+  const outside = outsideRead(s);
+  const cannotConnect = () => fail(new ProviderError('provider_error', 'could not connect to the judge', { code: 'connect' }));
+  // 1 回目の聞き方で m2 → m3 の順に失敗し、呼び直しでも m2 → m3 の順に失敗する。5 つ目の台本（返事）が判定役に回ったら、4 回までの決まりが破れている
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cannotConnect(), cannotConnect(), cannotConnect(), cannotConnect(), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(s.adapter().calls.filter(isClassifier).map(c => c.model.id), ['m2', 'm3', 'm2', 'm3'], '呼ぶのは多くて 4 回（1 回の聞き方で 2 つ × 呼び直しの 1 回）');
+  const rows = s.app.db.prepare('SELECT outcome, failed, detail FROM judge_calls ORDER BY id').all().map(r => ({ ...r }));
+  assert.equal(rows.length, 1, '判定は 1 回として数える（呼び出しの数ではなく）');
+  assert.deepEqual([rows[0]!.outcome, rows[0]!.failed], ['failed', 'error']);
+  assert.match(String(rows[0]!.detail), /^connect: /u);
+  const waiting = s.app.pending.list({ status: 'waiting' });
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0]!.kind, 'judge_failed');
+  assert.match(waiting[0]!.reason, /could not connect/u);
+  assert.equal(autoRows(s).length, 0, '自動承認の許しの記録は無い');
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE decision = 'allow'").get()!.n, 0, 'allow になった道具の呼び出しは無い');
 });
 
 test('自動承認（エンジン）: 製品の外でコードを動かす今回だけの確かめは、判定役が決める（allow なら動く）。添付つきの発言（よそから来た文）のあとの外読みも、判定役が決める', async t => {
@@ -139,7 +167,7 @@ test('自動承認（エンジン）: 製品の外でコードを動かす今回
 
 // ── 外から読んだ内容のあと（Web）。同じ実行の中でも、止めたあとの次の実行にも持ち越す ──
 
-async function webApp(t: { after: (fn: () => void) => void }) {
+async function webApp(t: { after: (fn: () => void) => void }, options: { judgeLimits?: JudgeLimitSet } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -153,7 +181,7 @@ async function webApp(t: { after: (fn: () => void) => void }) {
     get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><html><head><title>t</title></head><body><main><p>ページの本文</p></main></body></html>') }) as PageResponse,
   };
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, pendingWaitMs: 0, botMemory: true, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, pendingWaitMs: 0, botMemory: true, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)), ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   mkdirSync(paths.workspace, { recursive: true });
@@ -418,9 +446,9 @@ test('自動承認（タスク）: Web を読んだあとの、許可フォル�
 });
 
 test('自動承認（タスク）: 判定役が答えられない（モデルを呼べない）ときは、chat と同じく judge_failed で Pending に積まれる', async t => {
-  const s = await webApp(t);
+  const s = await webApp(t, { judgeLimits: FAST_JUDGE });
   const command = s.command;
-  const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), fail(new Error('接続できません')), say('おわり')]);
+  const started = await runTaskWith(s, [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command }), fail(new Error('接続できません')), fail(new Error('接続できません')), say('おわり')]);
   const { rows } = await parked(s, started, '判定役が答えられない');
   assert.deepEqual(rows.map(r => [r.tool, r.kind, r.tainted]), [['shell_run', 'judge_failed', true]]);
   assert.match(rows[0]!.reason, /the judge could not be called/u);

@@ -12,7 +12,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import type { JudgeReply } from '../src/tools/auto-approve.ts';
-import { judgeStats, recordJudgeCall } from '../src/tools/judge-stats.ts';
+import { judgeFailingStreak, judgeStats, recordJudgeCall } from '../src/tools/judge-stats.ts';
 import { runToolCall, type PipelineDeps } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -105,7 +105,7 @@ test('5-J1: 記録に命令の文・入力・頼みの文・理由の文が入�
   for (const row of rows) for (const [column, value] of Object.entries(row)) {
     for (const mark of [SECRET_INPUT, REQUEST_TEXT, REASON_TEXT, 'do ', 'please']) assert.ok(!String(value).toLowerCase().includes(mark.toLowerCase()), `${column} に ${mark}`);
   }
-  assert.deepEqual(Object.keys(rows[0]!).sort(), ['ask_kinds', 'created_at', 'duration_ms', 'failed', 'id', 'input_tokens', 'judge_model', 'outcome', 'output_tokens', 'project_id', 'reason_keys', 'run_id', 'run_kind', 'tool']);
+  assert.deepEqual(Object.keys(rows[0]!).sort(), ['ask_kinds', 'created_at', 'detail', 'duration_ms', 'failed', 'id', 'input_tokens', 'judge_model', 'outcome', 'output_tokens', 'project_id', 'reason_keys', 'run_id', 'run_kind', 'tool']);
 });
 
 test('5-J1: 記録の表が無い・書けないときも、道具の呼び出しは同じ結果になる', async t => {
@@ -282,15 +282,15 @@ function failingJudge(ends: Record<string, JudgeEnd>): Script[] {
 test('5-J1: 料金のかかった失敗（max_tokens で切れた・答えの途中で時間切れ・途中で壊れた）も、それまでのトークンとモデルを記録する', async t => {
   const cases: Array<[JudgeEnd, string]> = [['truncated', 'unparsable'], ['hang', 'timeout'], ['broken', 'error']];
   for (const [end, failed] of cases) {
-    const s = await startApp(t, { models: [fakeModel('m1')], tools: [engineRead as unknown as ToolDef], judgeLimits: { chat: { answerMs: 300, slotWaitMs: 5_000 }, unattended: { answerMs: 300 } } });
+    const s = await startApp(t, { models: [fakeModel('m1')], tools: [engineRead as unknown as ToolDef], judgeLimits: { chat: { answerMs: 300, slotWaitMs: 5_000, retryDelayMs: 0 }, unattended: { answerMs: 300, retryDelayMs: 0 } } });
     const id = uuid(80);
     s.app.conversations.create({ id, title: end });
     s.adapter().scripts = failingJudge({ m1: end });
     const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'please read the outside file' });
     await settled(s.app, sent.body.runId);
     assert.deepEqual(s.app.db.prepare('SELECT outcome, failed, judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })),
-      // AP-1d: a cut-off reply is asked once more, and the spend of both calls is added up
-      [{ outcome: 'failed', failed, judge_model: 'm1', input_tokens: end === 'truncated' ? 1800 : 900, output_tokens: end === 'truncated' ? 800 : 400 }], end);
+      // AP-1d: a cut-off reply is asked once more, and so is a stream that broke at once (S3); the spend of both calls is added up
+      [{ outcome: 'failed', failed, judge_model: 'm1', input_tokens: end === 'truncated' || end === 'broken' ? 1800 : 900, output_tokens: end === 'truncated' || end === 'broken' ? 800 : 400 }], end);
   }
 });
 
@@ -303,4 +303,56 @@ test('5-J1: 判定役を順に替えたときは、各モデルで使ったト�
   await settled(s.app, sent.body.runId);
   assert.deepEqual(s.app.db.prepare('SELECT outcome, judge_model, input_tokens, output_tokens FROM judge_calls').all().map(r => ({ ...r })),
     [{ outcome: 'allow', judge_model: 'm3', input_tokens: 1800, output_tokens: 412 }]);
+});
+
+test('S3: judge_calls.detail は error の呼び出しにだけ付く。種類: 文の形で残し、文の秘密を伏せ、300 字に切る。種類が決まった語の形でなければ internal', t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const base = { runKind: 'chat' as const, tool: 'shell_run', askKinds: [], reasonKeys: [], projectId: null, spend: { ms: 1 } };
+  recordJudgeCall(db, { ...base, runId: 'a', outcome: 'failed', failed: 'error', detail: { kind: 'auth', text: 'refused 401 Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789' } });
+  recordJudgeCall(db, { ...base, runId: 'b', outcome: 'failed', failed: 'error', detail: { kind: 'rate_limit', text: 'x'.repeat(500) } });
+  recordJudgeCall(db, { ...base, runId: 'c', outcome: 'failed', failed: 'error', detail: { kind: 'Free form: text', text: 'y' } });
+  recordJudgeCall(db, { ...base, runId: 'd', outcome: 'allow' });
+  recordJudgeCall(db, { ...base, runId: 'e', outcome: 'failed', failed: 'timeout' });
+  const details = (db.prepare('SELECT detail FROM judge_calls ORDER BY id').all() as Array<{ detail: string | null }>).map(r => r.detail);
+  assert.ok(details[0]!.startsWith('auth: refused 401 Authorization:'), details[0]!);
+  assert.doesNotMatch(details[0]!, /abcdefghijklmnop/u);
+  assert.equal(details[1]!.length, 300);
+  assert.ok(details[1]!.startsWith('rate_limit: xxxx'));
+  assert.equal(details[2], 'internal: y');
+  assert.deepEqual(details.slice(3), [null, null]);
+});
+
+test('S3: cancelled（実行が止められただけ）の呼び出しは、呼んだ数・量には入るが、失敗の数にも、失敗の理由別にも入らない', t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const base = { runKind: 'chat' as const, tool: 'shell_run', askKinds: [], reasonKeys: [], projectId: null, runId: 'a' };
+  recordJudgeCall(db, { ...base, outcome: 'allow', spend: { ms: 10, inputTokens: 100, outputTokens: 1 } });
+  recordJudgeCall(db, { ...base, outcome: 'failed', failed: 'error', spend: { ms: 20, inputTokens: 200, outputTokens: 2 } });
+  recordJudgeCall(db, { ...base, outcome: 'failed', failed: 'cancelled', spend: { ms: 30, inputTokens: 300, outputTokens: 3 } });
+  assert.equal(db.prepare('SELECT failed FROM judge_calls WHERE id = 3').get()!.failed, 'cancelled');
+  const stats = judgeStats(db, { since: 0, until: Date.now() + 60_000 });
+  assert.deepEqual(stats.totals, { calls: 3, allow: 1, ask: 0, failed: 1, inputTokens: 600, outputTokens: 6, ms: 60 });
+  assert.deepEqual(stats.failures.map(f => [f.reason, f.calls]), [['error', 1]]);
+});
+
+test('S3: judgeFailingStreak は error・timeout・slot_timeout を新しい順に数え、答えた行で止まる。ほかの失敗は数えも止めもしない。20 行までしか読まない', t => {
+  const streak = (newestFirst: string[], drop = false): number => {
+    const db = openDatabase(':memory:', MIGRATIONS);
+    t.after(() => db.close());
+    const base = { runKind: 'chat' as const, tool: 'shell_run', askKinds: [], reasonKeys: [], projectId: null, runId: 'a', spend: { ms: 1 } };
+    [...newestFirst].reverse().forEach((value, i) => recordJudgeCall(db, value === 'allow' || value === 'ask' ? { ...base, outcome: value } : { ...base, outcome: 'failed', failed: value }, 1_000 + i));
+    if (drop) db.exec('DROP TABLE judge_calls');
+    return judgeFailingStreak(db);
+  };
+  assert.equal(streak([]), 0);
+  assert.equal(streak(['error', 'error', 'error']), 3);
+  assert.equal(streak(['slot_timeout', 'timeout', 'error']), 3);
+  assert.equal(streak(['error', 'cancelled', 'error', 'unparsable', 'timeout']), 3, 'cancelled と unparsable は数えも止めもしない');
+  assert.equal(streak(['error', 'allow', 'error', 'error']), 1, '答えた行で止まる');
+  assert.equal(streak(['error', 'ask', 'error', 'error']), 1, 'ask の答えも答え');
+  assert.equal(streak(['no_judge', 'too_long', 'no_request', 'judge_refused', 'unparsable', 'cancelled']), 0);
+  assert.equal(streak(Array.from({ length: 25 }, () => 'error')), 20, '20 行で止まる');
+  assert.equal(streak([...Array.from({ length: 20 }, () => 'cancelled'), 'error', 'error']), 0, '21 行目より先は読まない');
+  assert.equal(streak(['error', 'error', 'error'], true), 0, '表が読めなくても落ちない');
 });

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { AutoVerdict, JudgeSpend } from './auto-approve.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import type { RunKind } from './types.ts';
 
 export type JudgeOutcome = 'allow' | 'ask' | 'failed';
@@ -13,26 +14,49 @@ export interface JudgeCallInput {
   askKinds: readonly string[];
   outcome: JudgeOutcome;
   failed?: string | undefined;
+  // 呼べなかった理由（種類と、例外の文を 1 行にしたもの）。error のときだけ。`<種類>: <文>` の形で 300 字までに切って残す。記録とログにだけ使い、承認待ちの文・モデルへの返事には入れない
+  detail?: { kind: string; text: string } | undefined;
   spend: JudgeSpend;
 }
 
 const KEY = /^[a-z][a-z0-9_.-]{0,79}$/u;
 const KEYS_MAX = 32;
-const FAILED: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['error', 'timeout', 'unparsable', 'no_request', 'too_long', 'slot_timeout', 'no_judge', 'judge_refused']);
+const DETAIL_MAX = 300;
+const FAILED: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['error', 'cancelled', 'timeout', 'unparsable', 'no_request', 'too_long', 'slot_timeout', 'no_judge', 'judge_refused']);
 export const BEFORE_MODEL: ReadonlySet<string> = new Set<NonNullable<AutoVerdict['failed']>>(['no_judge', 'no_request', 'too_long', 'slot_timeout']);
 
 const keysOf = (keys: readonly string[]): string[] => [...new Set(keys.filter(key => KEY.test(key)))].sort().slice(0, KEYS_MAX);
 const count = (value: number | undefined): number | null => value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
+// 種類は決まった語の形だけ（そうでなければ internal）。文は秘密を伏せてから種類を前に付ける（種類を付けた形を伏せると、`auth: 401` の 401 が伏せられる）
+const detailOf = (detail: { kind: string; text: string }): string => `${KEY.test(detail.kind) ? detail.kind : 'internal'}: ${redactSecrets(detail.text)}`.slice(0, DETAIL_MAX);
+
 export function recordJudgeCall(db: DatabaseSync, input: JudgeCallInput, now = Date.now()): void {
   try {
-    db.prepare(`INSERT INTO judge_calls (run_id, run_kind, project_id, tool, reason_keys, ask_kinds, outcome, failed, judge_model, input_tokens, output_tokens, duration_ms, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO judge_calls (run_id, run_kind, project_id, tool, reason_keys, ask_kinds, outcome, failed, detail, judge_model, input_tokens, output_tokens, duration_ms, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       input.runId, input.runKind, input.projectId, input.tool.slice(0, 200), JSON.stringify(keysOf(input.reasonKeys)), JSON.stringify(keysOf(input.askKinds)),
       input.outcome, input.failed !== undefined && FAILED.has(input.failed) ? input.failed : input.outcome === 'failed' ? 'error' : null,
+      input.detail !== undefined ? detailOf(input.detail) : null,
       input.spend.model?.slice(0, 200) ?? null, count(input.spend.inputTokens), count(input.spend.outputTokens), count(Math.round(input.spend.ms)) ?? 0, now,
     );
   } catch { }
+}
+
+// 判定役が「呼べない」で続けて失敗している回数。新しい順に 20 行まで読み、error・timeout・slot_timeout は 1 と数え、答えた行（failed が NULL）で止まる。
+// ほかの failed（cancelled・unparsable・judge_refused・no_judge・no_request・too_long）は、判定役に届いたか呼ぶ前に決まったものなので、数えも止めもしない
+const STREAK_FAILURES: ReadonlySet<string> = new Set(['error', 'timeout', 'slot_timeout']);
+const STREAK_ROWS = 20;
+
+export function judgeFailingStreak(db: DatabaseSync): number {
+  try {
+    let streak = 0;
+    for (const row of db.prepare('SELECT failed FROM judge_calls ORDER BY created_at DESC, id DESC LIMIT ?').all(STREAK_ROWS) as Array<{ failed: string | null }>) {
+      if (row.failed === null) break;
+      if (STREAK_FAILURES.has(row.failed)) streak++;
+    }
+    return streak;
+  } catch { return 0; }
 }
 
 export interface JudgeTotals { calls: number; allow: number; ask: number; failed: number; inputTokens: number; outputTokens: number; ms: number }
@@ -55,9 +79,12 @@ interface Row { failed: string | null; run_id: string; run_kind: string; project
 
 const empty = (): JudgeTotals => ({ calls: 0, allow: 0, ask: 0, failed: 0, inputTokens: 0, outputTokens: 0, ms: 0 });
 
+// 実行が止められただけの呼び出し（cancelled）は、呼んだ数・量には入れるが、「失敗」の数には入れない
+const stopped = (row: Row): boolean => row.outcome === 'failed' && row.failed === 'cancelled';
+
 function add(totals: JudgeTotals, row: Row): void {
   totals.calls++;
-  totals[row.outcome]++;
+  if (!stopped(row)) totals[row.outcome]++;
   totals.inputTokens += Number(row.input_tokens ?? 0);
   totals.outputTokens += Number(row.output_tokens ?? 0);
   totals.ms += Number(row.duration_ms);
@@ -97,7 +124,7 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
     for (const key of listOf(row.reason_keys)) add(keys.get(key) ?? keys.set(key, { key, ...empty() }).get(key)!, row);
     for (const kind of listOf(row.ask_kinds)) add(kinds.get(kind) ?? kinds.set(kind, { kind, ...empty() }).get(kind)!, row);
     add(models.get(row.judge_model) ?? models.set(row.judge_model, { model: row.judge_model, ...empty() }).get(row.judge_model)!, row);
-    if (row.outcome === 'failed') {
+    if (row.outcome === 'failed' && !stopped(row)) {
       const reason = row.failed ?? 'error';
       add(failures.get(reason) ?? failures.set(reason, { reason, beforeModel: BEFORE_MODEL.has(reason), ...empty() }).get(reason)!, row);
     }

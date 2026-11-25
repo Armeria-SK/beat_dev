@@ -17,11 +17,11 @@ import type { ApprovalBroker } from './approvals.ts';
 import { matchRule, ruleCandidate, type RuleCandidate, type RuleHit } from './approval-rules.ts';
 import { FILE_ROUNDS_MAX, fileRoundInputs, judgeOnce, planFileRounds, type AutoVerdict, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeLimits, type JudgeReply, type JudgeSpend } from './auto-approve.ts';
 import { forgetAllow, involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNumber, rememberAllow, rememberedAllow } from './judge-cache.ts';
-import { recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
+import { judgeFailingStreak, recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf } from './hooks/decision-order.ts';
 import { carriesHeld, newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
 import { parseRemotes } from '../projects/remotes.ts';
-import { pendingText } from '../shared/messages/pending.ts';
+import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { QuestionError } from '../questions/store.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
 import { outboundOfCall, submitsOf, type Outbound } from './hooks/outbound.ts';
@@ -112,6 +112,17 @@ export function judgeRequestOf(ctx: Pick<ToolContext, 'fix' | 'project'>, deps: 
   return deps.lastUserRequest?.() ?? '';
 }
 export const unattendedRun =(ctx: Pick<ToolContext, 'kind' | 'parent'>): boolean => ctx.kind === 'task' || (ctx.kind === 'agent' && ctx.parent?.kind !== 'chat');
+
+// 判定役が答えられなかったときの承認待ちの文の鍵。呼べなかった（error）は、種類（閉じた語）ごとの決まった文。例外の文は鍵にも文にも入れない。
+// cancelled は実行が止められたときで、呼び出し側が先に「取り消し」で返すのでここには来ない（型を閉じるためだけ）
+export function judgeFailedKey(verdict: Pick<AutoVerdict, 'failed' | 'detail'> & { failed: NonNullable<AutoVerdict['failed']> }): PendingMessageKey {
+  if (verdict.failed === 'cancelled') return 'judge_failed_error';
+  if (verdict.failed === 'error') return verdict.detail !== undefined ? `judge_failed_error_${verdict.detail.kind}` : 'judge_failed_error';
+  return `judge_failed_${verdict.failed}`;
+}
+
+// 判定役の失敗が続いたら持ち主に知らせる回数。1 時間に 1 つ（dedupKey）
+const FAILING_NOTICE_AT = 3;
 
 function judgeLimitsFor(ctx: ToolContext, deps: PipelineDeps): JudgeLimits {
   const base = (deps.judgeLimits ?? JUDGE_LIMITS)[unattendedRun(ctx) ? 'unattended' : 'chat'];
@@ -432,9 +443,23 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         decidedBy = first.productRun;
       } else {
         const judgeKeys = first?.reasonKeys ?? [];
-        const noteJudge = (outcome: JudgeOutcome, failed: string | undefined, spend: JudgeSpend) => recordJudgeCall(deps.db, {
+        const noteJudge = (outcome: JudgeOutcome, failed: string | undefined, spend: JudgeSpend, detail?: AutoVerdict['detail']) => recordJudgeCall(deps.db, {
           runId: ctx.runId, runKind: ctx.kind, projectId: ctx.project?.id ?? null, tool: tool.name, reasonKeys: judgeKeys, askKinds: [...askKinds], outcome, failed, spend,
+          ...(detail !== undefined ? { detail } : {}),
         });
+        // 判定役を呼べない失敗（error・timeout・slot_timeout）が続いたら、持ち主に 1 つ知らせる。知らせられなくても、判定の結果は変えない
+        const noteFailing = (failed: string | undefined): void => {
+          if (failed !== 'error' && failed !== 'timeout' && failed !== 'slot_timeout') return;
+          try {
+            const notify = ctx.services?.notify;
+            const count = notify ? judgeFailingStreak(deps.db) : 0;
+            if (!notify || count < FAILING_NOTICE_AT) return;
+            notify({
+              kind: 'info', title: pendingText(language, 'notify_judge_failing_title'), body: pendingText(language, 'notify_judge_failing_body', { count }),
+              dedupKey: `judge-failing:${new Date().toISOString().slice(0, 13)}`,
+            });
+          } catch { }
+        };
         const noJudge = runsWithoutJudge(ctx, deps);
         // 直す実行は判定役の「許す」でだけ動く。判定役を切っていれば断る（D-11）
         if (noJudge && ctx.fix) return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: [...reasons, guardText(language, 'fix.no_judge')].join('\n- ') }));
@@ -483,7 +508,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
           for (const roundInput of rounds) {
             const judged = await judgeOnce(roundInput, classify, ctx.signal, judgeLimitsFor(ctx, deps));
             verdict = judged.verdict;
-            noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend);
+            noteJudge(verdict.failed ? 'failed' : verdict.decision, verdict.failed, judged.spend, verdict.detail);
+            noteFailing(verdict.failed);
             if (verdict.decision !== 'allow' || verdict.failed || ctx.signal.aborted) break;
           }
         }
@@ -500,7 +526,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
         }
         if (verdict.decision !== 'allow' || verdict.failed) {
           autoEvent('asked');
-          if (verdict.failed) return park('judge_failed', pendingText('en', `judge_failed_${verdict.failed}`), outbound, true);
+          if (verdict.failed) return park('judge_failed', pendingText('en', judgeFailedKey({ ...verdict, failed: verdict.failed })), outbound, true);
           return park('judge', verdict.reason ? pendingText('en', 'judge_asked', { reason: verdict.reason }) : pendingText('en', 'judge_asked_no_reason'), outbound, true);
         }
         let changed: string[] | undefined;

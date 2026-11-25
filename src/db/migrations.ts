@@ -702,4 +702,7 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   ALTER TABLE model_calls ADD COLUMN summary_chars INTEGER;
   `,
+  `
+  ALTER TABLE judge_calls ADD COLUMN detail TEXT;
+  `,
 ];
