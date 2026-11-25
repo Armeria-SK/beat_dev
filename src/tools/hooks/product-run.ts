@@ -23,6 +23,10 @@ export type ProductRunResult = { run: ProductRun } | { secret: string } | { secr
 const RUN_KINDS = new Set(['code', 'git_write']);
 const AWS_KEY = /(?:^|[^A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/u;
 const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
+const SOURCE_NAME = /(?:^|\/)[^/:]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|cs|vue|svelte|css|md)$/iu;
+// 名前がその言葉だけ（secrets.md・docs/credentials.md・secret.py）のファイルは、拡張子にかかわらず止める。長い名前の一部（credentials-helper.ts）だけが外れる
+const EXACT_WORD = /(?:^|\/)\.?(?:secrets?|credentials?)\.[^/]+$/iu;
+const commitSecret = (name: string): boolean => COMMIT_SECRET.test(name) && (EXACT_WORD.test(name) || !SOURCE_NAME.test(name));
 const MESSAGE_FLAGS = new Set(['-m', '--message']);
 
 const inside = (root: string, path: string): boolean => isInside(root, path) && isInside(realish(root), realish(path));
@@ -189,7 +193,7 @@ function secretToAdd(args: readonly FactWord[], dir: string, git: ProductRunInpu
     const code = entry.slice(0, 2);
     const path = resolve(top, entry.slice(3));
     if (code[0] === 'R' || code[0] === 'C') i++;
-    if (isSecretPath(path) || COMMIT_SECRET.test(entry.slice(3))) return entry.slice(3);
+    if (isSecretPath(path) || commitSecret(entry.slice(3))) return entry.slice(3);
   }
   return undefined;
 }
@@ -309,7 +313,7 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     if (sub === 'commit' && st.words.slice(1).some(w => !w.dynamic && (sanitizeModelInputText(w.text).redaction_count > 0 || AWS_KEY.test(w.text)))) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(args, dir)) {
-      const named = args.filter(w => !w.text.startsWith('-')).map(w => w.text).find(name => isSecretPath(resolve(dir, name)) || COMMIT_SECRET.test(name.replace(/\\/gu, '/')));
+      const named = args.filter(w => !w.text.startsWith('-')).map(w => w.text).find(name => isSecretPath(resolve(dir, name)) || commitSecret(name.replace(/\\/gu, '/')));
       if (named !== undefined) return { secret: named };
     }
     if (sub === 'add' && !namesFilesOnly(args, dir)) {

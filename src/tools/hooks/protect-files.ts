@@ -137,6 +137,32 @@ function isDirectory(path: string): boolean {
   try { return statSync(path).isDirectory(); } catch { return false; }
 }
 
+// 「cp 元… 先のフォルダ」だけの 1 文（mv も）。先のフォルダ自身は書き換えず、書かれるのは 先/元の名前 だけなので、その名前がそろって書き込みの一覧にあるときだけ、先のフォルダを一覧から外す。
+// 見張りは先のフォルダと できる名前の両方を書き込みに挙げるので、そのままだと守るフォルダを含むフォルダ（. など）への cp が、守る名前に当たらなくても聞かれる。
+// 文字は引用符・変数・ワイルドカード・つなぎ（; && | > など）の無い決まった形だけ読み、旗は値を取らないものだけ。ほかは外さない（rm -rf . のようなフォルダごとの書き込みは今までどおり聞く）
+const COPY_PROGRAMS = new Set(['cp', 'mv', 'copy-item', 'move-item', 'cpi', 'mi', 'copy', 'move']);
+const COPY_FLAG = /^(?:-[rRfvpnu]+|--(?:recursive|force|verbose|no-clobber|update)|-(?:recurse|force|verbose))$/iu;
+const COPY_PATH = /^(?:[A-Za-z]:[\\/])?[A-Za-z0-9_.@+][A-Za-z0-9_.@+/\\-]*$/u;
+
+function copyFolders(payload: HookPayload, writes: ReadonlyArray<{ path: string }>): Set<string> {
+  const folders = new Set<string>();
+  const input = payload.tool_input;
+  const command = payload.tool_name === 'shell_run' && typeof input === 'object' && input !== null ? (input as { command?: unknown }).command : undefined;
+  if (typeof command !== 'string' || command.length > 1_000) return folders;
+  const [program, ...rest] = command.trim().split(/[ \t]+/u);
+  if (!program || !COPY_PROGRAMS.has(program.toLowerCase())) return folders;
+  const flags = rest.filter(word => word.startsWith('-'));
+  const paths = rest.filter(word => !word.startsWith('-'));
+  if (paths.length < 2 || !flags.every(flag => COPY_FLAG.test(flag)) || !paths.every(word => COPY_PATH.test(word) && (WINDOWS || !word.includes('\\')))) return folders;
+  const dest = resolve(payload.cwd, paths.at(-1)!);
+  if (!isDirectory(dest)) return folders;
+  const names = paths.slice(0, -1).map(word => word.split(/[\\/]/u).filter(Boolean).at(-1));
+  if (names.some(name => name === undefined || name === '.' || name === '..')) return folders;
+  const written = new Set(writes.map(entry => baseFold(resolve(payload.cwd, entry.path))));
+  if (names.every(name => written.has(baseFold(resolve(dest, name!))))) folders.add(baseFold(dest));
+  return folders;
+}
+
 export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, language: Language = DEFAULT_LANGUAGE): HookResult {
   const writes = (payload.paths ?? []).filter(p => p.write && typeof p.path === 'string' && p.path !== '');
   const none: HookResult = { hook: PROTECT_FILES, decision: undefined, reason: '' };
@@ -147,8 +173,10 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
   let inodes: Inodes | undefined;
   const budget: Budget = { left: WALK_LIMIT };
   const reasons: string[] = [];
+  const folders = copyFolders(payload, writes);
   for (const entry of writes) {
     const given = resolve(payload.cwd, entry.path);
+    if (folders.has(baseFold(given)) && isDirectory(given)) continue;
     const lexical = WINDOWS ? windowsNames(given) : given;
     const resolved = realPath(lexical);
     const real = resolved.path;
