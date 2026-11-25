@@ -59,6 +59,8 @@ export function matchChange(files: readonly ChangedFile[], wanted: string, root:
 
 export const EDIT_TOOLS: ReadonlySet<string> = new Set(['file_write', 'file_edit', 'table_write']);
 
+export const CHANGING_TOOLS: ReadonlySet<string> = new Set([...EDIT_TOOLS, 'shell_run']);
+
 const SHOWN_REFUSALS = 3;
 const WHY: Record<ChangeRefusal, PlainKey> = {
   not_changed: 'ui.changes.why.not_changed',

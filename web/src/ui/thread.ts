@@ -17,6 +17,7 @@ export type NoticeWeight = 'quiet' | 'warn' | 'fail';
 
 export type ThreadItem =
   | { kind: 'owner'; key: string; text: string; attachments: string[]; at: number }
+  | { kind: 'generated'; key: string; text: string }
   | { kind: 'reply'; key: string; text: string; copyText: string | null; at: number; stamped: boolean }
   | { kind: 'tools'; key: string; rows: ToolItem[] }
   | { kind: 'live'; key: string; text: string; since: number | null }
@@ -146,7 +147,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
       const input = m.toolCallId ? pending.get(m.toolCallId)?.shift() : undefined;
       tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) }, ...(m.gate ? { gate: m.gate } : {}) });
     } else if (m.role === 'user') {
-      if (m.note !== 'continue') items.push({ kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
+      if (m.note !== 'continue') items.push(m.generated ? { kind: 'generated', key, text: m.text } : { kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {
       const turn = turns.get(m.id);
       const reply = { text: m.text, copyText: turn ? turn.copyText : m.text, at: m.createdAt, stamped: turn ? turn.copyText !== null : true };

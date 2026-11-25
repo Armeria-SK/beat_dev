@@ -7,13 +7,14 @@ import { Button } from './parts.tsx';
 const MENU_GAP = 4;
 const ENABLED_ITEMS = '[role="menuitem"]:not(:disabled)';
 
-export function SessionMenu({ conversation, label, lead, opener, floating, className, onArchived, onDeleted, onClose }: {
+export function SessionMenu({ conversation, label, lead, opener, floating, className, onRename, onArchived, onDeleted, onClose }: {
   conversation: Pick<Conversation, 'id' | 'archived' | 'project_id'>;
   label: string;
   lead?: ReactNode;
   opener: RefObject<HTMLElement | null>;
   floating?: boolean;
   className?: string;
+  onRename?: () => void;
   onArchived: (keyboard: boolean) => void;
   onDeleted: (keyboard: boolean) => void;
   onClose: (refocus: boolean) => void;
@@ -82,6 +83,7 @@ export function SessionMenu({ conversation, label, lead, opener, floating, class
         if (next !== null) { e.preventDefault(); items[next]?.focus(); }
       }}
       onBlur={e => { if (menuLeft(e.relatedTarget, e.currentTarget.contains(e.relatedTarget as Node | null), opener.current)) onClose(false); }}>
+      {onRename && <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={onRename}>{t('ui.session.rename')}</button></li>}
       {lead}
       {conversation.archived !== 1 && (
         <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" disabled={busy}

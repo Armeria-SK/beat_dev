@@ -189,6 +189,7 @@ export const EXPLAIN_KEYS = [
   'ui.notice.contextHigh',
   'ui.notice.summary',
   'ui.notice.summaryFailed',
+  'ui.notice.generated',
   'ui.fail.reply',
   'ui.fail.context',
   'ui.fail.noModel',

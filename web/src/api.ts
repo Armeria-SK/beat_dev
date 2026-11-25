@@ -135,6 +135,7 @@ export interface Message {
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
   // beat が足した一言（'continue' は返事が上限で切れたときの続きの頼み。画面に出さない）
   note?: 'pending' | 'continue';
+  generated?: true;
 }
 // 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
 export interface ModelChoice { modelId?: string | null; effort?: string | null; permissionMode?: PermissionMode }

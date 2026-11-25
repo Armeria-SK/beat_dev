@@ -107,6 +107,23 @@ function QuietNotice({ notices }: { notices: RunNotice[] }) {
   );
 }
 
+function GeneratedNote({ text, rising }: { text: string; rising: boolean }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="ui-generated">
+      <div className={`bt-notice${rising ? ' bt-rise' : ''}`}>
+        <span className="bt-notice__rule" />
+        <span className="ui-notice__text">
+          {t('ui.notice.generated')} · <button type="button" className="bt-notice__action" aria-expanded={open} onClick={() => setOpen(shown => !shown)}>{open ? t('ui.notice.hideGenerated') : t('ui.notice.showGenerated')}</button>
+        </span>
+        <span className="bt-notice__rule" />
+      </div>
+      {open && <p className="bt-meta ui-generated__text">{text}</p>}
+    </div>
+  );
+}
+
 function PlanWritten({ onOpen, rising }: { onOpen: (() => void) | undefined; rising: boolean }) {
   const t = useT();
   return (
@@ -241,13 +258,8 @@ function Bar({ conversation: row, readOnly, title, product, meter, panes, onRena
           </button>
           {menu && (
             <SessionMenu conversation={conversation} label={t('ui.session.menu')} opener={menuButton} className="ui-sessionmenu" onClose={closeMenu}
-              onArchived={() => closeMenu()} onDeleted={() => location.replace('#/')}
-              lead={(
-                <>
-                  <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={startRename}>{t('ui.session.rename')}</button></li>
-                  {conversation.has_summary && <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={() => { setMenu(false); onSummary(); }}>{t('ui.session.summary')}</button></li>}
-                </>
-              )} />
+              onRename={startRename} onArchived={() => closeMenu()} onDeleted={() => location.replace('#/')}
+              lead={conversation.has_summary ? <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" onClick={() => { setMenu(false); onSummary(); }}>{t('ui.session.summary')}</button></li> : undefined} />
           )}
         </div>
       )}
@@ -570,6 +582,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
           </div>
         );
       }
+      case 'generated': return <GeneratedNote key={item.key} text={item.text} rising={rise(item.key)} />;
       case 'reply': {
         const stamp = item.stamped ? messageStamp(item.at, renderedAt) : null;
         return (

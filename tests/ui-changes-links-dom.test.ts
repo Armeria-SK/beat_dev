@@ -118,10 +118,10 @@ test('ui/ToolRow（DOM）: Pending に止まった Edit・動かなかった Edi
   assert.ok(links[0]!.closest('.bt-tool')?.textContent?.includes('src/ran.ts'));
 });
 
-test('ui/live-state: 書く道具の結果（ok）が来るたびに、その会話の書いた回数が増える。失敗・断られた・読むだけの道具では増えない', () => {
+test('ui/live-state: 書く道具・シェルの命令の結果（ok）が来るたびに、その会話の書いた回数が増える。失敗・断られた・読むだけの道具では増えない', () => {
   const result = (name: string, ok = true, decision = 'allow') => ({ type: 'event' as const, hidden: false, event: { type: 'tool.result' as const, runId: 'r1', conversationId: 'c1', callId: name, name, ok, decision, preview: '' } });
   let state = EMPTY;
   for (const action of [result('file_edit'), result('file_write'), result('table_write'), result('file_edit', false), result('file_edit', true, 'deny'), result('file_read'), result('shell_run')]) state = reduce(state, action).state;
-  assert.equal(state.edits.get('c1'), 3);
+  assert.equal(state.edits.get('c1'), 4);
   assert.equal(state.edits.get('c2'), undefined);
 });
