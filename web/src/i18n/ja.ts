@@ -624,7 +624,6 @@ export const ja = {
   'ui.rs.similarNone': '開けるページのある似ている製品はありませんでした',
   'ui.rs.baseLicense': (license: string) => `土台にする前にライセンスを確かめてください: ${license}`,
   'ui.rs.unanswered': 'まだ答えていません。答えないままなら何も決まりません',
-  'ui.rs.confirmGoOn': '部品の調べへ進む',
   'ui.rs.confirmWhat': '計画の会話に入るのは、あなたが選んだものだけです',
   'ui.rs.confirmWhatLibraries': '計画と DECISIONS.md に入るのは、あなたが選んだ選択肢だけです',
   'ui.rs.busy': '会話がまだ返事をしています。返事が終わってからもう一度押してください',

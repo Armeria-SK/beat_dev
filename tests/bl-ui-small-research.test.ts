@@ -63,7 +63,7 @@ test('bl-ui-small/research: 失敗して 0 件の似ている製品の記録は�
   }
 });
 
-test('bl-ui-small/research: 押したときの動きは同じ（確定の呼び出しに記録の版と空の選びを送る）。日本語の説明では「部品の調べへ進む」', async () => {
+test('bl-ui-small/research: 押したときの動きは同じ（確定の呼び出しに記録の版と空の選びを送る）。日本語の説明にしても、ボタンの名前は英語のまま（I-1）', async () => {
   serve(() => view(record({ status: 'failed', items: [] })));
   const root = await pane();
   await click(confirmButton(root));
@@ -78,5 +78,5 @@ test('bl-ui-small/research: 押したときの動きは同じ（確定の呼び�
   setExplainLanguage('ja');
   serve(() => view(record({ status: 'failed', items: [] })));
   const ja = await pane();
-  assert.equal(confirmButton(ja)?.textContent, '部品の調べへ進む');
+  assert.equal(confirmButton(ja)?.textContent, 'Continue to the libraries research');
 });

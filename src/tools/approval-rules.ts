@@ -396,7 +396,7 @@ export function listRules(db: DatabaseSync): RuleView[] {
   return rows.map(({ archived_at, base, keys, ...r }) => ({
     ...r, id: Number(r.id), created_at: Number(r.created_at), archived: archived_at !== null && archived_at !== undefined,
     ...(pushRule({ tool: r.tool, base }) ? { push: true as const } : {}), ...(outsideRule({ kind: r.kind, tool: r.tool, base }) ? { outside: true as const } : {}),
-    ...(inactiveRule(keys) ? { inactive: true as const } : {}),
+    ...(r.kind === 'policy' && inactiveRule(keys) ? { inactive: true as const } : {}),
   }));
 }
 

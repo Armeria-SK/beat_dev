@@ -86,6 +86,11 @@ test('bl-ui-small/rules: 持ち主の Ask の一覧から作った決まりだ�
   assert.ok(candidate, '昔は、この行に選び方が出ていた');
   addRule(r.db, { projectId: 'p1', candidate, fromPending: 1, now: 1 });
 
+  // 送るの決まりが、キーに Ask の一覧のものも持っている形（2026-11-19 の頃に作られたもの）: 印は policy の決まりにだけ付けるので、この行は効く決まりのまま並ぶ
+  const sendRow = r.db.prepare("SELECT id, keys FROM approval_rules WHERE kind = 'send'").get() as { id: number; keys: string };
+  r.db.prepare('UPDATE approval_rules SET keys = ? WHERE id = ?').run(JSON.stringify([...(JSON.parse(sendRow.keys) as string[]), 'guard.needs_approval']), sendRow.id);
+  assert.ok((JSON.parse((r.db.prepare('SELECT keys FROM approval_rules WHERE id = ?').get(sendRow.id) as { keys: string }).keys) as string[]).includes('guard.needs_approval'), '送るの決まりもキーを持つ');
+
   // 本物の呼び出しで: 効く形の決まりは動き、Ask の一覧の決まりは当たらず持ち主へ
   const behaviour: Record<string, string> = {};
   for (const [name, args] of [
@@ -102,7 +107,8 @@ test('bl-ui-small/rules: 持ち主の Ask の一覧から作った決まりだ�
 
   // 画面に出す一覧の印は、決まりが本当に当たるかどうかと一致する
   assert.equal(listRules(r.db).length, 5);
-  assert.equal(listRules(r.db).filter(rule => rule.inactive).length, 1, '印が付くのは 1 つだけ');
+  assert.equal(listRules(r.db).filter(rule => rule.inactive).length, 1, '印が付くのは 1 つだけ（キーを持つ送るの決まりには付かない）');
+  assert.equal(listRules(r.db).find(rule => rule.id === sendRow.id)?.inactive, undefined, 'send の決まりは policy でないので印が付かない');
   const inactive = listRules(r.db).find(rule => rule.inactive);
   assert.ok(inactive);
   assert.equal(inactive.kind, 'policy');

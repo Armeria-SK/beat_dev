@@ -374,7 +374,7 @@ export function App() {
   const title = viewTitle(t, behind, conversation, routeProduct);
   const kanban = kanbanCount(waiting);
   const convo = isConversation(behind) || behind.view === 'productNew';
-  const convoProduct = behind.view === 'productNew' ? routeProduct : productOf(projects, conversation?.project_id ?? (unlisted?.id === chatId ? unlisted.projectId : undefined));
+  const convoProduct = behind.view === 'productNew' ? routeProduct : productOf(projects, listed ? conversation.project_id : (unlisted?.id === chatId ? unlisted.projectId : undefined));
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
   const covered = drawer || settingsOpen || onboard !== null;
   const shut = settingsOpen || onboard !== null;

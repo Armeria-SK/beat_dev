@@ -623,7 +623,6 @@ export const EXPLAIN_KEYS = [
   'ui.rs.similarNone',
   'ui.rs.baseLicense',
   'ui.rs.unanswered',
-  'ui.rs.confirmGoOn',
   'ui.rs.confirmWhat',
   'ui.rs.confirmWhatLibraries',
   'ui.rs.busy',
