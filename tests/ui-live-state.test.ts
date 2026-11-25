@@ -250,6 +250,14 @@ test('ui/live-state: やり直し中（retrying）の知らせは同じ実行の
   assert.deepEqual(failed.notices.get('c')!.map(n => n.kind), ['error'], '失敗で終わっても、やり直し中の知らせは残さない');
 });
 
+test('ui/live-state: 手元のモデルが黙っている（model_silent）知らせは、同じ実行の中で 1 つに置き換え、その実行が終われば消える（何度黙っても他の知らせを押し出さない）', () => {
+  const silent = (runId: string, seconds = 60): Action => ev({ type: 'warning', runId, conversationId: 'c', code: 'model_silent', message: 'm', params: { model: 'qwen', seconds } });
+  const during = run(EMPTY, silent('r'), silent('r', 120), silent('other'), ev({ type: 'warning', runId: 'r', conversationId: 'c', code: 'context_trimmed', message: 'x' }));
+  assert.deepEqual(during.notices.get('c')!.map(n => [n.runId, n.kind === 'warning' && n.code]), [['r', 'model_silent'], ['other', 'model_silent'], ['r', 'context_trimmed']]);
+  const ended = run(during, ev({ type: 'run.end', runId: 'r', conversationId: 'c', ok: true }));
+  assert.deepEqual(ended.notices.get('c')!.map(n => [n.runId, n.kind === 'warning' && n.code]), [['other', 'model_silent'], ['r', 'context_trimmed']], 'ほかの実行の分と、ほかの知らせは残す');
+});
+
 test('ui/live-state: Retry で片づけるのは、失敗した実行のお知らせだけ', () => {
   const s = run(EMPTY, ev({ type: 'compaction', runId: 'r1', conversationId: 'c', summarized: 2 }), ev({ type: 'run.end', runId: 'r2', conversationId: 'c', ok: false, errorKind: 'timeout' }));
   assert.deepEqual(run(s, { type: 'clearNotices', conversationId: 'c', runId: 'r2' }).notices.get('c')!.map(n => n.runId), ['r1']);

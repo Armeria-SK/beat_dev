@@ -25,6 +25,8 @@ export type StreamEvent =
   | { type: 'usage'; usage: Usage }
   // 送り返した考える部分が断られ、外して送り直した（実行の印 thinking_replay_rejected）
   | { type: 'replay_rejected' }
+  // 何か届いたことだけを知らせる（中身は無い）。ツール呼び出しの断片のように、完成するまで他の出来事にならないものも「届いている」と数えるため。受け取る側は数えるだけで、ほかは何もしない
+  | { type: 'progress' }
   | { type: 'done'; stop: StopReason; refused?: true };
 
 export type ProbeStatus =

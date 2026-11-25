@@ -142,6 +142,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
           const message = typeof chunk.error === 'string' ? chunk.error : String(chunk.error.message ?? 'error');
           throw classifyHttpFailure(Number(chunk.error.code) || 500, message, undefined, this.#secrets());
         }
+        yield { type: 'progress' };
         const choice = chunk?.choices?.[0];
         const delta = choice?.delta;
         if (delta) {

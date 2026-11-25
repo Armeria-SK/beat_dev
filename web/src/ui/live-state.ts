@@ -138,7 +138,7 @@ function dropNotices(s: LiveState, conversationId: string, drop: (n: RunNotice) 
 }
 
 const HIDDEN_WARNINGS: ReadonlySet<string> = new Set(['compacted', 'output_continued']);
-const PASSING_WARNINGS: ReadonlySet<string> = new Set(['retrying']);
+const PASSING_WARNINGS: ReadonlySet<string> = new Set(['retrying', 'model_silent']);
 
 function bump(s: LiveState, conversationId: string): LiveState {
   return { ...s, revisions: new Map(s.revisions).set(conversationId, (s.revisions.get(conversationId) ?? 0) + 1) };
