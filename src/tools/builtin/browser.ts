@@ -90,6 +90,8 @@ interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; d
 const RENDER_MARGIN_CHARS = 400;
 // 本文は、送る分より余分に読む（伏せて短くなっても、読みの上限で切れた秘密の頭が送る範囲に入らない）
 const TEXT_MARGIN = 4096;
+// 本文を、伏せた所が読める範囲の終わりまで続いて見せられなかったとき、もう 1 回だけ余分に読む字数（その先のきれいな位置を探す）
+const TEXT_RETRY_CHARS = 200_000;
 const RENDER_MARGIN_TOKENS = 120;
 
 // pipeline の切り方（capOutput: 伏せ字のあと、文字数とトークンの上限）で残る部分に、行がそのまま入っている要素だけを返す。
@@ -115,7 +117,7 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   let tokens = (options.outputTokens ?? Infinity) - RENDER_MARGIN_TOKENS - estimateTextTokens(header) - footerRoom / 3.5;
   // 文は余分に読み、伏せてから切る（伏せで短くなっても、切り目の秘密の頭が、送る範囲に入らない）
   const asked = options.offset + pageChars + TEXT_MARGIN;
-  const raw = options.mode !== 'elements' ? await until(page.text(asked), api.signal) : '';
+  let raw = options.mode !== 'elements' ? await until(page.text(asked), api.signal) : '';
   // 大きさは、送る形（block: 枠の文字の置き換え・伏せ字のあと）で測る
   const size = (text: string): { chars: number; tokens: number } => ({ chars: text.length + 1, tokens: estimateTextTokens(text) + 1 });
   let table: ElementTable | undefined;
@@ -146,13 +148,24 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   }
   if (options.mode !== 'elements') {
     const textTitle = toolText(language, 'browser.section_text');
-    const moreText = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
+    const moreText0 = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
+    // 読み始めを戻したときの 1 行の分も取っておく
+    const fromText = size(toolText(language, 'browser.text_from', { start: 999_999_999, offset: 999_999_999 }));
+    const moreText = { chars: moreText0.chars + fromText.chars, tokens: moreText0.tokens + fromText.tokens };
     const roomChars = Math.max(0, Math.min(pageChars, chars - size(textTitle).chars - moreText.chars));
     const roomTokens = Math.max(0, tokens - size(textTitle).tokens - moreText.tokens);
     // 頭から読んだ文を伏せ、きれいに分けられる位置のあいだだけを送る（pageText。求められた offset が値の途中なら手前へ戻す。
     // 読む上限で切れた読みは、いつも続きがあるものとして、続きの位置も確かめる）
-    const sent = pageText(raw, options.offset, raw.length >= asked, secrets, roomChars, roomTokens);
-    parts.push(textTitle, sent.text !== '' ? sent.text : toolText(language, 'browser.empty_text'));
+    let sent = pageText(raw, options.offset, raw.length >= asked, secrets, roomChars, roomTokens);
+    if (sent.blocked) {
+      // 伏せた所が読める範囲の終わりまで続いた: 余分に読み、その先のきれいな位置を探す（確かめた位置からだけ続ける）
+      const more = asked + TEXT_RETRY_CHARS;
+      raw = await until(page.text(more), api.signal);
+      sent = pageText(raw, options.offset, raw.length >= more, secrets, roomChars, roomTokens);
+    }
+    parts.push(textTitle);
+    if (sent.start !== options.offset && options.offset < raw.length) parts.push(toolText(language, 'browser.text_from', { start: sent.start, offset: options.offset }));
+    parts.push(sent.text !== '' ? sent.text : toolText(language, sent.blocked ? 'browser.text_blocked' : 'browser.empty_text', { offset: options.offset }));
     if (sent.next !== undefined) parts.push(toolText(language, 'browser.more_text', { offset: sent.next }));
   }
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない

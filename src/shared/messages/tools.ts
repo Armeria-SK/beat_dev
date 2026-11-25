@@ -362,6 +362,8 @@ const en = {
   'browser.empty_text': '(There is no visible text)',
   'browser.no_elements': '(There is nothing to touch)',
   'browser.more_text': '(Cut here. Continue with offset={offset})',
+  'browser.text_from': '(Shown from offset={start}, not {offset}: that offset was inside hidden secret text, so reading starts just before it)',
+  'browser.text_blocked': '(The page text continues, but it cannot be shown from offset={offset}: hidden secret text runs past what can be read from here. Use a later offset to skip past it)',
   'browser.more_elements': '({count} more elements are omitted)',
   'browser.replay_read_again': '(This page was read after the owner approved it, so its element numbers cannot be used yet. Read the page again with browser_read before you click or type.)',
   'browser.refs_exhausted': 'The browser of this conversation has used up its element numbers (up to e{max}) and does not number them again, so the page cannot be read or operated until beat is restarted',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { pageText, sentText } from '../src/tools/browser/sent.ts';
+import { findBack, pageText, sentText, TAIL_MARGIN } from '../src/tools/browser/sent.ts';
 import { redactSecrets } from '../src/shared/redaction.ts';
 
 // browser_read mode=text の読み進め（renderTab と同じ形: 頭から offset + 上限 + 4,096 字を読み、pageText に渡す）。
@@ -143,4 +143,75 @@ test('pageText: 読む上限の直前が「password: 」で値が上限の向こ
   const out = pageText(raw.slice(0, limit), 0, true, [], 20_000);
   assert.ok(out.next !== undefined && out.next > 0);
   assert.ok(!redactSecrets(raw.slice(out.next)).includes('hunter2'), raw.slice(out.next, out.next + 40));
+});
+
+// ── P3b の直し、4 回目 ──
+
+const pemBody = (n: number): string[] => Array.from({ length: n }, (_, i) => `MIIK${String(i).padStart(3, '0')}${'Qm9keQ'.repeat(10)}xyz`);
+const pemKey = (n: number): string => ['-----BEGIN PRIVATE KEY-----', ...pemBody(n), '-----END PRIVATE KEY-----'].join('\n');
+
+test('pageText: 51 行の秘密鍵の 32 行より奥に上限の切り目があっても、鍵の頭の手前で区切って読み進める（前に秘密があってもなくても）', () => {
+  const prose = (n: number): string => 'Plain prose sentence here. '.repeat(n);
+  for (const lead of ['', `token sk-${'k'.repeat(30)} here. `]) {
+    const raw = `${lead}${prose(Math.floor((20_400 - lead.length) / 27))}\n${pemKey(51)}\n${prose(1100)}`;
+    const keyAt = raw.indexOf('-----BEGIN');
+    assert.ok(24_096 - TAIL_MARGIN - keyAt > 33 * 70, `${keyAt}`);
+    const first = pageText(raw.slice(0, 24_096), 0, true, [], 20_000);
+    assert.ok(first.next !== undefined && !first.blocked, JSON.stringify({ next: first.next, blocked: first.blocked }));
+    const { sent } = page(raw, 20_000);
+    assert.ok(!sent.some(text => text.includes('Qm9keQ')), '鍵の中身を送らない');
+    assert.ok(sent.join('').includes(prose(3).trim()), '鍵のあとの文も読める');
+  }
+});
+
+test('pageText: きれいに分けられる位置が無い読み（区切りの無い並びの終わりで決まった秘密が切れる）は、何も送らず blocked', () => {
+  const PLAIN = 'Zq7-plainpass-Xv93-Lm2k';
+  const out = pageText(`${'A'.repeat(7000)}${PLAIN.slice(0, 8)}`, 0, true, [PLAIN], 20_000);
+  assert.equal(out.text, '');
+  assert.equal(out.next, undefined);
+  assert.equal(out.blocked, true);
+});
+
+test('pageText: 頭が秘密で、offset がその中なら 0 から読む（きれいな位置が見つからなければ offset のままにしない）', () => {
+  const PLAIN = 'Zq7-plainpass-Xv93-Lm2k';
+  const out = pageText(`${PLAIN} rest of the text`, 5, false, [PLAIN], 1000);
+  assert.equal(out.start, 0);
+  assert.ok(!out.text.includes('plainpass'), out.text);
+});
+
+test('pageText: offset が長い秘密鍵の中なら、鍵の頭の手前まで戻す', () => {
+  const raw = `Intro words here.\n${pemKey(60)}\nAfter words.`;
+  const keyAt = raw.indexOf('-----BEGIN');
+  const out = pageText(raw, raw.indexOf('MIIK045'), false, [], 20_000);
+  assert.ok(out.start <= keyAt && out.start >= keyAt - 'here.\n'.length, `${out.start} / ${keyAt}`);
+  assert.ok(!out.text.includes('Qm9keQ'), out.text.slice(0, 200));
+});
+
+test('findBack: 前の分の伏せた長さが maxHead を超える位置は返さない', () => {
+  const raw = 'aaa bbb ccc ddd eee';
+  const found = findBack(raw, raw, raw.length, 8, []);
+  assert.ok(found !== undefined && found.head <= 8 && found.q <= 8, JSON.stringify(found));
+});
+
+test('pageText: 1 行ずつ空行をはさんだ秘密鍵で、読む上限が鍵の中でも、鍵の中身を送らない（END の無い BEGIN の手前で区切る）', () => {
+  const keys = Array.from({ length: 20 }, (_, i) => `${key(i)}${'q'.repeat(170)}`).join(' ');
+  const lead = `${keys} ${'p '.repeat(200)}`;
+  const spaced = ['-----BEGIN PRIVATE KEY-----', ...pemBody(26), '-----END PRIVATE KEY-----'].join('\n\n');
+  const raw = `${lead.slice(0, 4596)}\n${spaced}\n${'After the key. '.repeat(400)}`;
+  const { sent } = page(raw, 2000);
+  assert.ok(!sent.some(text => text.includes('Qm9keQ')), sent.find(text => text.includes('Qm9keQ'))?.slice(-300));
+});
+
+test('pageText: 空白の無い JSON の、秘密でない名前の下の長い JWT で読む上限が中にあっても、頭と中身を送らない', () => {
+  const payload = Buffer.from(JSON.stringify({ sub: 'x'.repeat(3400) })).toString('base64url');
+  const jwt = `eyJhbGciOiJIUzI1NiJ9.${payload}.c2lnbmF0dXJlc2lnbmF0dXJlc2lnbmF0dXJl`;
+  const filler = (n: number): string => Array.from({ length: n }, (_, i) => `{"id":${i},"note":"${'n'.repeat(90)}"}`).join(',');
+  const raw = `{"items":[${filler(180)}],"data":"${jwt}","rest":[${filler(300)}]}`;
+  const at = raw.indexOf('eyJ');
+  const limit = 20_000 + 4096;
+  assert.ok(at < 20_000 && at + jwt.length > limit, `${at} ${jwt.length}`);
+  const first = pageText(raw.slice(0, limit), 0, true, [], 20_000);
+  assert.ok(!first.text.includes('eyJ'), first.text.slice(-200));
+  const { sent } = page(raw, 20_000);
+  assert.ok(!sent.some(text => text.includes('eyJhbGci') || text.includes(payload.slice(0, 20))), sent.find(text => text.includes('eyJ'))?.slice(-200));
 });

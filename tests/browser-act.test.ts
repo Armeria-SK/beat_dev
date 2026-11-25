@@ -1245,3 +1245,59 @@ test('P3b: browser_read の offset が値の途中なら、手前のきれいな
     for (const value of ['Rv8sQ', 'q7-plain', 'abcdefghij']) assert.ok(!out.content.includes(value), `${offset}: ${out.content}`);
   }
 });
+
+// ── P3b の直し、4 回目 ──
+
+test('P3b: 行の終わりまで続く Cookie の値で読める範囲が終わっても、もう 1 回余分に読んで、値のあとから続ける', async t => {
+  const r = rig(t, { mutate: c => { c.tools.browser.limits.pageChars = 2000; } });
+  const COOKIE = 'https://example.com/cookie';
+  const text = `Intro.\nCookie: ${'v'.repeat(30_000)}\n${'After the cookie line. '.repeat(300)}`;
+  r.driver.site(COOKIE, { title: 'Cookie', text, snapshot: '', rows: [] });
+  await browserOpen.execute({ url: COOKIE }, r.ctx);
+  const out = await browserRead.execute({ mode: 'text', offset: text.indexOf('Cookie:') }, r.ctx);
+  assert.ok(!out.content.includes('vvvv'), out.content.slice(0, 300));
+  assert.ok(out.content.includes('Cookie: [REDACTED]') && out.content.includes('After the cookie line.'), out.content.slice(0, 300));
+  assert.match(out.content, /offset=\d+/u);
+});
+
+test('P3b: 余分に読んでも見せられない（Cookie の値が読める範囲より長い）なら、「文は続くがここからは見せられない」と知らせる（文が無いとは言わない）', async t => {
+  const r = rig(t, { mutate: c => { c.tools.browser.limits.pageChars = 2000; } });
+  const COOKIE = 'https://example.com/cookie-long';
+  const text = `Intro.\nCookie: ${'v'.repeat(260_000)}\nAfter.`;
+  r.driver.site(COOKIE, { title: 'Cookie', text, snapshot: '', rows: [] });
+  await browserOpen.execute({ url: COOKIE }, r.ctx);
+  const offset = text.indexOf('Cookie:');
+  const out = await browserRead.execute({ mode: 'text', offset }, r.ctx);
+  assert.ok(out.content.includes(en('browser.text_blocked', { offset })), out.content.slice(0, 400));
+  assert.ok(!out.content.includes(en('browser.empty_text')) && !out.content.includes('vvvv'), out.content.slice(0, 400));
+});
+
+test('P3b: 読み始めを offset より手前に戻したときは、実際の読み始めを知らせる', async t => {
+  const r = rig(t);
+  const VALS = 'https://example.com/values-from';
+  const text = `${'Intro words. '.repeat(20)}password: hunter2-Rv8sQ and more words.`;
+  r.driver.site(VALS, { title: 'Values', text, snapshot: '', rows: [] });
+  await browserOpen.execute({ url: VALS }, r.ctx);
+  const offset = text.indexOf('hunter2') + 3;
+  const out = await browserRead.execute({ mode: 'text', offset }, r.ctx);
+  const shown = /Shown from offset=(\d+), not (\d+)/u.exec(out.content);
+  assert.ok(shown, out.content);
+  assert.equal(Number(shown[2]), offset);
+  assert.ok(Number(shown[1]) < offset && text.slice(Number(shown[1])).includes('password:'), shown[1]);
+  const plain = await browserRead.execute({ mode: 'text', offset: 13 }, r.ctx);
+  assert.doesNotMatch(plain.content, /Shown from offset/u, 'きれいな位置ならそのまま');
+});
+
+test('P3b: 決まった一覧の秘密で同じに見える 2 つの新しい要素（Revoke と別々の秘密）も、番号なしの組の 1 行', async t => {
+  const A = 'Plain-Alpha-Secret-0001';
+  const B = 'Plain-Bravo-Secret-0002';
+  const r = rig(t, { secrets: [A, B] });
+  const base = listSite({});
+  const names = [`Revoke ${A}`, `Revoke ${B}`];
+  const after: FakeSite = { ...base, snapshot: `${base.snapshot!}\n${names.map(n => `- button "${n}"`).join('\n')}`, rows: [...base.rows!, ...names.map((n): FakeRow => ({ role: 'button', name: n }))] };
+  r.driver.site(LIST, listSite({ mutate: after }));
+  await opened(r, LIST);
+  const inside = fenced((await browserClick.execute({ ref: 'e4' }, r.ctx)).content);
+  assert.ok(!inside.some(line => line.startsWith('+ ') && line.includes('Revoke')), inside.join('\n'));
+  assert.ok(inside.includes(en('browser.diff_group', { count: 2, role: 'button', name: '"Revoke [REDACTED]"' })), inside.join('\n'));
+});

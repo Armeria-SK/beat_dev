@@ -43,32 +43,42 @@ export interface Paged {
   start: number;
   // 続きの読みの offset（続きが無ければ undefined）。いつも start より後ろで、きれいに分けられる位置
   next: number | undefined;
+  // 上限で切れた読みで、きれいに分けられる位置が無かった（伏せた所が読める範囲の終わりまで続く）。文はまだ続くが、この offset からは見せられない
+  blocked: boolean;
 }
+
+const PEM_BEGIN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/gu;
+const PEM_END = /-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
 
 // browser_read の本文の 1 回分。full はページの文の頭から読んだもの、limited は読む上限で切れたか（その先にも文がある）。
 // 「きれいに分けられる位置」p: 文を p で前後に分けて伏せても、分けずに伏せた形と同じになる位置（秘密の途中・「password:」と値のあいだではない）。
 // 送るのは、きれいな 2 つの位置のあいだを伏せた形だけ。上限で切れた読みでは、最後の空白と、上限の TAIL_MARGIN 字手前より前の位置だけを使う
 export function pageText(full: string, offset: number, limited: boolean, secrets: readonly string[], maxChars: number, maxTokens = Infinity): Paged {
-  if (offset >= full.length && !limited) return { text: '', start: offset, next: undefined };
+  if (offset >= full.length && !limited) return { text: '', start: offset, next: undefined, blocked: false };
   const start = offset <= 0 ? 0 : cleanStart(full, Math.min(offset, full.length), secrets);
   const tail = full.slice(start);
   const redacted = redactSecrets(tail, secrets);
   let safe = { q: tail.length, head: redacted.length };
   if (limited) {
     const space = tail.search(/\s\S*$/u);
-    const bound = Math.min(space > 0 ? space : tail.length - 1, tail.length - TAIL_MARGIN);
+    let bound = Math.min(space > 0 ? space : tail.length - 1, tail.length - TAIL_MARGIN);
+    // 上限の向こうまで続くかもしれないものの中では区切らない（切った読みでの確かめでは、続きの形が見えない）:
+    // END の無い秘密鍵の BEGIN の印の前、区切りの無い並び（長い JWT など）の頭
+    for (const begin of tail.matchAll(PEM_BEGIN)) if (begin.index < bound && !PEM_END.test(tail.slice(begin.index))) { bound = begin.index; break; }
+    while (bound > 0 && !SEPARATOR.test(tail[bound - 1]!)) bound -= 1;
     const found = bound > 0 ? findBack(tail, redacted, bound, Infinity, secrets) : undefined;
-    // きれいに分けられる位置が無い（区切りの無い長い並び）: 何も送らず、続きも出さない（確かめられない位置からは続けない）
-    if (found === undefined) return { text: '', start, next: undefined };
+    // きれいに分けられる位置が無い（伏せた所〔長い鍵・行の終わりまでの Cookie の値〕が、読める範囲の終わりまで続く）:
+    // 何も送らず、続きの位置も出さない（確かめられない位置からは続けない）。呼ぶ側が、続きがあることを知らせる
+    if (found === undefined) return { text: '', start, next: undefined, blocked: true };
     safe = found;
   }
   const { room, text } = fitPrefix(redacted.slice(0, safe.head), maxChars, maxTokens);
-  if (room >= safe.head) return { text, start, next: limited ? start + safe.q : undefined };
+  if (room >= safe.head) return { text, start, next: limited ? start + safe.q : undefined, blocked: false };
   const target = Math.min(alignCut(tail, redacted, room)?.at ?? room, safe.q);
   // 送った所の中で一番後ろのきれいな位置。無ければ、その先のきれいな位置（送らなかった分は飛ばす）、それも無ければ安全な終わり
   const back = findBack(tail, redacted, target, room, secrets);
   const next = back ?? findForward(tail, redacted, target, safe.q, secrets) ?? safe;
-  return { text, start, next: start + next.q };
+  return { text, start, next: start + next.q, blocked: false };
 }
 
 // p で分けて伏せても全体と同じか。同じなら前の分の伏せた長さ、違えば undefined
@@ -78,8 +88,8 @@ function cleanSplit(raw: string, redacted: string, p: number, secrets: readonly 
   return redactSecrets(raw.slice(p), secrets) === redacted.slice(head.length) ? head.length : undefined;
 }
 
-// 区切り・行の頭・伏せた所の終わりで、from から後ろへきれいな位置を探す（0 は数えない）。前の分の伏せた長さが maxHead 以下のものだけ
-function findBack(raw: string, redacted: string, from: number, maxHead: number, secrets: readonly string[]): { q: number; head: number } | undefined {
+// 区切り・行の頭・伏せた所の終わりと頭（とその手前の区切り）で、from から後ろへきれいな位置を探す（0 は数えない）。前の分の伏せた長さが maxHead 以下のものだけ
+export function findBack(raw: string, redacted: string, from: number, maxHead: number, secrets: readonly string[]): { q: number; head: number } | undefined {
   const tried = new Set<number>();
   const accept = (q: number): { q: number; head: number } | undefined => {
     if (q <= 0 || q > from || tried.has(q)) return undefined;
@@ -89,6 +99,17 @@ function findBack(raw: string, redacted: string, from: number, maxHead: number, 
   };
   const first = accept(from);
   if (first) return first;
+  // from が伏せた所の中なら、まずその頭と手前の区切りを試す（長い秘密鍵の中の offset で、区切り・行の頭を 64 回試さない）
+  const spans = alignCut(raw, redacted, redacted.length);
+  const before = (at: number): number => { let k = at - 2; while (k >= 0 && !SEPARATOR.test(raw[k]!)) k -= 1; return k + 1; };
+  const inside = spans?.starts.findIndex((begin, k) => begin < from && from < spans.ends[k]!) ?? -1;
+  if (inside >= 0) {
+    const begin = spans!.starts[inside]!;
+    for (const candidate of [begin, before(begin), before(before(begin))]) {
+      const found = accept(candidate);
+      if (found) return found;
+    }
+  }
   let q = from;
   for (let tries = 0; tries < STEP_TRIES && q > 0; tries += 1) {
     let k = q - 2;
@@ -103,7 +124,9 @@ function findBack(raw: string, redacted: string, from: number, maxHead: number, 
     const found = accept(q);
     if (found) return found;
   }
-  const ends = (alignCut(raw, redacted, redacted.length)?.ends ?? []).filter(end => end <= from).reverse().slice(0, STEP_TRIES);
+  // 伏せた所の終わり・頭・頭の手前の区切り 2 つ（長い秘密鍵・Cookie の値の中に from があると、区切りと行の頭の 32 回では頭まで届かない）
+  const heads = (spans?.starts ?? []).flatMap(begin => { const one = before(begin); return [begin, one, before(one)]; });
+  const ends = [...new Set([...(spans?.ends ?? []), ...heads])].filter(end => end <= from).sort((a, b) => b - a).slice(0, STEP_TRIES * 2);
   for (const end of ends) {
     const found = accept(end);
     if (found) return found;
@@ -135,6 +158,8 @@ interface Alignment {
   at: number;
   // 伏せた所の、元の文での終わり（頭から順）
   ends: number[];
+  // 伏せた所の、元の文での頭（頭から順）
+  starts: number[];
 }
 
 // 伏せたあとの文は、元の文のいくつかの区間を MARK に置き換えたもの。頭から突き合わせて、伏せたあとの位置 room を元の文の位置に写す。
@@ -144,6 +169,7 @@ export function alignCut(raw: string, redacted: string, room: number): Alignment
   let i = 0;
   let j = 0;
   const ends: number[] = [];
+  const starts: number[] = [];
   let at: number | undefined;
   while (j < redacted.length) {
     if (at === undefined && j >= room) at = i;
@@ -155,6 +181,7 @@ export function alignCut(raw: string, redacted: string, room: number): Alignment
       const end = plain === '' ? raw.length : raw.indexOf(plain, i + 1);
       if (end < 0) return undefined;
       if (at === undefined && room < next) at = i;
+      starts.push(i);
       ends.push(end);
       i = end;
       j = next;
@@ -164,5 +191,5 @@ export function alignCut(raw: string, redacted: string, room: number): Alignment
     i += 1;
     j += 1;
   }
-  return { at: at ?? i, ends };
+  return { at: at ?? i, ends, starts };
 }
