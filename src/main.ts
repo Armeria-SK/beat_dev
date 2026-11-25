@@ -45,6 +45,7 @@ async function start(): Promise<void> {
     stopMcp: () => app.mcp.stop(),
     closeApp: () => { app.close(); },
     exit: code => process.exit(code),
+    secrets: () => app.registry.secrets(),
   });
   // 投げっぱなしの失敗は記録に出して動き続ける。捕まえていない例外と Ctrl+C・終了の合図は、同じ止め方で終わる
   installProcessGuards({ proc: process, log, shutdown, secrets: () => app.registry.secrets() });

@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { redactSecrets } from './shared/redaction.ts';
 
 // main.ts の「止める」と「受け口」を、本物の process に触れずに試せる形に切り出したもの。
@@ -6,6 +7,26 @@ import { redactSecrets } from './shared/redaction.ts';
 /** 受け口を付ける相手。本物の `process` がそのまま入る（試験ではにせのものを渡す） */
 export interface GuardProcess {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+type Secrets = (() => readonly string[]) | undefined;
+
+// 投げられたもの（Error・文字列・素の object・prototype の無い object・stack が文字でない Error）を、投げずに 1 つの文にする
+function describe(reason: unknown): string {
+  try {
+    if (reason instanceof Error) {
+      const { stack } = reason;
+      return typeof stack === 'string' && stack !== '' ? stack : `${String(reason.name)}: ${String(reason.message)}`;
+    }
+    return typeof reason === 'string' ? reason : inspect(reason, { depth: 3, breakLength: Infinity });
+  } catch { return '(a value that could not be printed)'; }
+}
+
+// 記録に出す文は、必ずここを通す（秘密を伏せる）。鍵を読む関数が投げても、形で見つかる鍵は伏せる。伏せること自体が失敗したら、文は出さない
+function printable(reason: unknown, secrets: Secrets): string {
+  const text = describe(reason);
+  try { return redactSecrets(text, secrets?.() ?? []); } catch { /* 下で、鍵の値なしで伏せ直す */ }
+  try { return redactSecrets(text); } catch { return '(text withheld: it could not be redacted)'; }
 }
 
 export interface ShutdownSteps {
@@ -17,6 +38,8 @@ export interface ShutdownSteps {
   readonly closeApp: () => void;
   readonly exit: (code: number) => void;
   readonly mcpWaitMs?: number;
+  /** 設定の鍵の値そのもの。失敗の行から伏せる */
+  readonly secrets?: () => readonly string[];
 }
 
 export interface Shutdown {
@@ -27,7 +50,8 @@ export interface Shutdown {
 }
 
 export function createShutdown(steps: ShutdownSteps): Shutdown {
-  const { log } = steps;
+  // 記録に出せなくても、止める手順は進める
+  const log = (line: string): void => { try { steps.log(line); } catch { /* 記録の出口が壊れている */ } };
   let closing = false;
   let finished = false;
   let exitCode = 0;
@@ -37,16 +61,19 @@ export function createShutdown(steps: ShutdownSteps): Shutdown {
     if (finished) return;
     finished = true;
     clearTimeout(timer);
-    // 受け口を付けたあとは、ここで投げて終われないと、止めかけた beat が動き続けてしまう。閉じるのに失敗しても必ず終わる
-    try { steps.closeApp(); } catch (error) { log(`[ERROR] Failed to close beat cleanly: ${(error as Error).message}`); } finally { steps.exit(exitCode); }
+    // 受け口を付けたあとは、ここで投げて終われないと、止めかけた beat が動き続ける。閉じるのに失敗しても必ず終わる
+    try { steps.closeApp(); } catch (error) { log(`[ERROR] Failed to close beat cleanly: ${printable(error, steps.secrets)}`); } finally { steps.exit(exitCode); }
   };
 
   const begin = (): void => {
     closing = true;
-    log('[INFO] Shutting down…');
-    steps.closeWeb();
+    // どの段で投げても、MCP の待ちの時計が切れるか、MCP が閉じ終わるかで finish に着く
     const wait = new Promise<void>(resolve => { timer = setTimeout(resolve, steps.mcpWaitMs ?? 5000); });
-    void Promise.race([steps.stopMcp(), wait]).catch(() => undefined).finally(finish);
+    log('[INFO] Shutting down…');
+    try { steps.closeWeb(); } catch (error) { log(`[ERROR] Failed to close the web server: ${printable(error, steps.secrets)}`); }
+    // stopMcp が同期で投げたときも、待ちが失敗した扱い（= すぐ finish）になる
+    const stopped = new Promise<unknown>(resolve => { resolve(steps.stopMcp()); });
+    void Promise.race([stopped, wait]).catch(() => undefined).finally(finish);
   };
 
   return {
@@ -63,10 +90,6 @@ export function createShutdown(steps: ShutdownSteps): Shutdown {
   };
 }
 
-function describe(reason: unknown): string {
-  return reason instanceof Error ? (reason.stack ?? `${reason.name}: ${reason.message}`) : String(reason);
-}
-
 export interface GuardOptions {
   readonly proc: GuardProcess;
   readonly log: (line: string) => void;
@@ -76,15 +99,12 @@ export interface GuardOptions {
 }
 
 export function installProcessGuards(options: GuardOptions): void {
-  const { proc, log, shutdown } = options;
-  const redact = (reason: unknown): string => {
-    try { return redactSecrets(describe(reason), options.secrets?.() ?? []); } catch { return redactSecrets(describe(reason)); }
-  };
+  const { proc, log, shutdown, secrets } = options;
   // 投げっぱなしの promise の失敗 1 つで beat 全体を止めない。見えるように記録に出して動き続ける
-  proc.on('unhandledRejection', reason => { log(`[ERROR] Unhandled promise rejection: ${redact(reason)}`); });
-  // 捕まえていない例外は、どこが壊れたか分からない。記録に出して、いまの止め方で終わる
+  proc.on('unhandledRejection', reason => { log(`[ERROR] Unhandled promise rejection: ${printable(reason, secrets)}`); });
+  // 捕まえていない例外は、どこが壊れたか分からない。記録に出して、いまの止め方で終わる（記録に出せなくても止める）
   proc.on('uncaughtException', error => {
-    log(`[ERROR] Uncaught exception: ${redact(error)}`);
+    try { log(`[ERROR] Uncaught exception: ${printable(error, secrets)}`); } catch { /* 記録の出口が壊れている */ }
     shutdown.fail();
   });
   proc.on('SIGINT', () => { shutdown.signal(); });
