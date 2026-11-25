@@ -1,8 +1,9 @@
 import { byText, cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { afterEach, mock, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import type { ChecklistItem, Message } from '../web/src/api.ts';
+import { ANSWER_GUARD_MS } from '../web/src/ui/ask.ts';
 import type { LiveDraft } from '../web/src/ui/live-state.ts';
 
 interface ConversationProps {
@@ -119,7 +120,10 @@ test('ui/ask-dom: Answer is enabled only when every question has a pick; Somethi
   assert.equal(answerButton(container)?.disabled, true, 'empty Something else');
   await input(container.querySelector('.ui-ask__other'), 'A map view');
   assert.equal(answerButton(container)?.disabled, false);
-  await click(answerButton(container));
+  // 問いが替わってすぐの Answer は受けない（ダブルクリック・ダブルタップで送らないため）。待たずに、時計だけ進める。
+  const realNow = performance.now.bind(performance);
+  const later = mock.method(performance, 'now', () => realNow() + ANSWER_GUARD_MS);
+  try { await click(answerButton(container)); } finally { later.mock.restore(); }
   await settle();
   await settle();
   assert.equal(sent.length, 1);

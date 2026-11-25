@@ -1,14 +1,18 @@
 import { useEffect, useId, useRef, useState, type MouseEvent } from 'react';
 import { useT } from '../i18n/index.ts';
-import { answerText, askStep, choose, emptyPick, type AskPick, type OpenAsk } from './ask.ts';
+import { ANSWER_GUARD_MS, answerText, askStep, choose, emptyPick, type AskPick, type OpenAsk } from './ask.ts';
 import { Button } from './parts.tsx';
 
-export function AskCard({ ask, busy, onAnswer }: { ask: OpenAsk; busy: boolean; onAnswer: (text: string) => void }) {
+const now = () => performance.now();
+
+export function AskCard({ ask, busy, onAnswer, clock = now }: { ask: OpenAsk; busy: boolean; onAnswer: (text: string) => void; clock?: () => number }) {
   const t = useT();
   const name = useId();
   const group = useRef<HTMLFieldSetElement>(null);
   const [picks, setPicks] = useState<AskPick[]>(() => ask.questions.map(emptyPick));
   const [step, setStep] = useState(0);
+  const changedAt = useRef(-Infinity);
+  const go = (to: number) => { changedAt.current = clock(); setStep(to); };
   const set = (index: number, next: AskPick) => setPicks(current => current.map((p, i) => (i === index ? next : p)));
   const s = askStep(ask.questions, picks, step);
   const qi = s.index;
@@ -26,8 +30,13 @@ export function AskCard({ ask, busy, onAnswer }: { ask: OpenAsk; busy: boolean; 
   if (!q) return null;
   const pick = picks[qi] ?? emptyPick();
   const type = q.multiSelect ? 'checkbox' : 'radio';
-  // Next のダブルクリックの 2 回目（detail 2）は、同じ場所に出た Answer に当たる。それでは送らない。
-  const send = (e: MouseEvent<HTMLButtonElement>) => { if (e.detail <= 1) onAnswer(answerText(ask.questions, picks, t('ui.ask.lead'))); };
+  // Next のあと、Answer は同じ場所に出る。ダブルクリックやダブルタップの 2 回目がそこに当たって送らないよう、
+  // 問いが替わってすぐ（ANSWER_GUARD_MS 以内）の押下と、ダブルクリックの 2 回目（detail 2）は受けない。
+  // タップは detail が 1 のままのことがあるので、時間のほうが決め手。
+  const send = (e: MouseEvent<HTMLButtonElement>) => {
+    if (e.detail > 1 || clock() - changedAt.current < ANSWER_GUARD_MS) return;
+    onAnswer(answerText(ask.questions, picks, t('ui.ask.lead')));
+  };
   return (
     <section className="bt-card ui-pinned ui-ask bt-rise" aria-label={t('ui.ask.head')} data-ask={ask.key}>
       <div className="bt-card__head">
@@ -56,11 +65,11 @@ export function AskCard({ ask, busy, onAnswer }: { ask: OpenAsk; busy: boolean; 
         </div>
       </div>
       <div className="bt-card__actions ui-ask__actions">
-        {!s.first && <Button key="back" variant="ghost" small disabled={busy} onClick={() => setStep(qi - 1)}>{t('ui.ask.back')}</Button>}
+        {!s.first && <Button key="back" variant="ghost" small disabled={busy} onClick={() => go(qi - 1)}>{t('ui.ask.back')}</Button>}
         {s.last ? (
           <Button key="answer" variant="primary" small disabled={busy || !s.canSend} onClick={send}>{t('ui.ask.answer')}</Button>
         ) : (
-          <Button key="next" variant="primary" small disabled={busy || !s.canNext} onClick={() => setStep(qi + 1)}>{t('ui.ask.next')}</Button>
+          <Button key="next" variant="primary" small disabled={busy || !s.canNext} onClick={() => go(qi + 1)}>{t('ui.ask.next')}</Button>
         )}
         <span className="bt-meta">{s.last ? t('ui.ask.consequence') : t('ui.ask.consequenceStep')}</span>
       </div>

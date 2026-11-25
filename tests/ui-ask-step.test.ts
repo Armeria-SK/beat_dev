@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
-import { choose, emptyPick, askStep, parseAsk, type OpenAsk } from '../web/src/ui/ask.ts';
+import { ANSWER_GUARD_MS, choose, emptyPick, askStep, parseAsk, type OpenAsk } from '../web/src/ui/ask.ts';
 import { cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
 
 // 質問カード: 1 問ずつ表示 → 答えると次へ → 最後にまとめて送る。複数の問いを 1 画面に並べない。
@@ -13,6 +13,8 @@ const INPUT = {
     { question: 'Which theme?', header: 'Theme', options: [{ label: 'Light' }, { label: 'Dark' }] },
   ],
 };
+
+type Props = { ask: OpenAsk; busy: boolean; onAnswer: (text: string) => void; clock?: () => number };
 
 afterEach(async () => { await cleanup(); });
 
@@ -32,10 +34,11 @@ test('ui/ask-step: askStep は答えるまで次へ進ませず、最後の問�
 });
 
 test('ui/ask-step: カードは 1 度に 1 問だけ出し、答えると次へ進み、最後にまとめて 1 回だけ送る', async () => {
-  const { AskCard } = await loadTsx<{ AskCard: ComponentType<{ ask: OpenAsk; busy: boolean; onAnswer: (text: string) => void }> }>('../web/src/ui/AskCard.tsx', import.meta.url);
+  const { AskCard } = await loadTsx<{ AskCard: ComponentType<Props> }>('../web/src/ui/AskCard.tsx', import.meta.url);
   const sent: string[] = [];
+  let now = 0;
   const ask: OpenAsk = { key: '1', questions: parseAsk(JSON.stringify(INPUT))! };
-  const { container } = await render(createElement(AskCard, { ask, busy: false, onAnswer: text => sent.push(text) }));
+  const { container } = await render(createElement(AskCard, { ask, busy: false, onAnswer: text => sent.push(text), clock: () => now }));
   const buttons = () => [...container.querySelectorAll('button')];
   const named = (text: string) => buttons().find(b => b.textContent === text);
   const headings = () => [...container.querySelectorAll('h3')].map(h => h.textContent);
@@ -62,16 +65,18 @@ test('ui/ask-step: カードは 1 度に 1 問だけ出し、答えると次へ�
   assert.equal(named('Answer')?.disabled, true, '最後の問いも答えるまで送れない');
   assert.deepEqual(sent, [], 'ここまで何も送っていない');
   await click(container.querySelectorAll('input')[1]);
+  now += ANSWER_GUARD_MS;
   await click(named('Answer'));
   assert.equal(sent.length, 1, 'まとめて 1 回だけ送る');
   assert.equal(sent[0], 'Answers:\n- Storage: JSON files\n- Screens: List\n- Theme: Dark');
 });
 
-test('ui/ask-step: 問いが 1 つだけなら、今までどおり Next なしで答えて送れる', async () => {
-  const { AskCard } = await loadTsx<{ AskCard: ComponentType<{ ask: OpenAsk; busy: boolean; onAnswer: (text: string) => void }> }>('../web/src/ui/AskCard.tsx', import.meta.url);
+test('ui/ask-step: 問いが 1 つだけなら、今までどおり Next なしで答えて、出てすぐの 1 回の押下で送れる', async () => {
+  const { AskCard } = await loadTsx<{ AskCard: ComponentType<Props> }>('../web/src/ui/AskCard.tsx', import.meta.url);
   const sent: string[] = [];
   const ask: OpenAsk = { key: '2', questions: parseAsk(JSON.stringify({ questions: [INPUT.questions[0]] }))! };
-  const { container } = await render(createElement(AskCard, { ask, busy: false, onAnswer: text => sent.push(text) }));
+  // 時計は動かさない（0 のまま）。問いが替わったことが無いカードは、出てからの経過時間で送れなくならない。
+  const { container } = await render(createElement(AskCard, { ask, busy: false, onAnswer: text => sent.push(text), clock: () => 0 }));
   const names = [...container.querySelectorAll('button')].map(b => b.textContent);
   assert.deepEqual(names, ['Answer']);
   await click(container.querySelectorAll('input')[0]);
@@ -82,12 +87,14 @@ test('ui/ask-step: 問いが 1 つだけなら、今までどおり Next なし�
 // Back で戻っても、前に入れた答え（選択・複数選択・「その他」の文）は消えない。進むのは Next / Back / 送るのボタンだけ。
 
 async function mount() {
-  const { AskCard } = await loadTsx<{ AskCard: ComponentType<{ ask: OpenAsk; busy: boolean; onAnswer: (text: string) => void }> }>('../web/src/ui/AskCard.tsx', import.meta.url);
+  const { AskCard } = await loadTsx<{ AskCard: ComponentType<Props> }>('../web/src/ui/AskCard.tsx', import.meta.url);
   const sent: string[] = [];
+  const time = { now: 10_000 };
   const ask: OpenAsk = { key: 'k', questions: parseAsk(JSON.stringify(INPUT))! };
-  const { container } = await render(createElement(AskCard, { ask, busy: false, onAnswer: text => sent.push(text) }));
+  const { container } = await render(createElement(AskCard, { ask, busy: false, onAnswer: text => sent.push(text), clock: () => time.now }));
   return {
     container, sent,
+    tick: (ms: number) => { time.now += ms; },
     headings: () => [...container.querySelectorAll('h3')].map(h => h.textContent),
     inputs: () => [...container.querySelectorAll('input')],
     button: (text: string) => [...container.querySelectorAll('button')].find(b => b.textContent === text),
@@ -139,6 +146,7 @@ test('ui/ask-step: Back keeps every earlier answer (choices, several picks, Some
   await click(card.button('Next'));
   assert.deepEqual(card.headings(), ['Which theme?']);
   assert.deepEqual(card.inputs().map(i => i.checked), [false, true, false], '3 問目: Dark が残る');
+  card.tick(ANSWER_GUARD_MS);
   await click(card.button('Answer'));
   assert.deepEqual(card.sent, ['Answers:\n- Storage: flat files\n- Screens: List, Detail\n- Theme: Dark']);
 });
@@ -167,8 +175,36 @@ test('ui/ask-step: the second click of a double-click lands on whatever now sits
   await clickWith(card.primary(), 2);
   assert.deepEqual(card.sent, [], 'ダブルクリックの 2 回目（detail 2）では送らない');
 
+  card.tick(ANSWER_GUARD_MS);
   await clickWith(card.primary(), 1);
   assert.equal(card.sent.length, 1, '改めて押せば送る');
+  assert.equal(card.sent[0], 'Answers:\n- Storage: SQLite\n- Screens: List\n- Theme: Dark');
+});
+
+test('ui/ask-step: a double-tap (two clicks that both report detail 1) right after Back does not send, whatever the input device reports; a click once the window has passed does', async () => {
+  const card = await mount();
+  await card.answerAll();
+  await click(card.button('Back'));
+
+  await clickWith(card.button('Next'), 1);
+  assert.deepEqual(card.headings(), ['Which theme?'], '1 回目のタップで最後の問いへ。Answer が同じ場所に出る');
+  await clickWith(card.primary(), 1);
+  assert.deepEqual(card.sent, [], '2 回目のタップ（detail 1）では送らない');
+  card.tick(ANSWER_GUARD_MS - 1);
+  await clickWith(card.primary(), 1);
+  assert.deepEqual(card.sent, [], '窓の中では、何回押しても送らない');
+  card.tick(1);
+  await clickWith(card.primary(), 1);
+  assert.deepEqual(card.sent, ['Answers:\n- Storage: SQLite\n- Screens: List\n- Theme: Dark'], '窓が過ぎたら、1 回の押下で送る');
+});
+
+test('ui/ask-step: Answer reached by Tab and pressed with the keyboard (click with detail 0, later than the window) sends at once', async () => {
+  const card = await mount();
+  await card.answerAll();
+  card.tick(ANSWER_GUARD_MS);
+  card.primary()!.focus();
+  await clickWith(document.activeElement, 0);
+  assert.equal(card.sent.length, 1);
   assert.equal(card.sent[0], 'Answers:\n- Storage: SQLite\n- Screens: List\n- Theme: Dark');
 });
 

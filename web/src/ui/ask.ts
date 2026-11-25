@@ -64,7 +64,10 @@ export function choose(question: AskQuestion, pick: AskPick, label: string | nul
 
 const answered = (pick: AskPick | undefined): boolean => Boolean(pick && (pick.labels.length > 0 || pick.other) && (!pick.other || pick.text.trim()));
 
-export const complete = (questions: readonly AskQuestion[], picks: readonly AskPick[]): boolean => questions.every((_, i) => answered(picks[i]));
+// 問いが替わってからこの時間（ミリ秒）のあいだは、Answer の押下を受けない。Windows の既定のダブルクリックの間隔に合わせた。
+export const ANSWER_GUARD_MS = 500;
+
+export const complete =(questions: readonly AskQuestion[], picks: readonly AskPick[]): boolean => questions.every((_, i) => answered(picks[i]));
 
 export interface AskStep { index: number; total: number; first: boolean; last: boolean; canNext: boolean; canSend: boolean }
 
