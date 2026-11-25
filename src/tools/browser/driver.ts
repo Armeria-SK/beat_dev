@@ -305,6 +305,29 @@ const SETTLE_LOAD_MS = 1000;
 const BOX_TIMEOUT_MS = 1000;
 // 確かめたあと、本当の操作が待ってよい時間（操作できる形になるのは先に待つので、ふだんはすぐ終わる）
 const ACT_AFTER_CHECK_MS = 1000;
+// 押したあと、差分を撮る前に DOM が静まるのを待つ（P3b）: DOM が 300 ms 動かなくなるまで、最大 1.5 秒。
+// 差分の取りこぼしを減らすためだけの待ちで、守りは押す・入れるの前のその場の取り直しが受け持つ
+export const QUIET_MS = 300;
+export const QUIET_MAX_MS = 1500;
+
+// ページの中で DOM の変化を見張り、quietMs 動かなければ true、maxMs で false、見張りが使えなければすぐ false（ページの中で動くので、外の名前を使わない）
+export function domQuiet(limits: { quietMs: number; maxMs: number }): Promise<boolean> {
+  return new Promise<boolean>(resolve => {
+    const Observer = (globalThis as { MutationObserver?: typeof MutationObserver }).MutationObserver;
+    const root = (globalThis as { document?: Document }).document?.documentElement;
+    if (typeof Observer !== 'function' || !root) { resolve(false); return; }
+    let quiet: ReturnType<typeof setTimeout> | undefined;
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    let observer: MutationObserver | undefined;
+    const stop = (value: boolean): void => { clearTimeout(quiet); clearTimeout(cap); observer?.disconnect(); resolve(value); };
+    try {
+      observer = new Observer(() => { clearTimeout(quiet); quiet = setTimeout(() => { stop(true); }, limits.quietMs); });
+      observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+    } catch { stop(false); return; }
+    quiet = setTimeout(() => { stop(true); }, limits.quietMs);
+    cap = setTimeout(() => { stop(false); }, limits.maxMs);
+  });
+}
 
 class PlaywrightPage implements PageHandle {
   readonly page: Page;
@@ -414,7 +437,20 @@ class PlaywrightPage implements PageHandle {
     }
     await new Promise<void>(resolve => { setTimeout(resolve, SETTLE_MS); });
     await this.page.waitForLoadState('domcontentloaded', { timeout: SETTLE_LOAD_MS }).catch(() => undefined);
+    await this.#quiet();
     return { ...this.#events };
+  }
+
+  // DOM が静まるまでの待ち。ページの中の時計に頼らず、こちらの時計でも 1.5 秒で止める。見張りが動かない（投げる・移動で消える）ときは待たない
+  async #quiet(): Promise<void> {
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    const capped = new Promise<void>(resolve => { cap = setTimeout(resolve, QUIET_MAX_MS); });
+    const watched = (async () => { await this.page.evaluate(domQuiet, { quietMs: QUIET_MS, maxMs: QUIET_MAX_MS }); })().catch(() => undefined);
+    try {
+      await Promise.race([capped, watched]);
+    } finally {
+      clearTimeout(cap);
+    }
   }
 
   // Playwright の失敗を beat の失敗にする（Playwright の文にはページの文字が入りうるので、そのままは出さない）
