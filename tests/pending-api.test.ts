@@ -201,7 +201,8 @@ test('walk-1118 D7: GET /api/pending は、行の会話の題（conversation_tit
   assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', false]);
   assert.deepEqual([pick(items, loose.id).conversation_title, pick(items, loose.id).project_archived], [null, false], '題の無い会話は null、製品の無い行は false');
   assert.equal((await s.json(`/api/projects/${shop.id}`, 'PATCH', { archived: true })).status, 200);
-  items = await rows();
+  assert.ok(!(await rows()).some(i => i.conversation_id === chat.id), 'しまった製品の待ちは、待ちの一覧から消える（cancelled になる）');
+  items = (await s.json('/api/pending?status=decided', 'GET')).body.items as Awaited<ReturnType<typeof rows>>;
   assert.deepEqual([pick(items, chat.id).conversation_title, pick(items, chat.id).project_archived], ['Please create hello.txt', true]);
 });
 

@@ -2,19 +2,22 @@ import { neutralizeFence } from '../shared/fence.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { closedByBeat, type PendingRow, type PendingView } from './store.ts';
 
-export type NoteHead = 'ran' | 'failed' | 'stale' | 'rejected';
+export type NoteHead = 'ran' | 'failed' | 'stale' | 'rejected' | 'settled';
 
 export interface PendingNote { head: NoteHead; text: string; event: string; fetched: boolean }
 
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu;
 const TITLE_MAX = 200;
 
+const settledElsewhere = (row: PendingRow): boolean => row.status === 'cancelled' && row.reject_reason === pendingText('en', 'settled_elsewhere');
+
 export function pendingNote(row: PendingRow, view: PendingView): PendingNote | undefined {
-  if (row.status === 'waiting' || row.status === 'running' || row.status === 'cancelled' || closedByBeat(row)) return undefined;
-  const head: NoteHead = row.status === 'ran' ? 'ran' : row.status === 'failed' ? 'failed' : row.status === 'stale' ? 'stale' : 'rejected';
+  if (row.status === 'waiting' || row.status === 'running' || (row.status === 'cancelled' && !settledElsewhere(row)) || closedByBeat(row)) return undefined;
+  const head: NoteHead = settledElsewhere(row) ? 'settled' : row.status === 'ran' ? 'ran' : row.status === 'failed' ? 'failed' : row.status === 'stale' ? 'stale' : 'rejected';
   const title = (view.title ?? row.tool).replace(CONTROL, ' ').slice(0, TITLE_MAX);
   const tool = row.tool.replace(CONTROL, ' ').slice(0, TITLE_MAX);
   const code = row.exit_code === null ? '-' : String(row.exit_code);
+  if (head === 'settled') return { head, text: pendingText('en', 'note_settled', { id: row.id, tool }), event: pendingText('en', 'event_settled', { id: row.id, tool }), fetched: false };
   const event = head === 'rejected' && row.reject_reason
     ? pendingText('en', 'event_rejected_reason', { id: row.id, tool, code, reason: row.reject_reason })
     : pendingText('en', `event_${head}`, { id: row.id, tool, code });

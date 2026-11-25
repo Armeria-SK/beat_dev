@@ -303,6 +303,9 @@ export class App {
           : event.type === 'task.changed' && TASK_ENDED.has(event.task.status) ? { taskId: event.task.id }
             : undefined;
       if (stop) void this.background.stopWhere(stop).catch(error => this.log(`[ERROR] Failed to stop background commands: ${(error as Error).message}`));
+      if (event.type === 'project.changed' && event.change === 'archived') {
+        try { this.pending.cancelProject(event.projectId, pendingText('en', 'cancelled_project')); } catch (error) { this.log(`[ERROR] Failed to cancel the pending items of an archived product: ${(error as Error).message}`); }
+      }
     });
     // 会話を消したら、その会話のタブを閉じる
     this.conversations.onDeleted = ids => { void this.browser.closeConversation(ids).catch(() => undefined); this.pending.cancelConversations(ids); };

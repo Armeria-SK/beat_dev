@@ -121,7 +121,7 @@ export interface PendingCounts {
 
 export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number; ruled: Record<string, number> }
 
-export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined }
+export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined; reason?: string | undefined }
 
 const OUTPUT_TAIL = 2000;
 const REASON_MAX = 500;
@@ -563,9 +563,10 @@ export class PendingStore {
     const state = parseJson<PendingState | null>(current.state, null);
     const nextState = state && result.fetched !== undefined ? { ...state, fetched: result.fetched } : state;
     const rest = settled(current, nextState, this.#heldOf(current.tool));
-    const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ?
+    const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, reject_reason = COALESCE(?, reject_reason), ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ?
       WHERE id = ? AND status = 'running'`).run(
       result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output, this.#markerOf(current.tool)), erased ? null : result.fullRef ?? null,
+      result.reason === undefined ? null : cleanReason(result.reason, this.#markerOf(current.tool)),
       result.status === 'ran' || result.status === 'failed' ? now : null, now, rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id,
     );
     if (Number(changed.changes) !== 1) return this.view(id);
@@ -624,6 +625,11 @@ export class PendingStore {
 
   withdrawTask(taskId: string, reason: string): number {
     const rows = this.#db.prepare("SELECT id FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(taskId) as Array<{ id: number }>;
+    return rows.filter(row => this.withdraw(Number(row.id), reason)).length;
+  }
+
+  cancelProject(projectId: string, reason: string): number {
+    const rows = this.#db.prepare("SELECT id FROM pending_actions WHERE project_id = ? AND status = 'waiting' ORDER BY id").all(projectId) as Array<{ id: number }>;
     return rows.filter(row => this.withdraw(Number(row.id), reason)).length;
   }
 
