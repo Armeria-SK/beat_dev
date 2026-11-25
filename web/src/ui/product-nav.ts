@@ -1,12 +1,11 @@
 import type { Conversation, Project } from '../api.ts';
-import { groupConversations, latestConversation, mergeConversations, moreCount, noProductApi, sidebarOrder, waitingTotal } from './products.ts';
+import { groupConversations, mergeConversations, moreCount, noProductApi, sidebarOrder, waitingTotal } from './products.ts';
 import { HOME, routeHash, routeProductId, settleRoute, type Route } from './routes.ts';
 
 export interface ProductNavRow {
   project: Project;
   sessions: Conversation[];
   more: number;
-  nameHref: string;
   waiting: number;
 }
 
@@ -20,11 +19,7 @@ export function productNav(
     const base = groups.byProduct.get(project.id) ?? [];
     const added = extra.get(project.id);
     const sessions = added ? mergeConversations(base, added.filter(c => c.project_id === project.id)) : base;
-    const latest = latestConversation(sessions, project.id);
-    return {
-      project, sessions, more: added ? 0 : moreCount(more, project.id), waiting: waitingTotal(project),
-      nameHref: latest ? routeHash({ view: 'chat', id: latest.id }) : routeHash({ view: 'productNew', id: project.id }),
-    };
+    return { project, sessions, more: added ? 0 : moreCount(more, project.id), waiting: waitingTotal(project) };
   });
   return { rows, none: groups.none };
 }

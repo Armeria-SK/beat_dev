@@ -430,13 +430,13 @@
 .bt-root.is-reduced .bt-cursor { transform: translate(var(--bt-drive-x, 120px), var(--bt-drive-y, 60px)); }
 .bt-root.is-reduced .bt-check--done .bt-check__box svg { stroke-dashoffset: 0; }
 
-/* Product head: folder, Overview button, name, count */
-.bt-side a.bt-side__name { color: inherit; text-decoration: none; }
+/* Product head: one link (Overview mark + name), then folder-missing mark and count */
+.bt-side__home { display: flex; align-items: center; gap: var(--space-2); flex: 1; min-width: 0; align-self: stretch; color: inherit; text-decoration: none; }
 .bt-side__ov { position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none; margin: 0 -3px; border-radius: var(--radius-xs); color: var(--ink-soft); transition: background-color var(--dur-quick) var(--ease-soft), color var(--dur-quick) var(--ease-soft); }
 .bt-side__ov .bt-icon { width: 16px; height: 16px; }
-.bt-side__ov:hover { background: var(--surface); color: var(--ink); }
-.bt-side__ov.is-active, .bt-side__ov.is-active:hover { background: var(--ink); color: var(--surface); }
-.bt-side__ov.has-waiting::after { content: ""; position: absolute; top: 0; right: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--pulse); border: 1px solid var(--surface-sunk); animation: bt-beat var(--dur-beat) var(--ease-calm) infinite; }
+.bt-side__home:hover .bt-side__ov { background: var(--surface); color: var(--ink); }
+.bt-side__home.is-active .bt-side__ov, .bt-side__home.is-active:hover .bt-side__ov { background: var(--ink); color: var(--surface); }
+.bt-side__home.has-waiting .bt-side__ov::after { content: ""; position: absolute; top: 0; right: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--pulse); border: 1px solid var(--surface-sunk); animation: bt-beat var(--dur-beat) var(--ease-calm) infinite; }
 @media (pointer: coarse) { .bt-side__ov { width: 36px; height: 36px; } }
 
 /* Modal: Settings only. A veil over the app, one floating sheet. */

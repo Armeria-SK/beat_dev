@@ -33,8 +33,6 @@ test('ui/product-nav: 製品の会話は製品の下、製品なしは No produc
   assert.deepEqual(ids(nav.none), ['b'], '製品の会話を No product に混ぜない');
   assert.ok(![...nav.none, ...nav.rows.flatMap(r => r.sessions)].some(c => c.id === 'c'), '知らない製品の会話は隠す');
   assert.equal(nav.rows[0]!.waiting, 3);
-  assert.equal(nav.rows[0]!.nameHref, '#/c/a', '名前はいちばん新しい会話を開く');
-  assert.equal(nav.rows[1]!.nameHref, '#/p/p2bbbb/new', '会話が無ければ新しい会話');
 });
 
 test('ui/product-nav: "N more" は more の数。読み足した分を合わせると N more は消え、ほかの製品の会話は混ぜない', () => {
