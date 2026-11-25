@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type Probe, type Profile } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { dropListed, plannedProviderId, setupModelConfig } from '../onboarding.ts';
+import { dropListed, keyEnvOf, plannedProviderId, setupModelConfig } from '../onboarding.ts';
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
-import { deepEqual } from '../settings/merge.ts';
+import { applyEdits, deepEqual, diffConfig } from '../settings/merge.ts';
 import type { Config } from '../settings/model.ts';
 import type { AgentState } from './agent-state.ts';
 import {
@@ -55,10 +55,22 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
 
   async function saveTidy(latest: Config, next: Config) {
     if (deepEqual(next, latest)) return;
-    const gone = (latest.providers as Json[]).map(p => p.id as string).filter(id => !(next.providers as Json[]).some(p => p.id === id));
-    for (const id of gone) if (keyed.current.has(id)) await api.deleteProviderKey(id).catch(() => undefined);
-    await api.saveSettings(next);
-    for (const id of gone) { listed.current.delete(id); keyed.current.delete(id); }
+    const edits = diffConfig(latest, next);
+    const merged = async (): Promise<Config> => {
+      const { config, conflicts } = applyEdits((await api.settings()).config, edits);
+      if (conflicts.length > 0) throw new Error('settings changed elsewhere');
+      return config;
+    };
+    let target = await merged();
+    const gone = (latest.providers as Json[]).filter(p => !(target.providers as Json[]).some(q => q.id === p.id));
+    const stillRead = (p: Json): boolean => { const env = keyEnvOf(p); return env !== undefined && (target.providers as Json[]).some(q => keyEnvOf(q) === env); };
+    const owed = gone.filter(p => keyed.current.has(p.id) && !stillRead(p));
+    if (owed.length > 0) {
+      for (const p of owed) await api.deleteProviderKey(p.id).catch(() => undefined);
+      target = await merged();
+    }
+    await api.saveSettings(target);
+    for (const p of gone) { listed.current.delete(p.id); keyed.current.delete(p.id); }
   }
 
   useEffect(() => { box.current?.querySelector<HTMLElement>('.bt-onboard__step.is-current input, .bt-onboard__step.is-current button, [data-next]')?.focus(); }, [index]);

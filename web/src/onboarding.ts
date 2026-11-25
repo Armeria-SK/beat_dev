@@ -109,6 +109,9 @@ export function dropListed(config: Config, ids: ReadonlySet<string>, keep: strin
   return kept.length === providers.length ? config : { ...config, providers: kept };
 }
 
+export const keyEnvOf = (provider: Record<string, unknown>): string | undefined =>
+  typeof provider.apiKeyEnv === 'string' ? provider.apiKeyEnv : provider.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined;
+
 const SEEN_KEY = 'beat.onboardingSeen';
 export function wasSetupShown(storage: Pick<Storage, 'getItem'> | undefined = safeStorage()): boolean {
   try { return storage?.getItem(SEEN_KEY) === '1'; } catch { return false; }

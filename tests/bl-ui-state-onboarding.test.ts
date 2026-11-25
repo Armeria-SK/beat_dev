@@ -81,7 +81,7 @@ const settle = async () => { for (let i = 0; i < 4; i++) await later(0); };
 
 interface Call { method: string; path: string; body: any }
 function fakeServer(initial: Config, keyed: string[] = []) {
-  const state = { config: structuredClone(initial) as Config, keys: new Set(keyed), calls: [] as Call[] };
+  const state = { config: structuredClone(initial) as Config, keys: new Set(keyed), calls: [] as Call[], onDelete: null as (() => Promise<void>) | null };
   globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
     const url = String(path);
     const method = init?.method ?? 'GET';
@@ -97,7 +97,7 @@ function fakeServer(initial: Config, keyed: string[] = []) {
     if (key) {
       const id = decodeURIComponent(key[1]!);
       if (method === 'PUT') state.keys.add(id);
-      if (method === 'DELETE') state.keys.delete(id);
+      if (method === 'DELETE') { await state.onDelete?.(); state.keys.delete(id); }
       return reply({ set: state.keys.has(id) });
     }
     if (/^\/api\/providers\/[^/]+\/models$/u.test(url)) return reply({ models: ['a', 'b'], truncated: false });
@@ -215,4 +215,71 @@ test('344 はじめの設定（DOM）: OpenAI を選んだとき、使われて�
   await click(byText(container, 'button', en['ui.ob.model.openai']));
   await settle();
   assert.equal(fieldOf(container, en['ui.ob.model.key'])?.placeholder, en['ui.ob.model.keySet'], 'Test が使う提供元に鍵があるときは「Key set」');
+});
+
+async function listWithKey(server: ReturnType<typeof fakeServer>): Promise<string> {
+  const container = await openModelStep();
+  await click(byText(container, 'button', en['ui.ob.model.custom']));
+  await input(container.querySelector('input[list="ui-ob-model-names"]'), 'm1');
+  await input(fieldOf(container, en['ui.ob.model.keyOptional']), 'k-secret-3');
+  await click(byText(container, 'button', en['ui.ob.model.list']));
+  await settle();
+  const made = idsOf(server.config).find(id => id !== 'anthropic')!;
+  assert.ok(made && server.keys.has(made), 'List が提供元と鍵を足した');
+  return made;
+}
+
+const puts = (server: ReturnType<typeof fakeServer>): number => server.calls.filter(c => c.method === 'PUT' && c.path === '/api/settings').length;
+const deletes = (server: ReturnType<typeof fakeServer>): number => server.calls.filter(c => c.method === 'DELETE').length;
+
+test('343 後片付けの書き込み（DOM）: 鍵を消して返事を待つ間に、ほかのタブが別の設定を変えても、その変更を巻き戻さない', async () => {
+  const server = fakeServer(configOf([anthropic]), ['anthropic']);
+  let release: () => void = () => undefined;
+  server.onDelete = () => new Promise<void>(resolve => { release = resolve; });
+  const made = await listWithKey(server);
+  try {
+    await cleanup();
+    await settle();
+    await later(30);
+    assert.equal(deletes(server), 1, '鍵を消す要求が出て、返事を待っている');
+    (server.config.routing as { retriesPerModel: number }).retriesPerModel = 5;
+    release();
+    await settle();
+    await later(30);
+  } finally { release(); }
+  assert.equal((server.config.routing as { retriesPerModel: number }).retriesPerModel, 5, '待っている間にほかのタブが変えた値は、読んだときの古い値に戻らない');
+  assert.deepEqual(idsOf(server.config), ['anthropic'], '使っていない提供元（' + made + '）は消えている');
+});
+
+test('343 後片付けの書き込み（DOM）: 待っている間に、消そうとしている提供元をほかのタブが変えていたら、書かずにやめる（その変更を消さない）', async () => {
+  const server = fakeServer(configOf([anthropic]), ['anthropic']);
+  let release: () => void = () => undefined;
+  server.onDelete = () => new Promise<void>(resolve => { release = resolve; });
+  const made = await listWithKey(server);
+  const before = puts(server);
+  try {
+    await cleanup();
+    await settle();
+    await later(30);
+    assert.equal(deletes(server), 1);
+    (server.config.providers as Array<{ id: string; timeoutMs: number }>).find(p => p.id === made)!.timeoutMs = 1234;
+    release();
+    await settle();
+    await later(30);
+  } finally { release(); }
+  assert.equal(puts(server), before, '衝突したので設定は書かない');
+  assert.equal((server.config.providers as Array<{ id: string; timeoutMs: number }>).find(p => p.id === made)?.timeoutMs, 1234, 'ほかのタブの変更が残っている');
+});
+
+test('343 後片付けの書き込み（DOM）: 消す提供元と同じ環境変数を、残る提供元がまだ使っているなら、鍵は消さない（提供元だけ外す）', async () => {
+  const server = fakeServer(configOf([anthropic]), ['anthropic']);
+  const made = await listWithKey(server);
+  const providers = server.config.providers as Array<Record<string, unknown>>;
+  providers.find(p => p.id === made)!.apiKeyEnv = 'SHARED_API_KEY';
+  providers.push(compat('other', { baseUrl: 'http://127.0.0.1:9100/v1', apiKeyEnv: 'SHARED_API_KEY' }));
+  await cleanup();
+  await settle();
+  await later(30);
+  assert.deepEqual(idsOf(server.config), ['anthropic', 'other'], '使っていない提供元は外れ、同じ環境変数を使う other は残る');
+  assert.equal(deletes(server), 0, 'other がまだ読む鍵なので、消す要求は出さない');
 });
