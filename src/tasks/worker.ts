@@ -346,7 +346,8 @@ export class Worker {
 
   #hold(): 'paused' | 'chat' | undefined {
     if (this.paused) return 'paused';
-    if (this.#d.engine.chatting) return 'chat';
+    // 会話の返事を作っていても、提供元に空きがあれば裏の実行は動く（空きが無いときだけ待つ。会話の実行も空きの数に入る）
+    if (this.#d.engine.chatting && !this.#d.engine.backgroundHasRoom()) return 'chat';
     return undefined;
   }
 
@@ -431,7 +432,7 @@ export class Worker {
       if (!skillOn) this.#d.reviews?.skipPending('skill', taskText(languageOf(c), 'review.skill_off'));
       const hold = this.#hold();
       if (hold === 'paused') { reschedule(); return 'paused'; }
-      // ユーザーとの会話の返事を作っている間は始めない（終われば onRunEnd で起こされる）
+      // ユーザーとの会話の返事を作っていて、提供元に空きが無い間は始めない（終われば onRunEnd で起こされる）
       if (hold === 'chat') { reschedule(now + 60_000); return 'busy'; }
       // 「今すぐ実行」を頼まれたものは、1時間の上限より先に実行する（上限は、ひとりでに動く分の費用を抑えるためのもの）
       let task: Task | undefined;

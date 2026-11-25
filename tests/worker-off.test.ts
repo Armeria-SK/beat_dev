@@ -167,10 +167,13 @@ test('waiting reasons match what the worker does: paused, chat reply, hourly lim
   assert.equal(await app.worker.tick(), 'paused');
   app.worker.setPaused(false);
 
+  // 会話の返事を書いている最中で、提供元に空きが無い（会話の実行がいるだけでは待たない。beat self-fix S1）
   Object.defineProperty(app.engine, 'chatting', { configurable: true, get: () => true });
+  Object.defineProperty(app.engine, 'backgroundHasRoom', { configurable: true, value: () => false });
   assert.deepEqual(reason(), { kind: 'chat' });
   assert.equal(await app.worker.tick(), 'busy');
   delete (app.engine as unknown as Record<string, unknown>).chatting;
+  delete (app.engine as unknown as Record<string, unknown>).backgroundHasRoom;
 
   const insert = app.db.prepare("INSERT INTO engine_runs (id, kind, started_at) VALUES (?, 'task', ?)");
   insert.run('r1', s.clock.now - 45 * 60_000);

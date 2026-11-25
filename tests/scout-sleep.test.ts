@@ -533,6 +533,8 @@ test('Think now: it runs past the cloud hourly count (D-7), and waits while a ch
   assert.equal(s.scoutRows().length, 2);
   let chatting = true;
   Object.defineProperty(s.app.engine, 'chatting', { get: () => chatting, configurable: true });
+  // 会話の返事を書いている最中は、提供元に空きが無い（会話の実行がいるだけでは待たない。beat self-fix S1）
+  Object.defineProperty(s.app.engine, 'backgroundHasRoom', { value: () => !chatting, configurable: true });
   s.later();
   assert.equal(s.app.worker.scoutNow(s.projectId)?.ok, true);
   assert.equal(await s.app.worker.tick(), 'busy');
