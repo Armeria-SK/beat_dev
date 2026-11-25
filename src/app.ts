@@ -287,6 +287,7 @@ export class App {
       driver: options.browserDriver ?? new PlaywrightDriver(), config: () => this.config(), paths: this.paths, log: this.log,
       notify: input => this.notifications.notify(input), secrets: () => this.registry.secrets(), now, refStart: options.browserRefStart ?? randomRefStart(),
       ...(options.browserDisplay !== undefined ? { canShowWindow: () => options.browserDisplay === true } : {}),
+      runActive: runId => this.engine.activeRuns().some(run => run.runId === runId),
     });
     this.background = new BackgroundJobs({ logDir: join(this.paths.data, 'tool_outputs'), now, isOpen: owner => this.#backgroundOpen(owner) });
     this.mergeWatch = new MergeWatch({
