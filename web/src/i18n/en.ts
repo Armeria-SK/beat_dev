@@ -343,7 +343,6 @@ export const en = {
   'ui.np.open': 'Open',
   'ui.np.checkFailed': (reason: string) => `Cannot use this folder · ${reason}`,
   'ui.np.folderOk': 'Folder OK',
-  'ui.np.picking': "Choose a folder in the window that opened on beat's PC.",
   'ui.np.pickFailed': (reason: string) => `The folder window did not open · ${reason}`,
   'ui.np.notAnswering': "beat's server is not answering. It may be stopped or restarting.",
   'ui.np.name': 'Name',

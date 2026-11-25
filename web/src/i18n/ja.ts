@@ -146,7 +146,6 @@ export const ja = {
   'ui.np.folderField': 'フォルダのフルパスを貼ってください',
   'ui.np.folderFieldPick': 'フルパスを貼るか、Open を押してフォルダを選んでください',
   'ui.np.checkFailed': (reason: string) => `このフォルダは使えません · ${reason}`,
-  'ui.np.picking': 'beat の PC で開いたウィンドウでフォルダを選んでください。',
   'ui.np.pickFailed': (reason: string) => `フォルダを選ぶウィンドウが開きませんでした · ${reason}`,
   'ui.np.notAnswering': 'beat のサーバーが応答しません。止まっているか、再起動中かもしれません。',
   'ui.np.nameHint': '空ならフォルダの名前になります',

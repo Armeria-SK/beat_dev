@@ -117,6 +117,13 @@ test('ui/TerminalPane（DOM）: リンクにするのは http://localhost だけ
   assert.deepEqual(links, ['http://localhost:5173/app']);
 });
 
+test('ui/TerminalPane（DOM）: 「Local:http://localhost:5173/」や「http://localhost:3000...」の localhost もリンクになる（行き先は http://localhost だけ）', async () => {
+  const server: Server = { items: [job()], outputs: { 'bg-1': [`Local:http://localhost:5173/${nl}`, `up at http://localhost:3000...${nl}`, `bad http://localhost:3000.evil.example${nl}`] }, calls: [] };
+  const { container } = await show(server);
+  const links = [...container.querySelectorAll('pre.bt-term a')].map(a => a.getAttribute('href'));
+  assert.deepEqual(links, ['http://localhost:5173/', 'http://localhost:3000']);
+});
+
 test('ui/TerminalPane（DOM）: いちばん下にいれば新しい行は bt-term__line--new で入る。上へ巻き戻していたら動かさず「N new lines」', async () => {
   const server: Server = { items: [job()], outputs: { 'bg-1': [`one${nl}`] }, calls: [] };
   const { container } = await show(server);
@@ -340,6 +347,52 @@ test('ui/terminal: localhost に見せかけたよその宛先はリンクにし
   assert.deepEqual(hrefs('see http://localhost:5173/app.'), ['http://localhost:5173/app']);
   assert.deepEqual(hrefs('(http://localhost:3000)'), ['http://localhost:3000']);
   assert.deepEqual(hrefs('at http://localhost'), ['http://localhost']);
+});
+
+test('ui/terminal: 省略記号・文末の点・コロンの直後に続く http://localhost もリンクにする。宛先は localhost（と任意のポート）だけで、よその宛先に見える形はならないまま', () => {
+  const hrefs = (line: string) => terminal.linkParts(line).filter(p => p.href).map(p => p.href);
+  assert.deepEqual(hrefs('Listening on http://localhost:3000...'), ['http://localhost:3000']);
+  assert.deepEqual(hrefs('(see http://localhost:3000.)'), ['http://localhost:3000']);
+  assert.deepEqual(hrefs('Local:http://localhost:5173/'), ['http://localhost:5173/']);
+  assert.deepEqual(hrefs('http://localhost:3000.'), ['http://localhost:3000']);
+  assert.deepEqual(hrefs('http://localhost...'), ['http://localhost']);
+  // 見せる文字と行き先は同じ（リンクの外の文字は文のまま残る）
+  assert.deepEqual(terminal.linkParts('Local:http://localhost:5173/'), [{ text: 'Local:' }, { text: 'http://localhost:5173/', href: 'http://localhost:5173/' }]);
+  assert.deepEqual(terminal.linkParts('ready http://localhost:3000...'), [{ text: 'ready ' }, { text: 'http://localhost:3000', href: 'http://localhost:3000' }, { text: '...' }]);
+  // よその宛先に見える形は、どれもならない
+  for (const line of [
+    'http://localhost:3000.evil.example',
+    'http://localhost:3000.evil.example/x',
+    'http://localhost:3000.-evil',
+    'http://localhost:3000:evil',
+    'http://localhost:3000@evil.example',
+    'http://localhost.example.com',
+    'http://localhost:300000',
+    'Local:http://localhost@evil.example/',
+    'Local:http://localhost.evil.example/',
+    'https://localhost:3000',
+    'ftp://localhost:3000',
+    'http://127.0.0.1:3000',
+    'Local:http://evil.example/',
+    'javascript:alert(1)//http://localhost',
+    'x/http://localhost:3000',
+    'x.http://localhost:3000',
+    // 点・コロンの次が ASCII の語の字でなくても（ほかの文字・%・@・点やコロンの連なり）、よその宛先に見えるものは外す
+    'http://localhost.еvil.com/',
+    'http://localhost.éxample.com',
+    'http://localhost.%65vil.com',
+    'http://localhost:3000.ｅvil.com',
+    'http://localhost:@evil.com',
+    'http://localhost:3000:@evil.com/',
+    'http://localhost..evil.com',
+    'http://localhost._evil.com',
+    'http://localhost.1evil.com',
+    // 前後の文字の決まり（1 つずつ外すと落ちるように）
+    'http://localhost-evil.com',
+    'xhttp://localhost',
+    'a-http://localhost',
+    'u@http://localhost:3000',
+  ]) assert.deepEqual(hrefs(line), [], line);
 });
 
 test('ui/terminal: 間が飛んだ続きは印の行を入れ、書きかけの行につながない。上限で捨てたら trimmed', () => {

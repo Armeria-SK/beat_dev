@@ -62,7 +62,7 @@ export function addText(prev: TermText, text: string, skipped = 0, max = MAX_LIN
 }
 
 // 宛先が localhost そのものの http だけ（localhost@… や localhost.… のようなよその宛先、ほかの語の続きは外す）
-const LOCALHOST = /(?<![\w/:.@-])http:\/\/localhost(?::\d{1,5})?(?![\w@-]|[.:]\S)(?:\/[^\s"'<>`]*)?/gu;
+const LOCALHOST = /(?<![\w/.@-])http:\/\/localhost(?::\d{1,5})?(?![\w@-]|[.:]+[\p{L}\p{N}_%@-])(?:\/[^\s"'<>`]*)?/gu;
 
 export type LinePart = { text: string; href?: string };
 

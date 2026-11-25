@@ -5,16 +5,11 @@ export function folderName(path: string): string {
   return parts.at(-1) ?? '';
 }
 
-export function nameFor(root: string, typed: string, touched: boolean): string {
-  return touched ? typed : folderName(root);
-}
-
-export function newProjectInput(root: string, name: string, check: string): NewProject | null {
+export function newProjectInput(root: string, name: string): NewProject | null {
   const path = root.trim();
   if (!path) return null;
   const input: NewProject = { root: path };
   if (name.trim()) input.name = name.trim();
-  if (check.trim()) input.checkCommand = check.trim();
   return input;
 }
 
