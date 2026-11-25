@@ -706,7 +706,16 @@ export class Worktrees {
           if (!(await this.#onlyBranch(repo, row.branch, tip))) return { ok: false, reason: 'foreign' };
           ending ??= merged ? 'merged' : 'discarded';
           this.#set(id, { ending });
-          const gone = await withGit(repo, this.#d.paths.data, async git => git([...NO_MAINTENANCE, 'branch', merged ? '-d' : '-D', '--', row.branch]));
+          const gone = await withGit(repo, this.#d.paths.data, async git => {
+            const deleted = await git([...NO_MAINTENANCE, 'branch', merged ? '-d' : '-D', '--', row.branch]);
+            if (deleted || !merged) return deleted;
+            // 取り込み済みと beat が確かめたのに branch -d が断られた: 持ち主が upstream を付けたブランチは、git が本体の今のブランチでなく upstream と比べて断る（毎回 removing のまま残る）。
+            // upstream が付いているときだけ、読んだ先端 tip を渡した update-ref -d で消す（先端が動いていれば消えない）。節は成功したときだけ外す
+            if (!(await git([...NO_MAINTENANCE, 'config', '--get', `branch.${row.branch}.merge`]))?.toString('utf8').trim()) return deleted;
+            const removed = await git([...NO_MAINTENANCE, 'update-ref', '--no-deref', '-d', `refs/heads/${row.branch}`, tip]);
+            if (removed) await git([...NO_MAINTENANCE, 'config', '--remove-section', `branch.${row.branch}`]);
+            return removed;
+          });
           if (!gone) return { ok: false, reason: 'failed' };
           branchKept = false;
         }
