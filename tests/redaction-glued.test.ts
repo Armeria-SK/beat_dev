@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { redactSecrets, sanitizeModelInputText } from '../src/shared/redaction.ts';
+import { redactJsonValue, redactSecrets, sanitizeModelInputText } from '../src/shared/redaction.ts';
 
 // 伏せ字の形の鍵が、前に語の文字がくっついていても残らない（`x` + `sk-ant-api03-…`）。
 // ふつうの語（disk-…・task-…）は今のまま伏せない。
@@ -124,4 +124,82 @@ test('くっついた鍵: [REDACTED] が何度も続く入力でも時間は入�
     const took = performance.now() - start;
     assert.ok(took < 2_000, `${input.length} 字に ${Math.round(took)}ms かかった`);
   }
+});
+
+// くっついた鍵の形は、名前で値を伏せる決まり（代入・旗・URL の引数名・JSON の鍵）が名前を読んだあとに当てる。
+// 先に当てると、`task-proj-db-password` のような名前の `sk-proj-db-password` の所を食べて、名前で伏せる決まりが働かず、値が出る
+const VALUE = 'hunter2pass';
+const JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+
+test('くっついた鍵: 名前の中に sk-proj- などを含む名前でも、名前で伏せる決まりが値を伏せる（代入・旗・URL の引数名・JSON の鍵）', () => {
+  const cases: Array<[string, string]> = [
+    [`task-proj-db-password=${VALUE}`, 'ta[REDACTED]=[REDACTED]'],
+    [`--task-proj-access-token ${VALUE}`, '--ta[REDACTED] [REDACTED]'],
+    [`https://h/cb?task-proj-api-token=${VALUE}&x=1`, 'https://h/cb?ta[REDACTED]=[REDACTED]&x=1'],
+    [`{"desk-ant-api-secret": "${VALUE}"}`, '{"de[REDACTED]": [REDACTED]}'],
+  ];
+  for (const [input, expected] of cases) {
+    const out = redactSecrets(input);
+    assert.equal(out.includes(VALUE), false, `値が残っている: ${input} -> ${out}`);
+    assert.equal(out, expected, input);
+  }
+});
+
+test('くっついた鍵: 名前 × 書き方のどの組み合わせでも、値は残らない', () => {
+  const heads = ['task-proj-', 'desk-ant-', 'disk-proj-', 'task-svcacct-', 'xsk-ant-', 'my-task-proj-'];
+  const tails = ['db-password', 'access-token', 'api-token', 'api-secret', 'client-secret', 'auth-token'];
+  const shapes: Array<(name: string) => string> = [
+    name => `${name}=${VALUE}`,
+    name => `${name}: ${VALUE}`,
+    name => `export ${name}=${VALUE} && run`,
+    name => `--${name} ${VALUE}`,
+    name => `--${name}=${VALUE}`,
+    name => `curl https://h/cb?${name}=${VALUE}&x=1`,
+    name => `https://h/cb?x=1&${name}=${VALUE}#frag`,
+    name => `{"${name}": "${VALUE}"}`,
+    name => `{"a": 1, "${name}":"${VALUE}"}`,
+  ];
+  let checked = 0;
+  for (const head of heads) {
+    for (const tail of tails) {
+      for (const shape of shapes) {
+        const input = shape(`${head}${tail}`);
+        const out = redactSecrets(input);
+        assert.equal(out.includes(VALUE), false, `値が残っている: ${input} -> ${out}`);
+        checked += 1;
+      }
+    }
+  }
+  assert.equal(checked, heads.length * tails.length * shapes.length);
+  const asJson = JSON.stringify(redactJsonValue({ 'task-proj-db-password': VALUE, nested: { 'desk-ant-api-secret': VALUE } }));
+  assert.equal(asJson.includes(VALUE), false, asJson);
+});
+
+test('くっついた鍵: JWT の頭に鍵の頭がくっついていても、JWT の中身（payload・署名）は残らない', () => {
+  const payload = JWT.split('.')[1]!;
+  const signature = JWT.split('.')[2]!;
+  const cases: Array<[string, string]> = [
+    [`xsk-proj-${JWT}`, 'xsk-proj-[REDACTED]'],
+    [`task-ant-${JWT}`, 'task-ant-[REDACTED]'],
+    [`see tokensk-ant-api03-${JWT} end`, 'see tokensk-ant-api03-[REDACTED] end'],
+    [`xsk-svcacct-${JWT}`, 'xsk-svcacct-[REDACTED]'],
+  ];
+  for (const [input, expected] of cases) {
+    const out = redactSecrets(input);
+    assert.equal(out.includes(payload), false, `payload が残っている: ${out}`);
+    assert.equal(out.includes(signature), false, `署名が残っている: ${out}`);
+    assert.equal(out, expected, input);
+    const sanitized = sanitizeModelInputText(input);
+    assert.equal(sanitized.text.includes(payload), false, sanitized.text);
+    assert.equal(sanitized.text.includes(signature), false, sanitized.text);
+    assert.ok(sanitized.redaction_count >= 1, '数は残る（断る確かめが働く）');
+  }
+});
+
+test('くっついた鍵: sanitizeModelInputText だけでも、くっついた鍵を伏せて数に入れる（断る確かめが働く）', () => {
+  assert.deepEqual(sanitizeModelInputText(`xsk-ant-api03-${TAIL}`), { text: 'x[REDACTED]', redaction_count: 1 });
+  assert.deepEqual(sanitizeModelInputText(`Bearer abc12345 and tokensk-proj-${TAIL} and xghp_${GH36}`), { text: '[REDACTED] and token[REDACTED] and x[REDACTED]', redaction_count: 3 });
+  assert.equal(sanitizeModelInputText(`task-proj-db-password=${VALUE}`).redaction_count, 1, '名前に sk-proj- を含む語も、数えて断る向き（伏せる側）は今のまま');
+  assert.equal(sanitizeModelInputText('plain text with task-ant-abc and disk-partition-tool').redaction_count, 0);
+  assert.equal(redactSecrets(`line one\nxsk-proj-${TAIL}\nline three`, [], { keepLines: true }), 'line one\nx[REDACTED]\nline three');
 });

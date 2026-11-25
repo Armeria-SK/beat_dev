@@ -2,7 +2,12 @@ const SECRET_PATTERNS = [
   /Bearer\s+[A-Za-z0-9._~+/-]+=*/gi,
   /\b(?:sk|or-v1)-[A-Za-z0-9_-]{8,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
-  // 前に語の文字がくっついた鍵（`x` + `sk-ant-…`）。頭の `\b` が無いので、ふつうの語に出ない頭だけにする（ただの `sk-` には付けない）
+];
+// 前に語の文字がくっついた鍵（`x` + `sk-ant-…`）。頭の `\b` が無いので、ふつうの語に出ない頭だけにする（ただの `sk-` には付けない）。
+// ほかの伏せ方（JWT・名前で値を伏せる代入・旗・URL の引数名・JSON の鍵）がそれぞれの読み方で読んだあとの、いちばん最後に当てる。
+// 先に当てると、`task-proj-db-password` のような名前の中を食べて、名前で値を伏せる決まりが働かず値が出る（JWT の頭を切ると中身も出る）。
+// 英数字と _ - の並びを伏せるだけなので、ほかの伏せ方の出力に当てても、今まで伏せていたものは出ない
+const GLUED_SECRET_PATTERNS = [
   /(?:sk-ant-|sk-proj-|sk-or-v1-|sk-svcacct-)[A-Za-z0-9_-]{8,}/g,
   /gh[pousr]_[A-Za-z0-9]{36,}/g,
 ];
@@ -70,7 +75,20 @@ function redactUrlParam(match: string, rawName: string, rawValue: string): strin
 
 const masked = (matched: string, keepLines: boolean): string => (keepLines ? `[REDACTED]${'\n'.repeat(matched.split('\n').length - 1)}` : '[REDACTED]');
 
-export function sanitizeModelInputText(input: string, keepLines = false): SanitizedModelInputText {
+function maskGlued(input: string, keepLines: boolean): SanitizedModelInputText {
+  let text = input;
+  let redactionCount = 0;
+  for (const pattern of GLUED_SECRET_PATTERNS) {
+    text = text.replace(pattern, matched => {
+      redactionCount += 1;
+      return masked(matched, keepLines);
+    });
+  }
+  return { text, redaction_count: redactionCount };
+}
+
+// くっついた鍵の形を当てる前までの伏せ方。redactSecrets は、くっついた鍵の形を自分の最後に当てるので、これを使う
+function sanitizeShapes(input: string, keepLines: boolean): SanitizedModelInputText {
   let text = input;
   let redactionCount = 0;
   for (const pattern of SECRET_PATTERNS) {
@@ -87,6 +105,12 @@ export function sanitizeModelInputText(input: string, keepLines = false): Saniti
   text = keys.text;
   redactionCount += keys.redaction_count;
   return Object.freeze({ text, redaction_count: redactionCount });
+}
+
+export function sanitizeModelInputText(input: string, keepLines = false): SanitizedModelInputText {
+  const shapes = sanitizeShapes(input, keepLines);
+  const glued = maskGlued(shapes.text, keepLines);
+  return Object.freeze({ text: glued.text, redaction_count: shapes.redaction_count + glued.redaction_count });
 }
 
 interface Segment { readonly start: number; readonly end: number; readonly last_word_end: number; readonly candidate?: number; }
@@ -243,7 +267,7 @@ export function redactExact(input: string, exactSecrets: readonly string[], keep
 export function redactSecrets(input: string, exactSecrets: readonly string[] = [], options: { keepLines?: boolean } = {}): string {
   const keepLines = options.keepLines === true;
   let redacted = redactExact(input, exactSecrets, keepLines);
-  redacted = sanitizeModelInputText(redacted, keepLines).text;
+  redacted = sanitizeShapes(redacted, keepLines).text;
   redacted = redacted.replace(URL_USERINFO_PASSWORD, '$1[REDACTED]@');
   redacted = redacted.replace(URL_USERINFO_TOKEN, '$1[REDACTED]@');
   redacted = redacted.replace(URL_PARAM, redactUrlParam);
@@ -251,7 +275,7 @@ export function redactSecrets(input: string, exactSecrets: readonly string[] = [
   redacted = redactFlagValues(redactAssignments(redacted));
   redacted = redacted.replace(USER_FLAG, (match, head: string, user: string, password: string) =>
     /^\d+$/u.test(user) && /^\d+$/u.test(password) ? match : `${head}[REDACTED]`);
-  return redacted.replace(MYSQL_PASSWORD, '$1[REDACTED]');
+  return maskGlued(redacted.replace(MYSQL_PASSWORD, '$1[REDACTED]'), keepLines).text;
 }
 
 function redactFlagValues(input: string): string {
