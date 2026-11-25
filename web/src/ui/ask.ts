@@ -66,6 +66,15 @@ const answered = (pick: AskPick | undefined): boolean => Boolean(pick && (pick.l
 
 export const complete = (questions: readonly AskQuestion[], picks: readonly AskPick[]): boolean => questions.every((_, i) => answered(picks[i]));
 
+export interface AskStep { index: number; total: number; first: boolean; last: boolean; canNext: boolean; canSend: boolean }
+
+export function askStep(questions: readonly AskQuestion[], picks: readonly AskPick[], step: number): AskStep {
+  const total = questions.length;
+  const index = Math.min(Math.max(0, step), Math.max(0, total - 1));
+  const last = index >= total - 1;
+  return { index, total, first: index === 0, last, canNext: !last && answered(picks[index]), canSend: last && complete(questions, picks) };
+}
+
 export function answerText(questions: readonly AskQuestion[], picks: readonly AskPick[], lead: string): string {
   const lines = questions.map((q, i) => {
     const pick = picks[i] ?? emptyPick();
