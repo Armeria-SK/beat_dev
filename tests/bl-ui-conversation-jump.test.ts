@@ -122,3 +122,21 @@ test('bl-ui-conversation/jump: 別の会話の印には飛ばない', async () =
   await renderChat('#/c/someone-else/m/3');
   assert.deepEqual(scrolled, []);
 });
+
+test('bl-ui-conversation/jump: 設定などの別の画面を挟んで同じ印の経路に戻っても、飛び直さない（自分で動かした位置を奪わない）', async () => {
+  await renderChat(`#/c/${CHAT}/m/3`);
+  assert.deepEqual(scrolled, ['3']);
+  await hashTo('#/settings');
+  await hashTo(`#/c/${CHAT}/m/3`);
+  assert.deepEqual(scrolled, ['3'], '設定を開いて閉じただけでは飛び直さない');
+  await hashTo('#/kanban');
+  await hashTo(`#/c/${CHAT}/m/3`);
+  assert.deepEqual(scrolled, ['3'], 'ほかの画面を挟んでも飛び直さない');
+});
+
+test('bl-ui-conversation/jump: 同じ会話の印の無い経路を挟んだあとなら、同じ印へまた飛べる（飛び直しを止める記録は、その会話の印の無い経路で消える）', async () => {
+  await renderChat(`#/c/${CHAT}/m/3`);
+  await hashTo(`#/c/${CHAT}`);
+  await hashTo(`#/c/${CHAT}/m/3`);
+  assert.deepEqual(scrolled, ['3', '3']);
+});

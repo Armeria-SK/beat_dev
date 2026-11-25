@@ -388,9 +388,10 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   useEffect(() => {
     if (!id) return undefined;
     const onHash = () => {
-      const target = messageTarget(parseRoute(location.hash), id);
-      if (target === null) jumped.current = null;
-      else if (location.hash !== jumped.current) setJump(target);
+      const route = parseRoute(location.hash);
+      if (route.view !== 'chat' || route.id !== id) return;
+      if (route.messageId === undefined) jumped.current = null;
+      else if (location.hash !== jumped.current) setJump(route.messageId);
     };
     addEventListener('hashchange', onHash);
     return () => removeEventListener('hashchange', onHash);
