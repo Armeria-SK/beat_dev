@@ -265,10 +265,17 @@ export async function autoDecide(
   const stop = new AbortController();
   let expired: 'timeout' | 'slot_timeout' | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // live: the clock that is running now (none if undefined). answerEnd: when the answer clock runs out
+  let live: 'timeout' | 'slot_timeout' | undefined;
+  let answerEnd = Date.now() + answerMs;
   const arm = (ms: number | undefined, kind: 'timeout' | 'slot_timeout') => {
     clearTimeout(timer);
-    timer = ms === undefined || stop.signal.aborted ? undefined : setTimeout(() => { expired = kind; stop.abort(new Error(kind)); }, ms);
+    live = ms === undefined || stop.signal.aborted ? undefined : kind;
+    if (kind === 'timeout' && ms !== undefined) answerEnd = Date.now() + ms;
+    timer = live === undefined ? undefined : setTimeout(() => { expired = kind; stop.abort(new Error(kind)); }, ms);
   };
+  // The second call never starts a clock of its own, so a first call that stopped while queued (queued() without started()) must not leave it with no clock or the slot clock: put the answer clock back, with the time that is left
+  const rearm = (): void => { if (live !== 'timeout') arm(Math.max(0, answerEnd - Date.now()), 'timeout'); };
   arm(answerMs, 'timeout');
   const call: JudgeCall | undefined = staged
     ? { answerMs, ...(limits.slotWaitMs !== undefined ? { slotWaitMs: limits.slotWaitMs } : {}), queued: () => arm(limits.slotWaitMs, 'slot_timeout'), started: () => arm(answerMs, 'timeout') }
@@ -310,11 +317,12 @@ export async function autoDecide(
   try {
     const first = await once(call);
     // The second call runs in what is left of the first call's time (it does not restart the clock). Whatever it returns is the answer: there is never a third call
-    const second = (): Promise<AutoVerdict> => once(call ? { ...call, queued: () => undefined, started: () => undefined } : undefined);
+    const second = (): Promise<AutoVerdict> => { rearm(); return once(call ? { ...call, queued: () => undefined, started: () => undefined } : undefined); };
     // AP-1d: a reply that could not be read is asked once more
     if (first.failed === 'unparsable') return combined.aborted ? first : await second();
     // A quick failure to call the judge (not a refusal, a timeout or a cancel) is asked once more after a short wait, and only with the staged limits
     if (staged && first.failed === 'error' && first.detail !== undefined && RETRY_KINDS.has(first.detail.kind) && Date.now() - begun < RETRY_WITHIN_MS && !combined.aborted) {
+      rearm();
       await pause(limits.retryDelayMs ?? RETRY_DELAY_MS);
       return combined.aborted ? failure() : await second();
     }

@@ -13,7 +13,7 @@ import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, JudgeRefused, judgeErrorKind, NoJudge, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeErrorKind, type JudgeLimits } from '../src/tools/auto-approve.ts';
+import { ACTION_BODY_LIMIT, autoDecide, type AutoVerdict, buildClassifierPrompt, EXFIL_RULE, JudgeRefused, judgeErrorKind, NoJudge, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeErrorKind, type JudgeLimits } from '../src/tools/auto-approve.ts';
 import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { memoryForget, memorySave } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
@@ -253,6 +253,81 @@ test('autoDecide（S3）: 呼び直しの待ちの間に答えの時計が切れ
   assert.deepEqual([expired.decision, expired.failed], ['ask', 'timeout']);
   assert.equal(clock.count(), 1, '待ちの間に時計が切れたら、2 回目は呼ばない');
   assert.ok(Date.now() - began2 < 3_000, '待ちは時間切れで切り上がる');
+});
+
+// 固まった autoDecide は、試験を止めずに「HUNG」で落とす: 見張りの時間を過ぎたら外の signal を止めて、残りの時計を片付けさせる
+const within = async (run: (signal: AbortSignal) => Promise<AutoVerdict>, guardMs = 3_000): Promise<AutoVerdict | 'HUNG'> => {
+  const controller = new AbortController();
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  const hung = new Promise<'HUNG'>(resolve => { guard = setTimeout(() => { resolve('HUNG'); controller.abort(); }, guardMs); });
+  try { return await Promise.race([run(controller.signal), hung]); } finally { clearTimeout(guard); }
+};
+// 1 回目: 順番待ちに入って（queued）、始める（started）前に失敗する。2 回目: 返らない
+const failsInQueue = (first: 'throw' | 'junk') => {
+  let n = 0;
+  return {
+    ask: async (_prompt: ClassifierPrompt, _signal: AbortSignal, step?: JudgeCall): Promise<string> => {
+      n++;
+      if (n > 1) return new Promise<string>(() => undefined);
+      step?.queued();
+      if (first === 'throw') throw new ProviderError('rate_limit', 'x');
+      return 'わかりません';
+    },
+    count: () => n,
+  };
+};
+
+test('autoDecide（S3）: 順番待ちに入ったあと始める前に失敗しても、呼び直しは答えの時計の残りで走る（時計なしで待ち続けず、順番待ちの時計にも替わらない）。allow にはならない', async () => {
+  for (const first of ['throw', 'junk'] as const) {
+    // 時計が 1 つだけの形（順番待ちの上限なし）: queued で時計が消えたまま 2 回目を待ち続けない
+    const unattended = failsInQueue(first);
+    const began = Date.now();
+    const a = await within(signal => autoDecide(input(), unattended.ask, signal, staged({ answerMs: 50, slotWaitMs: undefined })));
+    assert.ok(a !== 'HUNG', `${first}: 時計なしで固まった`);
+    assert.deepEqual([a.decision, a.failed, unattended.count()], ['ask', 'timeout', 2], first);
+    assert.ok(Date.now() - began < 1_000, `${first}: 答えの時計（50 ms）の残りで切れる`);
+
+    // 順番待ちの上限がある形: 呼び直しは順番待ちの時計（1,500 ms）ではなく、答えの時計の残りで走る
+    const chat = failsInQueue(first);
+    const began2 = Date.now();
+    const b = await within(signal => autoDecide(input(), chat.ask, signal, staged({ answerMs: 50, slotWaitMs: 1_500 })));
+    assert.ok(b !== 'HUNG', first);
+    assert.deepEqual([b.decision, b.failed, chat.count()], ['ask', 'timeout', 2], `${first}: slot_timeout ではなく timeout`);
+    assert.ok(Date.now() - began2 < 1_000, `${first}: 順番待ちの上限（1,500 ms）まで待たない`);
+  }
+});
+
+test('autoDecide（S3）: 呼び直しは時計を延ばさない（始めてから答えの時計の長さで切れる）。普通に始めてから失敗する形も同じ', async () => {
+  let n = 0;
+  const late = async (_prompt: ClassifierPrompt, _signal: AbortSignal, step?: JudgeCall): Promise<string> => {
+    n++;
+    if (n > 1) return new Promise<string>(() => undefined);
+    step?.queued();
+    step?.started();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    throw new ProviderError('rate_limit', 'x');
+  };
+  const began = Date.now();
+  const v = await within(signal => autoDecide(input(), late, signal, staged({ answerMs: 400, slotWaitMs: 1_500 })));
+  assert.ok(v !== 'HUNG');
+  assert.deepEqual([v.decision, v.failed, n], ['ask', 'timeout', 2]);
+  const took = Date.now() - began;
+  assert.ok(took >= 350 && took < 900, `答えの時計（400 ms）で切れる: ${took} ms`);
+  // 順番待ちの中で 150 ms 過ぎてから失敗した形: 呼び直しは答えの時計を測り直さず、残りの 150 ms で切れる（合わせて 300 ms 前後）
+  let m = 0;
+  const queuedLate = async (_prompt: ClassifierPrompt, _signal: AbortSignal, step?: JudgeCall): Promise<string> => {
+    m++;
+    if (m > 1) return new Promise<string>(() => undefined);
+    step?.queued();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    throw new ProviderError('rate_limit', 'x');
+  };
+  const began2 = Date.now();
+  const w = await within(signal => autoDecide(input(), queuedLate, signal, staged({ answerMs: 300, slotWaitMs: undefined })));
+  assert.ok(w !== 'HUNG');
+  assert.deepEqual([w.decision, w.failed, m], ['ask', 'timeout', 2]);
+  const took2 = Date.now() - began2;
+  assert.ok(took2 >= 280 && took2 < 430, `答えの時計の残りで切れる（測り直さない）: ${took2} ms`);
 });
 
 test('autoDecide（S3）: 例外の文は 1 行にして秘密を伏せ、120 字までに切って detail.text に入れる', async () => {

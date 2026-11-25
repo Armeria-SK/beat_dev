@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { App } from '../src/app.ts';
+import { ProviderError } from '../src/providers/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { UNTRUSTED_RUN, type Task } from '../src/tasks/store.ts';
 import { JUDGE_LIMITS, type JudgeLimitSet } from '../src/tools/pipeline.ts';
@@ -118,6 +119,27 @@ test('自動承認（エンジン）: 判定役のモデルの呼び出しが失
   assert.equal(autoRows(s).length, 0);
   s.app.replayPending(s.app.pending.claim(row!.id));
   await waitFor(() => s.app.pending.row(row!.id)?.status === 'ran', '許した行が動く');
+});
+
+test('自動承認（エンジン）: routing.judge に 2 つ並べて全部が一瞬で失敗しても、呼び直しを入れて判定役への呼び出しは 4 回まで。judge_calls は 1 行で、judge_failed が積まれ、動かない（S3）', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1'), fakeModel('m2'), fakeModel('m3')], judgeLimits: FAST_JUDGE, configure: c => { c.routing.judge = ['m2', 'm3']; } });
+  const outside = outsideRead(s);
+  const cannotConnect = () => fail(new ProviderError('provider_error', 'could not connect to the judge', { code: 'connect' }));
+  // 1 回目の聞き方で m2 → m3 の順に失敗し、呼び直しでも m2 → m3 の順に失敗する。5 つ目の台本（返事）が判定役に回ったら、4 回までの決まりが破れている
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cannotConnect(), cannotConnect(), cannotConnect(), cannotConnect(), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(s.adapter().calls.filter(isClassifier).map(c => c.model.id), ['m2', 'm3', 'm2', 'm3'], '呼ぶのは多くて 4 回（1 回の聞き方で 2 つ × 呼び直しの 1 回）');
+  const rows = s.app.db.prepare('SELECT outcome, failed, detail FROM judge_calls ORDER BY id').all().map(r => ({ ...r }));
+  assert.equal(rows.length, 1, '判定は 1 回として数える（呼び出しの数ではなく）');
+  assert.deepEqual([rows[0]!.outcome, rows[0]!.failed], ['failed', 'error']);
+  assert.match(String(rows[0]!.detail), /^connect: /u);
+  const waiting = s.app.pending.list({ status: 'waiting' });
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0]!.kind, 'judge_failed');
+  assert.match(waiting[0]!.reason, /could not connect/u);
+  assert.equal(autoRows(s).length, 0, '自動承認の許しの記録は無い');
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM tool_calls WHERE decision = 'allow'").get()!.n, 0, 'allow になった道具の呼び出しは無い');
 });
 
 test('自動承認（エンジン）: 製品の外でコードを動かす今回だけの確かめは、判定役が決める（allow なら動く）。添付つきの発言（よそから来た文）のあとの外読みも、判定役が決める', async t => {
