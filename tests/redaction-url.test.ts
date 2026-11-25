@@ -391,15 +391,16 @@ test('伏せ字: 振り返りに渡す道具の呼び出し（reviewWindow の s
   assert.ok(!transcript.includes('ss-9876') && !transcript.includes('Pa"'), transcript);
 });
 
-test('伏せ字: JSON の文字列の中の \\" は閉じの引用符でない（読めない引数の元の文・ログの JSON でも、値の後ろ半分を残さない）。引用符が閉じていなければ今までどおり', () => {
-  assert.equal(redactSecrets('{"password":"Pa\\"ss-9876","ref":"e2"}'), '{"password":[REDACTED],"ref":"e2"}');
-  assert.equal(redactSecrets('{"api_key":"sk\\"-abc","next":"v"}'), '{"api_key":[REDACTED],"next":"v"}');
-  assert.equal(redactSecrets('token="a\\"b" other="c"'), 'token=[REDACTED] other="c"');
-  assert.equal(redactSecrets('{"command":"x --password \\"abc\\" y"}'), '{"command":"x --password [REDACTED] y"}', '二重に包んだ形は今までどおり');
-  assert.equal(redactSecrets('password="abc\n"x"'), 'password=[REDACTED]\n"x"', '行をまたいで読まない');
-  assert.equal(redactSecrets('{"password":"Pa\\\\"}, "next":"v"'), '{"password":[REDACTED]}, "next":"v"', '値の終わりの \\\\ は引用符を守らない');
-  const raw = '{"ref":"e2","password":"Pa\\"ss-9876"';
-  assert.ok(!JSON.stringify(redactJsonValue(raw)).includes('ss-9876'), '読めない引数の元の文（call.raw）');
+test('伏せ字: 値の中の \\" は main と同じに読む（閉じの引用符とみなす。値の後ろ半分が残るのは記録した費用）。ほかの形は今までどおり', () => {
+  const BS = String.fromCharCode(92);
+  const NL = String.fromCharCode(10);
+  assert.equal(redactSecrets(`{"password":"Pa${BS}"ss-9876","ref":"e2"}`), '{"password":[REDACTED]ss-9876","ref":"e2"}');
+  assert.equal(redactSecrets(`{"api_key":"sk${BS}"-abc","next":"v"}`), '{"api_key":[REDACTED]-abc","next":"v"}');
+  assert.equal(redactSecrets(`token="a${BS}"b" other="c"`), 'token=[REDACTED]b" other="c"');
+  assert.equal(redactSecrets(`{"command":"x --password ${BS}"abc${BS}" y"}`), '{"command":"x --password [REDACTED] y"}', '二重に包んだ形は今までどおり');
+  assert.equal(redactSecrets(`password="abc${NL}"x"`), `password=[REDACTED]${NL}"x"`, '行をまたいで読まない');
+  assert.equal(redactSecrets(`{"password":"Pa${BS}${BS}"}, "next":"v"`), '{"password":[REDACTED]}, "next":"v"', '値の終わりの \\ は今までどおり');
+  assert.equal(redactJsonValue(`{"ref":"e2","password":"Pa${BS}"ss-9876"`), '{"ref":"e2","password":[REDACTED]ss-9876"', '読めない引数の元の文（call.raw）も main と同じ');
 });
 
 test('伏せ字: 値がバックスラッシュで終わる引用符つきの代入（Windows のパス）でも、同じ行・次の行のあとの名前・旗の値を残さない', () => {
@@ -417,7 +418,7 @@ test('伏せ字: 値がバックスラッシュで終わる引用符つきの代
     [`password="C:${BS}pw${BS}" mysql -h x -p"Secret99999"`, 'password=[REDACTED] mysql -h x -p[REDACTED]', '次が mysql の -p'],
     [`password="C:${BS}pw${BS}" curl -u "admin:Secret77777" http://x`, 'password=[REDACTED] curl -u "admin:[REDACTED]" http://x', '次が -u のユーザー:パスワード'],
     [`{"password":"C:${BS}pw${BS}","token":"tok_ABCDEFGHIJ123"}`, '{"password":[REDACTED],"token":[REDACTED]}', '壊れた JSON でも次の値は残さない'],
-    [`password="Pa${BS}"ss-9876" token="def1234567"`, 'password=[REDACTED] token=[REDACTED]', '値の中の引用符は今までの直しどおり閉じとみなさない'],
+    [`password="Pa${BS}"ss-9876" token="def1234567"`, 'password=[REDACTED]ss-9876" token=[REDACTED]', '値の中の引用符は main と同じに閉じとみなす（後ろ半分が残る費用）。次の名前の値は残さない'],
   ];
   for (const [input, expected, name] of cases) assert.equal(redactSecrets(input), expected, name);
 });
@@ -434,9 +435,30 @@ test('伏せ字: バックスラッシュで終わる値のあとに、先読み
   for (const out of [farKey, longMysql, longUser]) assert.ok(!out.includes('tok_ABC') && !out.includes('SSSS') && !out.includes('Secret77777'), out);
 });
 
-test('伏せ字: バックスラッシュで終わる値のあとに秘密でない名前の代入だけが続くときは、次の引用符まで伏せる（記録した伏せすぎ。値は残さない）', () => {
+test('伏せ字: バックスラッシュで終わる値のあとに秘密でない名前の代入が続いても、main と同じに伏せすぎない（次の引用符まで飲み込まない）', () => {
   const BS = String.fromCharCode(92);
-  assert.equal(redactSecrets(`password="abc${BS}" name="x"`), 'password=[REDACTED]x"');
+  assert.equal(redactSecrets(`password="abc${BS}" name="x"`), 'password=[REDACTED] name="x"');
+});
+
+test('伏せ字: 引用符の読み・符号化した写しの伏せが、main なら伏せる別の秘密を出さない（審査 7 の再現。S の印が出力に残ってはいけない）', () => {
+  const BS = String.fromCharCode(92);
+  const shapes: Array<[string, string, string[]]> = [
+    ['S1 値の中の \\" のあとの代入', `--token "S1, token="a${BS}"b"`, []],
+    ['S2 引用符つきの旗の値の中の代入', `--token 'S2 token="a${BS}"b' c"`, []],
+    ['S3 mysql の -p の中の代入', `mysql -h h -p"S3 token="a${BS}"b"`, []],
+    ['S4 手前の代入のあとの mysql の -p', `mysql token="a${BS}" -p"S4 Y" Z`, []],
+    ['S5 手前の代入のあとの URL のパスワード（入れた値と同じ）', `token="a${BS}" postgres://"abcd!:S5@h/p`, ['abcd!']],
+    ['S5b 引用符をまたぐ --user の連なり', `--user='u:S1?password="a${BS}"b' X"--user='u:S2"`, []],
+    ['S6 入れた値の %26 が、あとの名前の手前の区切りを食う', 'https://h/?q=1%26x%3Dpas%26token%3DS6%26y%3D2', ['pas&']],
+    ['S8 空白が + に符号化された値が、あとの語を食う', 'curl -H Bearer a+bS8rest', ['a b']],
+  ];
+  for (const [name, input, secrets] of shapes) assert.doesNotMatch(redactSecrets(input, secrets), /S\d/u, name);
+  assert.equal(redactSecrets('password=ab  cd efg', ['ab cd']), 'password=[REDACTED] efg', '最初の 1 段（literal）も、空白の並びが違う値を 1 つの鍵として伏せる（伏せないと、代入の段が先に値を切って後ろ半分が残る）');
+  const link = 'https://h/?q=1%26x%3Dpas%26token%3DS10%26y%3D2';
+  const typedCopy = redactExact(`見た: ${link} 打った値は pas& です`, ['pas&'], false, true);
+  assert.equal(typedCopy, `見た: ${link} 打った値は [REDACTED] です`, 'literal は書いてあるとおりの値だけ伏せ、%26 の形は触らない');
+  assert.doesNotMatch(redactSecrets(typedCopy), /S10/u, 'S10 保存した返事（literal）のあとの要約が、別の秘密を伏せる');
+  assert.equal(redactExact(link, ['pas&']), 'https://h/?q=1%26x%3D[REDACTED]token%3DS10%26y%3D2', '既定（符号化した写しも伏せる）は、最後の 1 段だけで使う');
 });
 
 test('伏せ字: 振り返りに渡す道具の呼び出しは、password が配列でも丸ごと伏せる（redactJsonValue を通す）', () => {

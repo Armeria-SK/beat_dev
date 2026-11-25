@@ -25,7 +25,7 @@ const URL_LONG_SECRET_MIN = 16;
 const URL_PARAM_SEPARATOR = /(?:[?&#;]|\\u0026)$/;
 const PRIVATE_KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
 const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_-])[0-9-]*["']?([A-Za-z_][A-Za-z0-9_-]*)(?:\\*["'])?\s*[:=][ \t]*(?:\r?\n[ \t]+)?/g;
-const ASSIGNMENT_VALUE = /(?<!\\)"(?:[^"\\\r\n]|\\[^\r\n])*"|\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
+const ASSIGNMENT_VALUE = /\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
 const AUTH_SCHEME = /^(?:Basic|Bearer|Digest|Negotiate|NTLM|Token)$/i;
 const AUTH_SCHEME_VALUE = /[ \t]+[^\s,;}"'\\]+/y;
 const COOKIE_NAME = /cookies?$/i;
@@ -277,8 +277,9 @@ function exactPattern(form: string): RegExp {
 }
 
 // 鍵そのものを伏せる。鍵の途中の空白は、2 つ以上・改行・タブなど並びが変わっていても同じ鍵として伏せる（相手が空白をそろえて返しても残さない）。
-// JSON の文字列の中の書き方（\ と " のエスケープ）と、URL に入った書き方（tolerantChar）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）
-export function redactExact(input: string, exactSecrets: readonly string[], keepLines = false): string {
+// JSON の文字列の中の書き方（\ と " のエスケープ）と、URL に入った書き方（tolerantChar）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）。
+// literal のときは書いてある文字そのままだけを伏せる（他の段より前に走らせても、他の段が値の終わりを探すのに使う文字を食わない）。符号化した写しを伏せる側は最後に走らせる
+export function redactExact(input: string, exactSecrets: readonly string[], keepLines = false, literal = false): string {
   const forms = new Set<string>();
   for (const secret of exactSecrets) {
     if (secret.trim().length === 0) continue;
@@ -287,14 +288,15 @@ export function redactExact(input: string, exactSecrets: readonly string[], keep
   }
   let redacted = input;
   for (const form of [...forms].sort((a, b) => b.length - a.length)) {
-    redacted = redacted.replace(exactPattern(form), matched => masked(matched, keepLines));
+    const pattern = literal ? new RegExp(form.split(/\s+/u).map(part => part.replace(REGEX_SPECIAL, '\\$&')).join('\\s+'), 'gu') : exactPattern(form);
+    redacted = redacted.replace(pattern, matched => masked(matched, keepLines));
   }
   return redacted;
 }
 
 export function redactSecrets(input: string, exactSecrets: readonly string[] = [], options: { keepLines?: boolean } = {}): string {
   const keepLines = options.keepLines === true;
-  let redacted = redactExact(input, exactSecrets, keepLines);
+  let redacted = redactExact(input, exactSecrets, keepLines, true);
   redacted = sanitizeShapes(redacted, keepLines).text;
   redacted = redacted.replace(URL_USERINFO_PASSWORD, '$1[REDACTED]@');
   redacted = redacted.replace(URL_USERINFO_TOKEN, '$1[REDACTED]@');
@@ -303,7 +305,7 @@ export function redactSecrets(input: string, exactSecrets: readonly string[] = [
   redacted = redactFlagValues(redactAssignments(redacted));
   redacted = redacted.replace(USER_FLAG, (match, head: string, user: string, password: string) =>
     /^\d+$/u.test(user) && /^\d+$/u.test(password) ? match : `${head}[REDACTED]`);
-  return maskGlued(redacted.replace(MYSQL_PASSWORD, '$1[REDACTED]'), keepLines).text.replace(URL_USERINFO_PASSWORD_WIDE, '$1[REDACTED]@');
+  return redactExact(maskGlued(redacted.replace(MYSQL_PASSWORD, '$1[REDACTED]'), keepLines).text.replace(URL_USERINFO_PASSWORD_WIDE, '$1[REDACTED]@'), exactSecrets, keepLines);
 }
 
 function redactFlagValues(input: string): string {
@@ -320,27 +322,6 @@ function redactFlagValues(input: string): string {
   }
   parts.push(input.slice(copied));
   return parts.join('');
-}
-
-// 値の引用符の中を読み進めて次の名前の頭まで飲み込むと、その名前（や旗）の値が伏せられずに残る。ここは「飲み込んだ範囲の中で始まる秘密の名前・旗・-u・mysql の -p があるか」を見る。範囲の中の秘密の名前・-u・mysql の語は、: や値が先読みの外にあっても数える。名前の終わりは範囲の外にはみ出してよい
-const HEAD_LOOKAHEAD = 256;
-const STRETCH_NAME = /(?<![A-Za-z0-9_-])([0-9-]*)["']?([A-Za-z_][A-Za-z0-9_-]*)/g;
-const USER_FLAG_NAME = /^(?:u|user|proxy-user)$/;
-const MYSQL_WORD = /\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b/;
-function holdsSensitiveHead(input: string, from: number, to: number): boolean {
-  const stretch = input.slice(from, to);
-  if (MYSQL_WORD.test(stretch)) return true;
-  for (const m of stretch.matchAll(STRETCH_NAME)) if (isSensitiveName(m[2]!) || (m[1]!.endsWith('-') && USER_FLAG_NAME.test(m[2]!))) return true;
-  const near = input.slice(from, to + HEAD_LOOKAHEAD);
-  const span = to - from;
-  for (const heads of [new RegExp(ASSIGNMENT_HEAD.source, 'g'), new RegExp(FLAG_HEAD.source, 'g')]) {
-    for (let match = heads.exec(near); match !== null && match.index < span; match = heads.exec(near)) if (isSensitiveName(match[1]!)) return true;
-  }
-  for (const later of [USER_FLAG, MYSQL_PASSWORD]) {
-    const match = new RegExp(later.source, 'g').exec(near);
-    if (match !== null && match.index < span) return true;
-  }
-  return false;
 }
 
 function redactAssignments(input: string): string {
@@ -361,10 +342,6 @@ function redactAssignments(input: string): string {
     }
     value.lastIndex = valueStart;
     let end = value.test(input) ? value.lastIndex : -1;
-    if (end >= 0 && input[valueStart] === '"') {
-      const plain = input.indexOf('"', valueStart + 1) + 1;
-      if (plain > 0 && plain < end && holdsSensitiveHead(input, plain, end)) end = plain;
-    }
     if (COOKIE_NAME.test(match[1]!)) {
       cookie.lastIndex = valueStart;
       const line = cookie.test(input) ? cookie.lastIndex : -1;

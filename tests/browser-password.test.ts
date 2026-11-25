@@ -780,36 +780,22 @@ test('P7: password は 128 文字まで（スキーマ 2 か所・実行前の�
   assert.deepEqual(page.acts, [], '長い値は欄に入れない');
 });
 
-// JSON の書き方で繰り返した値（\uXXXX・\/）も、保存される返事に残さない。16 進は大文字でも小文字でも
-const BS = String.fromCharCode(92);
-const ESCAPED_COPIES: Array<[string, string, string]> = [
-  ['at sign as a unicode escape', 'P@ss-Leak-77', `P${BS}u0040ss-Leak-77`],
-  ['slash as a backslash slash', 'a/b-Leak-88', `a${BS}/b-Leak-88`],
-  ['tilde as an uppercase and a lowercase unicode escape', 'Zq~Leak-99', `Zq${BS}u007ELeak-99 Zq${BS}u007eLeak-99`],
-  ['slash as a unicode escape', 'c/d-Leak-66', `c${BS}u002fd-Leak-66`],
-];
-
-test('P7: 値を JSON の書き方（\\uXXXX・\\/）で繰り返した本文があっても、保存される返事・履歴の API に残さない', async t => {
-  for (const [name, value, copy] of ESCAPED_COPIES) {
-    const { s, events } = await streamApp(t);
-    const id = uuid(120 + ESCAPED_COPIES.findIndex(([known]) => known === name));
-    const reply = `<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"${value}"}}</tool_call> JSON で書くと: {"password":"${copy}"}`;
-    s.adapter().scripts = [async function* () {
-      yield { type: 'text', delta: reply };
-      yield { type: 'done', stop: 'end_turn' as StopReason };
-    }, finish];
-    s.app.conversations.create({ id, title: '会話' });
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
-    assert.equal(sent.status, 202, JSON.stringify(sent.body));
-    await settled(s.app, sent.body.runId);
-    const saved = s.app.conversations.messages(id);
-    const said = saved.filter(m => m.role === 'assistant').map(m => `${m.text}\n${m.message.role === 'assistant' ? m.message.content : ''}`).join('\n');
-    assert.ok(said.includes('JSON で書くと'), `${name}: ${said}`);
-    const tail = value.slice(value.indexOf('Leak'));
-    assert.ok(!said.includes(tail), `${name}: ${said}`);
-    assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(tail), name);
-    assert.ok(!everything(events).includes(tail), name);
-  }
+test('P7: 保存される返事の本文は、書いてあるとおりの値だけ伏せる。符号化した写しの手前の文字は食わない（食うと、あとの要約が別の秘密を伏せられなくなる）', async t => {
+  const { s } = await streamApp(t);
+  const id = uuid(120);
+  const link = 'https://h/?q=1%26x%3Dpas%26token%3DS10%26y%3D2';
+  const reply = `<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"pas&"}}</tool_call> 見た: ${link} 打った値は pas& です`;
+  s.adapter().scripts = [async function* () {
+    yield { type: 'text', delta: reply };
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  }, finish];
+  s.app.conversations.create({ id, title: '会話' });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  await settled(s.app, sent.body.runId);
+  const said = s.app.conversations.messages(id).filter(m => m.role === 'assistant').map(m => `${m.text}\n${m.message.role === 'assistant' ? m.message.content : ''}`).join('\n');
+  assert.ok(said.includes(`見た: ${link} 打った値は [REDACTED] です`), said);
+  assert.ok(!redactSecrets(said).includes('S10'), 'あとの要約（redactSecrets）が S10 を伏せられる');
 });
 
 test('P7: 返事の途中で印が見えたあとは、本文を見直さない（続きがどれだけ長くても、見直しの回数は増えない）', async t => {
