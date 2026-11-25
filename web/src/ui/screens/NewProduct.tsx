@@ -3,7 +3,7 @@ import { api, ApiError, type Project, unreachable } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
-import { nameFor, newProjectInput, noteKeys } from '../folder-pick.ts';
+import { folderName, newProjectInput, noteKeys } from '../folder-pick.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Notice } from '../parts.tsx';
 import { routeHash } from '../routes.ts';
@@ -65,7 +65,6 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
   const [folderOk, setFolderOk] = useState<string | null>(null);
   const [root, setRoot] = useState('');
   const [name, setName] = useState('');
-  const [named, setNamed] = useState(false);
   const [check, setCheck] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -133,8 +132,7 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
     }
   };
 
-  const shownName = nameFor(root, name, named);
-  const input = newProjectInput(root, shownName, check);
+  const input = newProjectInput(root, name, check);
 
   const create = async () => {
     if (!input || busy) return;
@@ -196,8 +194,8 @@ export function NewProduct({ onProject, connected = true }: { onProject: (projec
 
         <label className="bt-form-row">
           <span className="bt-label">{t('ui.np.name')}</span>
-          <input className="bt-field" type="text" value={shownName} maxLength={100} autoComplete="off" placeholder={t('ui.np.nameHint')}
-            onChange={e => { setName(e.target.value); setNamed(true); }} />
+          <input className="bt-field" type="text" value={name} maxLength={100} autoComplete="off" placeholder={folderName(root) || t('ui.np.nameHint')}
+            onChange={e => setName(e.target.value)} />
         </label>
         <label className="bt-form-row">
           <span className="bt-label">{t('ui.np.check')}</span>

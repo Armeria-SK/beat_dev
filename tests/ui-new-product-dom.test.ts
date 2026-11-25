@@ -69,8 +69,48 @@ test('ui/NewProduct（DOM）: 一覧（Places to start）は無く、この PC �
   await settle();
   assert.deepEqual(posts(sent), [['/api/folders/pick', {}], ['/api/folders/check', { path: 'C:\\work\\shop' }]]);
   assert.equal(field(c).value, 'C:\\work\\shop');
-  assert.equal(nameField(c).value, 'shop');
+  assert.equal(nameField(c).value, '', '名前の欄は空のまま（フォルダ名は値にしない）');
+  assert.equal(nameField(c).placeholder, 'shop', 'フォルダ名は薄い文字（placeholder）に出る');
   assert.ok(text(c).includes(`${en['ui.np.folderOk']} · Not a git folder.`));
+});
+
+test('ui/NewProduct（DOM）: 名前の欄は空で始まり、フォルダ名は placeholder に出る。打った文字だけが名前になり（後ろに足されない）、打たずに作ると名前は送らない', async () => {
+  const sent = serve((path, method) => {
+    if (path === '/api/folders/pick' && method === 'POST') return { body: { path: 'C:\\work\\kakeibo' } };
+    if (path === '/api/folders/check') return { body: { root: 'C:\\work\\kakeibo', notes: [] } };
+    if (path === '/api/projects' && method === 'POST') return { status: 201, body: { project: { id: 'p9zzzz', name: 'kakeibo' }, notes: [] } };
+    return base(path, method);
+  });
+  const { container: c } = await show();
+  assert.equal(nameField(c).value, '');
+  assert.equal(nameField(c).placeholder, en['ui.np.nameHint'], 'フォルダが無い間は今までの案内');
+  await click(openButton(c));
+  await settle();
+  assert.equal(nameField(c).value, '', 'フォルダを選んでも値には入れない（打つと後ろに足されて kakeibokakeibo になっていた）');
+  assert.equal(nameField(c).placeholder, 'kakeibo');
+  await input(field(c), 'C:\\work\\shop');
+  assert.equal(nameField(c).placeholder, 'shop', '欄のパスを直すと placeholder も変わる');
+  await input(nameField(c), `${nameField(c).value}Home`);
+  assert.equal(nameField(c).value, 'Home', '打った文字だけが入る');
+  await input(nameField(c), '');
+  await click(byText(c, 'button', en['ui.np.create']));
+  await settle();
+  assert.deepEqual(sent.filter(s => s.path === '/api/projects' && s.method === 'POST').map(s => s.body), [{ root: 'C:\\work\\shop' }], '空に戻したら名前は送らない');
+  window.location.hash = '';
+});
+
+test('ui/NewProduct（DOM）: 名前を打って作ると、打った文字がそのまま名前として送られる', async () => {
+  const sent = serve((path, method) => {
+    if (path === '/api/projects' && method === 'POST') return { status: 201, body: { project: { id: 'p9zzzz', name: 'Home' }, notes: [] } };
+    return base(path, method);
+  });
+  const { container: c } = await show();
+  await input(field(c), 'C:\\work\\kakeibo');
+  await input(nameField(c), `${nameField(c).value}Home`);
+  await click(byText(c, 'button', en['ui.np.create']));
+  await settle();
+  assert.deepEqual(sent.filter(s => s.path === '/api/projects' && s.method === 'POST').map(s => s.body), [{ root: 'C:\\work\\kakeibo', name: 'Home' }]);
+  window.location.hash = '';
 });
 
 test('ui/NewProduct（DOM）: 窓で選んだフォルダが製品のフォルダにできない（ホームなど）なら、その理由をすぐ欄の下に出す', async () => {
@@ -181,7 +221,7 @@ test('ui/NewProduct（DOM）: Retry は失敗したときの値ではなく、�
   await click(byText(c, 'button', en['ui.fail.retry']));
   await settle();
   const created = sent.filter(s => s.path === '/api/projects' && s.method === 'POST').map(s => s.body);
-  assert.deepEqual(created.at(-1), { root: 'C:\\work\\b', name: 'b' });
+  assert.deepEqual(created.at(-1), { root: 'C:\\work\\b' }, '名前を打っていなければ送らない（サーバーがフォルダ名にする）');
   window.location.hash = '';
 });
 
