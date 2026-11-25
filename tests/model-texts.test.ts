@@ -163,7 +163,7 @@ test('buildSnapshot: ルールと見出しで組み立てる', t => {
 test('baseTokens: ルールと動的な部分の長さで見積もる', async t => {
   const s = await startApp(t);
   const given = () => s.app.tools.forRun('chat', { exclude: tool => tool.name === 'agent_run' || isBrowserTool(tool.name) || tool.name === 'acceptance_change' });
-  const rest = () => estimateToolTokens(ToolRegistry.specs(given().filter(isCore))) + estimateTextTokens(deferredSection(given().filter(tool => !isCore(tool)), s.app.config())) + 64; // 既定では agent_run と browser_* は無効で、モデルに渡らない。acceptance_change は acceptance_write と同時には渡らない
+  const rest = () => estimateToolTokens(ToolRegistry.specs(given().filter(isCore), s.app.config())) + estimateTextTokens(deferredSection(given().filter(tool => !isCore(tool)), s.app.config())) + 64; // 既定では agent_run と browser_* は無効で、モデルに渡らない。acceptance_change は acceptance_write と同時には渡らない
   const expected = estimateTextTokens(buildSnapshot(s.paths, { skills: '' }).text) + estimateTextTokens(buildDynamic(s.app.config().timezone)) + estimateTextTokens(fenceTail(buildTail(s.app.config().timezone), PLACEHOLDER_NONCE)) + rest();
   assert.equal(s.app.baseTokens(), expected);
 });

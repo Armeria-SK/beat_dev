@@ -64,7 +64,7 @@ test('a changed test file picks itself', t => {
 
 test('changes that cannot be placed in the graph pick every test, with the reason', t => {
   const graph = new ImportGraph(tree(t));
-  for (const file of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.web.json', 'tests/helpers/h.ts', 'tests/helpers/tsx-loader.mjs', 'src/prompt.md', 'src/data.json', 'tests/fixtures/page.html', 'deploy/x.ts', 'README.md']) {
+  for (const file of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.web.json', 'tests/helpers/h.ts', 'tests/helpers/tsx-loader.mjs', 'tests/helpers/notes.md', 'web/src/icon.svg', 'src/data.json', 'tests/fixtures/page.html', 'deploy/x.ts', 'README.md']) {
     const pick = graph.pick([file, 'src/unrelated.ts']);
     assert.deepEqual(pick.tests, graph.tests, file);
     assert.equal(pick.all.length, 1, file);
@@ -78,6 +78,174 @@ test('a change nothing reaches picks no test', t => {
   assert.deepEqual(pick.tests, []);
   assert.deepEqual(pick.all, []);
   assert.deepEqual(graph.pick([]).tests, []);
+});
+
+// .css / .md は、コードから読まれていれば、その読み方（import・path の文字列・読むフォルダ）が分かるので、コードと同じにグラフで選ぶ。
+// どのコードにも名前が出ない物は、どの試験も読まないので、選ぶ試験は無い。名前がグラフの追えない形で出る物だけ、全部を選ぶ。
+test('どのコードにも名前が出ない .css / .md は、試験を 1 つも選ばない（全部を選ぶ理由にならない）', t => {
+  const graph = new ImportGraph(tree(t, { 'web/src/ui/styles/lonely.css': 'a { color: red; }\n', 'src/notes.md': '# notes\n', 'scripts/guide.md': 'guide\n', 'tests/fixtures/note.md': 'x\n' }));
+  for (const file of ['web/src/ui/styles/lonely.css', 'src/notes.md', 'scripts/guide.md', 'tests/fixtures/note.md']) {
+    const pick = graph.pick([file, 'src/unrelated.ts']);
+    assert.deepEqual(pick.all, [], file);
+    assert.deepEqual(pick.tests, [], file);
+  }
+});
+
+test('コードが import している .css は、それを読み込むモジュールに届く試験だけを選ぶ。消した .css でも同じ', t => {
+  const graph = new ImportGraph(tree(t, {
+    'web/src/style.css': 'a {}\n',
+    'web/src/A.tsx': "import './style.css';\nimport './gone.css';\nimport { bee } from './B.ts';\nexport const A = () => bee;\n",
+  }));
+  for (const file of ['web/src/style.css', 'web/src/gone.css']) {
+    const pick = graph.pick([file]);
+    assert.deepEqual(pick.all, [], file);
+    assert.deepEqual(pick.tests, ['tests/ui.test.ts'], file);
+  }
+});
+
+test('試験が path の文字列や読むフォルダで読む .md は、その試験を選ぶ', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/docs/guide.md': 'x\n',
+    'src/scan/note.md': 'x\n',
+    'tests/lit.test.ts': "import { readFileSync } from 'node:fs';\nreadFileSync('src/docs/guide.md');\n",
+  }));
+  assert.deepEqual(graph.pick(['src/docs/guide.md']).tests, ['tests/lit.test.ts']);
+  assert.deepEqual(graph.pick(['src/scan/note.md']).tests, ['tests/scan.test.ts']);
+  assert.deepEqual(graph.pick(['src/scan/note.md']).all, []);
+});
+
+test('名前がグラフの追えない形で出る .css / .md は、全部を選び、どのコードかを理由に書く', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/notes.md': 'x\n',
+    'src/reader.ts': "import { join } from 'node:path';\nexport const notes = (dir: string): string => join(dir, 'notes.md');\n",
+    'tests/reader.test.ts': "import '../src/reader.ts';\n",
+    'web/src/ui/other/dup.css': 'a {}\n',
+    'web/src/ui/main.ts': "import './styles/dup.css';\n",
+    'tests/main.test.ts': "import '../web/src/ui/main.ts';\n",
+  }));
+  const named = graph.pick(['src/notes.md', 'src/unrelated.ts']);
+  assert.deepEqual(named.tests, graph.tests);
+  assert.equal(named.all.length, 1);
+  assert.match(named.all[0]!, /^src\/notes\.md: .*src\/reader\.ts/u);
+  // 同じ名前の別の .css を読む import があっても、どちらの .css か決められないので全部を選ぶ
+  const same = graph.pick(['web/src/ui/other/dup.css']);
+  assert.deepEqual(same.tests, graph.tests);
+  assert.match(same.all[0]!, /^web\/src\/ui\/other\/dup\.css: .*web\/src\/ui\/main\.ts/u);
+});
+
+const READER_TEST = "import '../src/reader.ts';\n";
+
+function selects(graph: ImportGraph, file: string, test: string): { by: 'selected' | 'all'; all: string[] } {
+  const pick = graph.pick([file]);
+  assert.ok(pick.tests.includes(test), `${file} must pick ${test}`);
+  return { by: pick.all.length > 0 ? 'all' : 'selected', all: pick.all };
+}
+
+test('a .md read by non-test code that scans a folder from APP_ROOT is picked up (selected or a full run)', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'src/prompts/system.md': '# system\n',
+    'src/reader.ts': "import { readdirSync } from 'node:fs';\nimport { join } from 'node:path';\nimport { APP_ROOT } from './paths.ts';\nexport const all = () => readdirSync(join(APP_ROOT, 'src', 'prompts')).filter(f => f.endsWith('.md'));\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  selects(graph, 'src/prompts/system.md', 'tests/reader.test.ts');
+  const variable = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'src/prompts/system.md': '# system\n',
+    'src/reader.ts': "import { readdirSync } from 'node:fs';\nimport { join } from 'node:path';\nimport { APP_ROOT } from './paths.ts';\nexport const all = (dir: string) => readdirSync(join(APP_ROOT, dir)).filter(f => f.endsWith('.md'));\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  selects(variable, 'src/prompts/system.md', 'tests/reader.test.ts');
+});
+
+test('a .md whose name non-test code builds in a template literal under APP_ROOT is picked up', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'src/prompts/system.md': '# system\n',
+    'src/reader.ts': "import { readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nimport { APP_ROOT } from './paths.ts';\nexport const one = (name: string) => readFileSync(join(APP_ROOT, 'src', 'prompts', `${name}.md`), 'utf8');\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  selects(graph, 'src/prompts/system.md', 'tests/reader.test.ts');
+});
+
+test('a .md that non-test code reads by string concatenation from a cwd-relative path is picked up', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/prompts/system.md': '# system\n',
+    'src/reader.ts': "import { readFileSync } from 'node:fs';\nexport const one = (name: string) => readFileSync('src/prompts/' + name + '.md', 'utf8');\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  selects(graph, 'src/prompts/system.md', 'tests/reader.test.ts');
+  const piecewise = new ImportGraph(tree(t, {
+    'src/prompts/system.md': '# system\n',
+    'src/reader.ts': "import { readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nexport const one = (name: string) => readFileSync(join('src', 'prompts', name + '.md'), 'utf8');\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  selects(piecewise, 'src/prompts/system.md', 'tests/reader.test.ts');
+});
+
+test('a .md next to a script that a test spawns, which finds its folder from APP_ROOT, is picked up', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'scripts/bench/NOTES.md': 'notes\n',
+    'scripts/bench/README.md': 'readme\n',
+    'scripts/bench/run.ts': "import { readdirSync, readFileSync } from 'node:fs';\nimport { join } from 'node:path';\nimport { APP_ROOT } from '../../src/paths.ts';\nconst HERE = join(APP_ROOT, 'scripts', 'bench');\nexport const docs = readdirSync(HERE).filter(f => f.endsWith('.md'));\nexport const readme = () => readFileSync(join(HERE, 'README.md'), 'utf8');\n",
+    'tests/bench.test.ts': "import { spawnSync } from 'node:child_process';\nspawnSync(process.execPath, ['scripts/bench/run.ts']);\n",
+  }));
+  selects(graph, 'scripts/bench/NOTES.md', 'tests/bench.test.ts');
+  const named = selects(graph, 'scripts/bench/README.md', 'tests/bench.test.ts');
+  assert.equal(named.by, 'all', 'a name the script spells out but cannot be followed is a full run');
+});
+
+test('a .css or .md that a non-code file names (CSS @import, .json, .html) is a full run, with that file in the reason', t => {
+  const graph = new ImportGraph(tree(t, {
+    'web/src/ui/styles/main.css': "@import './part.css';\n",
+    'web/src/ui/styles/part.css': 'a {}\n',
+    'web/src/ui/styles/page.css': 'a {}\n',
+    'src/docs/guide.md': '# guide\n',
+    'web/src/Main.tsx': "import './ui/styles/main.css';\nexport const Main = () => null;\n",
+    'src/manifest.json': '{ "docs": ["docs/guide.md"] }\n',
+    'web/index.html': '<link rel="stylesheet" href="/src/ui/styles/page.css">\n',
+    'tests/main.test.ts': "import '../web/src/Main.tsx';\n",
+  }));
+  for (const [file, by] of [['web/src/ui/styles/part.css', 'web/src/ui/styles/main.css'], ['src/docs/guide.md', 'src/manifest.json'], ['web/src/ui/styles/page.css', 'web/index.html']] as const) {
+    const pick = graph.pick([file]);
+    assert.deepEqual(pick.tests, graph.tests, file);
+    assert.equal(pick.all.length, 1, file);
+    assert.ok(pick.all[0]!.startsWith(`${file}: `) && pick.all[0]!.includes(by), pick.all[0]);
+  }
+});
+
+test('code that holds a repo root but never reads .css or .md does not widen the pick of an unreferenced .css', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'src/consumer.ts': "import { APP_ROOT } from './paths.ts';\nexport const where = () => ({ appRoot: APP_ROOT, cwd: process.cwd() });\n",
+    'tests/consumer.test.ts': "import '../src/consumer.ts';\n",
+    'web/src/ui/styles/lonely.css': 'a {}\n',
+  }));
+  const pick = graph.pick(['web/src/ui/styles/lonely.css']);
+  assert.deepEqual(pick.all, []);
+  assert.deepEqual(pick.tests, []);
+});
+
+test('a repo root handed as an argument to a function in another file that lists .md files picks the tests that reach it', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'src/prompts/system.md': '# system\n',
+    'src/lib.ts': "import { readdirSync } from 'node:fs';\nexport const scan = (dir: string) => readdirSync(dir).filter(f => f.endsWith('.md'));\n",
+    'src/reader.ts': "import { APP_ROOT } from './paths.ts';\nimport { scan } from './lib.ts';\nexport const all = () => scan(APP_ROOT + '/src/prompts');\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  selects(graph, 'src/prompts/system.md', 'tests/reader.test.ts');
+  const plain = new ImportGraph(tree(t, {
+    'src/paths.ts': PATHS_TS,
+    'src/prompts/system.md': '# system\n',
+    'src/lib.ts': "export const show = (dir: string) => dir.length;\n",
+    'src/reader.ts': "import { APP_ROOT } from './paths.ts';\nimport { show } from './lib.ts';\nexport const all = () => show(APP_ROOT);\n",
+    'tests/reader.test.ts': READER_TEST,
+  }));
+  const pick = plain.pick(['src/prompts/system.md']);
+  assert.deepEqual(pick.all, []);
+  assert.deepEqual(pick.tests, []);
 });
 
 const DYN = {

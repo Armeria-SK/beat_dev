@@ -228,7 +228,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     recorded();
     if (!previous || readLog(ctx).get(abs) === digest(previous)) readLog(ctx).set(abs, digest(Buffer.from(next, 'utf8')));
     if (!exists) ctx.noteCreated?.(abs);
-    const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') };
+    const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: (appending ? input.content : next).length.toLocaleString('en-US') };
     const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
     if (!delta) return { content: toolText(language, 'file.wrote', params) };
     return { content: toolText(language, 'file.wrote_lines', { ...params, added: delta.added.toLocaleString('en-US'), removed: delta.removed.toLocaleString('en-US') }) };

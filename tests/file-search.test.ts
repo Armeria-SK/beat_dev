@@ -203,3 +203,60 @@ test('ファイル検索: 名前の検索でも秘密・禁止リストは出さ
   const env = await s.call('file_search', { name: '*.env' });
   assert.doesNotMatch(env.output.content, /\.env/u);
 });
+
+test('ファイル検索: path にファイルを渡すと、そのファイルの中を探す（「フォルダが無い」とは言わない）', async t => {
+  const s = setup(t);
+  makeFixtures(s);
+  const hit = await s.call('file_search', { path: 'notes/b.txt', text: 'りんご' });
+  assert.equal(hit.decision, 'allow');
+  assert.notEqual(hit.output.isError, true, hit.output.content);
+  assert.match(hit.output.content, /notes\/b\.txt:2: りんごジュース/u);
+  assert.doesNotMatch(hit.output.content, /does not exist/u);
+  assert.doesNotMatch(hit.output.content, /notes\/a\.md/u, '同じフォルダの別のファイルは探さない');
+  const miss = await s.call('file_search', { path: 'notes/b.txt', text: 'みかん' });
+  assert.match(miss.output.content, /Nothing was found: notes\/b\.txt/u);
+  assert.notEqual(miss.output.isError, true);
+  const byName = await s.call('file_search', { path: 'notes/b.txt', name: '*.md' });
+  assert.match(byName.output.content, /Nothing was found/u, 'name はそのファイルの名前に当てる');
+  const sameName = await s.call('file_search', { path: 'notes/b.txt', name: 'B.TXT' });
+  assert.match(sameName.output.content, /notes\/b\.txt/u);
+  const missing = await s.call('file_search', { path: 'notes/none.txt', text: 'りんご' });
+  assert.equal(missing.output.isError, true);
+  assert.match(missing.output.content, /The folder does not exist: notes\/none\.txt/u);
+});
+
+test('ファイル検索: path に渡したファイルが秘密なら、中を探さない', async t => {
+  const s = setup(t);
+  makeFixtures(s);
+  const out = await s.call('file_search', { path: '.env', text: 'りんご' });
+  assert.equal(out.decision, 'deny');
+  assert.doesNotMatch(out.output.content, /りんご=1/u);
+});
+
+test('ファイル検索: name はフォルダの名前にも当たり、フォルダは末尾の / で分かる', async t => {
+  const s = setup(t);
+  makeFixtures(s);
+  mkdirSync(join(s.paths.workspace, 'docs', 'ux-trial'), { recursive: true });
+  writeFileSync(join(s.paths.workspace, 'docs', 'ux-trial', 'r.md'), 'x');
+  writeFileSync(join(s.paths.workspace, 'docs', 'ux-trial.md'), 'x');
+  const out = await s.call('file_search', { name: '*ux-trial*' });
+  assert.equal(out.decision, 'allow');
+  const lines = out.output.content.split('\n');
+  assert.ok(lines.includes('docs/ux-trial/'), out.output.content);
+  assert.ok(lines.includes('docs/ux-trial.md'), 'ファイルは今までどおり（末尾の / 無し）');
+  assert.ok(!lines.includes('docs/ux-trial/r.md'), '名前に合わないファイルは出さない');
+  const caseSensitive = await s.call('file_search', { name: '*UX-TRIAL*', case_sensitive: true });
+  assert.match(caseSensitive.output.content, /Nothing was found/u);
+});
+
+test('ファイル検索: text があるときは、中身を持たないフォルダを名前の結果に出さない。秘密・禁止のフォルダの名前も出さない', async t => {
+  const s = setup(t, c => { c.tools.deny = ['workspace/locked']; });
+  makeFixtures(s);
+  mkdirSync(join(s.paths.workspace, 'locked'), { recursive: true });
+  const withText = await s.call('file_search', { name: '*', text: 'りんご' });
+  assert.doesNotMatch(withText.output.content, /^notes\/$/mu);
+  assert.match(withText.output.content, /notes\/a\.md:1: りんご/u);
+  const star = await s.call('file_search', { name: '*' });
+  assert.doesNotMatch(star.output.content, /locked/u);
+  assert.match(star.output.content, /^notes\/$/mu);
+});

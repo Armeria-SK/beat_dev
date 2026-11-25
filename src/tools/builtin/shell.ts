@@ -500,22 +500,27 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
   };
 }
 
+// 設定を渡せない説明（description）は「設定の上限」と言い、渡せる説明（describe）は maxTimeoutSec の秒数まで言う。入力の型の最大 3600 は、設定で上げられる限界であって、いまの上限ではない
+const shellDescription = (maxTimeoutSec?: number): string => [
+  'Run one shell command (PowerShell on Windows, bash on Linux). cwd must be inside an allowed folder (if omitted, the working folder).',
+  'Do not use cd to move outside the allowed folders; set cwd instead. Sending data out, installing packages and operations that touch anything outside the allowed folders need the user\'s approval.',
+  'Destructive operations and reading secrets cannot be run.',
+  'Walking a large folder such as node_modules or .git with -Recurse or the like is slow (over 20 seconds for 15,000 files), and the result is too long to fit in the context. Exclude such folders, or narrow the scope with -Name, -Filter or -Depth.',
+  'On Windows, PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
+  'PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
+  'In Windows PowerShell, cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user\'s confirmation every time, even when the path is fixed. To write a file, use the file_write / file_edit tools, not the shell. Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
+  'Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',
+  'For a long-running command (a dev server, a watcher, a long test run), set background: true and keep working. It goes through the same checks, waits about 2 seconds, then returns an id such as bg-3 with the output so far (if the command ends within those 2 seconds, you get the normal result instead). Read its later output with shell_output and stop it with shell_stop; the background commands of this conversation are listed in the system prompt.',
+  `timeoutSec cannot go above the maximum set in the settings${maxTimeoutSec === undefined ? '' : ` (${maxTimeoutSec} s)`}; a larger value is lowered to that maximum and the result says so.`,
+  'timeoutSec does not apply to a background command: it runs until it is stopped, this conversation is deleted or archived, the task ends, or beat stops. Background commands work only in a product\'s conversation or task, and git push cannot run in the background.',
+  'Never put a command in the background yourself with &, nohup, start or Start-Process: beat could not see or stop it.',
+  'A window or GUI program that a background command opens (a browser, an app) is closed together with it; background commands run with BROWSER=none, so dev servers do not open a browser (look at the page with the browser tools instead).',
+].join(' ');
+
 export const shellRun: ToolDef<ShellInput> = {
   name: 'shell_run',
-  description: [
-    'Run one shell command (PowerShell on Windows, bash on Linux). cwd must be inside an allowed folder (if omitted, the working folder).',
-    'Do not use cd to move outside the allowed folders; set cwd instead. Sending data out, installing packages and operations that touch anything outside the allowed folders need the user\'s approval.',
-    'Destructive operations and reading secrets cannot be run.',
-    'Walking a large folder such as node_modules or .git with -Recurse or the like is slow (over 20 seconds for 15,000 files), and the result is too long to fit in the context. Exclude such folders, or narrow the scope with -Name, -Filter or -Depth.',
-    'On Windows, PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
-    'PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
-    'In Windows PowerShell, cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user\'s confirmation every time, even when the path is fixed. To write a file, use the file_write / file_edit tools, not the shell. Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
-    'Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',
-    'For a long-running command (a dev server, a watcher, a long test run), set background: true and keep working. It goes through the same checks, waits about 2 seconds, then returns an id such as bg-3 with the output so far (if the command ends within those 2 seconds, you get the normal result instead). Read its later output with shell_output and stop it with shell_stop; the background commands of this conversation are listed in the system prompt.',
-    'timeoutSec does not apply to a background command: it runs until it is stopped, this conversation is deleted or archived, the task ends, or beat stops. Background commands work only in a product\'s conversation or task, and git push cannot run in the background.',
-    'Never put a command in the background yourself with &, nohup, start or Start-Process: beat could not see or stop it.',
-    'A window or GUI program that a background command opens (a browser, an app) is closed together with it; background commands run with BROWSER=none, so dev servers do not open a browser (look at the page with the browser tools instead).',
-  ].join(' '),
+  description: shellDescription(),
+  describe: config => shellDescription(config.tools.shell.maxTimeoutSec),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),
     cwd: Type.Optional(Type.String({ maxLength: 1024 })),
@@ -570,6 +575,7 @@ export const shellRun: ToolDef<ShellInput> = {
     if (stderr.trim()) parts.push(`[stderr]\n${stderr.trimEnd()}`);
     if (result.truncated) parts.push(toolText(language, 'shell.truncated', { total: result.totalBytes.toLocaleString('en-US'), cap: settings.outputCapBytes.toLocaleString('en-US'), tail: result.fullOutputPath ? toolText(language, 'shell.truncated_tail', { path: result.fullOutputPath }) : '' }));
     if (result.timedOut) parts.push(toolText(language, 'shell.timeout', { seconds: timeoutSec }));
+    if (input.timeoutSec !== undefined && input.timeoutSec > timeoutSec) parts.push(toolText(language, 'shell.timeout_lowered', { asked: input.timeoutSec, seconds: timeoutSec }));
     if (result.aborted) parts.push(toolText(language, 'shell.aborted'));
     return {
       content: shellTranscript(input.command, header, parts),
