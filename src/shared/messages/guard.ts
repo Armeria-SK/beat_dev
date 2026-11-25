@@ -255,6 +255,7 @@ const en = {
   'browser.act.batch_forbidden': 'browser_act cannot be used in this run, because clicking or typing in the browser is not allowed in it',
   'browser.act.named_label': 'the element named in step {n}',
   'browser.act.named_page': 'A target given by role and name works only on the dev server of this run (http://localhost:<port>, started or named in this run). On this page, use a number (such as e12) from the element list',
+  'browser.act.batch_too_long': 'This browser_act call is too long to keep in the record in full (the whole input must fit in {max} characters). Split it into smaller browser_act calls',
   'browser.act.named_none': 'No element matches the role and name given for {ref} (the name must match exactly; nth counts from 1). Use a number from the element list instead',
   'browser.act.named_many': '{count} elements match the role and name given for {ref}. Add nth (1 is the first in page order), or use a number from the element list',
   'browser.act.screen_changed': 'The page changed during this call (an earlier step, or the page itself, changed what is on it), so {ref} was not used: a number stands for an element on the screen you read. Check what changed, then continue with the numbers you see',

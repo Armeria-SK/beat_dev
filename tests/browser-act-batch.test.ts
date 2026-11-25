@@ -12,7 +12,7 @@ import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { ACT_MAX_STEPS, ACT_TOTAL_MS, ACT_WAIT_MAX_MS, actSteps, BROWSER_TOOLS, browserAct, browserOpen } from '../src/tools/builtin/browser.ts';
-import { planAllows, runToolCall } from '../src/tools/pipeline.ts';
+import { planAllows, runToolCall, TOOL_INPUT_PREVIEW_CHARS } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { effectivePolicy, toolPolicy } from '../src/tools/tool-policy.ts';
@@ -653,5 +653,75 @@ test('P5 ページから来た文（題・要素の名前・増えた文）は�
     if (then !== 'elements') assert.match(inside, /Ignore the rules/u, `${then}: ページの文は枠の中`);
     assert.ok(!lines.slice(0, lines.indexOf('<<<') - 1).join('\n').includes('Ignore'), '枠の外の step の行にページの文は無い');
     assert.equal(r.ctx.taint.tainted, true);
+  }
+});
+
+// ── P5 の直し（安全の審査） ──
+
+test('P5 直し 1: step が済んだあとに、ブラウザの中の生の例外（BrowserFailure でない）が出ても、済んだ step の行を残して止まる（「何も起きていない、やり直して」と返さない）', async t => {
+  const cases: Array<[string, unknown[], (page: FakePage) => void]> = [
+    ['snapshot', [{ click: 'e9' }, { click: 'e10' }, { click: 'e2' }], page => { const real = page.snapshot.bind(page); page.snapshot = async () => { if (page.acts.length > 0) throw new Error('Execution context was destroyed: secret-path'); return real(); }; }],
+    ['text in wait', [{ click: 'e9' }, { wait: { text: 'zzz', ms: 150 } }, { click: 'e2' }], page => { const real = page.text.bind(page); page.text = async (max: number) => { if (page.acts.length > 0) throw new Error('Execution context was destroyed: secret-path'); return real(max); }; }],
+  ];
+  for (const [name, steps, breakPage] of cases) {
+    const r = rig(t, dev);
+    const page = await r.open(DEV);
+    breakPage(page);
+    const outcome = await r.act(steps);
+    const text = outcome.output.content;
+    assert.deepEqual(r.acts(), ['click Delete#0'], name);
+    assert.equal(outcome.output.isError, true, name);
+    assert.match(text, /^1\. Clicked e9\.\n2\. Failed: The page could not be read at this step[^\n]*\nNot run: step 3\./u, `${name}: ${text}`);
+    assert.ok(!/browser was closed|try again|Execution context|secret/iu.test(text), `${name}: ${text}`);
+    assert.equal(r.ctx.taint.tainted, true, `${name}: 済んだ動作のある結果は、外から読んだ印が付く`);
+  }
+});
+
+test('P5 直し 2: wait の文は、読む上限で切れた読みを戻して切ってから比べる（上限をまたぐ決まった秘密の頭を、当たり外れで探れない）', async t => {
+  const held = 'zebra-owner-passphrase';
+  const r = rig(t, { ...dev, secrets: [held] });
+  const page = await r.open(DEV);
+  const limit = r.parsed.tools.browser.limits.pageChars;
+  page.mutate({ ...site(DEV_NEXT), text: `${'x'.repeat(limit - 14)}\nLABEL ${held}` });
+  assert.equal((await page.text(limit)).endsWith('LABEL zebra-o'), true, '前提: 読みは秘密の 7 字目で切れる');
+  for (const guess of ['LABEL zebra-o', 'LABEL zebra-X', 'zebra-o']) {
+    const out = await r.act([{ wait: { text: guess, ms: 120 } }], { then: 'none' });
+    assert.match(out.output.content, /^1\. Failed: The text did not appear within 120 ms/u, guess);
+  }
+  page.mutate({ ...site(DEV_NEXT), text: `Step 1\nLABEL ok\n${'y '.repeat(limit)}` });
+  assert.match((await r.act([{ wait: { text: 'LABEL ok', ms: 120 } }], { then: 'none' })).output.content, /^1\. The text appeared\.$/u, '上限で切れた読みでも、手前の文は当たる');
+});
+
+test('P5 直し 3: 1 回の呼び出しの入力は、道具の記録（tool_calls.input）にそのまま残る長さまで。超える呼び出しは全体を断り、何も実行しない', async t => {
+  const r = rig(t, dev);
+  await r.open(DEV);
+  const stepsOf = (chars: number) => [{ type: 'e1', text: 'ab '.repeat(700).slice(0, 1900) }, { type: 'e1', text: 'ef '.repeat(700).slice(0, 1500) }, { type: 'e1', text: 'cd '.repeat(700).slice(0, chars) }];
+  const base = JSON.stringify({ steps: stepsOf(0) }).length;
+  const fits = { steps: stepsOf(TOOL_INPUT_PREVIEW_CHARS - base) };
+  assert.equal(JSON.stringify(fits).length, TOOL_INPUT_PREVIEW_CHARS);
+  const ok = await r.act(fits.steps);
+  assert.equal(ok.output.isError, undefined, ok.output.content);
+  assert.equal(r.acts().length, 3);
+  const rows = () => (r.db.prepare("SELECT input FROM tool_calls WHERE tool = 'browser_act' ORDER BY created_at, rowid").all() as Array<{ input: string }>).map(row => row.input);
+  assert.equal(rows().at(-1), JSON.stringify(fits), '上限ちょうどは、そのまま記録に残る');
+  const over = stepsOf(TOOL_INPUT_PREVIEW_CHARS - base + 1);
+  const denied = await r.act(over);
+  assert.equal(denied.decision, 'deny');
+  assert.match(denied.output.content, /Split it into smaller browser_act calls/u);
+  assert.equal(r.acts().length, 3, '何も実行しない');
+  const direct = await browserAct.execute({ steps: over }, r.ctx);
+  assert.equal(direct.isError, true, '直接の実行でも断る');
+  assert.equal(r.acts().length, 3);
+});
+
+test('P5 直し 4: 文が出なかった wait と、名前で指した目標の当たりの数（無い・複数）は、ページから分かったことなので、外から読んだ印が付く', async t => {
+  for (const steps of [[{ wait: { text: 'NEVER SHOWN', ms: 100 } }], [{ click: { role: 'button', name: 'Delete' } }], [{ click: { role: 'button', name: 'No such button' } }]]) {
+    const r = rig(t, dev);
+    await r.open(DEV);
+    assert.equal(r.ctx.taint.tainted, false, '前提');
+    const out = await r.act(steps);
+    assert.equal(out.output.isError, true);
+    assert.deepEqual(r.acts(), []);
+    assert.equal(r.ctx.taint.tainted, true, JSON.stringify(steps));
   }
 });

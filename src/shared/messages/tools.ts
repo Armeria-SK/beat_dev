@@ -435,6 +435,7 @@ const en = {
   'browser.act_stopped_after': 'Stopped after step {n}: {reason}',
   'browser.act_not_run': 'Not run: step {steps}.',
   'browser.act_no_text': 'The text did not appear within {ms} ms',
+  'browser.act_step_unread': 'The page could not be read at this step (it may be loading or may have moved). The steps above are done: do not repeat them. Read the page with browser_read before going on',
   'browser.act_time_limit': 'The time limit for one browser_act call ({sec} seconds) was reached',
   'browser.notify_title': 'The browser cannot be started',
   'browser.notify_body': 'The browser failed to start {count} times in a row, so it will not be started for a while. Check "Browser" in the settings.',

@@ -7,7 +7,7 @@ import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { outboundText } from '../../shared/messages/outbound.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { redactSecrets } from '../../shared/redaction.ts';
+import { redactJsonValue, redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
 import { actPreview, actRoute, browserActCheck, devServerPage, inspectAct, namedItem, ownerTextsOf, peekTab, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type ActPick, type Inspected, type NamedTarget } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
@@ -17,7 +17,7 @@ import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
 import { findBack, openKeyStart, pageText, sentText, TAIL_MARGIN } from '../browser/sent.ts';
 import { siteAllows } from '../browser/sites.ts';
-import { matches, TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
+import { matches, TOOL_INPUT_PREVIEW_CHARS, TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { clip, pageUrl, RetrievalFailure } from '../web/public-page.ts';
 import { ROOM_MARGIN_TOKENS } from './image.ts';
@@ -248,13 +248,7 @@ async function renderFind(browser: BrowserSession, api: BrowserApi, tab: Browser
     // 読む上限で切れた読みは、上限の TAIL_MARGIN 字手前より前の最後の行の頭から、分けて伏せても同じ形になる位置（findBack。pageText と同じ確かめ）まで戻って切る
     // （最後の行を捨てるだけでは、行をまたぐ秘密の頭の行が伏せられずに残る）。END の無い秘密鍵があれば、その BEGIN の印より前から戻る。改行の無い文は探さない
     const limited = raw.length >= FIND_READ_CHARS;
-    let whole = raw;
-    if (limited) {
-      let line = raw.lastIndexOf('\n', raw.length - TAIL_MARGIN - 1) + 1;
-      const open = openKeyStart(raw);
-      if (open !== undefined && open < line) line = open;
-      whole = line > 0 ? raw.slice(0, findBack(raw, redactSecrets(raw, secrets), line, Infinity, secrets)?.q ?? 0) : '';
-    }
+    const whole = limited ? cutBack(raw, secrets) : raw;
     const notes = size(`${textTitle}\n${toolText(language, 'browser.find_more_text', { count: 999_999 })}\n${toolText(language, 'browser.find_text_limited', { chars: FIND_READ_CHARS })}`);
     const roomChars = Math.min(FIND_TEXT_CHARS, chars - notes.chars);
     const roomTokens = tokens - notes.tokens;
@@ -302,6 +296,14 @@ export function addedTextLines(before: string, after: string): string[] {
     if (left > 0) count.set(text, left - 1); else added.push(text);
   }
   return added;
+}
+
+// 読む上限で切れた読みを、伏せても同じ形になる位置まで戻して切る（browser_find と、browser_act の待つ文が使う）
+function cutBack(raw: string, secrets: readonly string[]): string {
+  let line = raw.lastIndexOf('\n', raw.length - TAIL_MARGIN - 1) + 1;
+  const open = openKeyStart(raw);
+  if (open !== undefined && open < line) line = open;
+  return line > 0 ? raw.slice(0, findBack(raw, redactSecrets(raw, secrets), line, Infinity, secrets)?.q ?? 0) : '';
 }
 
 // 本文を読む（差分の「増えた文」の元）。上限で切れていたら、最後の行（途中で切れた行）を捨てる。読めなければ空
@@ -793,6 +795,8 @@ function actRefusal(input: ActStepsInput, ctx: ToolContext, language: Language):
   if (ACT_COVERS.some(name => ctx.forbiddenTools?.has(name) === true)) return guardText(language, 'browser.act.batch_forbidden');
   if (hookCovers(ctx)) return guardText(language, 'browser.act.batch_hook');
   if (!Value.Check(ACT_INPUT, input)) return toolText(language, 'pipeline.bad_args', { errors: '/steps' });
+  // 道具の記録に入力がそのまま残る長さまで（長いと記録は縮められ、何を入れたかを持ち主があとから見られない）
+  if (JSON.stringify(redactJsonValue(input)).length > TOOL_INPUT_PREVIEW_CHARS) return guardText(language, 'browser.act.batch_too_long', { max: TOOL_INPUT_PREVIEW_CHARS });
   return undefined;
 }
 
@@ -861,14 +865,16 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
               let appeared = false;
               for (;;) {
                 assertTabUrl(browser, api, tab, tab.page.url());
-                // 伏せたあとの形で比べる（伏せた秘密の中身を、待つ文の当たり外れで探らせない。browser_find と同じ）
-                const body = redactSecrets(await until(tab.page.text(api.config.limits.pageChars), api.signal), secrets);
+                // 伏せたあとの形で比べる（伏せた秘密の中身を、待つ文の当たり外れで探らせない。browser_find と同じ）。
+                // 読む上限で切れた読みは、戻して切ってから伏せる（上限をまたぐ秘密の頭が、伏せられずに残らないように）
+                const read = await until(tab.page.text(api.config.limits.pageChars), api.signal);
+                const body = redactSecrets(read.length >= api.config.limits.pageChars ? cutBack(read, secrets) : read, secrets);
                 if (body.includes(text)) { appeared = true; break; }
                 const rest = end - Date.now();
                 if (rest <= 0) break;
                 await sleep(Math.min(ACT_WAIT_POLL_MS, rest), api.signal);
               }
-              if (!appeared) { fail(wanted > left ? timeLimit : toolText(language, 'browser.act_no_text', { ms: wanted })); break; }
+              if (!appeared) { remote = true; fail(wanted > left ? timeLimit : toolText(language, 'browser.act_no_text', { ms: wanted })); break; }
               lines.push(toolText(language, 'browser.act_step_appeared', { n }));
             }
             completed += 1;
@@ -885,7 +891,7 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
           const actInput: ActInput = { tab: tab.id, ref: label, ...('type' in step ? { text, submit } : {}) };
           const pick: ActPick = { shape: true, ...(named !== undefined ? { named: { target: named, allowed: (url, place) => place === 'loopback' && devServer(url) } } : {}) };
           const found = await inspectAct(api, kind, actInput, language, browser.loopbackDenied(), pick);
-          if (!found.ok) { refuse(found.reason); break; }
+          if (!found.ok) { if (named !== undefined) remote = true; refuse(found.reason); break; }
           if (named === undefined && i > 0 && !sameScreen(found.shape, found.pageUrl)) { refuse(guardText(language, 'browser.act.screen_changed', { ref: label })); break; }
           const dev = found.place === 'loopback' && devServer(found.pageUrl);
           const stopped = found.place === 'loopback' && !dev ? stoppedServerText(found.pageUrl, ctx, language) : undefined;
@@ -917,7 +923,13 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
           const happened = eventLines(acted, language);
           if (happened.length > 0) { lines.push(toolText(language, 'browser.act_stopped_after', { n, reason: happened.join(' ') })); stop.at = i; }
         } catch (thrown) {
-          if (!(thrown instanceof BrowserFailure)) throw thrown;
+          if (!(thrown instanceof BrowserFailure)) {
+            // ブラウザの中の生の例外。済んだ step が無ければ今までどおり（何も起きていない）。済んだ step があれば、その行を残して止まる
+            // （「閉じられた、やり直して」と返すと、済んだ動作をもう一度させることになる）。例外の文は出さない
+            if (completed === 0 || api.signal.aborted) throw thrown;
+            fail(toolText(language, 'browser.act_step_unread'));
+            break;
+          }
           if (!thrown.appTextOnly) remote = true;
           fail(thrown.appTextOnly ? thrown.text(language) : block(thrown.text(language), secrets));
         }

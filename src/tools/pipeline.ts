@@ -40,6 +40,8 @@ export function reviewAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles'>): boo
 }
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
+// 道具の記録（tool_calls.input）と道具の知らせに残す入力の長さ。これより長い入力は縮めて残す
+export const TOOL_INPUT_PREVIEW_CHARS = 4000;
 
 export const JUDGE_REUSE = 'judge-reuse';
 
@@ -250,7 +252,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const tool = deps.registry.get(call.name);
   const shownInput = truncated
     ? redactSecrets(truncated.raw).slice(0, 2000)
-    : previewJson(redactJsonValue(call.arguments ?? call.raw ?? null), 4000);
+    : previewJson(redactJsonValue(call.arguments ?? call.raw ?? null), TOOL_INPUT_PREVIEW_CHARS);
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
