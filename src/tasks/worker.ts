@@ -18,7 +18,7 @@ import { taskText } from '../shared/messages/tasks.ts';
 import { askBeforeRegister, growSkills } from '../tools/skills/store.ts';
 import { resolveConfigPath } from '../tools/hooks/scope.ts';
 import type { TaskControl } from '../tools/types.ts';
-import { OWNER_FIX, OWNER_RUN_KV, SCOUT_RUN, type Task, type TaskStore } from './store.ts';
+import { OWNER_FIX, OWNER_RUN_KV, SCOUT_RUN, TASK_EVENTS_WINDOW, type Task, type TaskEvent, type TaskStore } from './store.ts';
 import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
@@ -26,7 +26,7 @@ import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutP
 import { dropUnrecordedFixes, fixCandidate, markFixTried, recordFix } from '../scout/fix.ts';
 import { runFix } from '../scout/fix-run.ts';
 import type { FixCopies } from '../scout/fix-copy.ts';
-import { clearSleep, currentMarks, ownerRejectedSince, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
+import { clearSleep, currentMarks, lastEventId, ownerRejectedSince, quickMarks, readSleep, sameQuickMarks, saveSleep, SCOUT_FLAT_RUNS, type Marks, type SleepReason } from '../scout/sleep.ts';
 import { headOf, treeMark } from '../scout/areas.ts';
 import { readLedger } from '../scout/ledger.ts';
 import { PROPOSAL_OPEN_MAX } from '../tools/builtin/proposal.ts';
@@ -193,6 +193,9 @@ export class Worker {
   readonly #scoutAskedRuns = new Set<string>();
   // 直す実行の確かめのコマンドを止める合図（キーは runId。止める条件で直す実行と一緒に止める）
   readonly #fixAborts = new Map<string, AbortController>();
+  // 考える実行ごとの、始めに取った task_events の一番大きい id（キーは runId）。ふつうに終わったときだけ scoutState の seenEvent に進める。
+  // #running の行に入れると worker の状態として画面へ出てしまうので、別に持つ
+  readonly #scoutEventMarks = new Map<string, number>();
   // 材料を読んでいて、まだ #running に入っていない考える実行の製品（そのあいだの Think now を重ねないため）
   #scoutStarting: ScoutPlan | undefined;
   // 作業フォルダの印を最後に比べた時刻（製品ごと）。見回りの間隔より短くは比べない
@@ -747,10 +750,13 @@ export class Worker {
       if (proposalId && head) return this.#startFix(plan, proposalId, head, c, now, release);
     }
     const window = route.available ?? 32_000;
-    // 休みの印は材料を読む前に取る（読んでいる間の Reject・計画書の保存を、休んだあとの変化として拾う）
+    // 休みの印は材料を読む前に取る（読んでいる間の Reject・計画書の保存を、休んだあとの変化として拾う）。task_events の id の印も同じ所で取る
+    const eventMark = lastEventId(this.#d.db);
     const marks: Marks | undefined = plan.asked ? undefined : plan.marks ?? await currentMarks(this.#d.db, kv, project.id, project.root, dirname(projects!.dir));
-    // 前の回のあとに持ち主が Reject していれば（材料を読む前に見る。読んでいる最中の Reject は、印の変化で次の回に拾う）、休む判定を飛ばして 1 回考え直す（Q-79-1。クラウドの回数の上限は #scoutPlan がもう見た）
-    const rethink = !plan.asked && ownerRejectedSince(this.#d.db, project.id, scoutState(kv, project.id).last ?? 0);
+    // 前の考える実行がふつうに終わったあとに持ち主が Reject していれば（材料を読む前に見る。読んでいる最中の Reject は、印の変化で次の回に拾う）、休む判定を飛ばして 1 回考え直す（Q-79-1。クラウドの回数の上限は #scoutPlan がもう見た）。
+    // 比べるのは行の id（seenEvent）。考え直しの実行が失敗・停止したときは seenEvent が進まないので、次の回でもう一度考え直す。seenEvent が無い（前の版で保存した）状態だけ、実行を始めた時刻で比べる
+    const state = scoutState(kv, project.id);
+    const rethink = !plan.asked && ownerRejectedSince(this.#d.db, project.id, { eventId: state.seenEvent, at: state.last ?? 0 });
     let materials: Awaited<ReturnType<typeof scoutMaterials>>;
     try {
       materials = await scoutMaterials({
@@ -765,7 +771,7 @@ export class Worker {
     saveScoutState(kv, project.id, { examined: materials.examined });
     const sleep = plan.asked || rethink || !marks ? undefined : this.#sleepReason(project.id, materials);
     if (sleep && marks) {
-      saveSleep(kv, project.id, { reason: sleep, at: now, ...marks });
+      saveSleep(kv, project.id, { reason: sleep, at: now, ...marks, event: eventMark });
       this.#treeCheckedAt.set(project.id, now);
       this.#scoutChanged(project.id);
       return 'idle';
@@ -785,6 +791,7 @@ export class Worker {
     if (!route.local) noteCloudRun(kv, now);
     saveScoutState(kv, project.id, { last: now, ...(materials.head ? { head: materials.head } : {}), stale: materials.stale });
     this.#running.set(started.runId, { kind: 'scout', taskId: task.id, runId: started.runId, title, projectId: project.id });
+    this.#scoutEventMarks.set(started.runId, eventMark);
     if (plan.asked) this.#scoutAskedRuns.add(started.runId);
     this.#scoutStarting = undefined;
     this.#scoutChanged(project.id);
@@ -799,6 +806,7 @@ export class Worker {
       this.#running.delete(started.runId);
       this.#scoutStops.delete(started.runId);
       this.#scoutAskedRuns.delete(started.runId);
+      this.#scoutEventMarks.delete(started.runId);
       this.#scoutChanged(project.id);
     }
     return 'ran';
@@ -896,7 +904,7 @@ export class Worker {
       if (!moved && tree === sleep.tree) continue;
       woken.set(project.id, { ...quick, tree });
       // stuck の製品を Reject だけで起こしたときは数え直さない（考え直しは 1 回。一覧が育たなければまた stuck で休む）
-      const rejectOnly = sleep.head === quick.head && sleep.plan === quick.plan && ownerRejectedSince(this.#d.db, project.id, sleep.at);
+      const rejectOnly = sleep.head === quick.head && sleep.plan === quick.plan && ownerRejectedSince(this.#d.db, project.id, { eventId: sleep.event, at: sleep.at });
       this.#wake(project.id, sleep.reason !== 'stuck' || (moved && !rejectOnly));
     }
     return woken;
@@ -1010,7 +1018,9 @@ export class Worker {
     }
     if (result.ok || end) {
       tasks.finish(task.id, 'done', end ? scoutText(language, 'run.ended', { reason: scoutText(language, end === 'agents_busy' ? 'stop.agents_busy' : 'stop.agents_used') }) : result.ok && result.text.trim() ? result.text.trim().slice(0, 1000) : scoutText(language, 'run.done'), 'worker', runId);
-      saveScoutState(kv, projectId, { fails: 0, until: now + SCOUT_SHORT_WAIT_MS, note: '' });
+      // ふつうに終わった実行だけが、始めに見えていた持ち主の Reject を読んだことにする（失敗・止められた実行では進めない）
+      const seen = this.#scoutEventMarks.get(runId);
+      saveScoutState(kv, projectId, { fails: 0, until: now + SCOUT_SHORT_WAIT_MS, note: '', ...(seen !== undefined ? { seenEvent: seen } : {}) });
       return;
     }
     if (stop || result.errorKind === 'cancelled') {
@@ -1065,7 +1075,7 @@ export class Worker {
     const mainRoot = placed?.kind === 'worktree' ? this.#d.projects?.get(task.project_id!)?.root : undefined;
     const since = this.#now();
     const mainBefore = mainRoot ? await mainGitPrint(mainRoot, dirname(this.#d.projects!.dir), this.#d.places?.placeRoot()) : undefined;
-    const events = tasks.events(task.id);
+    const events = this.#promptEvents(task.id);
     // 前の回が返事だけだったかは、残した経過の文で見る（サーバーの文は今は英語だけなので、言語が変わって外れることは無い）
     const prompt = taskPrompt(task, events, c.timezone, language, workAgreement(this.#d.db, task, language), events.find(e => e.kind === 'requeued')?.content === taskText(language, 'reason.replied_only', { limit: STAGNATION_LIMIT }));
     const started = engine.runTask(task, conversationId, prompt, placed ? { place: placed.kind === 'worktree' ? placed.row.id : null } : {});
@@ -1085,6 +1095,15 @@ export class Worker {
       if (placed?.kind === 'worktree' && placed.row.task_id === task.id) await this.#closeWorktree(task, placed.row.id);
     } finally { this.#running.delete(started.runId); }
     return 'ran';
+  }
+
+  // 頼みの文に渡す経過。新しい順の TASK_EVENTS_WINDOW 件に前の run・answer_moved が無く、件数が上限ちょうどなら、前の実行のあとに積まれた経過で
+  // それらも読まれていない答えも窓の外へ落ちている恐れがある。窓の一番古い行より古い答えだけを（古い側の末尾に）足す
+  // （窓の中の答えは taskPrompt が数えるので、二重に入れず、足す枠も窓の外の答えだけに使う）。taskPrompt は変えない
+  #promptEvents(taskId: string): TaskEvent[] {
+    const events = this.#d.tasks.events(taskId, TASK_EVENTS_WINDOW);
+    if (events.length < TASK_EVENTS_WINDOW || events.some(e => e.kind === 'run' || e.kind === 'answer_moved')) return events;
+    return [...events, ...this.#d.tasks.answersSinceLastRun(taskId, undefined, events.at(-1)!.id)];
   }
 
   // 作業コピーで動いた実行の前後で、本体の git（HEAD・ブランチ・参照・stash・共有の設定）が変わっていたら、タスクの経過と知らせで持ち主に伝える（止めも戻しもしない）
