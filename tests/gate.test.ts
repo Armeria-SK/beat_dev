@@ -900,3 +900,14 @@ test('quiet-loss C3 同じコマンドが失敗したときも 1 回だけ動き
   const [event] = s.events(task.id, 'item_check_failed');
   assert.match(event!.content ?? '', /A-1, A-2/u);
 });
+
+test('quiet-loss C3 間に別のコマンドが走ったあとの同じコマンドは動かし直す（A=X, B=Y, C=X は X が 2 回）。続けて同じコマンドのときだけ 1 回にまとめる', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Lists files', check: command(PASS) }, { result: 'Saves files', check: command(`${PASS} extra`) }, { result: 'Reads files', check: command(PASS) }]);
+  const task = s.task(p.id, ['A-1', 'A-2', 'A-3']);
+  await s.run(task.id, [done()]);
+  assert.deepEqual(s.runs(p.root), ['pass', 'pass', 'pass'], 'X → Y → X は 3 回（間に Y が走ったので X は動かし直す）');
+  assert.deepEqual(s.states(p.id), { 'A-1': 'met', 'A-2': 'met', 'A-3': 'met' });
+  const at = (id: string) => (s.evidence(p.id, id)[0] as { at: number }).at;
+  assert.ok(at('A-3') >= at('A-2') && at('A-2') >= at('A-1'), '証拠の時刻は動かした順');
+});
