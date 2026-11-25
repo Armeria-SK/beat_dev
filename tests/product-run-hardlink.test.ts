@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { linkSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { test } from 'node:test';
+import fs, { linkSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import { mock, test } from 'node:test';
 import { shellRuleShape } from '../src/tools/approval-rules.ts';
 import { gitDirLinkFree, productRunOf, repoInside, type ProductRunResult } from '../src/tools/hooks/product-run.ts';
 import type { ScopePolicy } from '../src/tools/hooks/scope.ts';
@@ -136,4 +137,56 @@ test('G3 審査: 承認の決まり（gitInside）は、ハードリンクのあ
   assert.deepEqual(shellRuleShape([fact(['git', 'fetch'])], p.product, undefined, env)?.cmd, ['git', 'fetch'], '前提: ハードリンクが無ければ形がある');
   p.hardLink(join('logs', 'HEAD'));
   assert.equal(shellRuleShape([fact(['git', 'fetch'])], p.product, undefined, env), undefined, 'ハードリンクがあれば形なし');
+});
+
+// ── 見回りの途中でファイル・フォルダが消えても、確かめを黙って飛ばさない（ENOENT は「もう無い」。それ以外の失敗は今までどおり「リンク有り」）──
+
+// node:fs の 1 つの呼び出しを、指した場所だけ壊す。ENOENT の lstat は、本物と同じに throwIfNoEntry: false なら undefined を返し、無ければ投げる
+function breakAt(t: Parameters<typeof tempDir>[0], name: 'lstatSync' | 'readdirSync', target: string, code: 'ENOENT' | 'EACCES'): void {
+  const table = fs as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const original = table[name]!;
+  mock.method(table, name, (...args: unknown[]) => {
+    if (resolve(String(args[0])) !== resolve(target)) return original(...args);
+    if (code === 'ENOENT' && name === 'lstatSync' && (args[1] as { throwIfNoEntry?: boolean } | undefined)?.throwIfNoEntry === false) return undefined;
+    throw Object.assign(new Error(`${code}: mocked ${name}`), { code });
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mock.restoreAll(); syncBuiltinESMExports(); });
+}
+
+test('G3 審査: 見回りの途中でファイルが消えても（lstat が ENOENT）、鍵のメッセージは持ち主へ回る', { skip: !gitAvailable && 'git が無い' }, t => {
+  const p = product(t);
+  const lock = join(p.gitDir, 'refs', 'heads', 'vanishing.lock');
+  writeFileSync(lock, 'x');
+  breakAt(t, 'lstatSync', lock, 'ENOENT');
+  assert.equal(gitDirLinkFree(p.gitDir), true, '消えたファイルはハードリンクではない');
+  assert.deepEqual(p.stepFour(KEY_MESSAGE), { secretMessage: true }, '消えたファイルで「リンク有り」にせず、持ち主へ');
+});
+
+test('G3 審査: 見回りの途中でサブフォルダが消えても（readdir が ENOENT）、鍵のメッセージは持ち主へ回る', { skip: !gitAvailable && 'git が無い' }, t => {
+  const p = product(t);
+  for (const parent of ['refs', 'logs']) {
+    const gone = join(p.gitDir, parent, 'heads', 'gone');
+    mkdirSync(gone, { recursive: true });
+    breakAt(t, 'readdirSync', gone, 'ENOENT');
+    assert.equal(gitDirLinkFree(p.gitDir), true, `${parent}: 消えたフォルダは飛ばす`);
+    assert.deepEqual(p.stepFour(KEY_MESSAGE), { secretMessage: true }, `${parent}: 持ち主へ`);
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+test('G3 審査: ENOENT 以外の失敗（読めない・lstat できない）は、今までどおり「リンク有り」で判定役へ戻る', { skip: !gitAvailable && 'git が無い' }, t => {
+  const p = product(t);
+  const lock = join(p.gitDir, 'refs', 'heads', 'unreadable.lock');
+  writeFileSync(lock, 'x');
+  const sub = join(p.gitDir, 'refs', 'heads', 'locked');
+  mkdirSync(sub, { recursive: true });
+  for (const [name, target] of [['lstatSync', lock], ['readdirSync', sub]] as const) {
+    breakAt(t, name, target, 'EACCES');
+    assert.equal(gitDirLinkFree(p.gitDir), false, `${name}: EACCES`);
+    assert.equal(p.stepFour(KEY_MESSAGE), undefined, `${name}: EACCES は今までどおり判定役へ`);
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
 });

@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { GIT_IDENTITY } from './allowlist-git.ts';
 import { DEV_RUNNERS, GIT_IDENTITY_KEY, nodeFileIndex, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
@@ -202,17 +202,24 @@ const LINK_WALK_DEEP = new Set(['refs', 'logs']);
 // リンク（symlink）に加えて、ふつうのファイルのハードリンクも見る。git は reflog（logs/…）と COMMIT_EDITMSG をその場に書くので、
 // 外のファイルとハードリンクでつながっていれば、判定役を通らない commit が外のファイルを書き換える。見るのは .git の直下と refs・logs の下で、
 // objects の下は見ない（git clone --local は、オブジェクトを正しくハードリンクする）。
-// 'link': symlink がある・数の上限を超えた・読めない（今までの「リンク有り」）。'hard': symlink は無いが、ハードリンクがある
+// 'link': symlink がある・数の上限を超えた・読めない（今までの「リンク有り」）。'hard': symlink は無いが、ハードリンクがある。
+// 見回りの途中でファイル・サブフォルダが消えた（ENOENT。index.lock などはすぐ消える）ときは、「もう無い」として飛ばす。黙って「リンク有り」にすると、鍵の確かめに届かず判定役へ落ちる。ENOENT 以外の失敗は、今までどおり「リンク有り」
 type GitDirLinks = 'none' | 'hard' | 'link';
 
 function gitDirLinks(gitDir: string, cap: number): GitDirLinks {
   let seen = 0;
   let hard = false;
+  const list = (dir: string): Dirent[] => {
+    try { return readdirSync(dir, { withFileTypes: true }); } catch (error) {
+      if (dir !== gitDir && (error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  };
   const clean = (dir: string, depth: number, files: boolean): boolean => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    for (const entry of list(dir)) {
       if (++seen > cap || entry.isSymbolicLink()) return false;
       if (!entry.isDirectory()) {
-        if (files && entry.isFile() && lstatSync(join(dir, entry.name)).nlink > 1) hard = true;
+        if (files && entry.isFile() && (lstatSync(join(dir, entry.name), { throwIfNoEntry: false })?.nlink ?? 0) > 1) hard = true;
         continue;
       }
       const name = entry.name.toLowerCase();
