@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
+import { requiredContext } from '../src/engine/status.ts';
 import { conversationWindow, REVIEW_WINDOW_CHARS, reviewPolicyLines, reviewPrompt, reviewWindowLimits } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
@@ -154,10 +155,13 @@ test('10-1 持ち主の発言の無い窓は、モデルを呼ばずに upto を
   assert.equal(occurrences(s.reviewPrompts(), mark(100)), 1, '持ち主の発言と同じ窓の分は送る');
 });
 
-test('10-1 窓がモデルに入る: 日本語 20,000 文字の会話を、使える量が 12,000 ほどのモデルで振り返っても、どの回も context_overflow にならない', async t => {
-  const s = await setup(t, c => { c.models[0]!.contextLength = 15_000; });
-  const available = s.app.engine.backgroundAvailable()!;
-  assert.ok(available > 10_000 && available < 13_500, `前提: 使える量 ${available}`);
+test('10-1 窓がモデルに入る: 日本語 20,000 文字の会話を、使える最小のモデル（使える量が 13,000 ほど）で振り返っても、どの回も context_overflow にならない', async t => {
+  // 固定の部分（道具の説明・system）は育つので、「使える最小」の大きさは、いまの必要な長さから決める。決まった数（15,000）だと、固定の部分が育ったとき確認で使えないモデルになり、使える量が undefined になる
+  const probe = await setup(t);
+  const least = requiredContext(probe.app.config().models[0]!, probe.app.baseTokens(), probe.app.memoryTokens());
+  const s = await setup(t, c => { c.models[0]!.contextLength = least + 100; });
+  const available = s.app.engine.backgroundAvailable();
+  assert.ok(available !== undefined && available > 10_000 && available < 20_000, `前提: 使える量 ${available}（必要な長さ ${least}）`);
   s.app.conversations.create({ id: 'c1' });
   s.app.kv.set('review:upto:c1', '0');
   fill(s.app, 'c1', 20, () => 'あ'.repeat(1000));
