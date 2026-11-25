@@ -39,6 +39,7 @@ const en = {
   'event.recovered': 'The previous run stopped midway, so it will run again',
   'event.scout_closed': 'This scout run stopped midway (a restart of beat), so it was closed. Scout runs are never resumed',
   'event.skipped': 'The previous run has not finished yet, so none was created this time',
+  'event.pending_not_reopened': 'Pending item #{id} was approved after this Build was done, but it did not succeed. This Build was not reopened because another Build of this product is open. Use "Run again" once that one is finished or cancelled',
   'event.created_from': 'Created from the schedule "{title}"',
   'event.answer': 'Reply to question #{id} "{question}": {text}',
   'event.answer_moved': 'The reply to question #{id} went to the follow-up task [{task}], because this task ended during the run',

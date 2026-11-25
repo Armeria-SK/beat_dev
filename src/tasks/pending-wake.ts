@@ -3,7 +3,7 @@ import type { Language } from '../config/schema.ts';
 import type { PendingChange, PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { taskText } from '../shared/messages/tasks.ts';
-import type { Task, TaskStore } from './store.ts';
+import { TaskError, type Task, type TaskStore } from './store.ts';
 
 export interface PendingWakeDeps {
   db: DatabaseSync;
@@ -57,7 +57,15 @@ function reopenAfterFailure(deps: PendingWakeDeps, task: Task, change: PendingCh
     deps.log(`[INFO] Did not reopen task ${task.id} after approved Pending item #${change.id} ended as ${change.status}: another run of the same schedule is still open`);
     return;
   }
-  deps.tasks.reopen(task.id, 'beat', reason);
+  try {
+    deps.tasks.reopen(task.id, 'beat', reason);
+  } catch (error) {
+    if (!(error instanceof TaskError) || error.code !== 'error.build_open') throw error;
+    // 同じ製品で別の Build が動いている間は、済んだ Build を開き直さない。持ち主に見えるよう、そのタスクの経過に理由を残す（開き直しを自動で待ち直すことはしない）
+    deps.tasks.event(task.id, 'skipped', 'beat', taskText(deps.language(), 'event.pending_not_reopened', { id: change.id }));
+    deps.log(`[INFO] Did not reopen task ${task.id} after approved Pending item #${change.id} ended as ${change.status}: another Build of the same product is still open`);
+    return;
+  }
   deps.log(`[INFO] Reopened task ${task.id} because approved Pending item #${change.id} ended as ${change.status}`);
 }
 

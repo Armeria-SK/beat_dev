@@ -39,6 +39,7 @@ export const taskJa = {
   'event.recovered': "前の実行が途中で止まったので、もう一度動かします",
   'event.scout_closed': "この scout の実行は途中で止まった（beat の再起動）ので、閉じました。scout の実行は続きからは動かしません",
   'event.skipped': "前の回がまだ終わっていないので、今回は作りませんでした",
+  'event.pending_not_reopened': "この Build が済んだあとに Pending の項目 #{id} が承認されましたが、うまくいきませんでした。この製品の別の Build が動いているので、この Build は開き直していません。その Build が終わるか取り消されたら、\"Run again\" を使ってください",
   'event.created_from': "予定「{title}」から作りました",
   'event.answer': "質問 #{id}「{question}」への返事: {text}",
   'event.answer_moved': "このタスクが実行の途中で終わったので、質問 #{id} への返事は続きのタスク [{task}] に渡しました",

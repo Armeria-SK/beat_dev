@@ -1149,6 +1149,11 @@ test('Build の戻し・開き直しの断りは、別の製品の Build・自�
   assert.equal(s.app.tasks.uncancel(fix.id, 'user').status, 'ready', '取り消した持ち主の直しは Build ではないので、別の Build が動いていても戻せる');
   cancel(s, plain.id);
   assert.equal(s.app.tasks.uncancel(plain.id, 'user').status, 'ready', '製品の中のふつうのタスクも同じ');
+  const child = s.userTask('Build から分かれた子', { acceptanceItems: ['A-1'], projectId: 'shop', spawnedBy: other.id });
+  cancel(s, child.id);
+  assert.equal(s.app.tasks.uncancel(child.id, 'user').status, 'ready', 'Build から分かれた子（spawned_by あり）は Build ではないので、別の Build が動いていても戻せる');
+  cancel(s, child.id);
+  assert.equal(s.app.tasks.reopen(child.id, 'user').status, 'ready', '開き直しも同じ');
   assert.ok(elsewhere && other);
 });
 
