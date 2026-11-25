@@ -8,6 +8,7 @@ import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { DEDUP_MS } from '../src/notify/notifications.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
+import { OWNER_FIX } from '../src/tasks/store.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { fail, FakeAdapter, reply, tempDir, type Script, testConfig, withLoad } from './helpers.ts';
@@ -1100,4 +1101,71 @@ test('切れた返事だけで終わったタスクは、メモに「切れた�
   assert.match(after.body, /the reply was cut off by the output limit/u);
   assert.match(after.body, /資料の骨子は次のとおりです/u);
   assert.equal(after.status, 'ready', '進展なしの扱いは普通の返事と同じ');
+});
+// ── 取り消した Build を戻す・開き直すとき、同じ製品の別の Build が動いていれば断る（backlog T1） ──
+
+test('取り消した Build を戻す・開き直すとき、同じ製品に別の開いた Build があれば error.build_open で断る。断ったら何も変えない', async t => {
+  const s = await setup(t);
+  const build = (title: string, projectId: string) => s.userTask(title, { acceptanceItems: ['A-1'], projectId });
+  const old = build('Build: 古い', 'shop');
+  cancel(s, old.id);
+  const current = build('Build: 新しい', 'shop');
+  for (const state of ['ready', 'running', 'waiting'] as const) {
+    s.app.db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(state, current.id);
+    assert.throws(() => s.app.tasks.uncancel(old.id, 'user'), (e: any) => e.code === 'error.build_open', `${state} の Build があるあいだは戻せない`);
+    assert.throws(() => s.app.tasks.reopen(old.id, 'user'), (e: any) => e.code === 'error.build_open', `${state} の Build があるあいだは開き直せない`);
+  }
+  const refused = s.app.tasks.get(old.id)!;
+  assert.deepEqual([refused.status, refused.cancelled_from], ['cancelled', 'ready'], '断ったら何も変えない');
+  assert.equal(s.app.tasks.events(old.id).some(e => e.kind === 'uncancelled' || e.kind === 'reopened'), false);
+
+  cancel(s, current.id);
+  assert.equal(s.app.tasks.uncancel(old.id, 'user').status, 'ready', '別の Build が片づけば戻せる');
+  s.app.tasks.finish(old.id, 'failed', '失敗', 'worker');
+  assert.equal(s.app.tasks.reopen(old.id, 'user').status, 'ready', '別の Build が無ければ、失敗した Build も開き直せる');
+});
+
+test('Build の戻し・開き直しの断りは、別の製品の Build・自分自身・持ち主の直し・Build でないタスクには出ない', async t => {
+  const s = await setup(t);
+  const build = (title: string, projectId: string) => s.userTask(title, { acceptanceItems: ['A-1'], projectId });
+  const old = build('Build: 古い', 'shop');
+  cancel(s, old.id);
+
+  const elsewhere = build('Build: 別の製品', 'cafe');
+  const fix = s.userTask('持ち主の直し', { acceptanceItems: ['A-2'], projectId: 'shop' });
+  s.app.tasks.event(fix.id, OWNER_FIX, 'user', '{}');
+  const plain = s.userTask('ふつうのタスク', { projectId: 'shop' });
+  assert.equal(s.app.tasks.uncancel(old.id, 'user').status, 'ready', '別の製品の Build・動いている持ち主の直し・ふつうのタスクは数えない');
+  cancel(s, old.id);
+  assert.equal(s.app.tasks.reopen(old.id, 'user').status, 'ready', '開き直しも同じ');
+
+  const current = s.app.tasks.get(old.id)!;
+  assert.equal(current.status, 'ready');
+  s.app.tasks.setWaiting(current.id, 'question', 'どちらにしますか');
+  assert.equal(s.app.tasks.reopen(current.id, 'user').status, 'ready', '自分自身（動いている Build）は数えない');
+
+  cancel(s, fix.id);
+  const other = build('Build: 同じ製品の別の Build', 'shop');
+  assert.equal(s.app.tasks.uncancel(fix.id, 'user').status, 'ready', '取り消した持ち主の直しは Build ではないので、別の Build が動いていても戻せる');
+  cancel(s, plain.id);
+  assert.equal(s.app.tasks.uncancel(plain.id, 'user').status, 'ready', '製品の中のふつうのタスクも同じ');
+  const child = s.userTask('Build から分かれた子', { acceptanceItems: ['A-1'], projectId: 'shop', spawnedBy: other.id });
+  cancel(s, child.id);
+  assert.equal(s.app.tasks.uncancel(child.id, 'user').status, 'ready', 'Build から分かれた子（spawned_by あり）は Build ではないので、別の Build が動いていても戻せる');
+  cancel(s, child.id);
+  assert.equal(s.app.tasks.reopen(child.id, 'user').status, 'ready', '開き直しも同じ');
+  assert.ok(elsewhere && other);
+});
+
+test('API: POST /api/tasks/:id/uncancel は、同じ製品に別の Build が動いていれば 409 と task.error.build_open', async t => {
+  const s = await setup(t);
+  const api = await serve(t, s);
+  const old = s.userTask('Build: 古い', { acceptanceItems: ['A-1'], projectId: 'shop' });
+  cancel(s, old.id);
+  s.userTask('Build: 新しい', { acceptanceItems: ['A-1'], projectId: 'shop' });
+  const refused = await api(`/api/tasks/${old.id}/uncancel`, {});
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.code, 'task.error.build_open');
+  assert.match(refused.body.message, /Another Build for this product is still open/u);
+  assert.equal(s.app.tasks.get(old.id)!.status, 'cancelled');
 });

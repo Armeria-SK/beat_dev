@@ -243,3 +243,58 @@ test('5-P2 子のタスク（spawned_by）を開き直しても、もう終わ�
   assert.equal(s.app.tasks.get(parent)!.status, 'done');
   assert.equal(s.reopened(parent).length, 0);
 });
+
+// ── 別の Build が動いている製品で、済んだ Build の承認した行が失敗したとき（開き直しは断られる） ──
+
+async function buildWithRow(s: Awaited<ReturnType<typeof setup>>, title: string) {
+  const made = await s.doneWithRow('fail', title);
+  // 済んだ Build の形（製品と受け入れの項目を持つ）にする。Build の完了の門は、この試験の対象ではない
+  s.app.db.prepare("UPDATE tasks SET project_id = 'shop', acceptance_items = '[\"A-1\"]' WHERE id = ?").run(made.id);
+  return made;
+}
+const failedChange = (s: Awaited<ReturnType<typeof setup>>, made: { id: string; row: number }) => ({ id: made.row, status: 'failed' as const, projectId: null, conversationId: s.app.tasks.get(made.id)!.conversation_id!, taskId: made.id });
+
+test('5-P2 同じ製品で別の Build が動いていると、済んだ Build は開き直さず、経過に理由を残す（呼んだ側には投げない）。別の Build が片づいたあとの再実行は持ち主に任せる', async t => {
+  const s = await setup(t);
+  const old = await buildWithRow(s, 'Build: 済んだ');
+  const other = s.app.tasks.create({ title: 'Build: 動いている', origin: 'user', actor: 'user', projectId: 'shop', acceptanceItems: ['A-1'] });
+  const notices = s.app.notifications.list(100).length;
+  assert.doesNotThrow(() => pendingDecided(s.deps(), failedChange(s, old)));
+  const after = s.app.tasks.get(old.id)!;
+  assert.deepEqual([after.status, after.completed_at !== null], ['done', true], '済んだままにする');
+  assert.equal(s.reopened(old.id).length, 0);
+  const notes = s.app.tasks.events(old.id).filter(event => event.kind === 'skipped');
+  assert.equal(notes.length, 1, '開き直さなかった理由が、そのタスクの経過に 1 つ残る');
+  assert.equal(notes[0]!.actor, 'beat');
+  assert.match(notes[0]!.content!, new RegExp(`#${old.row}\\b`, 'u'));
+  assert.match(notes[0]!.content!, /another Build of this product is open/u);
+  assert.equal(s.app.notifications.list(100).length, notices, '知らせは増やさない');
+  assert.equal(s.app.tasks.get(other.id)!.status, 'ready', '動いている Build には触らない');
+});
+
+test('5-P2 同じ製品の別の Build が動いていても、実際の流れ（行が failed で終わる）で済んだ Build の経過に理由が残る。別の製品の Build なら、いつもどおり開き直す', async t => {
+  const s = await setup(t);
+  const old = await buildWithRow(s, 'Build: 済んだ');
+  const elsewhere = await buildWithRow(s, 'Build: 別の製品');
+  s.app.db.prepare("UPDATE tasks SET project_id = 'cafe' WHERE id = ?").run(elsewhere.id);
+  s.app.tasks.create({ title: 'Build: 動いている', origin: 'user', actor: 'user', projectId: 'shop', acceptanceItems: ['A-1'] });
+  s.app.pending.claim(old.row);
+  s.app.pending.finish(old.row, { status: 'failed' });
+  assert.equal(s.app.tasks.get(old.id)!.status, 'done');
+  assert.equal(s.app.tasks.events(old.id).filter(event => event.kind === 'skipped').length, 1);
+
+  s.app.pending.claim(elsewhere.row);
+  s.app.pending.finish(elsewhere.row, { status: 'failed' });
+  assert.equal(s.app.tasks.get(elsewhere.id)!.status, 'ready', '別の製品の Build は動いていないので、開き直す');
+  assert.equal(s.reopened(elsewhere.id).length, 1);
+});
+
+test('5-P2 開き直しが Build の断り以外の理由で失敗したときは、今までどおり投げる（経過に断りの理由を書かない）', async t => {
+  const s = await setup(t);
+  const old = await buildWithRow(s, 'Build: 済んだ');
+  const task = s.app.tasks.get(old.id)!;
+  const events: string[] = [];
+  const tasks = { get: () => task, hasOpenRun: () => false, reopen: () => { throw new Error('disk gone'); }, event: (_id: string, kind: string) => { events.push(kind); } };
+  assert.throws(() => pendingDecided({ ...s.deps(), tasks: tasks as never }, failedChange(s, old)), /disk gone/u);
+  assert.deepEqual(events, []);
+});
