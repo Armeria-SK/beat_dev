@@ -201,14 +201,18 @@ const LINK_WALK_DEEP = new Set(['refs', 'logs']);
 
 // リンク（symlink）に加えて、ふつうのファイルのハードリンクも見る。git は reflog（logs/…）と COMMIT_EDITMSG をその場に書くので、
 // 外のファイルとハードリンクでつながっていれば、判定役を通らない commit が外のファイルを書き換える。見るのは .git の直下と refs・logs の下で、
-// objects の下は見ない（git clone --local は、オブジェクトを正しくハードリンクする）
-export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
+// objects の下は見ない（git clone --local は、オブジェクトを正しくハードリンクする）。
+// 'link': symlink がある・数の上限を超えた・読めない（今までの「リンク有り」）。'hard': symlink は無いが、ハードリンクがある
+type GitDirLinks = 'none' | 'hard' | 'link';
+
+function gitDirLinks(gitDir: string, cap: number): GitDirLinks {
   let seen = 0;
+  let hard = false;
   const clean = (dir: string, depth: number, files: boolean): boolean => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (++seen > cap || entry.isSymbolicLink()) return false;
       if (!entry.isDirectory()) {
-        if (files && entry.isFile() && lstatSync(join(dir, entry.name)).nlink > 1) return false;
+        if (files && entry.isFile() && lstatSync(join(dir, entry.name)).nlink > 1) hard = true;
         continue;
       }
       const name = entry.name.toLowerCase();
@@ -218,16 +222,29 @@ export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
     return true;
   };
   try {
-    return !lstatSync(gitDir).isSymbolicLink() && clean(gitDir, 0, true);
+    return lstatSync(gitDir).isSymbolicLink() || !clean(gitDir, 0, true) ? 'link' : hard ? 'hard' : 'none';
   } catch {
-    return false;
+    return 'link';
   }
 }
 
-export function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
+export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
+  return gitDirLinks(gitDir, cap) === 'none';
+}
+
+// 'outside': 製品の外にある・リンクがある・読めない。'hard': 製品の中にあるが、ハードリンクがある。'none': 製品の中で、リンクが無い
+export type RepoLinks = 'outside' | 'hard' | 'none';
+
+export function repoLinks(dir: string, root: string, git: ProductRunInput['git']): RepoLinks {
   const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir', ...REPO_PARTS.flatMap(part => ['--git-path', part])])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  if (places?.length !== 3 + REPO_PARTS.length || !places.every(place => inside(root, resolve(dir, place)))) return false;
-  return [...new Set([places[1]!, places[2]!].map(place => resolve(dir, place)))].every(place => gitDirLinkFree(place));
+  if (places?.length !== 3 + REPO_PARTS.length || !places.every(place => inside(root, resolve(dir, place)))) return 'outside';
+  const links = [...new Set([places[1]!, places[2]!].map(place => resolve(dir, place)))].map(place => gitDirLinks(place, LINK_WALK_CAP));
+  return links.includes('link') ? 'outside' : links.includes('hard') ? 'hard' : 'none';
+}
+
+// 判定役を飛ばす許可（順 4 の product-git・承認の決まりの git の形）に使う。ハードリンクがあれば偽
+export function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
+  return repoLinks(dir, root, git) === 'none';
 }
 
 export function productRunOf(input: ProductRunInput): ProductRunResult {
@@ -240,6 +257,8 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
   if ([...verdict.writes, ...verdict.scripts].some(p => !inside(root, p))) return undefined;
   let commits = false;
   let others = false;
+  // ハードリンクのある置き場は、判定役を飛ばす許可だけを止める。持ち主へ回す確かめ（鍵のメッセージ・鍵のファイルの add）は、全部の文についてそのまま働かせる
+  let hardLinked = false;
   const rerouted = verdict.writes.length > 0 || verdict.statements.some(st => st.piped === true || st.redirected === true);
   for (const st of verdict.statements) {
     if (!plainStatement(st, root)) return undefined;
@@ -275,7 +294,9 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     const args = st.words.slice(target.subAt + 1);
     if (sub !== 'add' && sub !== 'commit') return undefined;
     if (st.words.slice(1).some((w, i, all) => w.text.includes(',') && !(i > 0 && MESSAGE_FLAGS.has(all[i - 1]!.text) && !w.text.includes(',-')))) return undefined;
-    if (!repoInside(dir, root, git)) return undefined;
+    const links = repoLinks(dir, root, git);
+    if (links === 'outside') return undefined;
+    if (links === 'hard') hardLinked = true;
     if (sub === 'commit' && st.words.slice(1).some(w => !w.dynamic && (sanitizeModelInputText(w.text).redaction_count > 0 || AWS_KEY.test(w.text)))) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(args, dir)) {
@@ -289,5 +310,6 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     }
     commits = true;
   }
+  if (hardLinked) return undefined;
   return { run: commits ? 'product-git' : 'product-code' };
 }

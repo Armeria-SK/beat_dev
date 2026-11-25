@@ -60,6 +60,9 @@ export function remoteKey(url: string): string {
   return `${scheme}://${host}/${clean}`;
 }
 
+// 控えの送り先の URL（url と pushUrl）。照らし（push-target）と判定役への「信用する宛先」に使う。(hidden) は見せないという印で、本物の宛先ではないので数えない
+export const recordedUrls = (remotes: readonly Remote[]): string[] => remotes.flatMap(r => [r.url, ...(r.pushUrl ? [r.pushUrl] : [])]).filter(url => url !== HIDDEN_URL);
+
 export function parseRemotes(raw: string | undefined): Remote[] {
   try {
     const list = JSON.parse(raw ?? '[]') as unknown;

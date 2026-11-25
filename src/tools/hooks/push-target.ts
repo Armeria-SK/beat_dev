@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { remoteKey, type Remote } from '../../projects/remotes.ts';
+import { recordedUrls, remoteKey, type Remote } from '../../projects/remotes.ts';
 import type { StatementFacts } from './shell-guard.ts';
 
 export interface PushEnv {
@@ -105,6 +105,6 @@ export function pushProblem(st: StatementFacts, subAt: number, before: readonly 
   if (/[:/\\]/u.test(name)) return { key: 'send.push_target', remote: name };
   const urls = env.pushUrls(dir, name);
   if (!urls?.length) return { key: 'send.push_target', remote: name };
-  const recorded = new Set(env.remotes.flatMap(r => [r.url, ...(r.pushUrl ? [r.pushUrl] : [])]).map(remoteKey));
+  const recorded = new Set(recordedUrls(env.remotes).map(remoteKey));
   return urls.every(u => recorded.has(remoteKey(u))) ? undefined : { key: 'send.push_target', remote: name };
 }
