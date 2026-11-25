@@ -30,6 +30,7 @@ export interface ProjectRow {
   remotes: string;
   doc_language: string | null;
   doc_language_pinned: number;
+  // No longer read or written (the per-product research override was removed); the column stays so stored data is not dropped
   research_settings: string | null;
   archived_at: number | null;
   created_at: number;
@@ -104,7 +105,7 @@ export class ProjectStore {
     return this.get(id)!;
   }
 
-  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined; remotes?: readonly Remote[] | undefined; scoutMode?: ScoutMode | undefined; researchSettings?: string | null | undefined }): ProjectRow {
+  update(id: string, patch: { name?: string | undefined; checkCommand?: string | null | undefined; archived?: boolean | undefined; remotes?: readonly Remote[] | undefined; scoutMode?: ScoutMode | undefined }): ProjectRow {
     const current = this.get(id);
     if (!current) throw new ProjectError('unknown');
     const restoring = patch.archived === false && current.archived_at !== null;
@@ -112,8 +113,8 @@ export class ProjectStore {
     const now = this.#now();
     const archivedAt = patch.archived === undefined ? current.archived_at : patch.archived ? current.archived_at ?? now : null;
     try {
-      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, remotes = ?, scout_mode = ?, research_settings = ?, updated_at = ? WHERE id = ?')
-        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, patch.remotes ? JSON.stringify(patch.remotes) : current.remotes, patch.scoutMode ?? current.scout_mode, patch.researchSettings === undefined ? current.research_settings : patch.researchSettings, now, id);
+      this.#db.prepare('UPDATE projects SET name = ?, check_command = ?, archived_at = ?, remotes = ?, scout_mode = ?, updated_at = ? WHERE id = ?')
+        .run(patch.name ?? current.name, patch.checkCommand === undefined ? current.check_command : patch.checkCommand, archivedAt, patch.remotes ? JSON.stringify(patch.remotes) : current.remotes, patch.scoutMode ?? current.scout_mode, now, id);
     } catch (error) {
       if (isRootConflict(error)) throw new ProjectError('root_in_use');
       throw error;

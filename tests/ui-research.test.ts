@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { ResearchItem, ResearchRecord } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import {
-  canConfirm, choiceTag, confirmedLines, confirmFailure, confirmPicks, defaultTag, featureGroups, initialPicks, ownSettings, pickedCount, presetChoice, researchModel, setResearch, setResearchModel, statusPill, toggleLanguage,
+  canConfirm, choiceTag, confirmedLines, confirmFailure, confirmPicks, defaultTag, featureGroups, initialPicks, pickedCount, presetChoice, researchModel, setResearch, setResearchModel, statusPill, toggleLanguage,
 } from '../web/src/ui/research.ts';
 
 // beat R (M7・R-2u / R-4): 調べた一覧の画面の決まり（DOM なし）
@@ -105,7 +105,7 @@ test('確定のあと: DB の選びから読み戻す（自分で作るは 1 行
   assert.deepEqual(confirmedLines(r), [{ kind: 'build', name: '' }, { kind: 'feature', name: 'Tags' }, { kind: 'choice', name: 'Store?', option: 'SQLite' }]);
 });
 
-test('設定（R-4）: 調べ役のモデル・research の塊の書き方・言語は好きと避けたいの両方に入らない・製品の上書きの空は null', () => {
+test('設定（R-4）: 調べ役のモデル・research の塊の書き方・言語は好きと避けたいの両方に入らない', () => {
   assert.equal(researchModel({ routing: { research: ['m2'] } }), 'm2');
   assert.equal(researchModel({ routing: {} }), '');
   assert.deepEqual(setResearchModel({ routing: { chat: ['m1'] } }, 'm2').routing, { chat: ['m1'], research: ['m2'] });
@@ -116,8 +116,6 @@ test('設定（R-4）: 調べ役のモデル・research の塊の書き方・言
   assert.deepEqual(toggleLanguage({ prefer: ['Go'], avoid: ['Python'] }, 'prefer', 'Python'), { prefer: ['Go', 'Python'], avoid: [] });
   assert.deepEqual(toggleLanguage({ prefer: ['Go'], avoid: [] }, 'avoid', 'Go'), { prefer: [], avoid: ['Go'] });
   assert.deepEqual(toggleLanguage({ prefer: ['Go', 'Rust'], avoid: [] }, 'prefer', 'Go'), { prefer: ['Rust'], avoid: [] });
-  assert.equal(ownSettings({ limits: {} }), null);
-  assert.deepEqual(ownSettings({ when: 'off', limits: { minutes: 3 } }), { when: 'off', limits: { minutes: 3 } });
 });
 
 test('受け入れの一覧: 出どころ owner_pick に「あなたが選んだ（調べた一覧から）」の札・選んだ名前・数の行が付く', async () => {
