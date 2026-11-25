@@ -377,6 +377,21 @@ test('ui/terminal: 省略記号・文末の点・コロンの直後に続く htt
     'javascript:alert(1)//http://localhost',
     'x/http://localhost:3000',
     'x.http://localhost:3000',
+    // 点・コロンの次が ASCII の語の字でなくても（ほかの文字・%・@・点やコロンの連なり）、よその宛先に見えるものは外す
+    'http://localhost.еvil.com/',
+    'http://localhost.éxample.com',
+    'http://localhost.%65vil.com',
+    'http://localhost:3000.ｅvil.com',
+    'http://localhost:@evil.com',
+    'http://localhost:3000:@evil.com/',
+    'http://localhost..evil.com',
+    'http://localhost._evil.com',
+    'http://localhost.1evil.com',
+    // 前後の文字の決まり（1 つずつ外すと落ちるように）
+    'http://localhost-evil.com',
+    'xhttp://localhost',
+    'a-http://localhost',
+    'u@http://localhost:3000',
   ]) assert.deepEqual(hrefs(line), [], line);
 });
 
