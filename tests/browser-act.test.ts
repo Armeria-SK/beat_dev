@@ -1142,3 +1142,106 @@ test('P3b: 伏せで 4,096 字より縮む本文でも、読む上限の切り�
   const rest = await browserRead.execute({ mode: 'text', offset: Number(next[1]) }, r.ctx);
   assert.ok(!rest.content.includes(PLAIN.slice(0, 5)) && rest.content.includes('[REDACTED]') && rest.content.includes('after'), rest.content);
 });
+
+// ── P3b の直し、3 回目（reviewer-deep の REQUEST_CHANGES → 指揮役の決め） ──
+
+const pem = (body: string): string[] => ['-----BEGIN PRIVATE KEY-----', ...Array.from({ length: 6 }, (_, i) => `${body}${String(i).padStart(2, '0')}${'A'.repeat(50)}`), '-----END PRIVATE KEY-----'];
+
+test('P3b: 押したあとの増えた文は、行を比べる前に伏せる（BEGIN / END の印が変わらず、鍵の中身の行だけが入れ替わる）', async t => {
+  const r = rig(t);
+  const KEYS = 'https://example.com/keys';
+  const site = (body: string, effect?: FakeEffect): FakeSite => ({
+    title: 'Keys', text: ['Keys', ...pem(body), 'Regenerate'].join('\n'),
+    snapshot: '- button "Regenerate"', rows: [{ role: 'button', name: 'Regenerate', ...(effect ? { effect } : {}) }],
+  });
+  r.driver.site(KEYS, site('MIIEvAAA', { mutate: site('MIIEvBBB') }));
+  await opened(r, KEYS);
+  const output = await browserClick.execute({ ref: 'e1' }, r.ctx);
+  assert.ok(!output.content.includes('MIIEvBBB'), output.content);
+  assert.ok(fenced(output.content).includes(en('browser.diff_no_text')), output.content);
+});
+
+test('P3b: 押したあとの増えた文で、字下げした値の行（password: / authorization: の次の行）を送らない', async t => {
+  const r = rig(t);
+  const CONF = 'https://example.com/config';
+  const site = (password: string, auth: string, effect?: FakeEffect): FakeSite => ({
+    title: 'Config', text: ['Config', 'password:', `    ${password}`, 'authorization:', `    Basic ${auth}`, 'Reveal'].join('\n'),
+    snapshot: '- button "Reveal"', rows: [{ role: 'button', name: 'Reveal', ...(effect ? { effect } : {}) }],
+  });
+  r.driver.site(CONF, site('********', '********', { mutate: site('hunter2-Rv8sQ', 'dXNlcjpodW50ZXIyLVJ2OHNR') }));
+  await opened(r, CONF);
+  const output = await browserClick.execute({ ref: 'e1' }, r.ctx);
+  assert.ok(!output.content.includes('hunter2-Rv8sQ') && !output.content.includes('dXNlcjpo'), output.content);
+});
+
+test('P3b: 伏せると同じに見える 2 つの新しい要素（Revoke と別々の鍵）は、同じ「+ eN」の 2 行ではなく、番号なしの組の 1 行', async t => {
+  const r = rig(t);
+  const base = listSite({});
+  const names = ['Revoke sk-proj-AAAAAAAAAAAAAAAAAAAAAAAA', 'Revoke sk-proj-BBBBBBBBBBBBBBBBBBBBBBBB'];
+  const after: FakeSite = { ...base, snapshot: `${base.snapshot!}\n${names.map(n => `- button "${n}"`).join('\n')}`, rows: [...base.rows!, ...names.map((n): FakeRow => ({ role: 'button', name: n }))] };
+  r.driver.site(LIST, listSite({ mutate: after }));
+  await opened(r, LIST);
+  const inside = fenced((await browserClick.execute({ ref: 'e4' }, r.ctx)).content);
+  assert.ok(!inside.some(line => line.startsWith('+ ') && line.includes('Revoke')), inside.join('\n'));
+  assert.ok(inside.includes(en('browser.diff_group', { count: 2, role: 'button', name: '"Revoke [REDACTED]"' })), inside.join('\n'));
+  assert.equal((await preCheck(r, browserClick, { ref: 'e5' })).decision, 'deny');
+});
+
+test('P3b: 押す前の本文の読みが返らなくても、1 秒で読みをやめて押し、差分を返す', async t => {
+  const r = rig(t);
+  r.driver.site(LIST, listSite({ mutate: LIST_AFTER }));
+  const page = await opened(r, LIST);
+  const text = page.text.bind(page);
+  page.text = async (max: number) => (page.acts.length === 0 ? new Promise<string>(() => undefined) : text(max));
+  const started = Date.now();
+  const output = await browserClick.execute({ ref: 'e4' }, r.ctx);
+  const took = Date.now() - started;
+  assert.deepEqual(page.acts.map(a => a.name), ['Go']);
+  assert.ok(fenced(output.content).includes(en('browser.section_changes')), output.content);
+  assert.ok(took >= 900 && took < 2900, `${took} ms`);
+});
+
+test('P3b: 押す前の本文の読みのあいだに止められたら、押さずに止まる', async t => {
+  const r = rig(t);
+  r.driver.site(LIST, listSite({ mutate: LIST_AFTER }));
+  const page = await opened(r, LIST);
+  page.text = async () => new Promise<string>(() => undefined);
+  let started = 0;
+  const click = page.click.bind(page);
+  page.click = (...args: Parameters<typeof page.click>) => { started += 1; return click(...args); };
+  const controller = new AbortController();
+  const pending = browserClick.execute({ ref: 'e4' }, { ...r.ctx, signal: controller.signal } as ToolContext);
+  setTimeout(() => controller.abort(), 200);
+  const output = await pending;
+  assert.equal(output.content, en('browser.aborted'));
+  // 止めたあとに裏で押し始めていないか（押す処理は要素の確かめを待ってから記録する）
+  await new Promise<void>(resolve => setTimeout(resolve, 300));
+  assert.equal(page.acts.length, 0, '押していない');
+  assert.equal(started, 0, '押す処理を始めていない');
+});
+
+test('P3b: 押したあとの読みのあいだに止められたら「読めなかった」ではなく止めた結果', async t => {
+  const r = rig(t);
+  r.driver.site(LIST, listSite({ mutate: LIST_AFTER }));
+  const page = await opened(r, LIST);
+  const snap = page.snapshot.bind(page);
+  page.snapshot = async () => (page.acts.length > 0 ? new Promise<string>(() => undefined) : snap());
+  const controller = new AbortController();
+  const pending = browserClick.execute({ ref: 'e4' }, { ...r.ctx, signal: controller.signal } as ToolContext);
+  setTimeout(() => controller.abort(), 500);
+  const output = await pending;
+  assert.equal(output.content, en('browser.aborted'), output.content);
+  assert.ok(!output.content.includes(en('browser.acted_unread', { url: LIST })));
+});
+
+test('P3b: browser_read の offset が値の途中なら、手前のきれいな位置から読む（値を送らない）', async t => {
+  const r = rig(t, { secrets: [PLAIN] });
+  const VALS = 'https://example.com/values';
+  const text = `${'Intro words. '.repeat(20)}password: hunter2-Rv8sQ and ${PLAIN} then Authorization: Bearer abcdefghijklmnop0123456789 end.`;
+  r.driver.site(VALS, { title: 'Values', text, snapshot: '', rows: [] });
+  await browserOpen.execute({ url: VALS }, r.ctx);
+  for (const offset of [text.indexOf('hunter2') + 3, text.indexOf(PLAIN) + 1, text.indexOf('Bearer') + 'Bearer'.length]) {
+    const out = await browserRead.execute({ mode: 'text', offset }, r.ctx);
+    for (const value of ['Rv8sQ', 'q7-plain', 'abcdefghij']) assert.ok(!out.content.includes(value), `${offset}: ${out.content}`);
+  }
+});

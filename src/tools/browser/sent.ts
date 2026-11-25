@@ -5,48 +5,145 @@ import { neutralizeFence } from '../../shared/fence.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 
 const MARK = '[REDACTED]';
-// 続きの読みの位置を、元の文の上で後ろへ探し直す数（空白の切れ目・行の頭のそれぞれ）
+// 区切りの位置を探す数（区切り・行の頭・伏せた所の終わりのそれぞれ）
 const STEP_TRIES = 32;
 const SEPARATOR = /[\s,;{}[\]()<>]/u;
+// 読む上限で切れた読みでは、上限の手前この字数より後ろで区切らない（上限の向こうに値がある「password:」の後ろで区切らない）
+export const TAIL_MARGIN = 1024;
 
 export interface Sent {
   // 送る形の文
   text: string;
   // 伏せたあとの文を途中で切ったか
   cut: boolean;
-  // 送った分が元の文の何文字にあたるか（続きの読みの offset）。cut でなければ元の文の長さ。
-  // その位置で前後に分けて伏せても、全体を伏せた形と同じになる位置だけを返す（続きが秘密や「password:」と値のあいだから始まらない）。
-  // 何か送ったときは 0 より大きい（同じ所を読み続けない）
-  rawUsed: number;
+}
+
+// 伏せたあとの文の頭を、送る形で上限に収める（枠の文字の置き換えで長くなることがあるので、収まるまで縮める）
+function fitPrefix(redacted: string, maxChars: number, maxTokens: number): { room: number; text: string } {
+  let room = prefixLength(redacted, maxChars, maxTokens);
+  let text = neutralizeFence(redacted.slice(0, room));
+  while (room > 0 && (text.length > maxChars || estimateTextTokens(text) > maxTokens)) {
+    room = Math.floor(room * 0.9);
+    text = neutralizeFence(redacted.slice(0, room));
+  }
+  return { room, text };
 }
 
 // maxChars / maxTokens は送る形（伏せ・置き換えのあと）で測る
 export function sentText(raw: string, secrets: readonly string[], maxChars: number, maxTokens = Infinity): Sent {
   const redacted = redactSecrets(raw, secrets);
-  let room = prefixLength(redacted, maxChars, maxTokens);
-  let text = neutralizeFence(redacted.slice(0, room));
-  // 枠の文字の置き換えで長くなることがある。収まるまで縮める
-  while (room > 0 && (text.length > maxChars || estimateTextTokens(text) > maxTokens)) {
-    room = Math.floor(room * 0.9);
-    text = neutralizeFence(redacted.slice(0, room));
+  const { room, text } = fitPrefix(redacted, maxChars, maxTokens);
+  return { text, cut: room < redacted.length };
+}
+
+export interface Paged {
+  // 送る形の文
+  text: string;
+  // 送った文の、ページの文の上の頭（求められた offset を、きれいに分けられる位置まで戻したもの）
+  start: number;
+  // 続きの読みの offset（続きが無ければ undefined）。いつも start より後ろで、きれいに分けられる位置
+  next: number | undefined;
+}
+
+// browser_read の本文の 1 回分。full はページの文の頭から読んだもの、limited は読む上限で切れたか（その先にも文がある）。
+// 「きれいに分けられる位置」p: 文を p で前後に分けて伏せても、分けずに伏せた形と同じになる位置（秘密の途中・「password:」と値のあいだではない）。
+// 送るのは、きれいな 2 つの位置のあいだを伏せた形だけ。上限で切れた読みでは、最後の空白と、上限の TAIL_MARGIN 字手前より前の位置だけを使う
+export function pageText(full: string, offset: number, limited: boolean, secrets: readonly string[], maxChars: number, maxTokens = Infinity): Paged {
+  if (offset >= full.length && !limited) return { text: '', start: offset, next: undefined };
+  const start = offset <= 0 ? 0 : cleanStart(full, Math.min(offset, full.length), secrets);
+  const tail = full.slice(start);
+  const redacted = redactSecrets(tail, secrets);
+  let safe = { q: tail.length, head: redacted.length };
+  if (limited) {
+    const space = tail.search(/\s\S*$/u);
+    const bound = Math.min(space > 0 ? space : tail.length - 1, tail.length - TAIL_MARGIN);
+    const found = bound > 0 ? findBack(tail, redacted, bound, Infinity, secrets) : undefined;
+    // きれいに分けられる位置が無い（区切りの無い長い並び）: 何も送らず、続きも出さない（確かめられない位置からは続けない）
+    if (found === undefined) return { text: '', start, next: undefined };
+    safe = found;
   }
-  const cut = room < redacted.length;
-  return { text, cut, rawUsed: cut ? rawOffset(raw, redacted, room, secrets) : raw.length };
+  const { room, text } = fitPrefix(redacted.slice(0, safe.head), maxChars, maxTokens);
+  if (room >= safe.head) return { text, start, next: limited ? start + safe.q : undefined };
+  const target = Math.min(alignCut(tail, redacted, room)?.at ?? room, safe.q);
+  // 送った所の中で一番後ろのきれいな位置。無ければ、その先のきれいな位置（送らなかった分は飛ばす）、それも無ければ安全な終わり
+  const back = findBack(tail, redacted, target, room, secrets);
+  const next = back ?? findForward(tail, redacted, target, safe.q, secrets) ?? safe;
+  return { text, start, next: start + next.q };
+}
+
+// p で分けて伏せても全体と同じか。同じなら前の分の伏せた長さ、違えば undefined
+function cleanSplit(raw: string, redacted: string, p: number, secrets: readonly string[]): number | undefined {
+  const head = redactSecrets(raw.slice(0, p), secrets);
+  if (!redacted.startsWith(head)) return undefined;
+  return redactSecrets(raw.slice(p), secrets) === redacted.slice(head.length) ? head.length : undefined;
+}
+
+// 区切り・行の頭・伏せた所の終わりで、from から後ろへきれいな位置を探す（0 は数えない）。前の分の伏せた長さが maxHead 以下のものだけ
+function findBack(raw: string, redacted: string, from: number, maxHead: number, secrets: readonly string[]): { q: number; head: number } | undefined {
+  const tried = new Set<number>();
+  const accept = (q: number): { q: number; head: number } | undefined => {
+    if (q <= 0 || q > from || tried.has(q)) return undefined;
+    tried.add(q);
+    const head = cleanSplit(raw, redacted, q, secrets);
+    return head !== undefined && head <= maxHead ? { q, head } : undefined;
+  };
+  const first = accept(from);
+  if (first) return first;
+  let q = from;
+  for (let tries = 0; tries < STEP_TRIES && q > 0; tries += 1) {
+    let k = q - 2;
+    while (k >= 0 && !SEPARATOR.test(raw[k]!)) k -= 1;
+    q = k + 1;
+    const found = accept(q);
+    if (found) return found;
+  }
+  q = from;
+  for (let tries = 0; tries < STEP_TRIES && q > 0; tries += 1) {
+    q = raw.lastIndexOf('\n', q - 2) + 1;
+    const found = accept(q);
+    if (found) return found;
+  }
+  const ends = (alignCut(raw, redacted, redacted.length)?.ends ?? []).filter(end => end <= from).reverse().slice(0, STEP_TRIES);
+  for (const end of ends) {
+    const found = accept(end);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+// from より後ろ、to まで（to を含む）で、最初のきれいな位置（伏せた所の終わりと区切りから）
+function findForward(raw: string, redacted: string, from: number, to: number, secrets: readonly string[]): { q: number; head: number } | undefined {
+  const ends = (alignCut(raw, redacted, redacted.length)?.ends ?? []).filter(end => end > from && end <= to);
+  const separators: number[] = [];
+  for (let k = from; k < to && separators.length < STEP_TRIES; k += 1) if (SEPARATOR.test(raw[k]!)) separators.push(k + 1);
+  const candidates = [...new Set([...ends.slice(0, STEP_TRIES), ...separators])].filter(q => q > from && q <= to).sort((a, b) => a - b);
+  for (const q of candidates) {
+    const head = cleanSplit(raw, redacted, q, secrets);
+    if (head !== undefined) return { q, head };
+  }
+  return undefined;
+}
+
+// モデルが選んだ offset を、ページの文の頭からみてきれいな位置まで戻す（値の途中から読ませない）。見つからなければ 0
+function cleanStart(full: string, offset: number, secrets: readonly string[]): number {
+  const redacted = redactSecrets(full, secrets);
+  return findBack(full, redacted, offset, Infinity, secrets)?.q ?? 0;
 }
 
 interface Alignment {
   // 伏せたあとの文の room の位置にあたる元の文の位置（伏せた印の途中なら、その秘密の頭）
   at: number;
-  // 最初に伏せた所の、元の文での終わり（伏せた所が無ければ undefined）
-  firstEnd: number | undefined;
+  // 伏せた所の、元の文での終わり（頭から順）
+  ends: number[];
 }
 
 // 伏せたあとの文は、元の文のいくつかの区間を MARK に置き換えたもの。頭から突き合わせて、伏せたあとの位置 room を元の文の位置に写す。
-// 区間の終わりは、次の MARK までの伏せていない文が元の文に現れる最初の位置。突き合わせられなければ undefined（呼ぶ側が後ろへ探す）
+// 区間の終わりは、次の MARK までの伏せていない文が元の文に現れる最初の位置。突き合わせられなければ undefined。
+// 写した位置は近くに置くためだけに使い、使う前にいつも cleanSplit で確かめる
 export function alignCut(raw: string, redacted: string, room: number): Alignment | undefined {
   let i = 0;
   let j = 0;
-  let firstEnd: number | undefined;
+  const ends: number[] = [];
   let at: number | undefined;
   while (j < redacted.length) {
     if (at === undefined && j >= room) at = i;
@@ -58,7 +155,7 @@ export function alignCut(raw: string, redacted: string, room: number): Alignment
       const end = plain === '' ? raw.length : raw.indexOf(plain, i + 1);
       if (end < 0) return undefined;
       if (at === undefined && room < next) at = i;
-      firstEnd ??= end;
+      ends.push(end);
       i = end;
       j = next;
       continue;
@@ -67,41 +164,5 @@ export function alignCut(raw: string, redacted: string, room: number): Alignment
     i += 1;
     j += 1;
   }
-  return { at: at ?? i, firstEnd };
-}
-
-// 元の文を n で前後に分けて伏せても全体を伏せた形と同じで、前の分が送った範囲（room）に収まるか
-function splits(raw: string, redacted: string, room: number, n: number, secrets: readonly string[]): boolean {
-  const head = redactSecrets(raw.slice(0, n), secrets);
-  if (head.length > room || !redacted.startsWith(head)) return false;
-  return redactSecrets(raw.slice(n), secrets) === redacted.slice(head.length);
-}
-
-// 伏せたあとの文の room 文字までが、元の文のどこまでにあたるか（続きの読みの位置）
-function rawOffset(raw: string, redacted: string, room: number, secrets: readonly string[]): number {
-  if (room <= 0) return 0;
-  const aligned = alignCut(raw, redacted, room);
-  const start = aligned?.at ?? Math.min(raw.length, room);
-  const tried = new Set<number>();
-  const accept = (n: number): boolean => {
-    if (n <= 0 || tried.has(n)) return false;
-    tried.add(n);
-    return splits(raw, redacted, room, n, secrets);
-  };
-  if (accept(start)) return start;
-  // 後ろへ: 区切り（空白・JSON の , { [ など）の切れ目、それでもだめなら行の頭（「password:」の前・行ごと）
-  let n = start;
-  for (let tries = 0; tries < STEP_TRIES && n > 0; tries += 1) {
-    let k = n - 2;
-    while (k >= 0 && !SEPARATOR.test(raw[k]!)) k -= 1;
-    n = k + 1;
-    if (accept(n)) return n;
-  }
-  n = start;
-  for (let tries = 0; tries < STEP_TRIES && n > 0; tries += 1) {
-    n = raw.lastIndexOf('\n', n - 2) + 1;
-    if (accept(n)) return n;
-  }
-  // 見つからなければ、最初に伏せた所のあとから（同じ所を読み続けない。伏せた所の中身は送らない）
-  return aligned?.firstEnd ?? 0;
+  return { at: at ?? i, ends };
 }

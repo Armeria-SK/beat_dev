@@ -347,7 +347,7 @@ function scalar(raw: string): string {
 export type Numbering =
   | { kind: 'show'; fits?: ((item: ListedElement) => boolean) | undefined; limit?: number | undefined }
   | { kind: 'check' }
-  | { kind: 'diff'; fits?: ((item: ListedElement) => boolean) | undefined; maxLines: number; tableLimit: number };
+  | { kind: 'diff'; fits?: ((item: ListedElement) => boolean) | undefined; maxLines: number; tableLimit: number; secrets?: readonly string[] | undefined };
 
 // 差分の行（増えた要素だけ）
 export function diffLine(item: ListedElement, secrets: readonly string[] = []): string {
@@ -377,9 +377,12 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   const viewed = new Set(book.view.values());
   const fresh = numbering.kind === 'diff' && !navigated ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
   // 番号を振るのは、押したあとのページで役割・名前が 1 つだけの要素だけ（同じ名前の組の要素は、並べ替え・作り直しで別の行の要素になりうる）
+  // 同じかどうかは、モデルに見える形（伏せて 100 字で切った名前）で数える（伏せると同じに見える 2 つにも番号を振らない）
+  const secrets = numbering.kind === 'diff' ? numbering.secrets ?? [] : [];
+  const seenAs = (e: Entry): string => `${e.role} ${shown(e.name, secrets)}`;
   const named = new Map<string, number>();
-  for (const e of entries) named.set(keyOf(e), (named.get(keyOf(e)) ?? 0) + 1);
-  const wanted = fresh.filter(e => named.get(keyOf(e)) === 1);
+  if (fresh.length > 0) for (const e of entries) named.set(seenAs(e), (named.get(seenAs(e)) ?? 0) + 1);
+  const wanted = fresh.filter(e => named.get(seenAs(e)) === 1);
   const tableLimit = numbering.kind === 'show' ? numbering.limit ?? MAX_ELEMENTS : numbering.kind === 'diff' ? numbering.tableLimit : 0;
   let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (navigated ? 'show' : 'diff') : numbering.kind;
   let candidates = new Set(form === 'show' ? usable.slice(0, tableLimit) : wanted);
@@ -407,9 +410,9 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
     const dead = [...book.view].filter(([ref, pwRef]) => !(keptNow.has(pwRef) && book.records.get(pwRef)?.ref === ref));
     const added = wanted.filter(e => !keptNow.has(e.pwRef!)).length;
     for (const e of fresh) {
-      if (named.get(keyOf(e)) === 1 || keptNow.has(e.pwRef!)) continue;
-      const group = newGroups.get(keyOf(e));
-      if (group) group.count += 1; else newGroups.set(keyOf(e), { role: e.role, name: e.name, count: 1 });
+      if (named.get(seenAs(e)) === 1 || keptNow.has(e.pwRef!)) continue;
+      const group = newGroups.get(seenAs(e));
+      if (group) group.count += 1; else newGroups.set(seenAs(e), { role: e.role, name: e.name, count: 1 });
     }
     if (dead.length + added + newGroups.size > numbering.maxLines) {
       form = 'show';

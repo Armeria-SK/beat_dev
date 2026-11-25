@@ -14,7 +14,7 @@ import { diffLine, elementLine, formatElements, groupLine, markShown, type Eleme
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
-import { sentText } from '../browser/sent.ts';
+import { pageText, sentText } from '../browser/sent.ts';
 import { siteAllows } from '../browser/sites.ts';
 import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -145,18 +145,15 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     tokens -= spent.tokens;
   }
   if (options.mode !== 'elements') {
-    // 読む上限で切れていたら、最後の空白までにしてから伏せる（上限の切り目にまたがる秘密を、半分だけ送らない）
-    const read = raw.slice(options.offset);
-    const lastSpace = raw.length >= asked ? read.search(/\s\S*$/u) : -1;
-    const wanted = lastSpace > 0 ? read.slice(0, lastSpace) : read;
     const textTitle = toolText(language, 'browser.section_text');
     const moreText = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
     const roomChars = Math.max(0, Math.min(pageChars, chars - size(textTitle).chars - moreText.chars));
     const roomTokens = Math.max(0, tokens - size(textTitle).tokens - moreText.tokens);
-    // 伏せてから、送る形で上限に収まるように切る（sentText）
-    const sent = sentText(wanted, secrets, roomChars, roomTokens);
+    // 頭から読んだ文を伏せ、きれいに分けられる位置のあいだだけを送る（pageText。求められた offset が値の途中なら手前へ戻す。
+    // 読む上限で切れた読みは、いつも続きがあるものとして、続きの位置も確かめる）
+    const sent = pageText(raw, options.offset, raw.length >= asked, secrets, roomChars, roomTokens);
     parts.push(textTitle, sent.text !== '' ? sent.text : toolText(language, 'browser.empty_text'));
-    if (sent.cut || raw.length >= asked) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + sent.rawUsed }));
+    if (sent.next !== undefined) parts.push(toolText(language, 'browser.more_text', { offset: sent.next }));
   }
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
@@ -264,7 +261,7 @@ async function renderDiff(api: BrowserApi, tab: BrowserTab, language: Language, 
     used = next;
     return true;
   };
-  const table = await rereadTab(tab, url, signal, { kind: 'diff', fits, maxLines: DIFF_MAX_LINES, tableLimit: DIFF_TABLE_LIMIT });
+  const table = await rereadTab(tab, url, signal, { kind: 'diff', fits, maxLines: DIFF_MAX_LINES, tableLimit: DIFF_TABLE_LIMIT, secrets });
   if (table?.diff === undefined) return undefined;
   const diff = table.diff;
   const lineOf = (item: ListedElement): string => (diff.form === 'diff' ? diffLine(item, secrets) : elementLine(item, secrets));
@@ -299,7 +296,8 @@ async function renderDiff(api: BrowserApi, tab: BrowserTab, language: Language, 
   chars -= spent.chars;
   tokens -= spent.tokens;
   // 増えた文: 20 行・1,500 字まで（送る形で測る）
-  const added = addedTextLines(beforeText, afterText);
+  // 行を比べる前に前後とも伏せる（値の行だけが変わり、見出しの行〔BEGIN の印・「password:」〕が変わらないと、比べたあとでは伏せられない）
+  const added = addedTextLines(redactSecrets(beforeText, secrets, { keepLines: true }), redactSecrets(afterText, secrets, { keepLines: true }));
   const wanted = added.slice(0, DIFF_TEXT_LINES).join('\n');
   const roomChars = Math.max(0, Math.min(DIFF_TEXT_CHARS, chars - size(textTitle).chars - size(toolText(language, 'browser.diff_more_text')).chars));
   const roomTokens = Math.max(0, tokens - size(textTitle).tokens - size(toolText(language, 'browser.diff_more_text')).tokens);
