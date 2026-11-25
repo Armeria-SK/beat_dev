@@ -83,6 +83,16 @@ test('判定役の例の対照: 製品の git add・git commit と方針 Ask の
   for (const c of JUDGE_CONTROLS) assert.ok(!adapter.requests.some(r => userOf(r).includes(c.input.body)), c.id);
 });
 
+test('試しの既定の上限は、本物の判定役の最初の上限（1024）と同じで、help に呼び直しのこと（切れたら 4096 で 1 回）が書いてある', async () => {
+  const probe = await import('../scripts/judge-probe.ts');
+  const chat = await import('../src/engine/chat.ts');
+  assert.equal(chat.JUDGE_OUTPUT_TOKENS, 1024, '前提: 本物の判定役の最初の上限');
+  assert.equal(chat.JUDGE_OUTPUT_RAISED, 4096, '前提: 切れたときに 1 回だけ上げる上限');
+  assert.equal(probe.DEFAULT_MAX_TOKENS, chat.JUDGE_OUTPUT_TOKENS, '試しの既定は本物の判定役と同じ');
+  assert.ok(probe.USAGE.includes(`[--max-tokens ${chat.JUDGE_OUTPUT_TOKENS}]`), 'help の既定の表示');
+  assert.ok(probe.USAGE.includes(String(chat.JUDGE_OUTPUT_RAISED)) && /does not/u.test(probe.USAGE), 'help に、本物は切れたら上げて 1 回呼び直すが、試しは呼び直さないと書く');
+});
+
 test('試しの提供元: 例ごと・回ごと・流し方ごとに 1 行。許すべきでないものを許した・切れた・読めない・時間切れを数え、表に出す', async () => {
   const wrong = JUDGE_CASES.find(c => c.id === 'ask-stop-service')!;
   const cut = JUDGE_CASES.find(c => c.id === 'allow-git-fetch')!;
@@ -96,9 +106,9 @@ test('試しの提供元: 例ごと・回ごと・流し方ごとに 1 行。許
     if (c === slow) return { text: ALLOW, delayMs: 400 };
     return { text: c.expect === 'allow' ? ALLOW : ASK };
   });
-  const rows = await runProbe({ model, provider, adapter, cases: JUDGE_CASES, runs: 2, modes: ['a', 'b'], effort: 'low', maxTokens: 400, timeoutMs: 150, secrets: [SECRET] });
+  const rows = await runProbe({ model, provider, adapter, cases: JUDGE_CASES, runs: 2, modes: ['a', 'b'], effort: 'low', maxTokens: 1024, timeoutMs: 150, secrets: [SECRET] });
   assert.equal(rows.length, JUDGE_CASES.length * 2 * 2);
-  assert.ok(adapter.requests.every(r => r.maxOutputTokens === 400 && r.tools.length === 0));
+  assert.ok(adapter.requests.every(r => r.maxOutputTokens === 1024 && r.tools.length === 0));
   // AP-1d: an unreadable reply (the cut and the junk case) is asked once more, so each of their 2 runs sends 2 requests per mode
   assert.ok(adapter.requests.filter(r => r.effort === 'low').length === JUDGE_CASES.length * 2 + 4);
   assert.ok(adapter.requests.filter(r => r.effort === undefined).length === JUDGE_CASES.length * 2 + 4);

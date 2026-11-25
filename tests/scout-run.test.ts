@@ -312,6 +312,23 @@ test('scout: the owner\'s memory books are not in the scout run or its scouts, t
   assert.match(JSON.stringify(s.adapter().calls.at(-1)!.system), /blue-otter-42/u);
 });
 
+test('scout (E3): the skills list is not in the scout run or its scouts (they have no skill_view to open one), though an ordinary task run has it', async t => {
+  const s = await setup(t);
+  s.app.skills.write({ name: 'weekly-tidy', description: 'Tidy the weekly report', body: 'Step one.' });
+  s.adapter().scripts.push(toolCall('agent_run', { task: 'look', title: 'Look' }), reply('area: src\nchecked: x\nresult: no problem'), reply('done'));
+  await s.app.worker.tick();
+  assert.equal(s.adapter().calls.length, 3, 'the lead run, its scout, the lead run again');
+  for (const req of s.adapter().calls) {
+    assert.equal(req.tools.some(tool => tool.name === 'skill_view'), false, 'premise: the scout run has no skill_view');
+    assert.doesNotMatch(req.system.frozen, /weekly-tidy/u);
+  }
+  s.app.projects.update(s.projectId, { scoutMode: 'off' });
+  s.app.tasks.create({ title: 'plain task', origin: 'user', actor: 'user', projectId: s.projectId });
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'ok', notify: false }));
+  await s.app.worker.tick();
+  assert.match(s.adapter().calls.at(-1)!.system.frozen, /weekly-tidy/u, 'control: an ordinary task run still has the list');
+});
+
 test('scout: web_fetch with a long URL path is refused in the scout run and its scouts; elsewhere only the query counts', async t => {
   const s = await setup(t);
   const long = `https://example.com/${'a'.repeat(400)}`;

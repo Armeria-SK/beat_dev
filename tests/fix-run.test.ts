@@ -235,6 +235,22 @@ test('8-6a: 直す実行に Web・ブラウザ・MCP・agent_run・task_*・ques
   assert.equal(s.count('engine_runs', 'tainted = 1'), 1);
 });
 
+test('8-6a E3: 直す実行の system に skills の一覧は無い（skill_view が渡らず開けないため）。ふつうの会話には一覧がある', { skip: !gitAvailable }, async t => {
+  const s = await fixApp(t);
+  s.app.skills.write({ name: 'weekly-tidy', description: 'Tidy the weekly report', body: 'Step one.' });
+  s.model.scripts.push(reply('nothing'));
+  const result = await s.run();
+  assert.ok(result.ok);
+  const first = s.model.calls.find(req => !isJudgeRequest(req))!;
+  assert.equal((first.tools ?? []).some(tool => tool.name === 'skill_view'), false, '前提: 直す実行に skill_view は渡らない');
+  assert.doesNotMatch(first.system.frozen, /weekly-tidy/u);
+  s.model.scripts.push(reply('hi'));
+  const chat = s.app.engine.send('c-e3', 'hello');
+  assert.ok(chat.ok);
+  await s.app.engine.wait(chat.runId);
+  assert.match(s.model.calls.at(-1)!.system.frozen, /weekly-tidy/u, '対照: ふつうの会話の system には一覧がある');
+});
+
 test('8-6a D-11 (3)(4): 写しの中の製品のコード（node check.js）は判定役なしで動き、パイプのある文は判定役へ行って、頼みの文に提案の文が入らない。判定役の「聞きたい」は断られ Pending に行かない', { skip: !gitAvailable }, async t => {
   const s = await fixApp(t);
   s.model.scripts.push(sh('node check.js'), sh(JUDGED), editFix(), reply('done'));
