@@ -77,6 +77,9 @@ export interface JudgeStatsQuery { since: number; until?: number | undefined; pr
 
 interface Row { failed: string | null; run_id: string; run_kind: string; project_id: string | null; reason_keys: string; ask_kinds: string; outcome: JudgeOutcome; judge_model: string | null; input_tokens: number | null; output_tokens: number | null; duration_ms: number; created_at: number }
 
+// slot_timeout is in BEFORE_MODEL, but after the judge list switched to the next model the earlier model had already answered or spent tokens: such a row names a model or has tokens, so it is not "before the model"
+const calledModel = (row: Row): boolean => row.judge_model !== null || row.input_tokens !== null || row.output_tokens !== null;
+
 const empty = (): JudgeTotals => ({ calls: 0, allow: 0, ask: 0, failed: 0, inputTokens: 0, outputTokens: 0, ms: 0 });
 
 // 実行が止められただけの呼び出し（cancelled）は、呼んだ数・量には入れるが、「失敗」の数には入れない
@@ -126,7 +129,9 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
     add(models.get(row.judge_model) ?? models.set(row.judge_model, { model: row.judge_model, ...empty() }).get(row.judge_model)!, row);
     if (row.outcome === 'failed' && !stopped(row)) {
       const reason = row.failed ?? 'error';
-      add(failures.get(reason) ?? failures.set(reason, { reason, beforeModel: BEFORE_MODEL.has(reason), ...empty() }).get(reason)!, row);
+      const beforeModel = BEFORE_MODEL.has(reason) && !(reason === 'slot_timeout' && calledModel(row));
+      const key = `${reason}:${beforeModel}`;
+      add(failures.get(key) ?? failures.set(key, { reason, beforeModel, ...empty() }).get(key)!, row);
     }
   }
   const runLimit = Math.min(Math.max(1, query.runLimit ?? 50), 500);
@@ -137,6 +142,6 @@ export function judgeStats(db: DatabaseSync, query: JudgeStatsQuery): JudgeStats
     keys: [...keys.values()].sort(byCalls(k => k.key)),
     askKinds: [...kinds.values()].sort(byCalls(k => k.kind)),
     models: [...models.values()].sort(byCalls(m => m.model ?? '')),
-    failures: [...failures.values()].sort(byCalls(f => f.reason)),
+    failures: [...failures.values()].sort(byCalls(f => `${f.reason}:${f.beforeModel}`)),
   };
 }
