@@ -42,6 +42,14 @@ function SideLink({ href, icon, name, active, count, countLabel }: {
   );
 }
 
+function SideAdd({ href, label, active }: { href: string; label: string; active: boolean }) {
+  return (
+    <a className={`bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost ui-side-add${active ? ' is-active' : ''}`} href={href} aria-label={label} title={label} aria-current={active ? 'page' : undefined}>
+      <Icon name="plus" />
+    </a>
+  );
+}
+
 function footText(t: ReturnType<typeof useT>, foot: FootLine): string {
   switch (foot.kind) {
     case 'waiting': return t('ui.foot.waiting', foot.n);
@@ -197,7 +205,10 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <SideLink href="#/pending" icon="pause" name={t('ui.nav.pending')} active={at('pending')} count={pending} countLabel={t('ui.count.waiting', pending)} />
         <SideLink href="#/schedule" icon="calendar" name={t('ui.nav.schedule')} active={at('schedule')} />
 
-        <span className="bt-label bt-sidebar__label">{t('ui.product.section')}</span>
+        <div className="ui-sidebar__labelrow">
+          <span className="bt-label bt-sidebar__label">{t('ui.product.section')}</span>
+          <SideAdd href={routeHash({ view: 'newProduct' })} label={t('ui.product.new')} active={at('newProduct')} />
+        </div>
         {nav.rows.map(row => {
           const { project } = row;
           const home = route.view === 'product' && route.id === project.id;
@@ -211,6 +222,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
                 </a>
                 {project.folder_missing && <span className="bt-meta ui-side-missing">{t('ui.product.folderMissing')}</span>}
                 <CountBadge n={row.waiting} label={t('ui.count.waiting', row.waiting)} />
+                <SideAdd href={routeHash({ view: 'productNew', id: project.id })} label={t('ui.session.newIn', project.name)} active={fresh} />
               </div>
               {row.sessions.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
               {row.more > 0 && (extra.has(project.id) ? (
@@ -222,21 +234,17 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
                   <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
                 </button>
               ))}
-              <a className={`bt-side bt-side--session ui-side-new${fresh ? ' is-active' : ''}`} href={routeHash({ view: 'productNew', id: project.id })} aria-current={fresh ? 'page' : undefined}>
-                <Icon name="plus" /><span className="bt-side__name">{t('ui.session.new')}</span>
-              </a>
             </Fragment>
           );
         })}
-        <SideLink href={routeHash({ view: 'newProduct' })} icon="plus" name={t('ui.product.new')} active={at('newProduct')} />
 
         <div className="ui-sidebar__labelrow">
           <span className="bt-label bt-sidebar__label">{t('ui.section.noProduct')}</span>
+          <SideAdd href="#/" label={t('ui.session.new')} active={at('new')} />
           {!searching && <button ref={searchButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
         </div>
         {searching && <SessionSearch onClose={() => { refocus.current = true; setSearching(false); }} />}
         {nav.none.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
-        <SideLink href="#/" icon="plus" name={t('ui.session.new')} active={at('new')} />
 
         <span className="bt-label bt-sidebar__label">{t('ui.section.library')}</span>
         <SideLink href={memoryHash(route, conversations)} icon="book" name={t('ui.nav.memory')} active={at('memory')} />

@@ -387,6 +387,7 @@ export const en = {
   'ui.ps.langTag': 'Language tag',
   'ui.ps.langInvalid': 'Use a tag such as ja, en, zh-Hant or pt-BR',
   'ui.session.new': 'New session',
+  'ui.session.newIn': (product: string) => `New session in ${product}`,
   'ui.session.untitled': 'Untitled',
   'ui.session.running': 'Running',
   'ui.session.idle': 'Idle',
