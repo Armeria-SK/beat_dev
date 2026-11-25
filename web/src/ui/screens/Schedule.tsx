@@ -33,7 +33,7 @@ const ERROR_KEY = {
 const BLOCK_KEY = { run_open: 'ui.schedule.block.runOpen', ran: 'ui.schedule.block.ran', linked: 'ui.schedule.block.linked' } as const satisfies Record<DeleteBlock, string>;
 const STATE_KEY = { past: 'ui.schedule.slot.past', live: 'ui.schedule.slot.live', planned: 'ui.schedule.slot.planned' } as const;
 
-const yearOf = (ms: number): string => formatDateTime(ms, 'full').slice(0, 4);
+const yearOf = (ms: number): string => formatDateTime(ms, 'full').slice(0, 9);
 const whenText = (ms: number, now: number): string => (yearOf(ms) === yearOf(now) ? formatDateTimeSmart(ms, now) : formatDateTime(ms, 'full'));
 const dayLabel = (ms: number, options: Intl.DateTimeFormatOptions): string => new Intl.DateTimeFormat('en-GB', { timeZone: getTimezone(), ...options }).format(ms);
 
@@ -100,13 +100,14 @@ function ScheduleForm({ task, projects = [], onClose, onSaved }: { task: Repeati
       } else {
         const built = buildNewTask(draft);
         if (!built.ok) { setError(t(ERROR_KEY[built.error])); setBusy(false); return; }
-        const { task: created } = await api.createTask(withProduct(built.task, liveProduct));
+        const { task: created } = await api.createTask(withProduct(built.task, product));
         toast({ kind: 'done', icon: 'check', title: t(repeat ? 'ui.schedule.toast.created' : 'ui.task.toast.created'), body: created.title, href: routeHash({ view: 'task', id: created.id }) });
       }
       onSaved();
       onClose();
     } catch (failure) {
       setError(failure instanceof ApiError ? failure.message : t('ui.task.saveFailed'));
+      setProduct(liveProduct);
       setBusy(false);
     }
   };
@@ -369,6 +370,8 @@ export function Schedule({ revision, projects }: ScheduleProps) {
       if (loads.current.isCurrent(ticket)) setFailed(true);
     }
   }, [range]);
+  const loadNow = useRef(load);
+  loadNow.current = load;
 
   useEffect(() => {
     const pushed = seen.current !== revision;
@@ -421,7 +424,7 @@ export function Schedule({ revision, projects }: ScheduleProps) {
       try {
         await action();
         const undo = done?.undo;
-        if (done) toast({ icon: done.icon ?? 'check', title: done.title, body: task.title, ...(undo ? { action: undoAction(() => undo().then(() => load())) } : {}) });
+        if (done) toast({ icon: done.icon ?? 'check', title: done.title, body: task.title, ...(undo ? { action: undoAction(() => undo().then(() => loadNow.current())) } : {}) });
       } catch (error) { reportOpError(error); }
       await load();
     }),

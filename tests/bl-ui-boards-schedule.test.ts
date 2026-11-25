@@ -3,10 +3,10 @@ import { window } from './helpers/dom-env.ts';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
-import type { Project, RepeatingTask, Task } from '../web/src/api.ts';
+import { ApiError, type Project, type RepeatingTask, type Task } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { repeatingRow, splitSchedule } from '../web/src/ui/schedule.ts';
+import { RELOAD_DELAY_MS, repeatingRow, splitSchedule } from '../web/src/ui/schedule.ts';
 
 // backlog 308・309・315（Schedule）: 動いている回の見つけ方、Pause の Undo、しまわれた製品を送らない。
 
@@ -47,6 +47,8 @@ const calls: Array<{ path: string; method: string; body: unknown }> = [];
 const seen: FeedbackItem[] = [];
 let stopListening = (): void => undefined;
 
+const ARCHIVED = { error: 'project', code: 'project.error.archived', message: 'This product is archived. Restore it first' };
+
 function serve(data: () => { repeating: RepeatingTask[]; active: Task[] }): void {
   calls.length = 0;
   seen.length = 0;
@@ -57,10 +59,13 @@ function serve(data: () => { repeating: RepeatingTask[]; active: Task[] }): void
     const method = init?.method ?? 'GET';
     calls.push({ path: url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
     const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-    if (url === '/api/tasks') { const now = data(); return reply(200, { active: now.active, finished: [], awaiting: [], repeating: now.repeating }); }
+    if (method === 'GET' && url === '/api/tasks') { const now = data(); return reply(200, { active: now.active, finished: [], awaiting: [], repeating: now.repeating }); }
     if (url.startsWith('/api/schedule')) return reply(200, { from: 0, to: 1, slots: [], templates: [], ranTruncated: false });
     if (method === 'POST' && /^\/api\/tasks\/[^/]+\/(cancel|uncancel)$/u.test(url)) return reply(200, { task: task('x', 'cancelled') });
-    if (method === 'POST' && url === '/api/tasks') return reply(201, { task: task('created', 'scheduled') });
+    if (method === 'POST' && url === '/api/tasks') {
+      if ((calls.at(-1)!.body as { projectId?: string } | null)?.projectId === 'p1') return reply(400, ARCHIVED);
+      return reply(201, { task: task('created', 'scheduled') });
+    }
     return reply(404, { error: 'not_found' });
   }) as typeof fetch;
 }
@@ -120,26 +125,60 @@ test('ui/Schedule（DOM, 309）: Pause のトーストには Undo が付き、�
   assert.ok(byText(rowOf(container, 'tpl'), 'button', en['ui.schedule.pause']), 'Undo のあと、行は動いている行に戻って読み直される');
 });
 
-test('ui/Schedule（DOM, 315）: 新しい予定の入力を開いているあいだに製品がしまわれたら、しまわれた製品の id を送らない（画面の選びも「製品なし」に戻る）', async () => {
+test('ui/Schedule（DOM, 315）: 新しい予定の入力を開いているあいだに製品がしまわれたら、画面の選びは「製品なし」になり、送るとサーバーの「しまわれている」の断りが出て、選びも送る値も「製品なし」に揃う。次に送ると製品なしで作られる', async () => {
   serve(() => ({ repeating: [], active: [] }));
-  const alive = [project('p1'), project('p2')];
-  const { container, root } = await render(createElement(Schedule, { revision: 0, projects: alive }));
+  const { container, root } = await render(createElement(Schedule, { revision: 0, projects: [project('p1'), project('p2')] }));
   await later(10);
   await settle();
   await click(byText(container, 'button', en['ui.schedule.newShort']));
-  const select = container.querySelector<HTMLSelectElement>(`select[aria-label="${en['ui.pf.product']}"]`)!;
+  const select = () => container.querySelector<HTMLSelectElement>(`select[aria-label="${en['ui.pf.product']}"]`)!;
   await update(() => {
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set?.call(select, 'p1');
-    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set?.call(select(), 'p1');
+    select().dispatchEvent(new window.Event('change', { bubbles: true }));
   });
-  assert.equal(select.value, 'p1');
+  assert.equal(select().value, 'p1');
   await update(() => root.render(createElement(Schedule, { revision: 0, projects: [project('p1', true), project('p2')] })));
-  assert.equal(container.querySelector<HTMLSelectElement>(`select[aria-label="${en['ui.pf.product']}"]`)!.value, '', 'しまわれた製品は選びから外れ、「製品なし」を指す');
+  assert.equal(select().value, '', '画面の選びは「製品なし」');
   await input(container.querySelector(`input[aria-label="${en['ui.task.title']}"]`), 'Morning sweep');
   await click(byText(container, 'button', en['ui.newtask.create']));
   await later(10);
   await settle();
-  const post = calls.find(c => c.method === 'POST' && c.path === '/api/tasks')!;
-  assert.ok(post, '作成の POST が出る');
-  assert.equal((post.body as { projectId?: string }).projectId, undefined, 'しまわれた製品の id は送らない（送ると 400 になる）');
+  const posts = () => calls.filter(c => c.method === 'POST' && c.path === '/api/tasks');
+  assert.equal(posts().length, 1);
+  assert.equal((posts()[0]!.body as { projectId?: string }).projectId, 'p1', '選んだ製品の id を 1 度送り、サーバーの断りを出させる');
+  assert.equal(container.querySelector('[role="alert"]')?.textContent, new ApiError(400, ARCHIVED).message, 'サーバーの断りの文が出る（黙って製品なしで作らない）');
+  assert.ok(container.querySelector('form[aria-label="' + en['ui.schedule.new'] + '"]'), '断られたので入力は開いたまま');
+  assert.equal(select().value, '');
+
+  await click(byText(container, 'button', en['ui.newtask.create']));
+  await later(10);
+  await settle();
+  assert.equal(posts().length, 2);
+  assert.equal((posts()[1]!.body as { projectId?: string }).projectId, undefined, '選びと送る値が揃ったので、次は製品なしで送る');
+  assert.equal(container.querySelector('form[aria-label="' + en['ui.schedule.new'] + '"]'), null, '作ったら入力は閉じる');
+});
+
+test('ui/Schedule（DOM, 309）: Undo は、押した時点の Day / Week で読み直す（Pause のあとに Week へ替えても、Day の一覧を Week の下に戻さない）', async () => {
+  serve(() => ({ repeating: [template('tpl', 'scheduled')], active: [] }));
+  const { container } = await render(createElement(Schedule, { revision: 0, projects: [] }));
+  await later(10);
+  await settle();
+  await click(byText(rowOf(container, 'tpl'), 'button', en['ui.schedule.pause']));
+  await later(10);
+  await settle();
+  const toastItem = seen.find(item => item.title === en['ui.schedule.toast.paused'])!;
+  assert.ok(toastItem?.action, 'Pause のトースト');
+  const spans = () => calls.filter(c => c.path.startsWith('/api/schedule')).map(c => { const q = new URLSearchParams(c.path.split('?')[1]); return Number(q.get('to')) - Number(q.get('from')); });
+  const daySpan = spans().at(-1)!;
+  await click(byText(container, 'button', en['ui.schedule.range.week']));
+  await later(RELOAD_DELAY_MS + 100);
+  await settle();
+  const weekSpan = spans().at(-1)!;
+  assert.ok(weekSpan > daySpan, 'Week は Day より広い');
+  const before = spans().length;
+  toastItem.action!.run();
+  await later(10);
+  await settle();
+  assert.ok(spans().length > before, 'Undo のあと、一覧を読み直す');
+  assert.equal(spans().at(-1), weekSpan, 'Undo の読み直しは今の範囲（Week）で');
 });

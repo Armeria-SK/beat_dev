@@ -358,10 +358,10 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
     if (!built.ok) { setError(t(built.error === 'title' ? 'ui.newtask.needTitle' : 'ui.newtask.needTime')); return; }
     setBusy(true);
     try {
-      const { task } = await api.createTask(withProduct(built.task, liveProduct));
+      const { task } = await api.createTask(withProduct(built.task, product));
       toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.created'), body: task.title, href: routeHash({ view: 'task', id: task.id }) });
       onClose();
-    } catch (failure) { reportOpError(failure); setBusy(false); }
+    } catch (failure) { reportOpError(failure); setProduct(liveProduct); setBusy(false); }
   };
   return (
     <form className="ui-newtask bt-rise" aria-label={t('ui.kanban.new')} onSubmit={e => void submit(e)}
@@ -458,13 +458,10 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     if (productId) void api.checkBranches(productId).catch(() => undefined);
   }, [productId]);
   const board = useMemo(
-    () => {
-      if (!data) return null;
-      const settled = data.filter === filter;
-      return buildBoard({ active: inFilter(data.active, filter), finished: inFilter(data.finished, filter), hasMore: settled && data.next !== null, finishedTotal: settled ? data.total : 0, sessions, checklists });
-    },
+    () => (data ? buildBoard({ active: inFilter(data.active, filter), finished: inFilter(data.finished, filter), hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }) : null),
     [data, filter, sessions, checklists],
   );
+  const settled = data?.filter === filter;
   const options = projects.some(p => p.archived_at === null) ? filterOptions(projects) : [];
   const ticking = sessions.some(card => card.outcome === 'running');
   const now = useNow(ticking ? 1000 : 30_000);
@@ -589,7 +586,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
                   <div className="ui-col__cards">
                     {column.cards.map((card, index) => renderCard(card, index, index === firstTask))}
                     {column.id === 'proposed' && column.cards.length === 0 && (emptyProposed ?? <p className="bt-meta ui-col__empty">{t('ui.kanban.noProposals')}</p>)}
-                    {(column.id === 'done' || column.id === 'failed') && board.more > 0 && (
+                    {(column.id === 'done' || column.id === 'failed') && settled && board.more > 0 && (
                       <button type="button" className="bt-tool__link bt-meta ui-more" disabled={moreBusy} title={t('ui.kanban.moreHint')} onClick={() => void more()}>{t('ui.kanban.more', board.more)}</button>
                     )}
                   </div>
