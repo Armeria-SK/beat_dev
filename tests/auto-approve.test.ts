@@ -418,7 +418,7 @@ test('判定役に渡す文（Q-W1-14）: 宛先の利用者情報は消し、�
   const creds = line(buildClassifierPrompt(input({ trusted: ['https://alice:hunter2@example.com/owner/shop.git', 'https://example.com/owner/shop.git'] })));
   assert.equal(creds, 'https://example.com/owner/shop.git', '利用者情報が消え、同じ宛先は 1 つ');
   const scp = line(buildClassifierPrompt(input({ trusted: ['alice:hunter2@example.com:owner/shop.git', 'git@example.com:owner/shop.git'] })));
-  assert.equal(scp, 'example.com:owner/shop.git, git@example.com:owner/shop.git', 'scp の形の「名前:パスワード@」も消す（パスワードの無い git@ は残す）');
+  assert.equal(scp, '(hidden), git@example.com:owner/shop.git', 'scp の形の「名前:パスワード@」は丸ごと隠す（ssh は名前の部分へつなぐので、後ろのホストを見せない。パスワードの無い git@ は残す）');
   const secret = line(buildClassifierPrompt(input({ trusted: ['https://example.com/r.git?t=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789'] })));
   assert.doesNotMatch(secret, /abcdefghijklmnop/u, '鍵らしい文字は伏せる');
   const many = Array.from({ length: 50 }, (_, i) => `https://git.example.org/owner/repository-number-${i}.git`);
