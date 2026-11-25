@@ -153,7 +153,7 @@ async function webApp(t: { after: (fn: () => void) => void }) {
     get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><html><head><title>t</title></head><body><main><p>ページの本文</p></main></body></html>') }) as PageResponse,
   };
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, botMemory: true, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, pendingWaitMs: 0, botMemory: true, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   t.after(() => app.close());
   mkdirSync(paths.workspace, { recursive: true });
