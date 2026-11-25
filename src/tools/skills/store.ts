@@ -45,6 +45,7 @@ export const SKILL_VERSIONS_KEPT = 20;
 export const SKILL_AUTO_PER_DAY = 5;
 export const SKILL_REVIEW_PENDING_MAX = 10;
 const AUTO_LOG_KEY = 'skills:auto-registered';
+const SEEN_KEY = 'skill-seen:';
 const DAY_MS = 86_400_000;
 const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat)(?:-(\d{1,4}))?\.md$/u;
 
@@ -131,7 +132,9 @@ export class SkillStore {
     if (!SKILL_NAME.test(name)) return undefined;
     const path = join(this.#dir, name, 'SKILL.md');
     if (!existsSync(path)) { this.#dropMissing(name); return undefined; }
-    const parsed = parseSkillFile(readFileSync(path, 'utf8'));
+    const text = readFileSync(path, 'utf8');
+    this.#checkOutsideEdit(name, text);
+    const parsed = parseSkillFile(text);
     const usage = this.#db.prepare('SELECT uses, last_used_at FROM skill_usage WHERE name = ?').get(name) as { uses: number; last_used_at: number | null } | undefined;
     return {
       name, description: parsed.description ?? storeText(this.#language(), 'skill.no_description'), body: parsed.body,
@@ -230,6 +233,7 @@ export class SkillStore {
     this.#keepVersion(input.name, target, content, who);
     mkdirSync(dir, { recursive: true });
     atomicWriteFile(target, content);
+    this.#markSeen(input.name, content);
     this.#mark(input.name, source);
     this.#db.prepare('UPDATE skill_registry SET outside = ? WHERE name = ?').run(outside ? 1 : 0, input.name);
     return this.get(input.name)!;
@@ -244,8 +248,35 @@ export class SkillStore {
     if (!SKILL_NAME.test(name)) throw new SkillError('skill.bad_name');
     let previous = '';
     try { if (lstatSync(target).isFile()) previous = readFileSync(target, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    if (previous !== '') this.#keepOutsideEdit(name, previous);
     if (previous === next || (previous === '' && who !== 'beat-auto')) return;
-    const dir = join(this.#backups, name);
+    this.#saveVersion(this.#backups, name, previous, who);
+  }
+
+  #keepOutsideEdit(name: string, current: string): void {
+    if (this.#backups === null) return;
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(`${SEEN_KEY}${name}`) as { value: string } | undefined;
+    if (row?.value === current) return;
+    if (row !== undefined && row.value !== '') this.#saveVersion(this.#backups, name, row.value, 'beat');
+    this.#markSeen(name, current);
+  }
+
+  #checkOutsideEdit(name: string, text?: string): void {
+    const path = join(this.#dir, name, 'SKILL.md');
+    try {
+      if (lstatSync(path).isFile()) this.#keepOutsideEdit(name, text ?? readFileSync(path, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.#log(`[WARN] Could not keep the earlier text of skill "${name}" that was changed outside the app: ${(error as Error).message}`);
+    }
+  }
+
+  #markSeen(name: string, content: string): void {
+    if (this.#backups === null) return;
+    this.#db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(`${SEEN_KEY}${name}`, content, this.#now());
+  }
+
+  #saveVersion(backups: string, name: string, previous: string, who: SkillAuthor): void {
+    const dir = join(backups, name);
     mkdirSync(dir, { recursive: true });
     const files = readdirSync(dir).filter(file => VERSION_FILE.test(file));
     const at = this.#now();
@@ -261,6 +292,7 @@ export class SkillStore {
   history(name: string): SkillVersion[] {
     if (!SKILL_NAME.test(name)) throw new SkillError('skill.bad_name');
     if (this.#backups === null) return [];
+    this.#checkOutsideEdit(name);
     const dir = join(this.#backups, name);
     let files: string[];
     try { files = readdirSync(dir).filter(file => VERSION_FILE.test(file)); } catch { return []; }
@@ -281,6 +313,7 @@ export class SkillStore {
     const found = this.get(name) !== undefined;
     if (found) rmSync(join(this.#dir, name), { recursive: true, force: true });
     if (this.#backups !== null) rmSync(join(this.#backups, name), { recursive: true, force: true });
+    this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${SEEN_KEY}${name}`);
     if (!found) throw new SkillError('skill.not_found', { name });
   }
 
