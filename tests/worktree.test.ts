@@ -1027,7 +1027,7 @@ test('worktree C2: upstream を付けた取り込み済みのブランチ（git 
   gitIn(s.product, 'branch', '--set-upstream-to=stale', 'main');
   assert.equal(await s.wt.isMerged(row.id), true);
   assert.equal(s.wt.get(row.id)!.state, 'merged');
-  assert.match(branchConfig(s), new RegExp(`branch\.${row.branch}\.merge refs/heads/stale`, 'u'));
+  assert.ok(branchConfig(s).includes(`branch.${row.branch}.merge refs/heads/stale`), branchConfig(s));
   assert.deepEqual(await s.wt.removeWorktree(row.id, { keepBranch: false }), { ok: true, branchKept: false });
   assert.equal(gitOk(s.product, 'rev-parse', '--verify', '-q', `refs/heads/${row.branch}`), false, 'ブランチが消える');
   assert.equal(s.wt.get(row.id)!.state, 'merged');
@@ -1036,41 +1036,49 @@ test('worktree C2: upstream を付けた取り込み済みのブランチ（git 
   assert.equal(gitOk(s.product, 'rev-parse', '--verify', '-q', 'refs/heads/stale'), true, 'upstream だったブランチには触らない');
 });
 
-test('worktree C2: 取り込み済みと確かめたあと、消す直前に先端が動いたブランチは消さない（先端を渡した update-ref -d が断る）', { skip: !gitAvailable }, async t => {
-  const s = setup(t);
-  const { row, tip } = await finished(s);
-  mergeIntoMain(s, row.branch);
-  gitIn(s.product, 'branch', 'stale', row.base);
-  gitIn(s.product, 'branch', '--set-upstream-to=stale', row.branch);
-  assert.equal(await s.wt.isMerged(row.id), true);
-  let moved = '';
-  const wt = interleave(s, row.id, () => {
-    moved = gitIn(s.product, 'commit-tree', `${tip}^{tree}`, '-p', tip, '-m', 'owner commit after the check');
-    gitIn(s.product, 'update-ref', `refs/heads/${row.branch}`, moved, tip);
+// 取り込み済みと確かめたあと、消す直前に先端が動いたブランチは消さない。動いた先端が、取り込まれていない（git の branch -d も断る）場合と、本体に取り込み済み（git の branch -d は通してしまう）場合の両方
+for (const [name, mergedAfterMove] of [['取り込まれていない先端', false], ['本体に取り込み済みの先端', true]] as const) {
+  test(`worktree C2: 取り込み済みと確かめたあと、消す直前に先端が動いたブランチは消さない（${name}）`, { skip: !gitAvailable }, async t => {
+    const s = setup(t);
+    const { row, tip } = await finished(s);
+    mergeIntoMain(s, row.branch);
+    gitIn(s.product, 'branch', 'stale', row.base);
+    gitIn(s.product, 'branch', '--set-upstream-to=stale', row.branch);
+    assert.equal(await s.wt.isMerged(row.id), true);
+    const before = branchConfig(s);
+    let moved = '';
+    const wt = interleave(s, row.id, () => {
+      moved = mergedAfterMove ? gitIn(s.product, 'rev-parse', 'HEAD') : gitIn(s.product, 'commit-tree', `${tip}^{tree}`, '-p', tip, '-m', 'owner commit after the check');
+      gitIn(s.product, 'update-ref', `refs/heads/${row.branch}`, moved, tip);
+    });
+    assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
+    assert.ok(moved);
+    assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), moved, '動いた先端のブランチは消えない');
+    assert.equal(branchConfig(s), before, 'upstream の設定は元のまま');
+    assert.equal(s.wt.get(row.id)!.state, 'removing', '見回りがやり直せるように removing のまま');
+    if (!mergedAfterMove) {
+      // やり直しでも、今度は取り込まれていない先端なので残す
+      assert.deepEqual(await s.wt.removeWorktree(row.id, { keepBranch: false }), { ok: true, branchKept: true, note: 'branch_moved' });
+      assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), moved);
+    }
   });
-  assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
-  assert.ok(moved);
-  assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), moved, '動いた先端のブランチは消えない');
-  assert.match(branchConfig(s), new RegExp(`branch\.${row.branch}\.merge`, 'u'), '消えなかったブランチの設定の節は残る');
-  assert.equal(s.wt.get(row.id)!.state, 'removing', '見回りがやり直せるように removing のまま');
-  // やり直しでも、今度は取り込まれていない先端なので残す
-  assert.deepEqual(await s.wt.removeWorktree(row.id, { keepBranch: false }), { ok: true, branchKept: true, note: 'branch_moved' });
-  assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), moved);
-});
+}
 
-test('worktree C2: upstream の無い取り込み済みのブランチを git の branch -d が断ったとき（別の作業コピーが取り出している）は、update-ref で消さない', { skip: !gitAvailable }, async t => {
+test('worktree C2: upstream の無い取り込み済みのブランチを git の branch -d が断ったとき（別の作業コピーが取り出している）は、消さない', { skip: !gitAvailable }, async t => {
   const s = setup(t);
   const { row, tip } = await finished(s);
   mergeIntoMain(s, row.branch);
   assert.equal(await s.wt.isMerged(row.id), true);
   const other = join(s.base, 'other-checkout');
+  const before = branchConfig(s);
   const wt = interleave(s, row.id, () => { gitIn(s.product, 'worktree', 'add', '-q', other, row.branch); });
   assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
   assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), tip, '別の作業コピーが取り出しているブランチは消さない');
+  assert.equal(branchConfig(s), before, 'upstream の無いブランチの設定に何も書かない');
   assert.equal(gitIn(other, 'symbolic-ref', 'HEAD'), `refs/heads/${row.branch}`);
 });
 
-test('worktree C2: 取り込んでいないブランチ（-D の道）は、upstream があっても -D が断られたら update-ref で消さない', { skip: !gitAvailable }, async t => {
+test('worktree C2: 取り込んでいないブランチ（-D の道）は、upstream があっても -D が断られたら消さない', { skip: !gitAvailable }, async t => {
   const s = setup(t);
   const { row, tip } = await finished(s);
   gitIn(s.product, 'branch', 'stale', row.base);
@@ -1080,4 +1088,39 @@ test('worktree C2: 取り込んでいないブランチ（-D の道）は、upst
   assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
   assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), tip, '取り込んでいないブランチは、別の作業コピーが取り出しているあいだ消さない');
   assert.equal(gitIn(other, 'symbolic-ref', 'HEAD'), `refs/heads/${row.branch}`);
+});
+
+// quiet-loss C2 fix-back: 別の作業コピーが rebase・bisect の途中でそのブランチを使っていても（git worktree list では detached に見える）、git 自身が branch -d で断るので消えない
+test('worktree C2: 別の作業コピーが rebase の途中で使っている取り込み済みのブランチは、upstream があっても消さず、upstream の設定は元のまま', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const { row, tip } = await finished(s);
+  mergeIntoMain(s, row.branch);
+  gitIn(s.product, 'branch', 'stale', row.base);
+  gitIn(s.product, 'branch', '--set-upstream-to=stale', row.branch);
+  assert.equal(await s.wt.isMerged(row.id), true);
+  // beat の作業コピーを片づけ、ブランチだけ残す。持ち主はそのブランチで別の作業コピーを開き、rebase の途中で止めている
+  assert.deepEqual(await s.wt.removeWorktree(row.id, { keepBranch: true }), { ok: true, branchKept: true });
+  const other = join(s.base, 'other-rebase');
+  gitIn(s.product, 'worktree', 'add', '-q', other, row.branch);
+  assert.equal(gitOk(other, 'rebase', '--force-rebase', '--exec', 'exit 1', row.base), false, '試験の前提: rebase が途中で止まる');
+  assert.equal(gitIn(other, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD', '試験の前提: 途中の作業コピーは detached に見える');
+  const before = branchConfig(s);
+  assert.deepEqual(await s.wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
+  assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), tip, 'rebase の途中で使われているブランチは消さない');
+  assert.equal(branchConfig(s), before, 'upstream の設定は元のまま');
+  assert.equal(s.wt.get(row.id)!.state, 'removing', '見回りがやり直せるように removing のまま');
+});
+
+test('worktree C2: 取り込み済みと確かめたあと、消す直前に本体のブランチが巻き戻って取り込まれていなくなったブランチは消さない（git が消す時点でもう一度確かめる）', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const { row, tip } = await finished(s);
+  mergeIntoMain(s, row.branch);
+  gitIn(s.product, 'branch', 'stale', row.base);
+  gitIn(s.product, 'branch', '--set-upstream-to=stale', row.branch);
+  assert.equal(await s.wt.isMerged(row.id), true);
+  const before = branchConfig(s);
+  const wt = interleave(s, row.id, () => { gitIn(s.product, 'update-ref', 'refs/heads/main', row.base); });
+  assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
+  assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), tip, '取り込まれていなくなったブランチは消さない');
+  assert.equal(branchConfig(s), before, 'upstream の設定は元のまま');
 });

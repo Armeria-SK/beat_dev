@@ -710,11 +710,19 @@ export class Worktrees {
             const deleted = await git([...NO_MAINTENANCE, 'branch', merged ? '-d' : '-D', '--', row.branch]);
             if (deleted || !merged) return deleted;
             // 取り込み済みと beat が確かめたのに branch -d が断られた: 持ち主が upstream を付けたブランチは、git が本体の今のブランチでなく upstream と比べて断る（毎回 removing のまま残る）。
-            // upstream が付いているときだけ、読んだ先端 tip を渡した update-ref -d で消す（先端が動いていれば消えない）。節は成功したときだけ外す
-            if (!(await git([...NO_MAINTENANCE, 'config', '--get', `branch.${row.branch}.merge`]))?.toString('utf8').trim()) return deleted;
-            const removed = await git([...NO_MAINTENANCE, 'update-ref', '--no-deref', '-d', `refs/heads/${row.branch}`, tip]);
-            if (removed) await git([...NO_MAINTENANCE, 'config', '--remove-section', `branch.${row.branch}`]);
-            return removed;
+            // upstream が付いていて、先端が読んだ tip のままのときだけ、upstream の設定を外して git にもう一度 branch -d をさせる（別の作業コピーが使っている・本体の今のブランチに取り込まれていない、は git がここで改めて断る）。
+            // それでも断られたら、外した設定を元の値に戻す
+            const config = async (key: string) => (await git([...NO_MAINTENANCE, 'config', '--get', `branch.${row.branch}.${key}`]))?.toString('utf8').trim() || undefined;
+            const upstream = { merge: await config('merge'), remote: await config('remote') };
+            if (!upstream.merge) return deleted;
+            const current = (await git([...NO_MAINTENANCE, 'rev-parse', '--verify', '-q', `refs/heads/${row.branch}^{commit}`]))?.toString('utf8').trim();
+            if (current !== tip) return null;
+            const unset = await git([...NO_MAINTENANCE, 'branch', '--unset-upstream', '--', row.branch]);
+            const again = unset ? await git([...NO_MAINTENANCE, 'branch', '-d', '--', row.branch]) : null;
+            if (again) return again;
+            if (upstream.remote) await git([...NO_MAINTENANCE, 'config', `branch.${row.branch}.remote`, upstream.remote]);
+            await git([...NO_MAINTENANCE, 'config', `branch.${row.branch}.merge`, upstream.merge]);
+            return null;
           });
           if (!gone) return { ok: false, reason: 'failed' };
           branchKept = false;
