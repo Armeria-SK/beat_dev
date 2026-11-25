@@ -190,6 +190,7 @@ export const ja = {
   'ui.notice.contextHigh': (n: number) => `context が ${n}% 埋まっています · 古いメッセージを要約します`,
   'ui.notice.summary': '古いメッセージを要約しました',
   'ui.notice.summaryFailed': '要約を読めませんでした',
+  'ui.notice.generated': '自動で入ったメッセージ',
   'ui.fail.reply': '返事に失敗しました',
   'ui.fail.context': 'context が足りません',
   'ui.fail.noModel': 'モデルが設定されていません',

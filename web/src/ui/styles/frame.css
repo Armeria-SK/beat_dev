@@ -7,7 +7,7 @@
 .bt-app[data-panes="0"] { grid-template-columns: 248px minmax(0, 1fr); }
 .bt-sidebar, .bt-app__main, .bt-screen { overflow: clip; }
 
-.bt-app__main .bt-thread > .bt-msg:not(.bt-msg--owner), .bt-app__main .bt-thread > .bt-notice, .bt-app__main .bt-thread > .bt-checklist, .bt-app__main .bt-thread > .bt-tools, .bt-app__main .bt-thread > .bt-empty, .bt-app__main .bt-thread > .ui-summary, .bt-app__main > .ui-pinned { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
+.bt-app__main .bt-thread > .bt-msg:not(.bt-msg--owner), .bt-app__main .bt-thread > .bt-notice, .bt-app__main .bt-thread > .bt-checklist, .bt-app__main .bt-thread > .bt-tools, .bt-app__main .bt-thread > .bt-empty, .bt-app__main .bt-thread > .ui-summary, .bt-app__main .bt-thread > .ui-generated, .bt-app__main > .ui-pinned { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
 .bt-app__main .bt-thread > .bt-msg--owner { max-width: calc(min(100%, 720px) * 0.85); margin-right: max(0px, calc((100% - 720px) / 2)); }
 .bt-app__main .bt-thread { scrollbar-gutter: stable both-edges; }
 .bt-app__main .bt-composer { position: relative; flex: none; width: calc(100% - 2 * var(--ui-gutter, 0px)); max-width: 720px; margin-left: auto; margin-right: auto; }
@@ -15,6 +15,7 @@
 .bt-app__main > .ui-pinned { flex: none; width: calc(100% - 2 * var(--ui-gutter, 0px)); margin-bottom: var(--space-3); max-height: 40vh; overflow-y: auto; }
 .ui-owner { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-owner__files { display: block; margin-top: var(--space-1); }
+.ui-generated__text { margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-sunk); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ui-msg__meta { display: block; margin-top: var(--space-1); text-align: right; }
 .ui-reply__foot { display: flex; align-items: center; gap: var(--space-2); min-height: 28px; }
 .ui-thinking { margin-left: var(--space-2); }

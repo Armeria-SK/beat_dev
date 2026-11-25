@@ -111,25 +111,27 @@ test('ui/Sidebar（DOM）: 会話の行ごとに「…」ボタンがある。�
   assert.equal(productRow.querySelector('button'), null, '製品の行にはボタンが無い（+ はリンク）');
 });
 
-test('ui/Sidebar（DOM）: 「…」を押すと Archive と Delete のメニューが開き、先頭に焦点が入る。矢印・Home・End で動き、Escape で閉じて焦点は「…」に戻る', async () => {
+test('ui/Sidebar（DOM）: 「…」を押すと Rename・Archive・Delete のメニューが開き、先頭に焦点が入る。矢印・Home・End で動き、Escape で閉じて焦点は「…」に戻る', async () => {
   const { container } = await render(sidebarOf({ view: 'new' }));
   const more = moreOf(container, SHOP_CHAT)!;
   await click(more);
   const menu = menuOf(container)!;
   assert.equal(menu.getAttribute('aria-label'), en['ui.session.menuOf']('Fix the cart'));
   assert.equal(more.getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(itemText(container), [en['ui.session.archive'], en['ui.session.delete']]);
-  focused(items(container)[0], '先頭（Archive）に焦点');
+  assert.deepEqual(itemText(container), [en['ui.session.rename'], en['ui.session.archive'], en['ui.session.delete']]);
+  focused(items(container)[0], '先頭（Rename）に焦点');
   await press(document.activeElement, 'ArrowDown');
   focused(items(container)[1]);
+  await press(document.activeElement, 'ArrowDown');
+  focused(items(container)[2]);
   await press(document.activeElement, 'ArrowDown');
   focused(items(container)[0], '端で先頭に戻る');
   await press(document.activeElement, 'ArrowUp');
-  focused(items(container)[1], '先頭から上で末尾へ');
+  focused(items(container)[2], '先頭から上で末尾へ');
   await press(document.activeElement, 'Home');
   focused(items(container)[0]);
   await press(document.activeElement, 'End');
-  focused(items(container)[1]);
+  focused(items(container)[2]);
   const proceeded = await press(document.activeElement, 'Escape');
   assert.equal(proceeded, false, 'Escape はほかの Escape（ドロワーを閉じる）に渡さない');
   assert.ok(menuOf(container) === null, 'Escape で閉じる');
@@ -261,7 +263,7 @@ test('ui/Sidebar（DOM）: Delete はすぐには消さない。確かめの文�
 
     await click(itemNamed(container, en['ui.session.keep']));
     assert.equal(writes().length, 0, 'Keep は何も送らない');
-    assert.deepEqual(itemText(container), [en['ui.session.archive'], en['ui.session.delete']], 'もとのメニューに戻る');
+    assert.deepEqual(itemText(container), [en['ui.session.rename'], en['ui.session.archive'], en['ui.session.delete']], 'もとのメニューに戻る');
     focused(itemNamed(container, en['ui.session.delete']), '焦点は Delete に戻る');
 
     await click(itemNamed(container, en['ui.session.delete']));
