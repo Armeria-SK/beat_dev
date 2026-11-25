@@ -47,16 +47,16 @@ export function registerChangeRoutes(router: Router, app: App): void {
     return { project, realRoot };
   };
 
-  // Undo・Redo を断る間: その製品の running のタスク（裏の scout-run も）、フォルダが重なる（入れ子・親）別の製品の実行、
+  // Undo・Redo を断る間: その製品の running のタスク（scout-run の行は製品のフォルダに書かないので除く）、フォルダが重なる（入れ子・親）別の製品の実行、
   // tools.roots の書ける場所がその製品のフォルダに重なるときは、どの会話の実行でも
   const busy = (projectId: string, realRoot: string): boolean => {
-    if (app.db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' LIMIT 1").get(projectId)) return true;
+    if (app.db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' AND proposed_by IS NOT 'scout-run' LIMIT 1").get(projectId)) return true;
     const touches = (id: string | null): boolean => {
       if (id === null || id === projectId) return false;
       const other = app.projects.get(id);
       return other !== undefined && overlaps(realRoot, realOf(other.root));
     };
-    const others = app.db.prepare("SELECT DISTINCT project_id FROM tasks WHERE status = 'running' AND project_id IS NOT NULL AND project_id != ?").all(projectId) as Array<{ project_id: string }>;
+    const others = app.db.prepare("SELECT DISTINCT project_id FROM tasks WHERE status = 'running' AND proposed_by IS NOT 'scout-run' AND project_id IS NOT NULL AND project_id != ?").all(projectId) as Array<{ project_id: string }>;
     if (others.some(row => touches(row.project_id))) return true;
     const runs = app.engine.activeRuns();
     if (runs.some(run => { const id = app.conversations.projectOf(run.conversationId); return id === projectId || touches(id); })) return true;

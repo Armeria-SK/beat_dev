@@ -52,7 +52,11 @@ function secretRegexes(): RegExp[] {
   const source = readFileSync(new URL('../src/tools/hooks/scope.ts', import.meta.url), 'utf8').replace(/\r\n/gu, '\n');
   const block = /const SECRET_PATTERNS = \[\n([\s\S]*?)\n\];/u.exec(source)?.[1];
   assert.ok(block, 'SECRET_PATTERNS の定義が読める');
-  return block.split('\n').map(line => /^\s*\/(.+)\/([a-z]*),\s*$/u.exec(line)).filter((m): m is RegExpExecArray => m !== null).map(m => new RegExp(m[1]!, m[2]));
+  const lines = block.split('\n').filter(line => line.trim() !== '');
+  const parsed = lines.map(line => /^\s*\/(.+)\/([a-z]*),\s*$/u.exec(line));
+  const skipped = lines.filter((_, i) => parsed[i] === null || /\/[a-z]*,\s*\//u.test(parsed[i]![1]!));
+  assert.deepEqual(skipped, [], 'SECRET_PATTERNS の行は、1 行に正規表現 1 つ + 末尾のカンマで書く（読めない行がある）');
+  return parsed.map(m => new RegExp(m![1]!, m![2]));
 }
 
 test('L438: isSecretPath の正規表現 1 つ 1 つに見本の名前があり、その名前は SECRET_GLOBS の pathspec でも git が見つける（片方だけ足すと落ちる）', { skip: !gitAvailable }, t => {

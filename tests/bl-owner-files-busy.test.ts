@@ -57,19 +57,22 @@ async function rig(t: Parameters<typeof startApp>[0], writeRoots = false) {
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), 'utf8');
 const busy = (r: { status: number; body: { code?: string } }): [number, string | undefined] => [r.status, r.body.code];
 
-test('L240: 裏の仕事（scout-run）のタスクが running のあいだも、その製品の Undo・Redo は changes_busy', async t => {
+test('L240: 実行のない scout-run の行（考える・直す実行の印）が running でも、Undo・Redo は断らない。ふつうのタスクの running なら断る', async t => {
   const s = await rig(t);
   const p = await s.product('plain', { 'a.txt': 'v1\n', 'b.txt': 'b1\n' });
   await s.edited(p);
   await s.run(p.id, [readThen('file_write', { path: 'b.txt', content: 'b2\n' })]);
   const undone = await s.undo(p.id, { paths: ['b.txt'] });
-  const finish = s.running(p.id, true);
-  assert.deepEqual(busy(await s.undo(p.id, { paths: ['a.txt'] })), [409, 'project.changes_busy']);
-  assert.deepEqual(busy(await s.redo(p.id, undone.body.redo)), [409, 'project.changes_busy']);
-  assert.equal(read(p.root, 'a.txt'), 'v2\n');
-  finish();
-  assert.equal((await s.undo(p.id, { paths: ['a.txt'] })).status, 200, '終われば戻せる');
+  const finishScout = s.running(p.id, true);
+  assert.equal((await s.redo(p.id, undone.body.redo)).status, 200, 'scout-run の行は製品のフォルダに書かないので、Redo を断らない');
+  const undoneByScoutRow = await s.undo(p.id, { paths: ['a.txt'] });
+  assert.deepEqual([undoneByScoutRow.status, undoneByScoutRow.body.undone], [200, ['a.txt']]);
   assert.equal(read(p.root, 'a.txt'), 'v1\n');
+  finishScout();
+  await s.edited(p);
+  const finishBuild = s.running(p.id);
+  assert.deepEqual(busy(await s.undo(p.id, { paths: ['a.txt'] })), [409, 'project.changes_busy'], 'ふつうのタスクの running は断る');
+  finishBuild();
 });
 
 test('L240: フォルダが入れ子の別の製品のタスクが running なら、親からも子からも Undo は changes_busy。重ならない製品なら断らない', async t => {
@@ -91,8 +94,10 @@ test('L240: フォルダが入れ子の別の製品のタスクが running な�
   parentBuild();
 
   const siblingBuild = s.running(sibling.id);
-  assert.equal((await s.undo(parent.id, { paths: ['a.txt'] })).status, 200, '重ならない製品の実行は関係ない');
+  const childScout = s.running(child.id, true);
+  assert.equal((await s.undo(parent.id, { paths: ['a.txt'] })).status, 200, '重ならない製品の実行も、入れ子の製品の scout-run の行も関係ない');
   siblingBuild();
+  childScout();
 });
 
 test('L240: 入れ子の別の製品の会話の実行が動いているあいだも、Undo は changes_busy', async t => {
