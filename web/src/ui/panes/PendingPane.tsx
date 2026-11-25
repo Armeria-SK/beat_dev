@@ -53,7 +53,7 @@ function factText(t: T, fact: FileFact): string {
 function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
   const t = useT();
   const facts = fileFacts(row);
-  const extra = extraShown(row.title, view.extra);
+  const extra = extraShown(view.title, view.extra);
   return (
     <>
       {view.cwd && <p className="bt-meta ui-pending__cwd">{t('ui.pending.cwd')} <code>{view.cwd}</code></p>}
