@@ -62,7 +62,8 @@ export async function withGit<T>(root: string, dataDir: string, use: (git: (args
   if (!exe || isInside(real, exe) || !gitSupportsConfigOverride(exe)) { tell(real, 'git 2.32 or newer was not found outside the folder'); return undefined; }
   const run = prepareGitRun({ dataDir, env, gitExe: exe });
   try {
-    const childEnv = { ...env, ...run.env, GIT_CEILING_DIRECTORIES: dirname(real), GIT_OPTIONAL_LOCKS: '0' };
+    // 部分クローンで足りない物を、beat の読む git が remote へ取りに行かない（取りに行くのは判定役を通る道だけ）。足りなければ git が失敗し、呼ぶ側は「git が使えない」の扱いになる
+    const childEnv = { ...env, ...run.env, GIT_CEILING_DIRECTORIES: dirname(real), GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' };
     return await use(args => runGit(exe, real, args, childEnv));
   } finally {
     run.cleanup();

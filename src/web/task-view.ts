@@ -2,6 +2,7 @@ import type { App } from '../app.ts';
 import { languageOf } from '../shared/language.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { latestFixRow, prefixOf, type Prefix } from '../scout/fix.ts';
+import type { Proposal } from '../tasks/proposal.ts';
 import { taskView, type RepeatingTask, type Task, type TaskEvent, type TaskView } from '../tasks/store.ts';
 import type { WorktreeRow } from '../projects/worktree.ts';
 
@@ -33,9 +34,15 @@ function prefixView(app: App, task: Task): Prefix | null {
   return prefix ? { ...prefix, diff: prefix.diff.map(line => masked(app, line)!) } : null;
 }
 
+// モデルが書く提案の文を伏せる（kind・size・fixable・researchItem は鍵を持たない）
+function maskedProposal(app: App, proposal: Proposal | null): Proposal | null {
+  return proposal && { ...proposal, why: masked(app, proposal.why)!, area: proposal.area.map(entry => masked(app, entry)!), goal: masked(app, proposal.goal), evidence: masked(app, proposal.evidence), ledger: masked(app, proposal.ledger) };
+}
+
+// 読むだけの欄（結果の要約・待っている質問・提案の文）を伏せる。持ち主が画面で直して送り返す欄（title・body・next_action）は伏せない（伏せた印が保存されて本物を壊すため）
 export function maskedTaskView(app: App, task: Task): TaskView & { reject_reason?: string | null; worktree: TaskWorktree | null; prefix: Prefix | null } {
   const view = taskView(task, languageOf(app.config()));
-  const out = { ...view, result_summary: masked(app, view.result_summary), worktree: worktreeOf(app, task), prefix: prefixView(app, task) };
+  const out = { ...view, result_summary: masked(app, view.result_summary), waiting_text: masked(app, view.waiting_text), proposal: maskedProposal(app, view.proposal), worktree: worktreeOf(app, task), prefix: prefixView(app, task) };
   if (task.status !== 'cancelled' || task.cancelled_from !== 'inbox') return out;
   const reason = app.db.prepare(`SELECT content FROM task_events WHERE task_id = ?1 AND kind = 'reason'
     AND id > COALESCE((SELECT MAX(id) FROM task_events WHERE task_id = ?1 AND kind = 'uncancelled'), 0) ORDER BY id DESC LIMIT 1`).get(task.id) as { content: string | null } | undefined;

@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { GIT_IDENTITY } from './allowlist-git.ts';
 import { DEV_RUNNERS, GIT_IDENTITY_KEY, nodeFileIndex, PRODUCT_CODE_KEYS, SERVICE_PROGRAMS } from './decision-order.ts';
@@ -199,29 +199,61 @@ const REPO_PARTS = ['objects', 'refs', 'index', 'HEAD'];
 const LINK_WALK_CAP = 20_000;
 const LINK_WALK_DEEP = new Set(['refs', 'logs']);
 
-export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
+// リンク（symlink）に加えて、ふつうのファイルのハードリンクも見る。git は reflog（logs/…）と COMMIT_EDITMSG をその場に書くので、
+// 外のファイルとハードリンクでつながっていれば、判定役を通らない commit が外のファイルを書き換える。見るのは .git の直下と refs・logs の下で、
+// objects の下は見ない（git clone --local は、オブジェクトを正しくハードリンクする）。
+// 'link': symlink がある・数の上限を超えた・読めない（今までの「リンク有り」）。'hard': symlink は無いが、ハードリンクがある。
+// 見回りの途中でファイル・サブフォルダが消えた（ENOENT。index.lock などはすぐ消える）ときは、「もう無い」として飛ばす。黙って「リンク有り」にすると、鍵の確かめに届かず判定役へ落ちる。ENOENT 以外の失敗は、今までどおり「リンク有り」。
+// 名前が UTF-8 として読めないファイル・フォルダ（Linux の git は ref の名前を生のバイトで扱う）は、readdir が U+FFFD に化けた名前を返し、その名前で lstat・readdir すると ENOENT になる。
+// 上の「消えた」と区別できず、実在するハードリンクを飛ばしてしまうので、U+FFFD を含む名前はどの階層でも「リンク有り」にする
+type GitDirLinks = 'none' | 'hard' | 'link';
+
+function gitDirLinks(gitDir: string, cap: number): GitDirLinks {
   let seen = 0;
-  const clean = (dir: string, depth: number): boolean => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (++seen > cap || entry.isSymbolicLink()) return false;
-      if (!entry.isDirectory()) continue;
+  let hard = false;
+  const list = (dir: string): Dirent[] => {
+    try { return readdirSync(dir, { withFileTypes: true }); } catch (error) {
+      if (dir !== gitDir && (error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  };
+  const clean = (dir: string, depth: number, files: boolean): boolean => {
+    for (const entry of list(dir)) {
+      if (++seen > cap || entry.isSymbolicLink() || entry.name.includes('�')) return false;
+      if (!entry.isDirectory()) {
+        if (files && entry.isFile() && (lstatSync(join(dir, entry.name), { throwIfNoEntry: false })?.nlink ?? 0) > 1) hard = true;
+        continue;
+      }
       const name = entry.name.toLowerCase();
       const below = depth > 0 ? depth - 1 : LINK_WALK_DEEP.has(name) ? Infinity : name === 'objects' ? 1 : 0;
-      if (below > 0 && !clean(join(dir, entry.name), below)) return false;
+      if (below > 0 && !clean(join(dir, entry.name), below, depth > 0 ? files : name !== 'objects')) return false;
     }
     return true;
   };
   try {
-    return !lstatSync(gitDir).isSymbolicLink() && clean(gitDir, 0);
+    return lstatSync(gitDir).isSymbolicLink() || !clean(gitDir, 0, true) ? 'link' : hard ? 'hard' : 'none';
   } catch {
-    return false;
+    return 'link';
   }
 }
 
-export function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
+export function gitDirLinkFree(gitDir: string, cap = LINK_WALK_CAP): boolean {
+  return gitDirLinks(gitDir, cap) === 'none';
+}
+
+// 'outside': 製品の外にある・リンクがある・読めない。'hard': 製品の中にあるが、ハードリンクがある。'none': 製品の中で、リンクが無い
+export type RepoLinks = 'outside' | 'hard' | 'none';
+
+export function repoLinks(dir: string, root: string, git: ProductRunInput['git']): RepoLinks {
   const places = git(dir, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir', ...REPO_PARTS.flatMap(part => ['--git-path', part])])?.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  if (places?.length !== 3 + REPO_PARTS.length || !places.every(place => inside(root, resolve(dir, place)))) return false;
-  return [...new Set([places[1]!, places[2]!].map(place => resolve(dir, place)))].every(place => gitDirLinkFree(place));
+  if (places?.length !== 3 + REPO_PARTS.length || !places.every(place => inside(root, resolve(dir, place)))) return 'outside';
+  const links = [...new Set([places[1]!, places[2]!].map(place => resolve(dir, place)))].map(place => gitDirLinks(place, LINK_WALK_CAP));
+  return links.includes('link') ? 'outside' : links.includes('hard') ? 'hard' : 'none';
+}
+
+// 判定役を飛ばす許可（順 4 の product-git・承認の決まりの git の形）に使う。ハードリンクがあれば偽
+export function repoInside(dir: string, root: string, git: ProductRunInput['git']): boolean {
+  return repoLinks(dir, root, git) === 'none';
 }
 
 export function productRunOf(input: ProductRunInput): ProductRunResult {
@@ -234,6 +266,8 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
   if ([...verdict.writes, ...verdict.scripts].some(p => !inside(root, p))) return undefined;
   let commits = false;
   let others = false;
+  // ハードリンクのある置き場は、判定役を飛ばす許可だけを止める。持ち主へ回す確かめ（鍵のメッセージ・鍵のファイルの add）は、全部の文についてそのまま働かせる
+  let hardLinked = false;
   const rerouted = verdict.writes.length > 0 || verdict.statements.some(st => st.piped === true || st.redirected === true);
   for (const st of verdict.statements) {
     if (!plainStatement(st, root)) return undefined;
@@ -269,7 +303,9 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     const args = st.words.slice(target.subAt + 1);
     if (sub !== 'add' && sub !== 'commit') return undefined;
     if (st.words.slice(1).some((w, i, all) => w.text.includes(',') && !(i > 0 && MESSAGE_FLAGS.has(all[i - 1]!.text) && !w.text.includes(',-')))) return undefined;
-    if (!repoInside(dir, root, git)) return undefined;
+    const links = repoLinks(dir, root, git);
+    if (links === 'outside') return undefined;
+    if (links === 'hard') hardLinked = true;
     if (sub === 'commit' && st.words.slice(1).some(w => !w.dynamic && (sanitizeModelInputText(w.text).redaction_count > 0 || AWS_KEY.test(w.text)))) return { secretMessage: true };
     if (input.ownerHooks?.() !== false) return undefined;
     if (sub === 'add' && namesFilesOnly(args, dir)) {
@@ -283,5 +319,6 @@ export function productRunOf(input: ProductRunInput): ProductRunResult {
     }
     commits = true;
   }
+  if (hardLinked) return undefined;
   return { run: commits ? 'product-git' : 'product-code' };
 }
