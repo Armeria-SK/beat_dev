@@ -14,7 +14,7 @@ import { Button, Pill, type PillTone } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKeyFor } from './commit.ts';
-import { CommitField, Group, ListField, NumberField, Row, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
+import { CommitField, Group, ListField, NumberField, Row, SecretField, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
 import { JUDGE_OFF, judgeBackups, judgeChoice, judgeIsOff, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, scoutBackups, scoutChoice, scoutEffort, setConversation, setFallback, setJudge, setScout, setScoutEffort, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
@@ -134,9 +134,9 @@ function ProviderRow({ provider, open, onToggle, onRenamed }: { provider: Json; 
     <>
       {entering && (
         <div className="ui-set__form">
-          <input className="bt-field bt-field--mono" type="password" placeholder={t('ui.set.key.paste')} aria-label={t('ui.set.key.label', id)} value={key}
+          <SecretField className="bt-field bt-field--mono" placeholder={t('ui.set.key.paste')} aria-label={t('ui.set.key.label', id)} value={key}
             autoComplete="new-password" spellCheck={false} autoFocus disabled={busy}
-            onChange={e => setKey(e.target.value)}
+            onChange={setKey}
             onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); void send(null); } }} />
           <Button small variant="primary" disabled={busy || trimKey(key) === ''} onClick={() => void send(null)}>{t('ui.set.save')}</Button>
           <Button small variant="ghost" disabled={busy} onClick={() => { setEntering(false); setKey(''); ctx.cancel(); }}>{t('ui.cancel')}</Button>

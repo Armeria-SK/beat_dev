@@ -91,8 +91,17 @@ export function pruned<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
+// 鍵の名前が空の Anthropic になる編集（種類を Anthropic に変える・名前の欄を空にする）は、鍵を共有させない。ほかの編集は触らない
+function providerPatch(config: Config, id: string, patch: Record<string, unknown>): Record<string, unknown> {
+  if (!('apiKeyEnv' in patch)) return typeof patch.kind === 'string' ? { ...patch, ...kindPatch(config, id, patch.kind) } : patch;
+  if (patch.apiKeyEnv) return patch;
+  const provider = providerRows(config).find(p => p.id === id);
+  const apiKeyEnv = provider ? ownKeyEnv(config, id, typeof patch.kind === 'string' ? patch.kind : provider.kind) : undefined;
+  return apiKeyEnv ? { ...patch, apiKeyEnv } : patch;
+}
+
 export function updateListItem(config: Config, root: 'models' | 'providers', id: string, patch: Record<string, unknown>): Config {
-  const full = root === 'providers' && typeof patch.kind === 'string' && !patch.apiKeyEnv ? { ...patch, ...kindPatch(config, id, patch.kind) } : patch;
+  const full = root === 'providers' ? providerPatch(config, id, patch) : patch;
   return { ...config, [root]: (config[root] as Array<Record<string, unknown>>).map(item => (item.id === id ? pruned({ ...item, ...full }) : item)) };
 }
 
@@ -129,12 +138,18 @@ export function newAnthropicProvider(config: Config): Record<string, unknown> {
   return { id, kind: 'anthropic', apiKeyEnv, maxParallel: 2, timeoutMs: 600_000 };
 }
 
+// 鍵の名前が空の Anthropic は ANTHROPIC_API_KEY を使う。それをほかの提供元がすでに使っているなら、ID から作った名前（鍵を共有しない）。共有にならなければ undefined
+function ownKeyEnv(config: Config, id: string, kind: string): string | undefined {
+  if (kind !== 'anthropic') return undefined;
+  const taken = takenKeyEnvs(providerRows(config), id);
+  return taken.has('ANTHROPIC_API_KEY') ? derivedKeyEnv(id, taken) : undefined;
+}
+
 export function kindPatch(config: Config, id: string, kind: string): { kind: string; apiKeyEnv?: string } {
-  const providers = providerRows(config);
-  const provider = providers.find(p => p.id === id);
-  if (kind !== 'anthropic' || !provider || provider.apiKeyEnv) return { kind };
-  const taken = takenKeyEnvs(providers, id);
-  return taken.has('ANTHROPIC_API_KEY') ? { kind, apiKeyEnv: derivedKeyEnv(id, taken) } : { kind };
+  const provider = providerRows(config).find(p => p.id === id);
+  if (!provider || provider.apiKeyEnv) return { kind };
+  const apiKeyEnv = ownKeyEnv(config, id, kind);
+  return apiKeyEnv ? { kind, apiKeyEnv } : { kind };
 }
 
 export const providerInUse = (config: Config, id: string): boolean => (config.models as Array<{ provider: string }>).some(m => m.provider === id);
