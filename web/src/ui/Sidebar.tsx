@@ -112,6 +112,7 @@ function SessionRow({ conversation: c, route, running, pending }: { conversation
     document.addEventListener('pointerdown', away, true);
     return () => document.removeEventListener('pointerdown', away, true);
   }, [menu]);
+  useEffect(() => { if (renamed && renamed.from !== c.title) setRenamed(null); }, [c.title, renamed]);
   useEffect(() => {
     if (editing || !linkFocus.current) return;
     linkFocus.current = false;

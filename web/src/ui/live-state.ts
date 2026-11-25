@@ -1,7 +1,7 @@
 import type { ChecklistItem, Conversation, NotificationItem, PendingAction, PendingCounts, Project, QuestionCounts, Task, TaskStatus, ToolGate } from '../api.ts';
 import { mergeNotice } from '../chat-logic.ts';
 import type { Draft, RunEvent } from '../events.ts';
-import { CHANGING_TOOLS } from './changes.ts';
+import { EDIT_TOOLS } from './changes.ts';
 
 export interface TaskMark { status: TaskStatus; updatedAt: number; live: boolean; waitingKind?: Task['waiting_kind']; checkState?: Task['check_state']; merge?: boolean; projectId?: string | null; conversationId?: string | null; buildChat?: { chat: string; conversation: string | null } }
 
@@ -194,7 +194,7 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
       };
     case 'tool.result': {
       const state = library({ ...s, drafts: draftsWith(s, e.runId, d => ({ ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined, agent: undefined, toolStartedAt: undefined, toolCallId: undefined, settled: settle(d, e.callId, e.gate), settledCount: (d.settledCount ?? 0) + (d.activeTool && d.toolCallId === e.callId ? 1 : 0), waitingSince: now })) });
-      const edited = e.ok && e.decision !== 'deny' && CHANGING_TOOLS.has(e.name) ? { ...state, edits: new Map(state.edits).set(e.conversationId, (state.edits.get(e.conversationId) ?? 0) + 1) } : state;
+      const edited = e.decision !== 'deny' && (e.name === 'shell_run' || (e.ok && EDIT_TOOLS.has(e.name))) ? { ...state, edits: new Map(state.edits).set(e.conversationId, (state.edits.get(e.conversationId) ?? 0) + 1) } : state;
       return { state: edited, effects: [] };
     }
     case 'run.end': {

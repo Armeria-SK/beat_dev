@@ -173,6 +173,31 @@ test('L164: 一覧が新しい名前に替わったら、画面の側の仮の�
   assert.equal(container.querySelector(`a[href="#/c/${CHAT.id}"]`)!.textContent, 'Mine');
   await update(() => root.render(createElement(Sidebar, { ...(sidebarOf().props as Record<string, unknown>), conversations: [{ ...CHAT, title: 'Mine' }, OTHER] })));
   assert.equal(container.querySelector(`a[href="#/c/${CHAT.id}"]`)!.textContent, 'Mine');
+  await update(() => root.render(createElement(Sidebar, { ...(sidebarOf().props as Record<string, unknown>), conversations: [{ ...CHAT, title: 'Fix the cart' }, OTHER] })));
+  assert.equal(container.querySelector(`a[href="#/c/${CHAT.id}"]`)!.textContent, 'Fix the cart', '上の見出しで元の名前に戻したら、サイドバーも元の名前（仮の名前 Mine に引き戻されない）');
+  assert.equal(moreOf(rows(container)[0]!).getAttribute('aria-label'), en['ui.session.menuOf']('Fix the cart'), '「…」のラベルも元の名前');
   await update(() => root.render(createElement(Sidebar, { ...(sidebarOf().props as Record<string, unknown>), conversations: [{ ...CHAT, title: 'Someone else renamed it' }, OTHER] })));
   assert.equal(container.querySelector(`a[href="#/c/${CHAT.id}"]`)!.textContent, 'Someone else renamed it');
+});
+
+test('L164: 一覧の更新が送信の返事より先に着いても（サーバーの名前がもう新しい名前）、仮の名前は残らない。あとで元の名前に戻したらその名前が出る', async () => {
+  serve(() => ({ body: {} }));
+  const answer: { release: () => void } = { release: () => undefined };
+  const held = new Promise<void>(resolve => { answer.release = resolve; });
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    calls.push({ path: String(path), method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+    await held;
+    return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const { container, root } = await render(sidebarOf());
+  const field = await startRename(container, rows(container)[0]!);
+  await input(field, 'Mine');
+  await press(field, 'Enter');
+  await update(() => root.render(createElement(Sidebar, { ...(sidebarOf().props as Record<string, unknown>), conversations: [{ ...CHAT, title: 'Mine' }, OTHER] })));
+  answer.release();
+  await settle();
+  assert.equal(renames().length, 1);
+  assert.equal(container.querySelector(`a[href="#/c/${CHAT.id}"]`)!.textContent, 'Mine');
+  await update(() => root.render(createElement(Sidebar, { ...(sidebarOf().props as Record<string, unknown>), conversations: [{ ...CHAT, title: 'Fix the cart' }, OTHER] })));
+  assert.equal(container.querySelector(`a[href="#/c/${CHAT.id}"]`)!.textContent, 'Fix the cart');
 });

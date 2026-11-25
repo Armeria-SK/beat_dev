@@ -41,11 +41,17 @@ const convo = { id: 'c1', title: 'Retry', project_id: 'p1', archived: 0, has_sum
 
 const result = (name: string, ok = true, decision = 'allow', conversationId = 'c1') => ({ type: 'event' as const, hidden: false, event: { type: 'tool.result' as const, runId: 'r1', conversationId, callId: name, name, ok, decision, preview: '' } });
 
-test('L144: シェルの命令（shell_run）が ok で終わるたびに、その会話の「書いた回数」が増える。失敗・断られた命令と、出力を読む・止めるだけの道具（shell_output・shell_stop）や読むだけの道具では増えない', () => {
+test('L144: シェルの命令（shell_run）が終わるたびに、その会話の「書いた回数」が増える。0 以外の終わり方（失敗）でも増える。断られた命令と、出力を読む・止めるだけの道具（shell_output・shell_stop）や読むだけの道具では増えない', () => {
   let state = EMPTY;
-  for (const action of [result('shell_run'), result('shell_run', false), result('shell_run', true, 'deny'), result('shell_output'), result('shell_stop'), result('file_read')]) state = reduce(state, action).state;
-  assert.equal(state.edits.get('c1'), 1);
+  for (const action of [result('shell_run'), result('shell_run', false), result('shell_run', false, 'deny'), result('shell_run', true, 'deny'), result('shell_output'), result('shell_stop'), result('file_read')]) state = reduce(state, action).state;
+  assert.equal(state.edits.get('c1'), 2);
   assert.equal(state.edits.get('c2'), undefined);
+});
+
+test('L144: 書き込みの道具（file_write など）は今までどおり、失敗や断られたときは増えない', () => {
+  let state = EMPTY;
+  for (const action of [result('file_write'), result('file_write', false), result('file_edit', true, 'deny'), result('table_write', false, 'deny')]) state = reduce(state, action).state;
+  assert.equal(state.edits.get('c1'), 1);
 });
 
 function serveApp(calls: string[]) {
