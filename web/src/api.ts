@@ -295,7 +295,7 @@ export interface SkillDraft {
   from_title?: string | null;
   outside?: 0 | 1;
 }
-export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto'; lines: number; description: string; body: string }
+export interface SkillVersion { id: string; at: number; who: 'you' | 'beat' | 'beat-auto' | 'outside'; lines: number; description: string; body: string }
 export interface CuriosityItem {
   id: number; topic: string; why: string | null; status: 'open' | 'researching' | 'done' | 'dropped'; result: string | null;
   task_id: string | null; source: 'beat' | 'user' | 'file'; created_at: number; updated_at: number;
