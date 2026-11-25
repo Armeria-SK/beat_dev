@@ -32,10 +32,12 @@ function product(t: Parameters<typeof tempDir>[0]) {
   return { product, put, stepFour };
 }
 
-const EVERYDAY = ['secret-manager.ts', 'credentials-form.tsx', 'src/secrets-loader.py', 'lib/secret_store.go', 'web/Credential.vue', 'docs/credentials.md', 'ui/secrets.css', 'SecretService.java', 'app/credentials_helper.rb'];
-const DATA_SHAPES = ['secrets.json', 'credentials.yml', 'credentials.yaml', 'prod.env', 'my-secret.txt', 'credentials', 'deploy-credentials.json', 'secret-manager.ts.bak', 'secrets.ts.env', 'config/secrets.toml', 'SECRET.JSON'];
+const EVERYDAY = ['secret-manager.ts', 'credentials-form.tsx', 'src/secrets-loader.py', 'lib/secret_store.go', 'web/CredentialForm.vue', 'docs/secrets-guide.md', 'ui/secrets-panel.css', 'SecretService.java', 'app/credentials_helper.rb', 'src/credentials-helper.ts'];
+// 名前がその言葉だけのファイルは、拡張子がソースでも止める（secrets.md・docs/credentials.md・secret.py には貼った本物の鍵が入りやすい）
+const EXACT_WORD = ['secrets.md', 'docs/credentials.md', 'secret.py', 'secrets.ts', 'credentials.ts', 'web/Credential.vue', 'ui/secrets.css', 'config/Secrets.TS', 'lib/credential.go'];
+const DATA_SHAPES = ['secrets.json', 'credentials.yml', 'credentials.yaml', 'prod.env', 'my-secret.txt', 'credentials', 'deploy-credentials.json', 'secret-manager.ts.bak', 'secrets.ts.env', 'config/secrets.toml', 'SECRET.JSON', ...EXACT_WORD];
 
-test('L164: 名前の一部に secret / credential があるソースコード（.ts .tsx .py .go .vue .md .css など）の git add は、判定役を飛ばす順 4 のまま通る', { skip: !gitAvailable && 'git が無い' }, t => {
+test('L164: 名前の一部に secret / credential があるだけで、名前がその言葉だけではないソースコード（.ts .tsx .py .go .vue .md .css など）の git add は、判定役を飛ばす順 4 のまま通る', { skip: !gitAvailable && 'git が無い' }, t => {
   const p = product(t);
   for (const name of EVERYDAY) {
     p.put(name);
@@ -46,7 +48,7 @@ test('L164: 名前の一部に secret / credential があるソースコード�
   assert.deepEqual(p.stepFour('git add secret-manager.ts credentials-form.tsx && git commit -m "add the secret manager"'), { run: 'product-git' }, '続けた commit も通る');
 });
 
-test('L164 対照: データの形（.json .yml .yaml .toml・拡張子なし）・.env で終わる名前・ソースの拡張子に見せかけた別の拡張子は、今までどおり持ち主へ回る', { skip: !gitAvailable && 'git が無い' }, t => {
+test('L164 対照: データの形（.json .yml .yaml .toml・拡張子なし）・.env で終わる名前・ソースの拡張子に見せかけた別の拡張子・名前がその言葉だけのファイル（secrets.md・secret.py）は、今までどおり持ち主へ回る', { skip: !gitAvailable && 'git が無い' }, t => {
   for (const name of DATA_SHAPES) {
     const p = product(t);
     p.put(name);
