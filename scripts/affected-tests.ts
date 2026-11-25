@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, globSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, globSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -11,9 +11,13 @@ const LOADER = './tests/helpers/tsx-loader.mjs';
 const PARSED = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs']);
 const SCANNED = ['src/', 'web/src/', 'scripts/', 'tests/'];
 const TRY_EXT = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs'];
-// コードではないが、コードからの読まれ方（import・path の文字列・読むフォルダ）をグラフで追える種類。.json・.html・.svg などは、今までどおり読まれる場所が分からない物として全部を選ぶ
 const ASSET = new Set(['.css', '.md']);
-const ASSET_NAME = /\.(?:css|md)(?![A-Za-z0-9_])/u;
+const ASSET_NAME = /\.(?:css|md)(?![A-Za-z0-9_])|^(?:css|md)$/u;
+const LISTERS = new Set(['readdir', 'readdirSync', 'opendir', 'opendirSync', 'glob', 'globSync', 'scandir']);
+const REPO_DIRS = new Set(['src', 'web', 'scripts', 'templates', 'assets', 'deploy', 'tests']);
+const BINARY = new Set(['.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.woff', '.woff2', '.ttf', '.otf', '.zip', '.gz', '.db', '.sqlite', '.pdf', '.mp3', '.mp4', '.wav']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist']);
+const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const JS_TO_TS: Record<string, string[]> = { '.js': ['.ts', '.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
 const REPO_PATH = /^(?:src|web|scripts|templates|assets|deploy|tests)(?:[/\\][^\s'"`]*)?$/u;
 const WHOLE = '';
@@ -30,6 +34,10 @@ export type Scan = {
   reads: string[];
   anchors: string[];
   assets: string[];
+  paths: string[];
+  roots: string[];
+  hands: string[];
+  lists: string[];
 };
 
 export type Pick = {
@@ -40,11 +48,22 @@ export type Pick = {
 };
 
 const slash = (p: string): string => p.replaceAll('\\', '/');
-const emptyScan = (): Scan => ({ edges: [], missing: [], dynamic: [], loads: [], reads: [], anchors: [], assets: [] });
+const emptyScan = (): Scan => ({ edges: [], missing: [], dynamic: [], loads: [], reads: [], anchors: [], assets: [], paths: [], roots: [], hands: [], lists: [] });
 const under = (file: string, prefix: string): boolean => file === prefix || file.startsWith(`${prefix}/`);
 
 function isFile(abs: string): boolean {
   try { return statSync(abs).isFile(); } catch { return false; }
+}
+
+function walkFiles(root: string, dir = ''): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    const rel = dir ? `${dir}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...walkFiles(root, rel));
+    else if (entry.isFile()) out.push(rel);
+  }
+  return out;
 }
 
 function candidates(base: string): string[] {
@@ -87,6 +106,20 @@ function isFileAnchor(node: ts.Node): boolean {
 function isCwd(node: ts.Node): boolean {
   return ts.isCallExpression(node) && node.arguments.length === 0 && ts.isPropertyAccessExpression(node.expression)
     && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'process' && node.expression.name.text === 'cwd';
+}
+
+function isProcessArgv(node: ts.Node): boolean {
+  return ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'process' && node.name.text === 'argv';
+}
+
+function handedOver(node: ts.Node): boolean {
+  let outer = node;
+  while (outer.parent && (ts.isBinaryExpression(outer.parent) || ts.isTemplateExpression(outer.parent) || ts.isTemplateSpan(outer.parent) || ts.isParenthesizedExpression(outer.parent))) outer = outer.parent;
+  const call = outer.parent;
+  if (!call || !(ts.isCallExpression(call) || ts.isNewExpression(call)) || !(call.arguments ?? []).some(arg => arg === outer)) return false;
+  const callee = call.expression;
+  const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+  return name !== 'join' && name !== 'resolve';
 }
 
 export function scanFile(root: string, rel: string, testSide: boolean): Scan {
@@ -151,7 +184,7 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
       if (name === 'createRequire' && args[0]) consume(args[0]);
       const base = args.find(arg => isImportMeta(arg, 'url'));
       if (base && fileRelative(node, args[0])) consume(base);
-      if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]) || (testSide && isAppRoot(args[0])))) {
+      if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && args[0] && (isFileAnchor(args[0]) || isCwd(args[0]) || isAppRoot(args[0]))) {
         const parts: string[] = [];
         let fixed = true;
         for (const arg of args.slice(1)) {
@@ -159,17 +192,45 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
           if (path === undefined) { fixed = false; break; }
           parts.push(path);
         }
-        if (fixed) load(node, resolve(isCwd(args[0]) || isAppRoot(args[0]) ? root : dir, ...parts));
+        if (!testSide && isAppRoot(args[0])) {
+          const prefix = parts.length > 0 ? repoRel(resolve(root, ...parts)) : undefined;
+          if (prefix !== undefined) scan.paths.push(prefix);
+          if (!fixed || prefix === undefined) scan.roots.push(at(node));
+        } else if (fixed) load(node, resolve(isCwd(args[0]) || isAppRoot(args[0]) ? root : dir, ...parts));
         else scan.anchors.push(at(node));
         consume(args[0]);
       }
+      if (ts.isCallExpression(node) && (name === 'join' || name === 'resolve') && REPO_DIRS.has(literal(args[0]) ?? '')) {
+        const lead: string[] = [];
+        for (const arg of args) {
+          const path = literal(arg);
+          if (path === undefined) break;
+          lead.push(path);
+        }
+        const prefix = repoRel(resolve(root, ...lead));
+        if (prefix !== undefined) scan.paths.push(prefix);
+        if (lead.length < args.length) scan.roots.push(at(node));
+      }
+      if (name !== undefined && LISTERS.has(name)) scan.lists.push(at(node));
     } else if (ts.isBinaryExpression(node) && isImportMeta(node.left, 'url')
       && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
       consume(node.left);
     }
     const written = ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) ? node.text : undefined;
     if (written !== undefined && ASSET_NAME.test(written)) scan.assets.push(written);
+    if (written !== undefined) {
+      const piece = slash(written).replace(/^\.\//u, '');
+      if (piece.includes('/') && REPO_PATH.test(piece) && !piece.split('/').includes('..')) {
+        const cut = piece.search(/[*?]/u);
+        const plain = (cut < 0 ? piece : piece.slice(0, Math.max(0, piece.lastIndexOf('/', cut)))).replace(/\/+$/u, '');
+        if (plain) scan.paths.push(plain);
+      }
+    }
     if (!consumed.has(node) && (isFileAnchor(node) || (testSide && isAppRoot(node)))) { scan.anchors.push(at(node)); consume(node); }
+    if (!consumed.has(node) && (isCwd(node) || isProcessArgv(node) || (!testSide && isAppRoot(node)))) {
+      scan.roots.push(at(node));
+      if (handedOver(node)) scan.hands.push(at(node));
+    }
     if (testSide) {
       const value = literal(node);
       if (value !== undefined && REPO_PATH.test(value) && !value.split(/[/\\]/u).includes('..')) {
@@ -205,6 +266,7 @@ export class ImportGraph {
   readonly #closures = new Map<string, Set<string>>();
   readonly #dirs = new Map<string, string[]>();
   #sources: string[] | undefined;
+  #texts: Map<string, string> | undefined;
 
   constructor(root: string) {
     this.root = resolve(root);
@@ -236,14 +298,28 @@ export class ImportGraph {
     return files;
   }
 
-  // 試験に限らず、SCANNED の下のコードのすべて
   #allCode(): string[] {
     this.#sources ??= SCANNED.flatMap(dir => globSync(`${dir}**/*`, { cwd: this.root, exclude: name => name === 'node_modules' }).map(slash))
       .filter(file => PARSED.has(extname(file)) && isFile(join(this.root, file)));
     return this.#sources;
   }
 
-  // .css / .md の名前がコードの文字列に出ていて、その出方をグラフが追えていないなら、そのコード（追えないものは、実行時に読むかもしれない）
+  #documents(): Map<string, string> {
+    if (!this.#texts) {
+      const code = new Set(this.#allCode());
+      const texts = new Map<string, string>();
+      for (const file of repoFiles(this.root)) {
+        if (code.has(file) || BINARY.has(extname(file).toLowerCase())) continue;
+        try {
+          const abs = join(this.root, file);
+          if (statSync(abs).isFile() && statSync(abs).size <= MAX_TEXT_BYTES) texts.set(file, readFileSync(abs, 'utf8').toLowerCase());
+        } catch { continue; }
+      }
+      this.#texts = texts;
+    }
+    return this.#texts;
+  }
+
   #unfollowed(changed: string): string | undefined {
     const name = changed.slice(changed.lastIndexOf('/') + 1).toLowerCase();
     for (const file of this.#allCode()) {
@@ -251,6 +327,9 @@ export class ImportGraph {
       if (!scan.assets.some(text => slash(text).toLowerCase().includes(name))) continue;
       const followed = scan.edges.includes(changed) || scan.missing.some(list => list.includes(changed)) || [...scan.loads, ...scan.reads].some(p => under(changed, p));
       if (!followed) return `named in ${file} in a way the import graph cannot follow (it may be read at runtime)`;
+    }
+    for (const [file, text] of this.#documents()) {
+      if (file !== changed && text.includes(name)) return `named in ${file}, which is not code the import graph follows (it may be read at runtime)`;
     }
     return undefined;
   }
@@ -272,11 +351,15 @@ export class ImportGraph {
   #touches(test: string, changed: string): boolean {
     const files = this.closure(test);
     if (files.has(changed)) return true;
+    const asset = ASSET.has(extname(changed));
     for (const file of files) {
       const scan = this.scan(file);
       if (scan.anchors.length > 0) return true;
       if ([...scan.loads, ...scan.reads].some(p => under(changed, p))) return true;
       if (scan.missing.some(list => list.includes(changed))) return true;
+      if (asset && scan.paths.some(p => under(changed, p))) return true;
+      if (asset && scan.roots.length > 0 && (scan.assets.length > 0 || scan.lists.length > 0)) return true;
+      if (asset && scan.hands.length > 0 && scan.edges.some(edge => this.scan(edge).assets.length > 0 || this.scan(edge).lists.length > 0)) return true;
     }
     return false;
   }
@@ -314,6 +397,11 @@ export function fallbackReason(file: string): string | undefined {
 function git(root: string, args: string[]): string[] {
   const out = execFileSync('git', ['-c', 'core.quotePath=false', ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   return out.split('\0').filter(Boolean);
+}
+
+function repoFiles(root: string): string[] {
+  try { return [...git(root, ['ls-files', '-z']), ...git(root, ['ls-files', '--others', '--exclude-standard', '-z'])].map(slash); }
+  catch { return walkFiles(root); }
 }
 
 export function changedFromGit(root: string, base: string): string[] {
