@@ -243,5 +243,7 @@ export interface ToolDef<I = any> {
   researchOnly?: true;
   acceptanceState?: 'draft' | 'frozen';
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
+  // 持ち主のフック（実行前・実行後）に渡す入力の形。値を渡してはいけない欄（browser の password）を伏せる。無ければ入力をそのまま渡す
+  hookInput?: (input: I) => unknown;
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

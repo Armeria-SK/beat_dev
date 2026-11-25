@@ -152,6 +152,12 @@ export function hookPaths(tool: ToolDef, check: PreCheck | undefined): NonNullab
   return [...out.values()];
 }
 
+// 持ち主のフックに渡す入力。道具が hookInput を持つときは、値を渡してはいけない欄を伏せた形（例: browser の password）にする。伏せる形を作れなければ、欄ごと外す
+function hookArgs(tool: ToolDef, args: unknown): unknown {
+  if (tool.hookInput === undefined) return args;
+  try { return tool.hookInput(args); } catch { return null; }
+}
+
 export function safeProductRoots(deps: Pick<PipelineDeps, 'productRoots'>): string[] {
   try { return deps.productRoots?.() ?? []; } catch { return []; }
 }
@@ -384,7 +390,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (hook.enabled === false || !matches(hook.matcher, tool.name) || decision === 'deny') continue;
     const hookCwd = callCwd();
     const result = await runCommandHook(hook, {
-      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: WINDOWS ? windowsNames(hookCwd) : hookCwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
+      hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: hookArgs(tool, args), cwd: WINDOWS ? windowsNames(hookCwd) : hookCwd, run_id: ctx.runId, conversation_id: ctx.conversationId,
       paths: hookPaths(tool, first), tainted, run_kind: ctx.kind, ...(ctx.project?.root ? { project_root: ctx.project.root } : {}), product_roots: safeProductRoots(deps),
     }, ctx.signal, language);
     if (result.decision && worst(decision, result.decision) !== decision) { decision = result.decision; decidedBy = `hook:${result.hook}`; }
@@ -597,7 +603,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   for (const hook of ctx.config.tools.hooks.postToolUse) {
     if (hook.enabled === false || !matches(hook.matcher, tool.name)) continue;
     await runCommandHook(hook, {
-      hook_event_name: 'PostToolUse', tool_name: tool.name, tool_input: args, tool_output: output.content.slice(0, 8000),
+      hook_event_name: 'PostToolUse', tool_name: tool.name, tool_input: hookArgs(tool, args), tool_output: output.content.slice(0, 8000),
       cwd: ctx.workspace, run_id: ctx.runId, conversation_id: ctx.conversationId,
     }, ctx.signal).catch(() => undefined);
   }

@@ -49,8 +49,8 @@ public static class BeatRunJob {
   [DllImport("kernel32.dll", SetLastError = true)] public static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
   [DllImport("iphlpapi.dll")] public static extern uint GetExtendedTcpTable(IntPtr table, ref int size, bool order, int family, int tableClass, uint reserved);
 
-  // 待ち受け（TCP_TABLE_OWNER_PID_LISTENER = 3）の表から、そのポートの持ち主の PID を集める。family 2 = IPv4（1 行 24 バイト）、23 = IPv6（1 行 56 バイト）。
-  // ポートは行の中で上位・下位のバイトが逆（ネットワークの順）
+  // Collect the owner PIDs of the listeners on this port from the listener table (TCP_TABLE_OWNER_PID_LISTENER = 3). family 2 = IPv4 (24 bytes per row), 23 = IPv6 (56 bytes per row).
+  // The port is stored in network byte order inside the row.
   static bool Collect(int family, int port, System.Collections.Generic.List<uint> pids) {
     int size = 0;
     GetExtendedTcpTable(IntPtr.Zero, ref size, false, family, 3, 0);
@@ -77,7 +77,7 @@ public static class BeatRunJob {
     return false;
   }
 
-  // yes / no / none / unknown。開けないプロセス（権限が足りない）は、ジョブの中と言えないので no
+  // yes / no / none / unknown. A process that cannot be opened (not enough rights) cannot be shown to be in the job, so the answer is no.
   public static string Listens(int port, IntPtr job) {
     try {
       if (port < 1 || port > 65535) return "unknown";

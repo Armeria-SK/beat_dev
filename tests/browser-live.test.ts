@@ -14,7 +14,7 @@ import { rereadTab } from '../src/tools/browser/checks.ts';
 import { BrowserFailure, LAUNCH_TIMEOUT_MS, PlaywrightDriver, playwrightOptions, seedPreferences, systemLocale, type ElementTarget, type LaunchOptions, type PageHandle } from '../src/tools/browser/driver.ts';
 import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
-import { actSteps, browserClick, browserFind, browserOpen } from '../src/tools/builtin/browser.ts';
+import { actSteps, browserClick, browserFind, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { testConfig } from './helpers.ts';
 
@@ -645,4 +645,55 @@ test('P6 press（M1）: 閉じた shadow DOM を持つ標準の要素（div・se
   assert.equal(refused.isError, true, refused.content);
   assert.match(refused.content, /^1\. Not done: The keyboard focus is inside a frame, or inside a part of the page whose inside cannot be read/u);
   assert.deepEqual(await keys(body), [], 'body の閉じた shadow DOM の中の入力欄に、鍵は届いていない');
+});
+
+// ---------------------------------------------------------------- P7: 暗証番号の欄（本物の Chrome。A6）
+
+// ページは、入れた値を本文・ボタンの名前・（送信のあと）URL に出す。入れた値は、そのあとのどの出力にも出ない
+const LOGIN_PAGE = `<form action="/after" method="get"><input id="pw" type="password" aria-label="Password" name="q"><input id="who" aria-label="Name"><p id="echo">Echo: none</p><button type="button" data-id="hello" id="hello">Hello none</button><button type="submit" data-id="go">Go</button></form>
+<script>const pw = document.getElementById('pw'); pw.addEventListener('input', () => { document.getElementById('echo').textContent = 'Echo: ' + pw.value; document.getElementById('hello').textContent = 'Hello ' + pw.value; });</script>`;
+const AFTER_PAGE = `<h1>Signed in</h1><p id="note">You are in</p><button data-id="out">Log out</button>`;
+
+test('P7（A6）: 本物の Chrome で password の欄に入れる。ページが値を本文・ボタンの名前・URL に出しても、結果・差分・表・本文・探すに値が出ない', options, async t => {
+  const PASS = 'test-pass-1234';
+  const r = await refRig(t, { '/login': LOGIN_PAGE, '/after': AFTER_PAGE });
+  const port = Number(new URL(r.ctx.ownerText!()[0]!).port);
+  (r.ctx.services as unknown as { background: unknown }).background = { printedPorts: () => new Set<number>(), ownsPort: async (_owner: unknown, asked: number) => asked === port, stoppedPort: () => undefined };
+  const content = await r.open('/login');
+  const ref = refOf(content, 'textbox', 'Password');
+  const page = await r.raw();
+  const check = await browserType.preCheck!({ ref, password: PASS }, r.ctx);
+  assert.equal(check.decision, 'allow', JSON.stringify(check));
+  const typed = await browserType.execute({ ref, password: PASS }, r.ctx);
+  assert.equal(typed.isError, undefined, typed.content);
+  assert.equal(await page.inputValue('#pw'), PASS, '本物の欄に値が入った');
+  assert.equal(await page.textContent('#echo'), `Echo: ${PASS}`, '前提: ページは入れた値を本文に出している');
+  // Playwright の ariaSnapshot が password の欄の値を出すか（A6）。出しても出さなくても、下の出口はどれも値を出さない
+  const raw = await page.locator('body').ariaSnapshot();
+  t.diagnostic(`A6 ariaSnapshot が password の値を出す: ${raw.includes(PASS)} / 本文・ボタンの名前に値が出る: ${raw.includes(`Hello ${PASS}`)}`);
+  assert.match(typed.content.split('\n')[0]!, /^Typed a password or verification code into e\d+ \(tab t1\)\.$/u);
+  const outputs: Array<[string, string]> = [['browser_type の結果（差分）', typed.content]];
+  for (const mode of ['elements', 'text'] as const) outputs.push([`browser_read ${mode}`, (await browserRead.execute({ mode }, r.ctx)).content]);
+  for (const query of ['Echo', 'Hello']) outputs.push([`browser_find ${query}`, (await browserFind.execute({ query } as never, r.ctx)).content]);
+  for (const [name, text] of outputs) assert.ok(!text.includes(PASS), `${name}: ${text}`);
+  assert.ok(typed.content.includes('[REDACTED]'), '差分には、ページが出した値の所が伏せ字で出る: ' + typed.content);
+  // Enter で送る（GET で /after?q=<値> へ移る）。行き着いたページの見出し・URL・差分にも値が出ない
+  const sent = await browserType.execute({ ref, password: PASS, submit: true }, r.ctx);
+  assert.equal(sent.isError, undefined, sent.content);
+  assert.equal((await r.raw()).url(), `http://127.0.0.1:${port}/after?q=${PASS}`, '前提: 本物のページは URL に値を載せて移った');
+  assert.ok(!sent.content.includes(PASS), sent.content);
+  assert.match(sent.content, /Signed in/u, '移ったあとの画面は返っている');
+  assert.ok(!(await browserRead.execute({ mode: 'text' }, r.ctx)).content.includes(PASS));
+  // text で暗証番号の欄に入れる・ふつうの欄に password で入れるのは、本物のページでも断る（値は入らない）
+  await r.open('/login');
+  const fresh = await r.raw();
+  const login = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  const pwRef = refOf(login.content, 'textbox', 'Password');
+  const nameRef = refOf(login.content, 'textbox', 'Name');
+  const asText = await browserType.execute({ ref: pwRef, text: 'abc' }, r.ctx);
+  assert.equal(asText.isError, true, asText.content);
+  const asPassword = await browserType.execute({ ref: nameRef, password: PASS }, r.ctx);
+  assert.equal(asPassword.isError, true, asPassword.content);
+  assert.equal(await fresh.inputValue('#pw'), '', '断ったので欄は空のまま');
+  assert.equal(await fresh.inputValue('#who'), '', 'ふつうの欄にも入っていない');
 });

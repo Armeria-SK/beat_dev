@@ -121,6 +121,8 @@ export type MirrorConversation = (conversationId: string) => { attended: boolean
 // タブごとの写しの記録。raw は見張りを付ける前のページ（撮影が自分の見張りに数えられないため）
 interface TabMirror { raw: PageHandle; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string; located: { target: ElementTarget; box: ElementBox } | undefined; pointer: { x: number; y: number } | undefined }
 
+// 会話ごとに覚える、入れた暗証番号・認証コードの数（これより古いものから捨てる）
+const TYPED_KEEP = 16;
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
 const VIEWPORT = { width: 1280, height: 800 };
@@ -228,6 +230,19 @@ export class BrowserSession {
   }
 
   secrets(): readonly string[] { return this.#d.secrets?.() ?? []; }
+  // この会話で入れた暗証番号・認証コード（P7）。ページがその値をあとで出しても（本文・表の名前・URL・入力欄の値）、その会話のどの出力でも伏せる。会話ごと・上限つき（古いものから捨てる）。会話を消すと忘れる
+  readonly #typed = new Map<string, string[]>();
+  // 鍵（設定の鍵・環境の鍵）に、その会話で入れた値を足した、伏せる値の一覧。URL に入った形（encodeURIComponent）も足す
+  secretsFor(conversationId: string): readonly string[] {
+    const typed = (this.#typed.get(conversationId) ?? []).flatMap(value => { const encoded = encodeURIComponent(value); return encoded === value ? [value] : [value, encoded]; });
+    return typed.length === 0 ? this.secrets() : [...this.secrets(), ...typed];
+  }
+  rememberTyped(conversationId: string, value: string): void {
+    if (value.trim().length === 0) return;
+    const list = (this.#typed.get(conversationId) ?? []).filter(known => known !== value);
+    list.push(value);
+    this.#typed.set(conversationId, list.slice(-TYPED_KEEP));
+  }
   enabled(): boolean { return this.#d.config().tools.browser.enabled; }
   // この会話で開いているタブの数（browser_close が、閉じるものが無いのにブラウザを起動しないための確かめ）
   tabCount(conversationId: string): number { return [...this.#tabs.values()].filter(tab => tab.conversationId === conversationId).length; }
@@ -289,6 +304,7 @@ export class BrowserSession {
 
   // 会話を消したとき、その会話のタブと作業用の文脈を閉じる（起動していなければ何もしない）
   async closeConversation(ids: readonly string[]): Promise<void> {
+    for (const id of ids) this.#typed.delete(id);
     if (this.#tabs.size === 0 && this.#contexts.size === 0) return;
     await this.#acquire(undefined);
     try {
