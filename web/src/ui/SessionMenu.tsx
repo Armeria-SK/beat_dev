@@ -14,8 +14,8 @@ export function SessionMenu({ conversation, label, lead, opener, floating, class
   opener: RefObject<HTMLElement | null>;
   floating?: boolean;
   className?: string;
-  onArchived: () => void;
-  onDeleted: () => void;
+  onArchived: (keyboard: boolean) => void;
+  onDeleted: (keyboard: boolean) => void;
   onClose: (refocus: boolean) => void;
 }) {
   const t = useT();
@@ -25,7 +25,7 @@ export function SessionMenu({ conversation, label, lead, opener, floating, class
   const [box, setBox] = useState<FixedMenu | null>(null);
   const list = useRef<HTMLUListElement>(null);
   const remove = useRef<HTMLButtonElement>(null);
-  const confirm = useRef<HTMLButtonElement>(null);
+  const keep = useRef<HTMLButtonElement>(null);
   const asked = useRef(false);
   const note = useId();
   const close = useRef(onClose);
@@ -51,17 +51,26 @@ export function SessionMenu({ conversation, label, lead, opener, floating, class
 
   useLayoutEffect(() => { list.current?.querySelector<HTMLElement>(ENABLED_ITEMS)?.focus({ preventScroll: true }); }, []);
   useEffect(() => {
-    if (confirming) confirm.current?.focus({ preventScroll: true });
+    const button = opener.current;
+    if (!button) return undefined;
+    const away = (e: FocusEvent) => { const to = e.relatedTarget as Node | null; if (to && !list.current?.contains(to)) close.current(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close.current(true); } };
+    button.addEventListener('focusout', away);
+    button.addEventListener('keydown', escape);
+    return () => { button.removeEventListener('focusout', away); button.removeEventListener('keydown', escape); };
+  }, [opener]);
+  useEffect(() => {
+    if (confirming) keep.current?.focus({ preventScroll: true });
     else if (asked.current) remove.current?.focus({ preventScroll: true });
     asked.current = confirming;
   }, [confirming]);
   useEffect(() => {
-    if (error) (confirm.current ?? list.current?.querySelector<HTMLElement>(ENABLED_ITEMS))?.focus({ preventScroll: true });
+    if (error) (keep.current ?? list.current?.querySelector<HTMLElement>(ENABLED_ITEMS))?.focus({ preventScroll: true });
   }, [error]);
 
-  const act = async (run: () => Promise<unknown>, after: () => void) => {
+  const act = async (run: () => Promise<unknown>, after: (keyboard: boolean) => void, keyboard: boolean) => {
     setBusy(true); setError('');
-    try { await run(); after(); } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); setBusy(false); }
+    try { await run(); after(keyboard); } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); setBusy(false); }
   };
   const style: CSSProperties | undefined = floating && box ? box : undefined;
   return (
@@ -76,14 +85,14 @@ export function SessionMenu({ conversation, label, lead, opener, floating, class
       {lead}
       {conversation.archived !== 1 && (
         <li role="none"><button type="button" role="menuitem" className="bt-menu__item ui-menu__btn" disabled={busy}
-          onClick={() => void act(() => api.archiveConversation(conversation.id), onArchived)}>{t('ui.session.archive')}</button></li>
+          onClick={e => void act(() => api.archiveConversation(conversation.id), onArchived, e.detail === 0)}>{t('ui.session.archive')}</button></li>
       )}
       {confirming ? (
         <li role="none" className="ui-menu__confirm">
           <span id={note} className="bt-meta">{t(conversation.project_id ? 'ui.session.deleteWhatProduct' : 'ui.session.deleteWhat')}</span>
           <span className="ui-menu__confirmrow">
-            <Button ref={confirm} role="menuitem" variant="danger" small aria-describedby={note} disabled={busy} onClick={() => void act(() => api.deleteConversation(conversation.id), onDeleted)}>{t('ui.session.deleteConfirm')}</Button>
-            <Button role="menuitem" variant="ghost" small onClick={() => setConfirming(false)}>{t('ui.session.keep')}</Button>
+            <Button role="menuitem" variant="danger" small aria-describedby={note} disabled={busy} onClick={e => void act(() => api.deleteConversation(conversation.id), onDeleted, e.detail === 0)}>{t('ui.session.deleteConfirm')}</Button>
+            <Button ref={keep} role="menuitem" variant="ghost" small onClick={() => setConfirming(false)}>{t('ui.session.keep')}</Button>
           </span>
         </li>
       ) : (

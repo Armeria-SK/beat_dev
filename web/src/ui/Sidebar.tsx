@@ -99,12 +99,22 @@ function SessionRow({ conversation: c, route, running, pending }: { conversation
   }, [menu]);
   const close = (refocus: boolean) => { setMenu(false); if (refocus) more.current?.focus(); };
   const leaveIfOpen = () => { const now = parseRoute(location.hash); if (now.view === 'chat' && now.id === c.id) location.replace(routeHash({ view: 'new' })); };
-  const archived = () => {
+  const passFocus = () => {
+    const mine = row.current;
+    if (!mine) return;
+    const nav = mine.closest('nav');
+    const links = [...(nav?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])];
+    const at = links.indexOf(mine.querySelector<HTMLElement>('.ui-side-row__link')!);
+    (links[at + 1] ?? links[at - 1] ?? nav?.querySelector<HTMLElement>('.bt-wordmark'))?.focus();
+  };
+  const archived = (keyboard: boolean) => {
+    if (keyboard) passFocus();
     setMenu(false);
     toast({ icon: 'archive', title: t('ui.session.archivedToast'), body: title, action: { label: t('ui.toast.undo'), run: () => { void api.unarchiveConversation(c.id).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: error instanceof ApiError ? error.message : undefined })); } } });
     leaveIfOpen();
   };
-  const deleted = () => {
+  const deleted = (keyboard: boolean) => {
+    if (keyboard) passFocus();
     setMenu(false);
     toast({ icon: 'x', title: t('ui.archived.toast.deleted'), body: title });
     leaveIfOpen();
