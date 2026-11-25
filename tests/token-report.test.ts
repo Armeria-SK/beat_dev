@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
+import { Runs } from '../src/db/runs.ts';
 import { APP_ROOT } from '../src/paths.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { openReadOnly, readReport, renderReport, type TokenReport } from '../scripts/token-report.ts';
@@ -24,9 +25,16 @@ const call = (db: DatabaseSync, c: Call) => db.prepare(`INSERT INTO model_calls 
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 100)`).run(c.run, c.seq, c.purpose ?? 'turn', c.model ?? 'm', c.input, c.read, c.write, c.output ?? 10, c.removed ?? 0, c.tools ?? 'T', c.frozen ?? 'F', c.dynamic ?? 'D', c.at);
 const run = (db: DatabaseSync, id: string, kind: string, conversation: string, at: number, extra: { parent?: string; flags?: string[] } = {}) =>
   db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at, parent_run_id, flags) VALUES (?, ?, ?, ?, ?, ?)').run(id, kind, conversation, at, extra.parent ?? null, JSON.stringify(extra.flags ?? []));
-// 実行の終わり方: engine_runs に量を書くのは ok と failed だけ（取り消し・beat の中で落ちた実行は書かない）
-const end = (db: DatabaseSync, id: string, e: { ok: boolean; kind?: string; attempts?: number; input?: number; read?: number }) =>
+// 実行の終わり方: engine_runs に量を書くのは ok・failed と取り消し。取り消しは量を渡さず Runs.finish に任せ（製品と同じ道。model_calls の合計が入る）、
+// beat の中で落ちた実行（internal）は書かない
+const end = (db: DatabaseSync, id: string, e: { ok: boolean; kind?: string; attempts?: number; input?: number; read?: number }) => {
+  if (e.kind === 'cancelled') {
+    const row = db.prepare('SELECT started_at, flags FROM engine_runs WHERE id = ?').get(id) as { started_at: number; flags: string };
+    new Runs(db, () => row.started_at + 1).finish(id, { ok: false, attempts: e.attempts ?? 1, errorKind: 'cancelled', flags: JSON.parse(row.flags) as string[] });
+    return;
+  }
   db.prepare('UPDATE engine_runs SET ended_at = started_at + 1, ok = ?, error_kind = ?, attempts = ?, input_tokens = ?, cache_read_tokens = ? WHERE id = ?').run(e.ok ? 1 : 0, e.kind ?? null, e.attempts ?? 1, e.input ?? null, e.read ?? null, id);
+};
 const conversation = (db: DatabaseSync, id: string) => db.prepare('INSERT INTO conversations (id, created_at, last_message_at) VALUES (?, 0, 0)').run(id);
 const message = (db: DatabaseSync, conv: string, runId: string, at: number, m: Record<string, unknown> & { role: string }) => {
   const text = m.role === 'tool' ? `[${String(m.name)}] ${String(m.content)}` : String(m.content ?? '');
@@ -79,7 +87,7 @@ function build(path: string) {
     call(db, { run: 'r3', seq: 8, input: 1100, read: 1100, write: 0, at: T3 + 6000 + 7 * MIN, ...same });
     // モデルが替われば、ほかが同じでも理由は model
     call(db, { run: 'r3', seq: 9, input: 1000, read: 0, write: 1000, at: T3 + 7000 + 7 * MIN, ...same, model: 'm2' });
-    // 終わり方: r1・r1c は ok、r3 は failed（どちらも engine_runs に量がある）。r2 は取り消し、r4 は beat の中で落ち、r5 は終わっていない（engine_runs に量が無い）
+    // 終わり方: r1・r1c は ok、r3 は failed（どちらも engine_runs に量がある）。r2 は取り消し（量を渡さない終わり方。Runs.finish が model_calls の合計を入れる）、r4 は beat の中で落ち、r5 は終わっていない（この 2 つは engine_runs に量が無い）
     end(db, 'r1', { ok: true, input: 3300, read: 1950 });
     end(db, 'r1c', { ok: true, input: 500, read: 0 });
     end(db, 'r2', { ok: false, kind: 'cancelled' });
@@ -201,12 +209,13 @@ test('終わり方ごとに分けて出し、engine_runs の基準と比べる�
   const r = report(path);
   const state = (name: string) => r.states.find(s => s.state === name)!;
   assert.deepEqual(r.states.map(s => [s.state, s.runs, s.volume.input, s.volume.read, s.engineInput, s.engineRead]), [
-    ['ok', 2, 3800, 1950, 3800, 1950], ['failed', 1, 9200, 1200, 9200, 1200], ['cancelled', 1, 2800, 1300, 0, 0], ['unfinished', 1, 300, 0, 0, 0], ['internal_error', 1, 700, 0, 0, 0],
+    ['ok', 2, 3800, 1950, 3800, 1950], ['failed', 1, 9200, 1200, 9200, 1200], ['cancelled', 1, 2800, 1300, 2800, 1300], ['unfinished', 1, 300, 0, 0, 0], ['internal_error', 1, 700, 0, 0, 0],
   ], '子の実行（r1c）は親に足さず自分の終わり方で数える');
   assert.equal(state('cancelled').volume.calls, 2, '取り消した実行も、終えた呼び出しは model_calls にある');
   assert.equal(r.compared.runs, 3);
   assert.deepEqual([r.compared.volume.input, r.compared.volume.read], [13_000, 3150]);
   assert.equal(r.compared.volume.readShare, r.compared.engineReadShare, '両側が同じ実行');
+  assert.match(renderReport(r), /engine_runs has tokens for ok, failed and newer cancelled runs \(older cancelled, unfinished and internal_error runs have none\)/u, '見出しは、取り消した実行にも量があることを言う');
   assert.match(renderReport(r), /compared with the engine_runs baseline: the 3 run\(s\) that ended ok or failed, on both sides; model_calls read share 24\.2%, engine_runs read share 24\.2%/u);
 });
 

@@ -7,7 +7,8 @@ import { Conversations } from '../src/db/conversations.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { KV } from '../src/db/kv.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { Runs } from '../src/db/runs.ts';
+import { Runs, type RunRow } from '../src/db/runs.ts';
+import type { Usage } from '../src/engine/types.ts';
 import { tempDir } from './helpers.ts';
 
 test('マイグレーションは新規でも再オープンでも同じ状態になる', t => {
@@ -80,6 +81,85 @@ test('実行記録の開始・終了と、再起動時の片付け', () => {
   runs.start('r2', 'chat');
   assert.equal(runs.closeDangling(), 1);
   assert.equal(runs.get('r2')!.error_kind, 'cancelled');
+});
+
+// 止められた・落ちた実行の量（self-fix S4）。量は model_calls の turn と discarded の合計、tool_calls は tool_calls の表の行数
+const call = (runs: Runs, runId: string, purpose: 'turn' | 'compact' | 'discarded', model: string, usage: Usage): void => runs.recordCall({ runId, purpose, model, usage, tools: [], system: { frozen: 'f', dynamic: 'd' }, startedAt: 1 });
+const toolRow = (db: DatabaseSync, runId: string, id: string): void => {
+  db.prepare("INSERT INTO tool_calls (id, run_id, tool, input, decision, decided_by, created_at) VALUES (?, ?, 'file_read', '{}', 'allow', 'rule', 1)").run(id, runId);
+};
+const counts = (row: RunRow) => [row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens];
+
+test('止められた実行は、量を渡されなくても model_calls の turn と discarded の合計が engine_runs の量になる（compact は入らない）', () => {
+  const runs = new Runs(openDatabase(':memory:', MIGRATIONS));
+  runs.start('r1', 'chat', 'c1');
+  call(runs, 'r1', 'turn', 'm', { inputTokens: 1000, outputTokens: 10, cacheReadTokens: 700, cacheWriteTokens: 200 });
+  call(runs, 'r1', 'discarded', 'm', { inputTokens: 500, outputTokens: 64_000, cacheReadTokens: 100, cacheWriteTokens: 50 });
+  call(runs, 'r1', 'compact', 'm', { inputTokens: 4000, outputTokens: 300 });
+  runs.finish('r1', { ok: false, attempts: 1, errorKind: 'cancelled', modelId: 'm', toolCalls: 2 });
+  const row = runs.get('r1')!;
+  assert.deepEqual(counts(row), [1500, 64_010, 800, 250]);
+  assert.equal(row.tool_calls, 2, '道具の数は渡された値のまま');
+});
+
+test('止められた実行でも、量つきで終えたときは渡した値のまま。呼び出しの記録が 1 行も無ければ今までどおり空', () => {
+  const runs = new Runs(openDatabase(':memory:', MIGRATIONS));
+  runs.start('r1', 'chat');
+  call(runs, 'r1', 'turn', 'm', { inputTokens: 1000, outputTokens: 10 });
+  runs.finish('r1', { ok: false, attempts: 1, errorKind: 'cancelled', usage: { inputTokens: 7, outputTokens: 3 } });
+  assert.deepEqual(counts(runs.get('r1')!), [7, 3, null, null]);
+  runs.start('r2', 'chat');
+  runs.finish('r2', { ok: false, attempts: 1, errorKind: 'cancelled' });
+  assert.deepEqual(counts(runs.get('r2')!), [null, null, null, null]);
+});
+
+test('ok・失敗で終えた実行は今までどおり。量を渡さなければ空のまま（model_calls を足さない）', () => {
+  const runs = new Runs(openDatabase(':memory:', MIGRATIONS));
+  runs.start('r1', 'chat');
+  call(runs, 'r1', 'turn', 'm', { inputTokens: 1000, outputTokens: 10 });
+  runs.finish('r1', { ok: true, attempts: 1 });
+  assert.deepEqual(counts(runs.get('r1')!), [null, null, null, null]);
+  runs.start('r2', 'chat');
+  call(runs, 'r2', 'turn', 'm', { inputTokens: 1000, outputTokens: 10 });
+  runs.finish('r2', { ok: false, attempts: 1, errorKind: 'rate_limit' });
+  assert.deepEqual(counts(runs.get('r2')!), [null, null, null, null]);
+  runs.start('r3', 'chat');
+  runs.finish('r3', { ok: true, attempts: 1, usage: { inputTokens: 10, outputTokens: 5 } });
+  assert.deepEqual(counts(runs.get('r3')!), [10, 5, null, null]);
+});
+
+test('再起動時に閉じた実行（落ちた実行）は、model_calls の合計・tool_calls の行数・最後に呼んだモデルが残る。ほかの実行や終わった実行には触らない', () => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  const runs = new Runs(db);
+  runs.start('r1', 'chat', 'c1');
+  call(runs, 'r1', 'turn', 'm-first', { inputTokens: 1000, outputTokens: 10, cacheReadTokens: 700, cacheWriteTokens: 200 });
+  call(runs, 'r1', 'discarded', 'm-first', { inputTokens: 500, outputTokens: 64_000, cacheReadTokens: 100, cacheWriteTokens: 50 });
+  call(runs, 'r1', 'compact', 'm-first', { inputTokens: 4000, outputTokens: 300 });
+  call(runs, 'r1', 'turn', 'm-last', { inputTokens: 2000, outputTokens: 20, cacheReadTokens: 1500, cacheWriteTokens: 0 });
+  for (const id of ['t1', 't2', 't3']) toolRow(db, 'r1', id);
+  runs.start('r-other', 'chat');
+  call(runs, 'r-other', 'turn', 'm-other', { inputTokens: 9, outputTokens: 9 });
+  toolRow(db, 'r-other', 't9');
+  runs.start('r-done', 'chat');
+  runs.finish('r-done', { ok: true, attempts: 1, modelId: 'm-done', usage: { inputTokens: 5, outputTokens: 5 }, toolCalls: 4 });
+  const done = runs.get('r-done')!;
+  assert.equal(runs.closeDangling(), 2);
+  const row = runs.get('r1')!;
+  assert.deepEqual(counts(row), [3500, 64_030, 2300, 250], 'turn と discarded の合計。compact（4000 / 300）は入らない');
+  assert.equal(row.tool_calls, 3);
+  assert.equal(row.model_id, 'm-last');
+  assert.equal(row.error_kind, 'cancelled');
+  assert.deepEqual([runs.get('r-other')!.input_tokens, runs.get('r-other')!.tool_calls, runs.get('r-other')!.model_id], [9, 1, 'm-other'], '自分の実行の分だけを足す');
+  assert.deepEqual(runs.get('r-done'), done, '終わっていた実行は変わらない');
+});
+
+test('再起動時に閉じた実行に model_calls も tool_calls も無ければ、今までどおり量は空・道具は 0・モデルは空', () => {
+  const runs = new Runs(openDatabase(':memory:', MIGRATIONS));
+  runs.start('r1', 'chat');
+  assert.equal(runs.closeDangling(), 1);
+  const row = runs.get('r1')!;
+  assert.deepEqual(counts(row), [null, null, null, null]);
+  assert.deepEqual([row.tool_calls, row.model_id], [0, null]);
 });
 
 test('KV の読み書き', () => {

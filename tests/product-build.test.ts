@@ -14,6 +14,7 @@ import { toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import { acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { meshStateSet } from '../src/tools/builtin/mesh.ts';
+import { planWrite } from '../src/tools/builtin/plan.ts';
 import { writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import { PLAN_GIST_LABEL, type TaskStore } from '../src/tasks/store.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
@@ -127,6 +128,21 @@ test('3-2-s 要件の聞き取りの文: Windows の改行（CRLF）のファイ
   writeFileSync(join(templates, 'requirements.md'), '# Requirements interview\r\nAsk.\r\n');
   assert.equal(requirementsText({ ...paths, templates }, 1_000), '# Requirements interview (compact)\nAsk.\nWrite.');
   assert.equal(requirementsText({ ...paths, templates }, 100_000), '# Requirements interview\nAsk.');
+});
+
+// self-fix S5: 要件の聞き取りの文（requirements*.md）は線いっぱいなので、計画の大きさの決まりは道具 plan_write の説明に置く
+test('self-fix S5 計画の大きさ: plan_write の説明が、書く前に件数を持ち主に言わせ、大きいとき（10 件より多い・「全部」）は分け方を聞いて最初の 1 回分をすすめさせる。時間・量の見込みは書かせず、ask_owner の名前も出さない。説明は短い英語のまま、計画モードで AI に届く', async t => {
+  const rules = [/before writing, tell the owner how many items/iu, /if over 10, or the owner said all of it/iu, /ask the owner how to split it/iu, /recommending the first batch/iu];
+  for (const rule of rules) assert.match(planWrite.description, rule);
+  assert.doesNotMatch(planWrite.description, /time and volume|ask_owner|only the first/iu, '見込みの数字は書かせない（根拠のデータが無い）。道具が止められていても読める。最初の 1 回分は「すすめる」だけで、決めつけない');
+  assert.ok(estimateTextTokens(planWrite.description) <= 170, String(estimateTextTokens(planWrite.description)));
+  assert.doesNotMatch(planWrite.description, /[^\x09\x0A\x20-\x7E]/u, 'モデル向けの文は ASCII の英語');
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('a')];
+  await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
+  const seen = s.adapter().calls.at(-1)!.tools.find(tool => tool.name === 'plan_write');
+  assert.equal(seen?.description, planWrite.description);
 });
 
 test('3-2-s 毎回の system（関数）: 製品の計画モードで聞き取りの文があれば、汎用の計画の 1 行と plan_write の 1 行の代わりに入る。製品に属さない計画モード・製品の自動承認のモードは今のまま', () => {
