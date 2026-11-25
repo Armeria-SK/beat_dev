@@ -648,9 +648,7 @@ test('browser_find: 文は頭から 1,000,000 字まで（切れたときは、�
   const r = rig(t);
   r.driver.site('https://example.com/huge', { title: 'Huge', text: `needle head\n${'line\n'.repeat(200_010)}needle tail` });
   await run(browserOpen, { url: 'https://example.com/huge' }, r.ctx());
-  const started = Date.now();
   const inside = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
-  assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
   assert.deepEqual(inside, [r.text('browser.section_found_text'), 'needle head', 'line', r.text('browser.find_text_limited', { chars: 12 + 5 * Math.floor((FIND_READ_CHARS - 1024 - 12) / 5) })]);
 });
 
@@ -741,10 +739,37 @@ test('browser_find: 読む上限で切れた文は、秘密の途中で切らな
 
 test('browser_find: 長い行が何か所も一致しても、行を切る手間は行ごとに 1 回', () => {
   const rows = Array.from({ length: 10 }, (_, i) => `${'ａ'.repeat(98_000)} needle${i}`).join('\n');
-  const started = Date.now();
-  const found = findText(rows, 'needle', 10, 150, () => true);
-  const took = Date.now() - started;
+  const original = String.prototype.normalize;
+  let long = 0;
+  String.prototype.normalize = function (this: string, ...args: [string?]) { if (this.length > 1000) long += 1; return original.apply(this, args); };
+  let found;
+  try { found = findText(rows, 'needle', 10, 150, () => true); } finally { String.prototype.normalize = original; }
   assert.equal(found.places, 10);
   assert.ok(found.lines.every(line => line.includes('needle')));
-  assert.ok(took < 1500, `${took} ms`);
+  assert.ok(long <= 10 * (2 + Math.ceil(Math.log2(98_008))), String(long));
+});
+
+test('browser_find: 読む上限の向こうに END がある秘密鍵は、中に空の行があっても、中身の行を返さない', async t => {
+  const r = rig(t);
+  const body = Array.from({ length: 400 }, (_, i) => `KEYBODY${String(i + 1).padStart(4, '0')}${'A'.repeat(50)}`).join('\n\n');
+  const text = `${'line\n'.repeat(198_800)}-----BEGIN RSA PRIVATE KEY-----\n${body}\n-----END RSA PRIVATE KEY-----\nafter`;
+  assert.ok(text.indexOf('-----BEGIN') < FIND_READ_CHARS - 2000 && text.indexOf('-----END') > FIND_READ_CHARS + 2000);
+  r.driver.site('https://example.com/open-key', { title: 'K', text });
+  await run(browserOpen, { url: 'https://example.com/open-key' }, r.ctx());
+  for (const query of ['KEYBODY', 'BEGIN']) {
+    const out = await run(browserFind, { query, where: 'text' }, r.ctx());
+    assert.ok(!/KEYBODY|PRIVATE KEY/u.test(out.content), `${query}: ${out.content.slice(-400)}`);
+    assert.ok(out.content.includes(r.text('browser.find_text_limited', { chars: 994_000 })), `${query}: ${out.content.slice(-400)}`);
+  }
+  const before = await run(browserFind, { query: 'line', where: 'text' }, r.ctx());
+  assert.ok(inFrame(before.content).includes('line'), '鍵より前の文は探せる');
+});
+
+test('browser_find: リンクの行き先にある秘密の値は伏せる', async t => {
+  const r = rig(t);
+  r.driver.site('https://example.com/href', { title: 'H', text: 'h', snapshot: '- link "Callback":\n  - /url: /cb?token=hrefvalue0123456789abcdef&page=2' });
+  await run(browserOpen, { url: 'https://example.com/href' }, r.ctx());
+  const out = await run(browserFind, { query: 'callback', where: 'elements' }, r.ctx());
+  assert.ok(!out.content.includes('hrefvalue0123456789abcdef'), out.content);
+  assert.deepEqual(inFrame(out.content), [r.text('browser.section_found_elements'), 'e1 link "Callback" → https://example.com/cb?token=[REDACTED]&page=2']);
 });

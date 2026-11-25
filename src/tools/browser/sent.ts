@@ -48,7 +48,16 @@ export interface Paged {
 }
 
 const PEM_BEGIN = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/gu;
-const PEM_END = /-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
+const PEM_END = /-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/gu;
+
+// END の無い秘密鍵の BEGIN の印の位置（最後の END より後ろの最初の BEGIN）。無ければ undefined。
+// 読む上限で切れた読みでは、ここより後ろで区切らない（END が上限の向こうにあると、中に空の行のある鍵は、伏せる側が最初の空の行までしか伏せない）
+export function openKeyStart(text: string): number | undefined {
+  let lastEnd = -1;
+  for (const end of text.matchAll(PEM_END)) lastEnd = end.index;
+  for (const begin of text.matchAll(PEM_BEGIN)) if (begin.index > lastEnd) return begin.index;
+  return undefined;
+}
 
 // browser_read の本文の 1 回分。full はページの文の頭から読んだもの、limited は読む上限で切れたか（その先にも文がある）。
 // 「きれいに分けられる位置」p: 文を p で前後に分けて伏せても、分けずに伏せた形と同じになる位置（秘密の途中・「password:」と値のあいだではない）。
@@ -64,7 +73,8 @@ export function pageText(full: string, offset: number, limited: boolean, secrets
     let bound = Math.min(space > 0 ? space : tail.length - 1, tail.length - TAIL_MARGIN);
     // 上限の向こうまで続くかもしれないものの中では区切らない（切った読みでの確かめでは、続きの形が見えない）:
     // END の無い秘密鍵の BEGIN の印の前、区切りの無い並び（長い JWT など）の頭
-    for (const begin of tail.matchAll(PEM_BEGIN)) if (begin.index < bound && !PEM_END.test(tail.slice(begin.index))) { bound = begin.index; break; }
+    const open = openKeyStart(tail);
+    if (open !== undefined && open < bound) bound = open;
     while (bound > 0 && !SEPARATOR.test(tail[bound - 1]!)) bound -= 1;
     const found = bound > 0 ? findBack(tail, redacted, bound, Infinity, secrets) : undefined;
     // きれいに分けられる位置が無い（伏せた所〔長い鍵・行の終わりまでの Cookie の値〕が、読める範囲の終わりまで続く）:

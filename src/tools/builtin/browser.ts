@@ -14,7 +14,7 @@ import { diffLine, elementLine, findText, formatElements, groupLine, markShown, 
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
-import { findBack, pageText, sentText, TAIL_MARGIN } from '../browser/sent.ts';
+import { findBack, openKeyStart, pageText, sentText, TAIL_MARGIN } from '../browser/sent.ts';
 import { siteAllows } from '../browser/sites.ts';
 import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -242,11 +242,13 @@ async function renderFind(browser: BrowserSession, api: BrowserApi, tab: Browser
     const textTitle = toolText(language, 'browser.section_found_text');
     const raw = await until(page.text(FIND_READ_CHARS), api.signal);
     // 読む上限で切れた読みは、上限の TAIL_MARGIN 字手前より前の最後の行の頭から、分けて伏せても同じ形になる位置（findBack。pageText と同じ確かめ）まで戻って切る
-    // （最後の行を捨てるだけでは、行をまたぐ秘密の頭の行が伏せられずに残る）。改行の無い文は探さない
+    // （最後の行を捨てるだけでは、行をまたぐ秘密の頭の行が伏せられずに残る）。END の無い秘密鍵があれば、その BEGIN の印より前から戻る。改行の無い文は探さない
     const limited = raw.length >= FIND_READ_CHARS;
     let whole = raw;
     if (limited) {
-      const line = raw.lastIndexOf('\n', raw.length - TAIL_MARGIN - 1) + 1;
+      let line = raw.lastIndexOf('\n', raw.length - TAIL_MARGIN - 1) + 1;
+      const open = openKeyStart(raw);
+      if (open !== undefined && open < line) line = open;
       whole = line > 0 ? raw.slice(0, findBack(raw, redactSecrets(raw, secrets), line, Infinity, secrets)?.q ?? 0) : '';
     }
     const notes = size(`${textTitle}\n${toolText(language, 'browser.find_more_text', { count: 999_999 })}\n${toolText(language, 'browser.find_text_limited', { chars: FIND_READ_CHARS })}`);
