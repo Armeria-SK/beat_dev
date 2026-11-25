@@ -12,7 +12,7 @@ import { routeHash } from '../routes.ts';
 import {
   confirmStale, draftFromTask, otherZone, RELOAD_DELAY_MS, reloadWait, repeatPatch, runNowKind, splitSchedule, timePatch, type DeleteBlock, type RepeatingRow, type TimedRow,
 } from '../schedule.ts';
-import { reportOpError, runTaskOp } from '../task-ops.ts';
+import { liveProductId, reportOpError, runTaskOp, undoAction } from '../task-ops.ts';
 import { buildRows, dayHours, nowAt, scrollToNow, windowOf, type Bar, type Range, type Stream, type TimeWindow } from '../timeline.ts';
 import { productName, withProduct } from '../product-meta.ts';
 import { sidebarOrder } from '../products.ts';
@@ -83,6 +83,7 @@ function ScheduleForm({ task, projects = [], onClose, onSaved }: { task: Repeati
   const set = (patch: Partial<TaskDraft>) => { setDraft(d => ({ ...d, ...patch })); setError(''); };
   const label = task ? t('ui.schedule.editing', task.title) : t('ui.schedule.new');
   const repeat = draft.when === 'repeat';
+  const liveProduct = liveProductId(projects, product);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
@@ -99,7 +100,7 @@ function ScheduleForm({ task, projects = [], onClose, onSaved }: { task: Repeati
       } else {
         const built = buildNewTask(draft);
         if (!built.ok) { setError(t(ERROR_KEY[built.error])); setBusy(false); return; }
-        const { task: created } = await api.createTask(withProduct(built.task, product));
+        const { task: created } = await api.createTask(withProduct(built.task, liveProduct));
         toast({ kind: 'done', icon: 'check', title: t(repeat ? 'ui.schedule.toast.created' : 'ui.task.toast.created'), body: created.title, href: routeHash({ view: 'task', id: created.id }) });
       }
       onSaved();
@@ -116,7 +117,7 @@ function ScheduleForm({ task, projects = [], onClose, onSaved }: { task: Repeati
       <input className="bt-field" autoFocus value={draft.title} maxLength={200} aria-label={t('ui.task.title')} placeholder={t('ui.task.title')} onChange={e => set({ title: e.target.value })} />
       <textarea className="bt-field" rows={3} value={draft.body} maxLength={20_000} aria-label={t('ui.task.body')} placeholder={t('ui.newtask.body')} onChange={e => set({ body: e.target.value })} />
       <div className="ui-newtask__row">
-        {!task && <ProductPick projects={projects} value={product} onChange={setProduct} />}
+        {!task && <ProductPick projects={projects} value={liveProduct} onChange={setProduct} />}
         <span className="bt-seg" role="group" aria-label={t('ui.task.priority')}>
           {PRIORITIES.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={draft.priority === p} onClick={() => set({ priority: p })}>{t(PRIORITY_KEY[p])}</button>)}
         </span>
@@ -216,13 +217,13 @@ interface RowActions {
   onConfirm: (on: boolean, refocus?: boolean) => void;
   onEdit: (on: boolean) => void;
   onDelete: () => void;
-  run: (action: () => Promise<unknown>, done?: { title: string; icon?: 'check' | 'undo' }) => void;
+  run: (action: () => Promise<unknown>, done?: { title: string; icon?: 'check' | 'undo'; undo?: () => Promise<unknown> }) => void;
   reload: () => void;
 }
 
 function RepeatingItem({ row, now, actions, product }: { row: RepeatingRow; now: number; actions: RowActions; product: string | null }) {
   const t = useT();
-  const { task, state, next, last, blocked } = row;
+  const { task, state, next, last, blocked, openRun } = row;
   const runNow = runNowKind(state);
   if (actions.editing) return <li className="bt-row ui-sched ui-sched--form"><ScheduleForm task={task} onClose={() => actions.onEdit(false)} onSaved={actions.reload} /></li>;
   const when = state === 'active' ? (next !== null ? t('ui.schedule.next', whenText(next, now), formatRelative(next, now)) : null) : t(state === 'paused' ? 'ui.schedule.pausedMeta' : 'ui.schedule.endedMeta');
@@ -242,12 +243,12 @@ function RepeatingItem({ row, now, actions, product }: { row: RepeatingRow; now:
         <DeleteConfirm note={t('ui.schedule.deleteNote.repeating')} busy={actions.busy} onDelete={actions.onDelete} onKeep={refocus => actions.onConfirm(false, refocus)} />
       ) : (
         <div className="bt-row__end ui-sched__buttons">
-          {last?.status === 'running' && <Pill tone="running">{t('ui.kanban.running')}</Pill>}
-          {last?.status === 'waiting' && <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>}
-          {row.runOpen && last && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => runTaskOp('cancel', { id: last.id, title: task.title }))}>{t('ui.schedule.cancelRun')}</Button>}
+          {openRun?.status === 'running' && <Pill tone="running">{t('ui.kanban.running')}</Pill>}
+          {openRun?.status === 'waiting' && <Pill tone="waiting">{t('ui.kanban.waiting')}</Pill>}
+          {openRun && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => runTaskOp('cancel', { id: openRun.id, title: task.title }))}>{t('ui.schedule.cancelRun')}</Button>}
           {state === 'paused' && <span className="bt-tag">{t('ui.schedule.paused')}</span>}
           {state === 'ended' && <span className="bt-tag">{t('ui.schedule.ended')}</span>}
-          {state === 'active' && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.cancelTask(task.id), { title: t('ui.schedule.toast.paused') })}>{t('ui.schedule.pause')}</Button>}
+          {state === 'active' && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.cancelTask(task.id), { title: t('ui.schedule.toast.paused'), undo: () => api.taskAction(task.id, 'uncancel') })}>{t('ui.schedule.pause')}</Button>}
           {state === 'paused' && <Button small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'uncancel'), { title: t('ui.schedule.toast.resumed'), icon: 'undo' })}>{t('ui.schedule.resume')}</Button>}
           {runNow && <Button variant="ghost" small disabled={actions.busy} onClick={() => actions.run(() => api.taskAction(task.id, 'run-now'), { title: t(runNow === 'restart' ? 'ui.schedule.toast.restarted' : 'ui.task.toast.started') })}>{t(runNow === 'restart' ? 'ui.schedule.restart' : 'ui.task.runNow')}</Button>}
           <Button variant="ghost" small disabled={actions.busy} data-edit={task.id} onClick={() => actions.onEdit(true)}>{t('ui.schedule.edit')}</Button>
@@ -419,7 +420,8 @@ export function Schedule({ revision, projects }: ScheduleProps) {
     run: (action, done) => void withBusy(task.id, async () => {
       try {
         await action();
-        if (done) toast({ icon: done.icon ?? 'check', title: done.title, body: task.title });
+        const undo = done?.undo;
+        if (done) toast({ icon: done.icon ?? 'check', title: done.title, body: task.title, ...(undo ? { action: undoAction(() => undo().then(() => load())) } : {}) });
       } catch (error) { reportOpError(error); }
       await load();
     }),

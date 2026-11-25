@@ -4,7 +4,7 @@ import { ApiError } from '../web/src/api.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import { sheetActions } from '../web/src/task-meta.ts';
-import { answerTaskOp, editOverwrites, runTaskOp, taskButtons, type TaskOpDeps } from '../web/src/ui/task-ops.ts';
+import { answerTaskOp, editOverwrites, liveProductId, runTaskOp, taskButtons, undoAction, type TaskOpDeps } from '../web/src/ui/task-ops.ts';
 
 // 新しい画面のタスクの操作（Kanban のカードとタスクの画面。steps/p1-ui.md の 1-4a）。
 // 戻せる操作（承認 → unapprove、却下・取り消し → uncancel）のトーストにだけ Undo が付く。画面を持たない関数（web/src/ui/task-ops.ts）。
@@ -153,4 +153,27 @@ test('ui/task-ops: 欄を書き換えている最中に下でその欄が変わ�
   assert.equal(editOverwrites('old', 'theirs', 'old'), true, '書き換えていなくても、Save すれば新しい値を戻してしまう');
   assert.equal(editOverwrites('old', 'mine', 'mine'), false, '同じ値になるなら上書きにならない');
   assert.equal(editOverwrites('', 'now set', ''), true);
+});
+
+test('ui/task-ops（backlog 315）: 新しいタスクに付ける製品は、しまわれていない製品だけ。しまわれた製品・一覧に無い製品・製品なしは null', () => {
+  const projects = [{ id: 'live', archived_at: null }, { id: 'shelved', archived_at: 5 }];
+  assert.equal(liveProductId(projects, 'live'), 'live');
+  assert.equal(liveProductId(projects, 'shelved'), null, 'しまわれた製品を送ると 400 になる');
+  assert.equal(liveProductId(projects, 'gone'), null);
+  assert.equal(liveProductId(projects, null), null);
+  assert.equal(liveProductId([], 'live'), null);
+});
+
+test('ui/task-ops（backlog 309）: Undo の操作は、押すと渡した関数を呼ぶ。失敗したらサーバーの文つきで知らせる', async () => {
+  const toasts: FeedbackItem[] = [];
+  let called = 0;
+  const ok = undoAction(async () => { called += 1; }, { toast: item => { toasts.push(item); } });
+  assert.equal(ok.label, t('ui.toast.undo'));
+  ok.run();
+  await settle();
+  assert.deepEqual([called, toasts.length], [1, 0]);
+  const bad = undoAction(async () => { throw new ApiError(409, { message: 'Not cancelled' }); }, { toast: item => { toasts.push(item); } });
+  bad.run();
+  await settle();
+  assert.deepEqual(toasts.map(item => [item.title, item.icon, item.body]), [[t('ui.task.toast.undoFailed'), 'alert', 'Not cancelled']]);
 });
