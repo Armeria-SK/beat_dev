@@ -1,0 +1,129 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
+import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
+import { WT_MAIN_PATH, WT_OPAQUE, worktreeGitRefusal } from '../src/tools/hooks/worktree-git.ts';
+import { tempDir } from './helpers.ts';
+
+// L184: 作業コピーの中で `cd web && … && cd ..`・pushd / popd をしただけの並びを、読めない形（wt.opaque）として断らない。
+// 作業コピーの外へ出る cd・行き先が決まらない cd は、今までどおり断る
+
+type Shell = 'bash' | 'powershell';
+
+function fixture(t: Parameters<typeof tempDir>[0]) {
+  const base = tempDir(t);
+  const ws = realish(join(base, 'copy'));
+  mkdirSync(join(ws, 'web', 'sub'), { recursive: true });
+  mkdirSync(join(base, 'elsewhere'), { recursive: true });
+  writeFileSync(join(ws, 'web', 'package.json'), '{}');
+  const policy: ScopePolicy = { roots: [{ path: ws, mode: 'write' }], deny: [], askOnWrite: [], skillsDir: join(ws, 'skills') };
+  const productRoot = join(base, 'main');
+  // PowerShell 5.1 は && と || を読めない（見張りが文を 0 個にして deny するので、断るかどうかの確かめにならない）。&& は ; に替え、|| と裏に回す & は PowerShell では試さない
+  const asShell = (given: string, shell: Shell): string => (shell === 'powershell' ? given.replaceAll(' && ', '; ') : given);
+  const parses = (given: string, shell: Shell = 'bash'): boolean => checkShellCommand(asShell(given, shell), ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', language: 'en' }).statements.length > 0;
+  const refusal = (given: string, shell: Shell = 'bash', cwdRel = '') => {
+    const command = asShell(given, shell);
+    const cwd = cwdRel ? join(ws, cwdRel) : ws;
+    const verdict = checkShellCommand(command, cwd, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', language: 'en' });
+    return worktreeGitRefusal(verdict.statements, { worktree: ws, productRoot, cwd, command, powershell: shell === 'powershell', remotes: () => ['origin'], sharedConfig: () => '' });
+  };
+  return { base, ws, refusal, parses };
+}
+
+const SHELLS: Shell[] = ['bash', 'powershell'];
+
+test('L184: 作業コピーの中だけを動く cd（cd web && … && cd ..）は wt.opaque で断らない', t => {
+  const { refusal, parses } = fixture(t);
+  const everyday = [
+    'cd web && npm test && cd .. && npm run build',
+    'cd web; npm test; cd ..; npm run build',
+    'cd web && npm test && cd ..',
+    'cd web/sub && npm test && cd ../..',
+    'cd ./web && npm test && cd ../ && npm run build',
+    'cd missing && npm test && cd ..',
+    'pushd web; npm test; popd; npm run build',
+    'cd web && git status && cd ..',
+    'cd web && npm test && cd .. && git status',
+  ];
+  for (const shell of SHELLS) {
+    for (const command of everyday) {
+      assert.ok(parses(command, shell), `${shell}: 見張りが文を読めた: ${command}`);
+      assert.equal(refusal(command, shell)?.key, undefined, `${shell}: ${command}`);
+    }
+  }
+  for (const command of ['Set-Location web; npm test; Set-Location ..', 'Push-Location web; npm test; Pop-Location; npm run build']) {
+    assert.ok(parses(command, 'powershell'), `powershell: 見張りが文を読めた: ${command}`);
+    assert.equal(refusal(command, 'powershell')?.key, undefined, `powershell: ${command}`);
+  }
+  assert.equal(refusal('cd .. && npm test', 'bash', 'web')?.key, undefined, 'web の中から .. へ出て作業コピーの直下に戻るのも中');
+});
+
+test('L184 対照: 作業コピーの外へ出る cd・行き先を決められない cd・ほかの形は、今までどおり断る', t => {
+  const { refusal, parses } = fixture(t);
+  const away = [
+    'cd .. && cd ..',
+    'cd .. && npm test',
+    'cd ../web && npm test',
+    'cd ../.. && npm test',
+    'cd web && npm test && cd .. && cd .. && npm run build',
+    'cd web && cd ../.. && npm test',
+    'cd $X && npm test',
+    'cd "$PWD/web" && npm test',
+    'cd $PWD/web && npm test && cd ..',
+    'cd web && npm test && cd $OLDPWD && npm run build',
+    'cd web; npm test; cd -; npm run build',
+    'cd web; npm test; cd ~; npm run build',
+    'cd; npm test',
+    'cd web && cd; npm test',
+    'popd; npm test',
+    'pushd web; popd; popd; npm test',
+    'pushd; npm test',
+    'pushd ..; npm test; popd; npm test',
+    'cd..; npm test',
+    'cd /tmp && npm test',
+    'cd web && npm test || cd ..; npm run build',
+    'cd web || cd sub; cd ..; cd ..; npm test',
+    'cd web && cd sub || x; cd ..; cd ..; cd ..; npm test',
+    'npm test && cd web; cd ..; cd ..; npm run build',
+    'mkdir out && cd out && npm test && cd ..',
+    'cd web && (npm test; cd ..); cd ..; cd ..; npm run build',
+    'cd web && npm test | cat; cd ..; cd ..; npm run build',
+    'cd web; npm test & cd ../..; npm run build',
+    'for d in web; do cd $d && npm test && cd ..; done',
+    'cd web; if ($?) { npm test }; cd ..; cd ..; npm run build',
+    'foreach ($d in "web") { cd $d; npm test; cd .. }',
+    'cd web; try { npm test } finally { cd .. }; cd ..; npm run build',
+  ];
+  const notRefused: string[] = [];
+  for (const shell of SHELLS) {
+    for (const command of away) {
+      if (!parses(command, shell) || (shell === 'bash' && /\$\?|foreach|try \{/u.test(command))) continue;
+      const key = refusal(command, shell)?.key;
+      if (key !== WT_OPAQUE && key !== WT_MAIN_PATH) notRefused.push(`${shell}: ${command} => ${String(key)}`);
+    }
+  }
+  assert.deepEqual(notRefused, []);
+  assert.ok(away.filter(c => parses(c, 'bash')).length >= 22 && away.filter(c => parses(c, 'powershell')).length >= 20, '読めた形が十分ある（読めないだけで断った扱いにならない）');
+  for (const command of ['cd web && npm test && cd .. && cd .. && git status', 'cd .. && git status']) {
+    assert.ok(refusal(command)?.key !== undefined, `${command}: 外へ出たあとの git も断る`);
+  }
+});
+
+test('L184 対照: 作業コピーの外を指す入口（junction・symlink のフォルダ）への cd は、中の名前に見えても断る', t => {
+  const { base, ws, refusal } = fixture(t);
+  symlinkSync(join(base, 'elsewhere'), join(ws, 'link'), 'junction');
+  for (const shell of SHELLS) {
+    assert.ok(refusal('cd link && npm test && cd ..', shell)?.key !== undefined, `${shell}: cd link`);
+    assert.ok(refusal('pushd link; npm test; popd', shell)?.key !== undefined, `${shell}: pushd link`);
+  }
+  assert.equal(refusal('cd web && npm test && cd ..')?.key, undefined, '同じ形で中のフォルダなら通る');
+});
+
+test('L184 対照: 動いたあとに git の別の入口（-C ..・環境の変数）を足す形は、cd を許しても断る', t => {
+  const { refusal } = fixture(t);
+  for (const command of ['cd web && npm test && cd .. && git -C .. status', 'cd web && git -C ../.. status && cd ..', 'cd web && GIT_DIR=../../.git git status && cd ..', 'cd web && git stash && cd ..']) {
+    assert.ok(refusal(command)?.key !== undefined, command);
+  }
+});
