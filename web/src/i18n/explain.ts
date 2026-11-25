@@ -577,6 +577,7 @@ export const EXPLAIN_KEYS = [
   'ui.set.rules.push',
   'ui.pending.rememberOutside',
   'ui.set.rules.outside',
+  'ui.set.rules.inactive',
   'ui.changes.loadFailed',
   'ui.changes.undoFailed',
   'ui.changes.toolsOnly',

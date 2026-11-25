@@ -578,6 +578,7 @@ export const ja = {
   'ui.set.rules.push': 'push は聞かずに動き、見ていないコミットも送ります',
   'ui.pending.rememberOutside': 'よそから来た文（Web・ダウンロード・人のファイル）を読んだあとの実行でも、聞かずに動きます。その文に操られた実行が、これを使うこともあります。',
   'ui.set.rules.outside': 'よそから来た文を読んだあとでも聞かずに動きます',
+  'ui.set.rules.inactive': '効いていません。Always ask の一覧にあるコマンドから作った決まりで、その一覧は決まりより先に必ず聞きます。この決まりは外してください',
   'ui.changes.loadFailed': '変更を読み込めませんでした',
   'ui.changes.undoFailed': '元に戻せませんでした',
   'ui.changes.toolsOnly': 'ここに出るのは、ファイルの道具で書いた変更だけです。コマンドで変えたものは出ず、ここでは元に戻せません。',

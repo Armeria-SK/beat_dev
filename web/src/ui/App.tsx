@@ -361,11 +361,20 @@ export function App() {
 
   const chatId = behind.view === 'chat' ? behind.id : null;
   const conversation = chatId ? conversations.find(c => c.id === chatId) : undefined;
+  // タスクの会話などは一覧の API に出ない（kind が chat でない）ので、一覧に無い会話は、読み込んだ会話の project_id で製品を引く
+  const [unlisted, setUnlisted] = useState<{ id: string; projectId: string | null } | null>(null);
+  const listed = conversation !== undefined;
+  useEffect(() => {
+    if (!chatId || listed || !live.conversationsSettled) return undefined;
+    let current = true;
+    void api.messages(chatId).then(r => { if (current) setUnlisted({ id: chatId, projectId: r.conversation.project_id ?? null }); }).catch(() => { if (current) setUnlisted({ id: chatId, projectId: null }); });
+    return () => { current = false; };
+  }, [chatId, listed, live.conversationsSettled]);
   const routeProduct = productOf(projects, routeProductId(behind));
   const title = viewTitle(t, behind, conversation, routeProduct);
   const kanban = kanbanCount(waiting);
   const convo = isConversation(behind) || behind.view === 'productNew';
-  const convoProduct = behind.view === 'productNew' ? routeProduct : productOf(projects, conversation?.project_id);
+  const convoProduct = behind.view === 'productNew' ? routeProduct : productOf(projects, listed ? conversation.project_id : (unlisted?.id === chatId ? unlisted.projectId : undefined));
   const isStreaming = behind.view === 'chat' && streaming.has(behind.id);
   const covered = drawer || settingsOpen || onboard !== null;
   const shut = settingsOpen || onboard !== null;
