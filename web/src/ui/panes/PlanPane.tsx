@@ -241,7 +241,7 @@ function Versions({ productId, latest }: { productId: string; latest: number }) 
   );
 }
 
-function AcceptanceList({ acc, editing, differs }: { acc: Acceptance; editing: Editing | undefined; differs: ReadonlySet<string> }) {
+function AcceptanceList({ acc, editing, differs, building }: { acc: Acceptance; editing: Editing | undefined; differs: ReadonlySet<string>; building: boolean }) {
   const t = useT();
   const [adding, setAdding] = useState<EditBase | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -258,7 +258,7 @@ function AcceptanceList({ acc, editing, differs }: { acc: Acceptance; editing: E
       <section className="bt-section ui-acc" aria-label={t('ui.acc.title')}>
         <div className="bt-section__head">
           <span className="bt-label">{t('ui.acc.title')}</span>
-          <span className="bt-meta">{acceptanceMeta(acc)}</span>
+          <span className="bt-meta">{acceptanceMeta(acc, building)}</span>
         </div>
         {items.length > 0 && <ul className="bt-list">{items.map(i => <Row key={i.id} entry={i} editing={editing} differs={differs.has(i.id)} />)}</ul>}
         {editing && (adding
@@ -757,7 +757,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
             {accNotice?.failure.kind === 'stale' && <div role="status"><Notice tone="warn" icon="alert" title={t(accNotice.what === 'edit' ? 'ui.acc.edit.stale' : 'ui.acc.change.staleNotice')} /></div>}
             {accNotice?.failure.kind === 'failed' && <Notice tone="fail" title={t(accNotice.what === 'edit' ? 'ui.acc.edit.failed' : 'ui.acc.change.failed')} text={accNotice.failure.detail ?? undefined} />}
             {change && <ProposedChange acc={acc} change={change} busy={accBusy} onDecide={decision => void decide(decision)} />}
-            {showAcceptance(acc) && <AcceptanceList acc={acc} editing={editing} differs={differs} />}
+            {showAcceptance(acc) && <AcceptanceList acc={acc} editing={editing} differs={differs} building={building} />}
             {deviations && <Differs data={deviations} />}
             {acc.frozen && <Versions productId={productId} latest={acc.frozen.version} />}
           </>
