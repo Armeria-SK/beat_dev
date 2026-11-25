@@ -4,7 +4,7 @@ import { ApiError, type Conversation, type Project } from '../web/src/api.ts';
 import { t } from '../web/src/i18n/index.ts';
 import { errorBodyText, serverText } from '../web/src/server-text.ts';
 import { folderName, newProjectInput, noteKeys } from '../web/src/ui/folder-pick.ts';
-import { awaitingProduct, loadProjectList, newSessionHash, productNav, productsMissing, projectLoads, sendOptions, settleLeave } from '../web/src/ui/product-nav.ts';
+import { awaitingProduct, loadProjectList, navigationHashes, newSessionHash, productNav, productsMissing, projectLoads, sendOptions, settingsRunStart, settleLeave } from '../web/src/ui/product-nav.ts';
 import { parseRoute, routeHash, type Route } from '../web/src/ui/routes.ts';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS, setUnsaved } from '../web/src/ui/unsaved.ts';
 
@@ -195,4 +195,76 @@ test('ui/product-nav: 製品のエラーのコードは画面の文にする。�
 test('ui/product-nav: /new は、製品の会話からならその製品の新しい会話へ、製品でなければ #/ へ', () => {
   assert.equal(newSessionHash('p1aaaa'), routeHash({ view: 'productNew', id: 'p1aaaa' }));
   assert.equal(newSessionHash(undefined), '#/');
+});
+
+test('ui/product-nav（backlog 372）: 読み足したあとも 200 件で切れて残りがあるなら、残りの数を「more」に出す。残りが無い・数えていないなら 0。読み足していない製品には効かない', () => {
+  const projects = [project('p1aaaa'), project('p2bbbb')];
+  const extra = new Map([['p1aaaa', [conv('a', 5, 'p1aaaa'), conv('old', 1, 'p1aaaa')]]]);
+  const capped = productNav(projects, [conv('a', 5, 'p1aaaa')], { p1aaaa: 231, p2bbbb: 9 }, extra, { p1aaaa: 31, p2bbbb: 77 });
+  assert.equal(capped.rows[0]!.more, 31, '読み足した製品は、読み足したあとの残り');
+  assert.equal(capped.rows[1]!.more, 9, '読み足していない製品は、最初の more のまま（残りの表は見ない）');
+  assert.equal(productNav(projects, [conv('a', 5, 'p1aaaa')], { p1aaaa: 231 }, extra, { p1aaaa: 0 }).rows[0]!.more, 0, '全部読めたら 0');
+  assert.equal(productNav(projects, [conv('a', 5, 'p1aaaa')], { p1aaaa: 231 }, extra).rows[0]!.more, 0, '残りの表が無ければ 0（今までどおり）');
+});
+
+test('ui/product-nav（backlog 356）: 止めたあとは、読み直しの時計も、遅れて届く答えも、あとから来る load も何もしない。start で動かし直せる（開発中の二重の起動に耐える）', async () => {
+  const timers: Array<() => void> = [];
+  let calls = 0;
+  const applied: string[][] = [];
+  const failing: boolean[] = [];
+  const loads = projectLoads(async () => { calls += 1; throw new ApiError(500, {}); }, projects => applied.push(ids(projects)), run => timers.push(run), [10], on => failing.push(on));
+  const stop = loads.start();
+  await loads.load();
+  assert.equal(timers.length, 1, '失敗したので読み直しの時計が 1 つ');
+  stop();
+  timers.shift()!();
+  await new Promise(r => setImmediate(r));
+  assert.equal(calls, 1, '止めたあとの時計は何も読まない');
+  assert.equal(timers.length, 0, '止めたあとの時計は次の時計を積まない');
+  await loads.load();
+  assert.equal(calls, 1, '止めたあとに来た load（件数の更新の遅れた分など）も読まない');
+
+  const restart = projectLoads(async () => { calls += 1; throw new ApiError(500, {}); }, () => undefined, run => timers.push(run), [10]);
+  const stopRestart = restart.start();
+  await restart.load();
+  assert.equal(calls, 2);
+  stopRestart();
+  restart.start();
+  timers.shift()!();
+  await new Promise(r => setImmediate(r));
+  assert.equal(calls, 2, '止める前に積んだ時計は、動かし直したあとも何も読まない');
+
+  const pending = [deferred<{ projects: Project[] }>(), deferred<{ projects: Project[] }>()];
+  let call = 0;
+  const live = projectLoads(() => pending[call++]!.promise, projects => applied.push(ids(projects)), run => timers.push(run), [10], on => failing.push(on));
+  const stopLive = live.start();
+  const inflight = live.load();
+  stopLive();
+  pending[0]!.resolve({ projects: [project('p1aaaa')] });
+  await inflight;
+  assert.deepEqual(applied, [], '止める前に出した読み込みの答えは当てない');
+
+  live.start();
+  const again = live.load();
+  pending[1]!.resolve({ projects: [project('p2bbbb')] });
+  await again;
+  assert.deepEqual(applied, [['p2bbbb']], 'start で動かし直せば、また読める');
+});
+
+test('ui/product-nav（backlog 352）: Settings の積み重ねの最初の位置は、開いた位置の手前に Settings が続く限り広げる。続かなければそのまま、位置が分からなければ null', () => {
+  const hashes = ['#/kanban', '#/settings/models', '#/settings/memory', '#/settings', '#/kanban'];
+  assert.equal(settingsRunStart(3, hashes), 1, '手前の 2 つも Settings: 最初は 1');
+  assert.equal(settingsRunStart(2, hashes), 1);
+  assert.equal(settingsRunStart(1, hashes), 1, '手前が Settings でなければそのまま');
+  assert.equal(settingsRunStart(0, hashes), 0, '先頭より手前は無い');
+  assert.equal(settingsRunStart(3, []), 3, '履歴の一覧が読めなければそのまま');
+  assert.equal(settingsRunStart(null, hashes), null);
+  assert.equal(settingsRunStart(1, ['#/settings', '#/settings/models']), 0, '先頭まで Settings なら先頭');
+});
+
+test('ui/product-nav（backlog 352）: navigationHashes は Navigation API の履歴を # から先の文字にする。無ければ空', () => {
+  const nav = { entries: () => [{ url: 'http://localhost/#/kanban' }, { url: 'http://localhost/' }, { url: null }, { url: 'http://localhost:4777/?a=1#/settings/models' }] };
+  assert.deepEqual(navigationHashes(nav), ['#/kanban', '', '', '#/settings/models']);
+  assert.deepEqual(navigationHashes(undefined), []);
+  assert.deepEqual(navigationHashes({}), []);
 });
