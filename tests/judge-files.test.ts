@@ -537,3 +537,22 @@ test('A2 実行を数え漏らさない: bun の <file>・source・. は実行�
   assert.deepEqual(wrong, []);
   for (const c of ['source evil.sh; npx tsx run.ts', 'npx tsx run.ts; bun evil.ts', 'npm test; bun evil.ts']) await ownerOnly(selfRunRig(t, cfg => { cfg.tools.shell.shell = 'bash'; }, files), c, 'judge_failed');
 });
+
+// 2026-11-26 shell-judge (security review, MEDIUM): a powershell statement is never a test runner, whatever flags it carries. `--test` before -File must not make it quiet for rewritesOf
+test('A1 再審査: powershell・pwsh は --test があっても試験の道具に数えない。-File の前の --test でも、前の文が書き換えるかの確かめ（持ち主）は変わらない', async t => {
+  const files = { 'x.ps1': "Write-Output 'x'\n", 't.js': "console.log('t');\n" };
+  const wrong: string[] = [];
+  for (const shell of SCOPE_SHELLS) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+    for (const program of ['powershell', 'pwsh']) {
+      for (const flag of ['-File', '-fi', '-fil', '/File', '/f', '--file']) {
+        for (const command of [`${program} --test ${flag} x.ps1; node --test t.js`, `${program} --test ${flag} x.ps1; node t.js`]) {
+          const got = scopeOf(r, command);
+          if (got !== 'owner') wrong.push(`${shell}: ${command} -> ${got} (want owner)`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+  await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files), 'powershell --test -fi x.ps1; node --test t.js');
+});

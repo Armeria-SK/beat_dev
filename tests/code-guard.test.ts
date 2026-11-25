@@ -557,7 +557,10 @@ test('A1 PowerShell の -File の綴り違い（-f・-fi・-fil・-FILE・/File�
     }
   }
   for (const flag of ['-fo', '-filex', '-fileX', '-ff', '-NoProfile', '-Command', '-c']) {
-    assert.deepEqual(f.ps(`powershell ${flag} put.ps1`).scripts.filter(p => p.endsWith('put.ps1') && flag !== '-Command' && flag !== '-c'), [], `${flag} is not -File`);
+    // -Command・-c の put.ps1 はコマンドの文字で -File の引数ではない。code.powershell の所見に見せるファイルを付けないことを、7 つ全部で確かめる
+    const found = segments(`powershell ${flag} put.ps1`).flatMap(seg => codeFindings(seg, { cwd: f.ws, language: 'en', selfHosts: [] })).filter(x => x.key === 'code.powershell');
+    assert.equal(found.length, 1, `${flag}: one code.powershell finding`);
+    assert.deepEqual(found[0]!.scripts, [], `${flag} is not -File`);
   }
 });
 

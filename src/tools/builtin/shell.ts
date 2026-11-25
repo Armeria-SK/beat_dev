@@ -252,6 +252,8 @@ function isRunner(st: StatementFacts): boolean {
   if (program === 'npx') return true;
   if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
   if (RUNNER_PROGRAMS.has(program)) return true;
+  // powershell・pwsh は、--test や -m があっても試験の道具ではない（下の node・python 向けの見分けに通さない）
+  if (program === 'pwsh' || program === 'powershell') return false;
   if (!runsCode(st)) return false;
   const target = words.findIndex(w => !w.startsWith('-'));
   const before = target < 0 ? words : words.slice(0, target);
