@@ -131,6 +131,8 @@ export interface QuestionStoreOptions {
   tasks?: TaskStore | undefined;
   projects?: ProjectStore | undefined;
   acceptance?: AcceptanceStore | undefined;
+  // 登録済みの秘密の値（持ち主が設定した鍵など）。質問・理由・選び・答えは、形が鍵らしくなくても、この値を伏せてから保存する。呼ぶたびに今の一覧を聞く
+  secrets?: (() => readonly string[]) | undefined;
 }
 
 const QUESTIONS_PER_TASK = 10;
@@ -143,9 +145,6 @@ const ANSWERED_MAX = 200;
 const OPEN_MAX = 1000;
 const REOPEN_KINDS: readonly QuestionKind[] = ['stuck', 'check_failed'];
 const FINISHED: readonly string[] = ['done', 'failed', 'cancelled'];
-
-const cleanBlock = (text: string, max: number): string => plainBlock(redactSecrets(stripHidden(text)), max).trim();
-const cleanLine = (text: string, max: number): string => plainLine(redactSecrets(stripHidden(text)), max);
 
 function pageOf(url: string | undefined): string | null {
   if (!url) return null;
@@ -191,6 +190,10 @@ export class QuestionStore {
 
   #now(): number { return this.options.now?.() ?? Date.now(); }
 
+  #block(text: string, max: number): string { return plainBlock(redactSecrets(stripHidden(text), this.options.secrets?.() ?? []), max).trim(); }
+
+  #line(text: string, max: number): string { return plainLine(redactSecrets(stripHidden(text), this.options.secrets?.() ?? []), max); }
+
   add(input: QuestionAdd): QuestionRow {
     const row = this.#insert(input, false);
     this.options.onChange?.({ id: row.id, projectId: row.project_id, status: 'open' });
@@ -201,11 +204,11 @@ export class QuestionStore {
     const kind = input.kind ?? 'ai';
     const category = input.category ?? 'other';
     if (!(QUESTION_CATEGORIES as readonly string[]).includes(category)) throw new QuestionError('bad_category', { categories: QUESTION_CATEGORIES.join(', ') });
-    const question = cleanBlock(input.question, TEXT_MAX);
+    const question = this.#block(input.question, TEXT_MAX);
     if (!question) throw new QuestionError('empty');
-    const why = input.why ? cleanBlock(input.why, TEXT_MAX) || null : null;
+    const why = input.why ? this.#block(input.why, TEXT_MAX) || null : null;
     if (input.options.length < 2 || input.options.length > 4) throw new QuestionError('options_count');
-    const options = input.options.map(option => cleanLine(option, OPTION_MAX));
+    const options = input.options.map(option => this.#line(option, OPTION_MAX));
     if (options.some(option => !option)) throw new QuestionError('option_empty');
     const blocking = input.blocking === true;
     const chosen = input.chosen ?? null;
@@ -233,7 +236,7 @@ export class QuestionStore {
     const language = DEFAULT_LANGUAGE;
     const page = pageOf(input.url);
     const question = page ? questionText(language, 'submit_question', { url: page }) : questionText(language, 'submit_question_unknown', { tool: input.tool });
-    const same = this.db.prepare("SELECT id FROM questions WHERE task_id = ? AND kind = 'submit_refused' AND question = ? ORDER BY id LIMIT 1").get(input.taskId, cleanBlock(question, TEXT_MAX)) as { id: number } | undefined;
+    const same = this.db.prepare("SELECT id FROM questions WHERE task_id = ? AND kind = 'submit_refused' AND question = ? ORDER BY id LIMIT 1").get(input.taskId, this.#block(question, TEXT_MAX)) as { id: number } | undefined;
     const { n } = this.db.prepare("SELECT COUNT(*) AS n FROM questions WHERE task_id = ? AND kind = 'submit_refused'").get(input.taskId) as { n: number };
     const kept = same ?? (n >= QUESTIONS_PER_TASK ? this.db.prepare("SELECT id FROM questions WHERE task_id = ? AND kind = 'submit_refused' ORDER BY id DESC LIMIT 1").get(input.taskId) as { id: number } : undefined);
     if (kept) {
@@ -258,7 +261,7 @@ export class QuestionStore {
         const added = transaction(this.db, () => {
           const task = tasks.get(id);
           if (!task) return false;
-          const question = cleanBlock(task.waiting_text ?? '', TEXT_MAX) || questionText(language, 'legacy_none');
+          const question = this.#block(task.waiting_text ?? '', TEXT_MAX) || questionText(language, 'legacy_none');
           const latest = this.#waitedOn(task.id);
           const held = latest === undefined ? undefined : this.get(latest);
           if (held && held.status === 'open' && held.question === question) return false;
@@ -339,7 +342,7 @@ export class QuestionStore {
     let text: string | null = null;
     if (raw) {
       if (answer.choice !== null) throw new QuestionError('invalid_answer');
-      text = cleanBlock(raw, ANSWER_MAX);
+      text = this.#block(raw, ANSWER_MAX);
       if (!text) throw new QuestionError('invalid_answer');
     } else if (answer.choice === null) {
       throw new QuestionError('invalid_answer');

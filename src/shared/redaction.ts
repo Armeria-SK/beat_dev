@@ -2,6 +2,9 @@ const SECRET_PATTERNS = [
   /Bearer\s+[A-Za-z0-9._~+/-]+=*/gi,
   /\b(?:sk|or-v1)-[A-Za-z0-9_-]{8,}\b/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  // 前に語の文字がくっついた鍵（`x` + `sk-ant-…`）。頭の `\b` が無いので、ふつうの語に出ない頭だけにする（ただの `sk-` には付けない）
+  /(?:sk-ant-|sk-proj-|sk-or-v1-|sk-svcacct-)[A-Za-z0-9_-]{8,}/g,
+  /gh[pousr]_[A-Za-z0-9]{36,}/g,
 ];
 const URL_CREDENTIAL = /(?:https?:\/\/)[^\s/@:]+:[^\s/]+@/gi;
 const URL_USERINFO_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:[]*:)(?:[^\s/?#]+@|(?!\d*(?:[/?#"',)\]}\\]|$))[^\s@]{1,256}@)/gi;

@@ -128,6 +128,7 @@ const REASON_MAX = 500;
 const LIST_MAX = 200;
 const MARK = '[REDACTED]';
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const FORMAT = /\p{Cf}/gu;
 
 const marks = (text: string): number => text.split(MARK).length - 1;
 
@@ -142,11 +143,12 @@ export function outputTail(text: string, mark: Mark = same => same): string {
   return marked.length > OUTPUT_TAIL ? marked.slice(-OUTPUT_TAIL) : marked;
 }
 
-// Marks every held value before the cut, for the same reason as outputTail. It marks twice around the control-character strip: before it, so a value that
-// itself holds a line break (a multi-line key) is still found; after it, so a value split by an invisible character (U+200B) that the strip joins back is marked too
+// Marks every held value before the cut, for the same reason as outputTail. It marks three times: on the raw text, so a value that itself holds a line break
+// (a multi-line key) is found; after only the format characters (Cf, e.g. U+200B) are stripped, so a multi-line value split by an invisible character is found with
+// its line breaks still in place; and after the whole control-character strip, so a value the strip joins back is marked too
 export function cleanReason(text: string | undefined, mark: Mark = same => same): string | null {
   if (text === undefined) return null;
-  const cleaned = mark(mark(text).replace(CONTROL, '')).trim().slice(0, REASON_MAX);
+  const cleaned = mark(mark(mark(text).replace(FORMAT, '')).replace(CONTROL, '')).trim().slice(0, REASON_MAX);
   return cleaned || null;
 }
 

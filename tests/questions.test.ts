@@ -4,9 +4,13 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
+import { openDatabase } from '../src/db/database.ts';
+import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
+import { QuestionStore } from '../src/questions/store.ts';
+import { TaskStore } from '../src/tasks/store.ts';
 import { questionAdd, questionList } from '../src/tools/builtin/questions.ts';
 import { planAllows } from '../src/tools/pipeline.ts';
 import type { ToolContext } from '../src/tools/types.ts';
@@ -767,4 +771,93 @@ test('question_list: その製品の Open と最近の答えを返す。外を�
   assert.equal(clean.fetched, undefined);
   await questionAdd.execute({ ...ask, question: 'From the web' } as never, ctxFor(s, task.id, { projectId: shop.id, tainted: true }));
   assert.equal((await questionList.execute({} as never, ctx)).fetched, true);
+});
+
+// 登録済みの秘密の値（持ち主が設定した鍵など）は、形が鍵らしくなくても、質問の文・理由・選び・答えに残さない。保存する値そのものを伏せる
+const HELD = 'held-value-123456';
+
+function heldStore(secrets?: () => readonly string[]): { db: ReturnType<typeof openDatabase>; tasks: TaskStore; store: QuestionStore } {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  const tasks = new TaskStore(db);
+  return { db, tasks, store: new QuestionStore(db, { tasks, ...(secrets ? { secrets } : {}) }) };
+}
+
+test('question: 登録済みの秘密の値は、問い・理由・選びを保存する前に伏せる（list の結果にも DB の行にも残らない）', () => {
+  const { db, store } = heldStore(() => [HELD]);
+  const row = store.add({ question: `Use ${HELD} for the deploy?`, why: `Because ${HELD} is the key`, options: [`yes ${HELD}`, 'no'], chosen: 0 });
+  assert.equal(JSON.stringify(store.list({ status: 'open' })).includes(HELD), false, 'list');
+  assert.equal(JSON.stringify(db.prepare('SELECT * FROM questions').all()).includes(HELD), false, 'DB の行');
+  const stored = store.get(row.id)!;
+  assert.equal(stored.question, 'Use [REDACTED] for the deploy?');
+  assert.equal(stored.why, 'Because [REDACTED] is the key');
+  assert.deepEqual(JSON.parse(stored.options), ['yes [REDACTED]', 'no']);
+});
+
+test('question: 登録済みの秘密の値は、答えの文からも伏せる。登録が無い store は今のまま（対照）', () => {
+  const held = heldStore(() => [HELD]);
+  const a = held.store.add({ question: 'Which key?', options: ['a', 'b'], chosen: 0 });
+  const answered = held.store.answer(a.id, { choice: null, text: `use ${HELD} please` });
+  assert.equal(answered?.question.answer, 'use [REDACTED] please');
+  assert.equal(JSON.stringify(held.db.prepare('SELECT * FROM questions').all()).includes(HELD), false);
+
+  const plain = heldStore();
+  const row = plain.store.add({ question: `Use ${HELD}?`, why: HELD, options: [HELD, 'no'], chosen: 0 });
+  assert.equal(plain.store.get(row.id)!.question, `Use ${HELD}?`, '登録の無い store は値を変えない（伏せ字の形に当たらない値）');
+  const answeredPlain = plain.store.answer(row.id, { choice: null, text: `use ${HELD}` });
+  assert.equal(answeredPlain?.question.answer, `use ${HELD}`);
+  const empty = heldStore(() => []);
+  assert.equal(empty.store.get(empty.store.add({ question: `Use ${HELD}?`, options: ['a', 'b'], chosen: 0 }).id)!.question, `Use ${HELD}?`);
+});
+
+test('question: 登録済みの鍵が後から変わっても、今の登録で伏せる（呼ぶたびに今の一覧を聞く）', () => {
+  let held: string[] = [];
+  const { store } = heldStore(() => held);
+  const first = store.add({ question: `Use ${HELD}?`, options: ['a', 'b'], chosen: 0 });
+  assert.equal(store.get(first.id)!.question, `Use ${HELD}?`);
+  held = [HELD];
+  const second = store.add({ question: `Use ${HELD} now?`, options: ['a', 'b'], chosen: 0 });
+  assert.equal(store.get(second.id)!.question, 'Use [REDACTED] now?');
+});
+
+test('question: submit_refused の同じ問いは、登録済みの値を含んでいても 2 回足して 1 行（照らしが伏せた文どうしで合う）', () => {
+  const { db, tasks, store } = heldStore(() => [HELD]);
+  const task = tasks.create({ title: 'Web job', origin: 'user', actor: 'user' });
+  const input = { taskId: task.id, projectId: null, conversationId: null, tool: 'browser_act', url: `https://example.com/${HELD}/form?x=1`, tainted: false };
+  const first = store.addSubmitRefused(input);
+  const second = store.addSubmitRefused(input);
+  assert.equal(first.added, true);
+  assert.equal(second.added, false, '2 回目は新しい行を作らない');
+  assert.equal(second.row.id, first.row.id);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM questions').get()!.n, 1);
+  assert.equal(JSON.stringify(db.prepare('SELECT * FROM questions').all()).includes(HELD), false);
+  assert.equal(first.row.question, 'Send the form at https://example.com/[REDACTED]/form?');
+});
+
+test('question: 古い待ち（waiting_text）を写した行も、登録済みの値を伏せ、2 回写しても 1 行', () => {
+  const { db, tasks, store } = heldStore(() => [HELD]);
+  const task = tasks.create({ title: 'Old wait', origin: 'user', actor: 'user' });
+  db.prepare("UPDATE tasks SET status = 'waiting', waiting_kind = 'question', waiting_text = ? WHERE id = ?").run(`Which key, ${HELD} or the other?`, task.id);
+  assert.equal(store.copyLegacyWaits(), 1);
+  assert.equal(store.copyLegacyWaits(), 0, '2 回目は写さない');
+  const rows = db.prepare('SELECT question FROM questions').all() as Array<{ question: string }>;
+  assert.deepEqual(rows.map(r => r.question), ['Which key, [REDACTED] or the other?']);
+});
+
+test('question: App が作る QuestionStore は、登録済みの提供元の鍵（環境の値）を伏せて保存する', async t => {
+  const dir = tempDir(t);
+  const paths = resolvePaths(dir);
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'HELD_PROVIDER_KEY', maxParallel: 1, timeoutMs: 10_000 }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
+  config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
+  writeFileSync(paths.config, JSON.stringify(config));
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, env: { HELD_PROVIDER_KEY: HELD }, adapterOverride: p => new FakeAdapter(p) });
+  t.after(() => app.close());
+  assert.deepEqual(app.registry.secrets(), [HELD]);
+  const row = app.questions.add({ question: `Use ${HELD}?`, why: HELD, options: [HELD, 'no'], chosen: 1 });
+  const stored = app.questions.get(row.id)!;
+  assert.equal(stored.question, 'Use [REDACTED]?');
+  assert.equal(stored.why, '[REDACTED]');
+  assert.deepEqual(JSON.parse(stored.options), ['[REDACTED]', 'no']);
 });
