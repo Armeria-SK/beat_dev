@@ -469,23 +469,36 @@ const quietStatement = (st: StatementFacts): boolean =>
   st.shapes.length === 0 && st.env.length === 0 && st.reasonKeys.length === 0 && st.urls.length === 0 && st.writes.length === 0 && !st.deletes
   && st.code.length === 0 && !st.codeDynamic && !st.programDynamic && !st.programOdd && !st.words.some(w => w.dynamic) && st.inner === undefined && st.unknownInner === undefined;
 
-const loopReadsOnly = (before: readonly StatementFacts[]): boolean => {
+const quietWrapper = (st: StatementFacts): boolean =>
+  st.shapes.length === 0 && st.env.length === 0 && st.urls.length === 0 && st.writes.length === 0 && !st.deletes
+  && !st.programDynamic && !st.programOdd && !st.words.some(w => w.dynamic) && st.inner !== null;
+
+const wrappersOf = (list: readonly StatementFacts[], target: StatementFacts): StatementFacts[] | undefined => {
+  for (const st of list) {
+    if (st === target) return [];
+    const inside = wrappersOf(st.inner ?? st.unknownInner ?? [], target);
+    if (inside) return [st, ...inside];
+  }
+  return undefined;
+};
+
+const loopReadsOnly = (header: StatementFacts, root: readonly StatementFacts[]): boolean => {
+  const enclosing = new Set(wrappersOf(root, header));
   let expressions = 0;
-  for (const st of new Set(flatten(before))) {
-    if (namesVariableOnly(st)) continue;
-    if (st.inner === null) return false;
-    if (st.inner !== undefined) continue;
+  for (const st of flatten(root)) {
+    if (st === header || namesVariableOnly(st)) continue;
+    if (enclosing.has(st)) { if (!quietWrapper(st)) return false; continue; }
     if (!quietStatement(st)) return false;
     if (st.program === '' && st.words.length === 0 && ++expressions > 1) return false;
   }
   return true;
 };
 
-function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
+function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv, nested: boolean, root: readonly StatementFacts[]): Hit[] {
   const p = st.program;
-  if ((st.programDynamic && !(namesVariableOnly(st) && loopReadsOnly(before))) || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
+  if ((st.programDynamic && !(namesVariableOnly(st) && loopReadsOnly(st, root))) || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
   if (st.inner === null) return [hit('send', 'send.unknown_command', { cmd: p })];
-  if (st.inner) return [...walk(st.inner, [...before, st], env, true), ...[statementHit(st, before, env)].filter((h): h is Hit => !!h)];
+  if (st.inner) return [...walk(st.inner, [...before, st], env, true, root), ...[statementHit(st, before, env)].filter((h): h is Hit => !!h)];
   if (!p) return [];
   const one = statementHit(st, before, env);
   return one ? [one] : [];
@@ -515,8 +528,8 @@ function statementHit(st: StatementFacts, before: readonly StatementFacts[], env
   return undefined;
 }
 
-function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
-  return list.flatMap((st, i) => statementHits(st, [...prior, ...list.slice(0, i)], env, nested));
+function walk(list: readonly StatementFacts[], prior: readonly StatementFacts[], env: OutboundEnv, nested: boolean, root: readonly StatementFacts[]): Hit[] {
+  return list.flatMap((st, i) => statementHits(st, [...prior, ...list.slice(0, i)], env, nested, root));
 }
 
 const flatten = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatten(st.inner ?? st.unknownInner ?? [])]);
@@ -566,7 +579,7 @@ export function outboundOf(facts: OutboundFacts, env: OutboundEnv): Outbound | u
     const secret = secretTarget(st);
     if (secret) return { kind: 'deny', reason: say(hit('deny', 'deny.secret_target', { target: secret })), targets: [secret] };
   }
-  const hits = walk(facts.statements, [], env, false);
+  const hits = walk(facts.statements, [], env, false, facts.statements);
   if (!hits.length) return undefined;
   const deletes = hits.find(h => h.kind === 'delete');
   const sends = hits.find(h => h.kind === 'send');

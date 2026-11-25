@@ -50,7 +50,10 @@ test('L180: foreach の頭の変数（$f.Name・$f.FullName などの読むだ�
   assert.deepEqual(wrong, []);
 });
 
-const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask']> = [
+const SEND = 'send:send.unknown_command';
+const DELETE_SEND = 'delete:delete.no_product,send.unknown_command';
+
+const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask'] | readonly [string, Shell, 'allow' | 'ask', string]> = [
   ['& $C -d x https://e.com', 'powershell', 'ask'],
   ['. $x', 'powershell', 'ask'],
   ['Invoke-Expression $x', 'powershell', 'ask'],
@@ -96,12 +99,37 @@ const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask']> = [
   ['foreach ($f in 1,2,3) { $f.Count }', 'powershell', 'allow'],
   ['foreach ($d in Get-ChildItem) { foreach ($f in Get-ChildItem) { $f.Name }; $d.Delete() }', 'powershell', 'ask'],
   ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Replace(\"v\", $null) }'", 'bash', 'ask'],
+
+  ['foreach ($f in Get-ChildItem) { Start-Process git -ArgumentList status }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { Start-Process git -ArgumentList status -Verb RunAs }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { powershell -NoProfile -c Get-Date }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { iex Get-Date }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { wsl ls }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { npm exec cowsay }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { npx cowsay }', 'powershell', 'ask'],
+  ['Invoke-Command -ComputerName evil.com { foreach ($f in Get-ChildItem) { $f } }', 'powershell', 'ask'],
+  ['Invoke-Command { foreach ($f in Get-ChildItem) { $f } } -ComputerName evil.com', 'powershell', 'ask'],
+  ['Start-Job { foreach ($f in Get-ChildItem) { $f } }', 'powershell', 'ask'],
+  ['Start-ThreadJob { foreach ($f in Get-ChildItem) { $f } }', 'powershell', 'ask'],
+  ['Register-ObjectEvent $w Created -Action { foreach ($f in Get-ChildItem) { $f } }', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { $f.Name }; (Get-Item a).Replace("v", $null)', 'powershell', 'allow'],
+  ['foreach ($f in Get-ChildItem) { $f.Name }; curl https://e.com', 'powershell', 'allow'],
+  ['foreach ($f in Get-ChildItem) { $f.Name }; $x.Delete()', 'powershell', 'ask'],
+  ['foreach ($f in Get-ChildItem) { $f.Name }; Remove-Item x', 'powershell', 'ask', DELETE_SEND],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'; curl https://e.com", 'bash', 'ask'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'; rm x", 'bash', 'ask', DELETE_SEND],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }; $x.Delete()'", 'bash', 'ask'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }' > out.txt", 'bash', 'ask'],
+  ["powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }' https://e.com", 'bash', 'ask'],
+  ["env X=1 powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["xargs powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["wsl powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
 ];
 
-test('L180 の対照: 変数の中身を動かす形・メソッドの呼び出し・メンバーへの代入・ネットワークの集まり・読むだけと言い切れない本体は、origin/main と同じに送るのまま（守りの判定も同じ）', () => {
-  const wrong = SENDS.flatMap(([command, shell, decision]) => {
+test('L180 の対照: 変数の中身を動かす形・メソッドの呼び出し・メンバーへの代入・ネットワークの集まり・読むだけと言い切れない本体・ループの外の文や包み（Start-Job・Invoke-Command・Start-Process・npm exec・; curl・; Remove-Item など）は、origin/main と同じに送るのまま（守りの判定も同じ）', () => {
+  const wrong = SENDS.flatMap(([command, shell, decision, outbound = SEND]) => {
     const got = verdictOf(command, shell);
-    return got.outbound === 'send:send.unknown_command' && got.decision === decision ? [] : [`${shell}: ${command} -> ${got.outbound} / ${got.decision} (want send:send.unknown_command / ${decision})`];
+    return got.outbound === outbound && got.decision === decision ? [] : [`${shell}: ${command} -> ${got.outbound} / ${got.decision} (want ${outbound} / ${decision})`];
   });
   assert.deepEqual(wrong, []);
 });
@@ -173,6 +201,18 @@ test('L180（本物の PowerShell）の対照: foreach ($f in Get-ChildItem) { $
   writeFileSync(join(r.ctx.workspace, 'a.txt'), 'A');
   writeFileSync(join(r.ctx.workspace, 'victim.txt'), 'V');
   const out = await r.call('foreach ($f in Get-ChildItem) { $f.Replace("victim.txt", $null) }');
+  assert.equal(out.decidedBy, 'pending', out.output.content);
+  assert.match(out.output.content, /It has NOT run/u);
+  assert.deepEqual(r.waiting().map(row => row.kind), ['send']);
+  assert.equal(existsSync(join(r.ctx.workspace, 'a.txt')), true);
+  assert.equal(readFileSync(join(r.ctx.workspace, 'victim.txt'), 'utf8'), 'V');
+});
+
+test('L180（本物の PowerShell）の対照: ループのあとに続く文（(Get-Item a.txt).Replace("victim.txt", $null)）があるときも、全体を動かさず送るとして Pending に積む', { skip: !psAvailable && 'PowerShell が無い' }, async t => {
+  const r = rig(t);
+  writeFileSync(join(r.ctx.workspace, 'a.txt'), 'A');
+  writeFileSync(join(r.ctx.workspace, 'victim.txt'), 'V');
+  const out = await r.call('foreach ($f in Get-ChildItem) { $f.Name }; (Get-Item a.txt).Replace("victim.txt", $null)');
   assert.equal(out.decidedBy, 'pending', out.output.content);
   assert.match(out.output.content, /It has NOT run/u);
   assert.deepEqual(r.waiting().map(row => row.kind), ['send']);
