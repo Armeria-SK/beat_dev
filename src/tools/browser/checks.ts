@@ -1,4 +1,4 @@
-// browser_click / browser_type の事前の判定と、実行の直前の探し直し（同じ判定を 2 回通す）。
+// browser_click / browser_type の事前の判定と、実行の直前の探し直し（同じ判定を 2 回通す）。browser_act（P5）は step ごとに、同じ探し直しと通り方をその時点のページで通す。
 // 守り（どれも、方針が allow でも・「この会話では許可」でも外れない。preCheck が deny を返し、execute も同じ判定をもう一度通す）:
 //   - 押せるのは、そのタブで許されたページ（公開のページ、または作業用のタブで許しのある実行の許されたループバック）だけ
 //   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否。
@@ -34,9 +34,22 @@ const SECRET_NAME = /password|passcode|passwd|パスワード|暗証|one[- ]?tim
 export interface ActInput { tab?: string | undefined; ref: string; text?: string | undefined; submit?: boolean | undefined }
 
 // place: ページが公開のページか、その実行に許されたループバック（製品の開発サーバー）か。submits: この操作がフォームを送るか（D-5）
+// shape: 探し直しに使った表の、画面のまとめ（ActPick.shape を渡したときだけ）
 export type Inspected =
-  | { ok: true; tab: BrowserTab; pageUrl: string; item: ListedElement; target: ElementTarget; detail: ElementDetail; place: 'public' | 'loopback'; submits: boolean }
+  | { ok: true; tab: BrowserTab; pageUrl: string; item: ListedElement; target: ElementTarget; detail: ElementDetail; place: 'public' | 'loopback'; submits: boolean; shape?: string | undefined }
   | { ok: false; reason: string };
+
+// 名前で指した目標（browser_act の step。P5）。nth は表の並び（木の順）で数え、1 が最初
+export interface NamedTarget { role: string; name: string; nth?: number | undefined }
+
+// browser_act の step の探し直しに足すもの。
+// named: 番号の代わりに、その場で取り直した表から役割と名前（完全一致）で探す。allowed が true を返すページでだけ（その実行の開発サーバー）。
+//   このとき input.ref は断る文に出す呼び名（「the element named in step 3」。ページの文も、モデルが書いた名前も入れない）
+// shape: 画面のまとめも返す
+export interface ActPick {
+  named?: { target: NamedTarget; allowed: (pageUrl: string, place: 'public' | 'loopback') => boolean } | undefined;
+  shape?: boolean | undefined;
+}
 
 const refuse = (reason: string): Inspected => ({ ok: false, reason });
 
@@ -69,8 +82,23 @@ export async function rereadTab(tab: BrowserTab, pageUrl: string, signal: AbortS
   return table;
 }
 
+// 表を取り直すが、読んでいないページの表を「読んだ表」にはしない（browser_act の名前で探す取り直しと、画面のまとめ。番号の step は今までどおり、読み直すまで断る）
+export async function peekTab(tab: BrowserTab, pageUrl: string, signal: AbortSignal, numbering: Numbering): Promise<ElementTable | undefined> {
+  const before = tab.table;
+  const table = await rereadTab(tab, pageUrl, signal, numbering);
+  if (before?.url !== pageUrl) tab.table = before;
+  return table;
+}
+
+// 名前で指した目標を、named つきで取り直した表から選ぶ。複数当たって nth が無ければ many、無ければ undefined
+export function namedItem(table: ElementTable, target: NamedTarget): ListedElement | 'many' | undefined {
+  const found = table.named ?? [];
+  if (target.nth === undefined && found.length > 1) return 'many';
+  return found[(target.nth ?? 1) - 1];
+}
+
 // タブ・ページ・番号・探し直しを確かめる。ブラウザの呼び出しの中（run のロックの下）で呼ぶ
-export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input: ActInput, language: Language, denied: ReadonlySet<number>): Promise<Inspected> {
+export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input: ActInput, language: Language, denied: ReadonlySet<number>, pick: ActPick = {}): Promise<Inspected> {
   let tab: BrowserTab;
   try { tab = api.tab(input.tab); } catch (thrown) {
     if (thrown instanceof BrowserFailure) return refuse(thrown.text(language));
@@ -79,14 +107,29 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input:
   const pageUrl = tab.page.url();
   const place = placeOf(tab, api, pageUrl, denied);
   if (place === undefined) return refuse(guardText(language, 'browser.act.not_allowed_page'));
-  if (tab.table === undefined) return refuse(guardText(language, 'browser.act.no_table'));
-  if (tab.table.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  const named = pick.named;
+  const before = tab.table;
+  if (named === undefined) {
+    if (before === undefined) return refuse(guardText(language, 'browser.act.no_table'));
+    if (before.url !== pageUrl) return refuse(guardText(language, 'browser.act.stale'));
+  } else if (!named.allowed(pageUrl, place)) return refuse(guardText(language, 'browser.act.named_page'));
   // 番号は、いつもその場で取り直した表から引く（読んだあとに要素が作り直された・中身が入れ替わった番号は、ここで使えなくなる）
-  const table = await rereadTab(tab, pageUrl, api.signal);
+  const table = await (named === undefined ? rereadTab : peekTab)(tab, pageUrl, api.signal, { kind: 'check', named: named?.target, shape: pick.shape });
   if (table === undefined) return refuse(guardText(language, 'browser.act.stale'));
-  const item = table.items.find(e => e.ref === input.ref);
-  // 使えなくなった番号には、新しい番号を添えない（周りを見ずに並びで選び直させない）。読み直させる。見せていない番号は無い番号と同じ
-  if (item === undefined || !shownRef(tab.refs, item.ref)) return refuse(guardText(language, retiredRef(tab.refs, input.ref) ? 'browser.act.retired' : 'browser.act.no_ref', { ref: input.ref }));
+  let item: ListedElement | undefined;
+  if (named === undefined) {
+    item = table.items.find(e => e.ref === input.ref);
+    // 使えなくなった番号には、新しい番号を添えない（周りを見ずに並びで選び直させない）。読み直させる。見せていない番号は無い番号と同じ
+    if (item === undefined || !shownRef(tab.refs, item.ref)) return refuse(guardText(language, retiredRef(tab.refs, input.ref) ? 'browser.act.retired' : 'browser.act.no_ref', { ref: input.ref }));
+  } else {
+    // 名前で指した目標: その場の表の並びで数える。複数当たって nth が無ければ選ばない。印の無い（引けない）要素は押さない。
+    // モデルが表で見ていない要素でもよい（番号の「見せた」の決まりは当てない。だから開発サーバーのページだけ）
+    const picked = namedItem(table, named.target);
+    if (picked === 'many') return refuse(guardText(language, 'browser.act.named_many', { ref: input.ref, count: table.named?.length ?? 0 }));
+    if (picked === undefined) return refuse(guardText(language, 'browser.act.named_none', { ref: input.ref }));
+    if (picked.pwRef === '') return refuse(guardText(language, 'browser.act.changed', { ref: input.ref }));
+    item = picked;
+  }
   if (item.frameUrl !== undefined && hostOf(item.frameUrl) !== hostOf(pageUrl)) return refuse(guardText(language, 'browser.act.frame', { ref: input.ref }));
   if (kind === 'type' && !TEXT_ROLES.has(item.role)) return refuse(guardText(language, 'browser.act.not_text', { ref: input.ref, role: item.role }));
   const target: ElementTarget = { ref: item.pwRef, role: item.role, name: item.name };
@@ -98,7 +141,7 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type', input:
   if (kind === 'type' && isSecretField(detail, item.name)) return refuse(guardText(language, 'browser.act.secret_field', { ref: input.ref }));
   // 入れるは submit（Enter）のときだけ送信。押すは要素で決める
   const submits = kind === 'type' ? input.submit === true : detail.form.submits;
-  return { ok: true, tab, pageUrl, item, target, detail, place, submits };
+  return { ok: true, tab, pageUrl, item, target, detail, place, submits, ...(table.shape !== undefined ? { shape: table.shape } : {}) };
 }
 
 // 通り方（Approach 4 の順 2〜6）。loopback: 許されたループバック（送信も判定役なし）/ submit: フォームの送信（送る）/

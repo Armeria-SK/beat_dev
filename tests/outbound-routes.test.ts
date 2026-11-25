@@ -10,6 +10,7 @@ const ROUTES: Readonly<Record<string, { route: Route; why: string }>> = {
   shell_run: { route: 'shell-statements', why: 'preCheck puts outboundOf(statements) into PreCheck.outbound: uploads, git push, scp/ssh, rm -rf, Remove-Item, Clear-Content' },
   browser_click: { route: 'submits', why: 'ToolDef.submits: every click may submit a form' },
   browser_type: { route: 'submits', why: 'ToolDef.submits: typing with Enter may submit a form' },
+  browser_act: { route: 'submits', why: 'ToolDef.submits: its click and type steps may submit a form' },
   browser_open: { route: 'precheck-outbound', why: 'preCheck returns outbound send for a listed site with a query or after outside text' },
   file_write: { route: 'none', why: 'writes inside the allowed roots; overwriting is not a removal (owner ruling 2026-11-07)' },
   file_edit: { route: 'none', why: 'edits inside the allowed roots; no removal' },

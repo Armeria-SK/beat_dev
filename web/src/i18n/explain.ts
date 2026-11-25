@@ -124,6 +124,7 @@ export const EXPLAIN_KEYS = [
   'tool.browser_close',
   'tool.browser_click',
   'tool.browser_type',
+  'tool.browser_act',
   'tool.agent_run',
   'tool.shell_output',
   'tool.shell_stop',

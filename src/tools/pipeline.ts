@@ -195,7 +195,8 @@ function capOutput(output: ToolOutput, language: Language, tokens: number | unde
   return { ...output, content: `${content.slice(0, shown)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: shown.toLocaleString('en-US'), note })}` };
 }
 
-const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
+// 持ち主のフックの matcher が、その道具の名前に当たるか（browser_act の事前の判定も同じ決めを使う）
+export const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
 
 // ブラウザの道具を使ってよいか。実行を始めたときの設定と、いまの設定のどちらかが無効なら使わせない
 function browserEnabled(ctx: ToolContext, deps: PipelineDeps): boolean {

@@ -63,6 +63,11 @@ export interface ElementTable {
   omitted: number;
   // diff で読んだときだけ: 差分の形か、移動・大きすぎる差分で表の形に落としたか
   diff?: DiffResult | undefined;
+  // check に named を渡したときだけ（P5）: 役割が同じで名前が完全に一致する要素の全部を、表の並び（木の順）で。
+  // 番号の無い要素は ref が空、印の無い（引けない）要素は pwRef が空
+  named?: ListedElement[] | undefined;
+  // check に shape を渡したときだけ（P5）: iframe の外の全部の行（入力欄の値と、焦点・位置の印は除く）のまとめ。画面が変わったかを比べる
+  shape?: string | undefined;
 }
 
 // 差分。新しい番号（items）は増えた要素だけ。dead: 見せた番号のうち使えなくなったもの（present: 要素はまだあるが中身が変わった）。
@@ -242,6 +247,12 @@ function cluesOf(members: readonly Entry[], page: Page): string[] {
   });
 }
 
+// 画面のまとめ（P5）: iframe の外の全部の行を、木の形ごと 1 つにまとめる。入力欄の値と、焦点・位置の印は入らない（打っただけ・焦点が動いただけでは変わらない）
+function shapeOf(page: Page): string {
+  const digest = digestOf(page, false);
+  return sha(page.lines.map((line, i) => (line.parent < 0 && !line.inFrame ? digest.sub[i]! : '')).join(','));
+}
+
 function retire(book: RefBook, ref: string): void {
   book.retired.add(ref);
   book.shown.delete(ref);
@@ -345,6 +356,7 @@ function scalar(raw: string): string {
 
 // 番号の振り方。show: 見せる表を作る（先頭から limit 件〔既定 300〕まで、fits が false を返したところで止める。新しい番号は見せる要素にだけ振る）。
 // check: 押す前の取り直し。新しい番号は振らず、前の番号のうち、同じ要素・同じ中身のものだけを表に残す。
+//   named を渡すと、その役割・名前の要素の全部（番号の有無にかかわらず）も返す。shape を渡すと、画面のまとめも返す（どちらも browser_act。P5）
 // diff: 押したあとの差分（P3b）。新しい番号は増えた要素（見せた番号の印でも、前に見せる形で読んだ要素でもないもの）にだけ振る。
 //   見せた番号の要素で中身が変わったものは使えなくして dead で返す（新しい番号は、次に見せる形で読んだときに振る）。
 //   URL か文書が変わった・差分の行が maxLines を超えるときは、show（tableLimit 件まで）と同じ表の形に落とす。
@@ -353,7 +365,7 @@ function scalar(raw: string): string {
 // fits には番号を振る前の要素を渡す（行の形は呼ぶ側が作って測る）
 export type Numbering =
   | { kind: 'show'; fits?: ((item: ListedElement) => boolean) | undefined; limit?: number | undefined }
-  | { kind: 'check' }
+  | { kind: 'check'; named?: { role: string; name: string } | undefined; shape?: boolean | undefined }
   | { kind: 'find'; query: string; role?: string | undefined; limit: number; fits?: ((item: ListedElement) => boolean) | undefined; secrets?: readonly string[] | undefined }
   | { kind: 'diff'; fits?: ((item: ListedElement) => boolean) | undefined; maxLines: number; tableLimit: number; secrets?: readonly string[] | undefined };
 
@@ -546,7 +558,19 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   for (const [pwRef, record] of [...book.records]) {
     if (!alive.has(pwRef)) { retire(book, record.ref); book.records.delete(pwRef); }
   }
-  if (form === 'check') return { url, items, omitted: Math.max(0, usable.length - items.length) };
+  if (form === 'check') {
+    const table: ElementTable = { url, items, omitted: Math.max(0, usable.length - items.length) };
+    if (numbering.kind === 'check' && numbering.named !== undefined) {
+      const want = numbering.named;
+      const name = flatText(want.name);
+      table.named = entries.filter(e => e.role === want.role && flatText(e.name) === name).map(e => {
+        const pwRef = e.pwRef !== undefined && !seenTwice.has(e.pwRef) ? e.pwRef : '';
+        return { ref: book.records.get(pwRef)?.ref ?? '', role: e.role, name: e.name, pwRef, frameUrl: undefined, href: e.href, states: e.states };
+      });
+    }
+    if (numbering.kind === 'check' && numbering.shape === true) table.shape = shapeOf(page);
+    return table;
+  }
   // 検索: 見せた一致だけの表（omitted は見せなかった一致の数）。差分の元は変えない
   if (numbering.kind === 'find') return { url, items, omitted: skipped };
   // 見せる形で読んだ要素を、次の差分の元として覚える

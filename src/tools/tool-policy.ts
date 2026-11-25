@@ -42,14 +42,23 @@ export const isLooser = (from: ToolPolicy, to: ToolPolicy): boolean => STRICTNES
 
 export interface HasPolicies { tools: { policies?: Record<string, string> | undefined } }
 
-// 設定に書かれた、その道具の方針。書いていない・読めない値は、その道具の既定（defaultPolicy。ほとんどは allow）。方針を持てない道具は allow
-export function toolPolicy(config: HasPolicies, name: string): ToolPolicy {
+// ほかの道具の動作をまとめて行う道具: 自分の方針と、まとめる道具の方針の、いちばん厳しいものが効く（まとめる側で、止めた・承認つきにした道具を素通りさせない）
+export const POLICY_COVERS: Readonly<Record<string, readonly string[]>> = { browser_act: ['browser_click', 'browser_type'] };
+
+function ownPolicy(config: HasPolicies, name: string): ToolPolicy {
   const policies = config.tools.policies;
   if (!isPolicyable(name)) return 'allow';
   if (!policies || !Object.hasOwn(policies, name)) return defaultPolicy(name);
   const value = policies[name];
   if (value === 'ask' && ASK_MEANS_BLOCK.has(name)) return 'block';
   return isToolPolicy(value) ? value : defaultPolicy(name);
+}
+
+// 設定に書かれた、その道具の方針。書いていない・読めない値は、その道具の既定（defaultPolicy。ほとんどは allow）。方針を持てない道具は allow。
+// browser_act は、browser_click・browser_type の方針とのいちばん厳しいもの（POLICY_COVERS）
+export function toolPolicy(config: HasPolicies, name: string): ToolPolicy {
+  const covered = Object.hasOwn(POLICY_COVERS, name) ? POLICY_COVERS[name]! : [];
+  return covered.reduce<ToolPolicy>((policy, other) => stricterPolicy(policy, ownPolicy(config, other)), ownPolicy(config, name));
 }
 
 // 実行に効く方針: 実行を始めたときの設定と、いまの設定の厳しい方。途中で厳しくした分はその場から効き、緩めた分は次の実行から。

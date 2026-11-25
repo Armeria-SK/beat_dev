@@ -106,6 +106,7 @@ const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
   browser_close: a => tabOf(a, t('ui.toolTarget.allTabs')),
   browser_click: element,
   browser_type: element,
+  browser_act: (a, cut) => t(cut.has('steps') ? 'ui.toolTarget.stepsMore' : 'ui.toolTarget.steps', count(a, 'steps')),
 };
 const NO_ARGS_NEEDED = new Set(['plan_write', 'question_list']);
 const DESCRIBING_KEYS = [
