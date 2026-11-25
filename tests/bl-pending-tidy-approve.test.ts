@@ -61,6 +61,12 @@ test('実機に近い道: 同じ会話の続きの file_edit が送るファイ�
   assert.equal(Number(owner.n), 0);
   const counts = (await s.json('/api/pending/counts', 'GET')).body;
   assert.equal(counts.waiting, 0);
+
+  await s.say('carry on', [reply('ok')]);
+  const seen = JSON.stringify(s.adapter().calls.at(-1)!.messages);
+  assert.match(seen, /Pending #\d+ \(fake_hold\) was closed without running/u, '次のモデルの呼び出しに、動かさずに閉じたという知らせが入る');
+  assert.match(seen, /call it again/u);
+  assert.doesNotMatch(seen, /owner approved Pending/u, '承認の知らせではない');
 });
 
 test('実機に近い道: 持ち主が手で書き換えたなら、HTTP の approve は今までどおり stale', async t => {

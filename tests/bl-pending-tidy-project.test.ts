@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import { builtinTools } from '../src/app.ts';
+import { pendingNote } from '../src/pending/notes.ts';
 import type { ToolDef } from '../src/tools/types.ts';
 import { fakeModel, startApp } from './app-setup.ts';
 import { tempDir } from './helpers.ts';
@@ -48,6 +49,7 @@ test('製品をしまうと、その製品の待ちの行が理由つきで canc
     assert.match(after.reject_reason ?? '', /product it came from was archived or removed/u);
     assert.equal(after.input, '', '取り消した行は生の入力を持たない');
     assert.notEqual(after.decided_at, null);
+    assert.equal(pendingNote(after, s.app.pending.view(item.id)!), undefined, '製品をしまって閉じた行は、担当に知らせを送らない');
   }
   assert.equal(s.row(b1.id).status, 'waiting', 'ほかの製品の行は残る');
   assert.deepEqual(await s.waiting(), [b1.id], '待ちの一覧にはほかの製品の行だけ');

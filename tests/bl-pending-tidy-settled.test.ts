@@ -83,7 +83,12 @@ test('積んだあとに、同じ会話が送るファイルを自分で書き�
   assert.match(after.output_preview ?? '', /settled another way/u);
   assert.deepEqual(s.ran, [], '動いていない');
   assert.equal(s.ownerCalls(), 0, '動いた記録（owner-pending）が無い');
-  assert.equal(pendingNote(after, s.store.view(row.id)!), undefined, '「承認したが変わったので動かさなかった」の知らせにならない');
+  const note = pendingNote(after, s.store.view(row.id)!);
+  assert.equal(note?.head, 'settled', '担当には 1 行の知らせが届く（動かさずに閉じた・まだ要るなら呼び直す）');
+  assert.match(note!.text, /was closed without running/u);
+  assert.match(note!.text, /call it again/u);
+  assert.doesNotMatch(note!.text, /owner approved/u, '「持ち主が承認した」の知らせではない');
+  assert.equal(note!.fetched, false);
 });
 
 test('別の会話が書いたなら、今までどおり stale（持ち主に見せる）', async t => {
@@ -198,4 +203,27 @@ test('消す行が git の製品の中: 対象を同じ会話が書き換えて�
   assert.equal(outcome.status, 'stale', outcome.output);
   assert.match(s.store.row(row.id)!.output_preview ?? '', /git status/u);
   assert.deepEqual(s.ran, []);
+});
+
+test('git の名前（branch など）は、作業フォルダの同名のファイルの記録として数えない（相対の名前は説明に使わない）', { skip: !gitAvailable }, async t => {
+  const s = rig(t);
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: s.root, stdio: 'ignore' });
+  writeFileSync(join(s.root, '.gitignore'), 'mine.txt\nbranch\n');
+  const path = s.file('mine.txt', 'one');
+  const lookalike = s.file('branch', 'one');
+  git('init', '-q', '-b', 'main');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'first');
+  const before = process.cwd();
+  process.chdir(s.root);
+  try {
+    const row = await s.park({ kind: 'delete', targets: [path] });
+    await s.edit('conv-1', path, 'one', 'twelve');
+    await s.edit('conv-1', lookalike, 'one', 'twelve');
+    git('switch', '-q', '-c', 'other');
+    const outcome = await s.approve(row.id);
+    assert.equal(outcome.status, 'stale', outcome.output);
+    assert.match(s.store.row(row.id)!.output_preview ?? '', /- branch: before refs\/heads\/main, now refs\/heads\/other/u);
+    assert.deepEqual(s.ran, []);
+  } finally { process.chdir(before); }
 });

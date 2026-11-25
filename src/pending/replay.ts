@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { rmSync, statSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import { productRel } from '../changes/record.ts';
@@ -193,6 +193,7 @@ function writtenByParker(row: PendingRow, ctx: ToolContext, db: DatabaseSync, pa
   if (!project?.root || !paths.length) return false;
   const find = db.prepare("SELECT 1 FROM file_changes WHERE conversation_id = ? AND project_id = ? AND place IS ? AND path = ? AND action IN ('create', 'modify') AND created_at > ? AND after_hash = ? LIMIT 1");
   return paths.every(path => {
+    if (!isAbsolute(path)) return false;
     const rel = productRel(project.root!, path);
     const fact = boundFacts([path])[0]!;
     if (rel === null || fact.hash === undefined) return false;
