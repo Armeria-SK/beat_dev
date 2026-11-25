@@ -14,6 +14,7 @@ import { toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import { acceptanceWrite } from '../src/tools/builtin/acceptance.ts';
 import { meshStateSet } from '../src/tools/builtin/mesh.ts';
+import { planWrite } from '../src/tools/builtin/plan.ts';
 import { writeChecklist } from '../src/tools/builtin/checklist-core.ts';
 import { PLAN_GIST_LABEL, type TaskStore } from '../src/tasks/store.ts';
 import { TAINTED_NOTE } from '../src/tools/auto-approve.ts';
@@ -127,6 +128,20 @@ test('3-2-s 要件の聞き取りの文: Windows の改行（CRLF）のファイ
   writeFileSync(join(templates, 'requirements.md'), '# Requirements interview\r\nAsk.\r\n');
   assert.equal(requirementsText({ ...paths, templates }, 1_000), '# Requirements interview (compact)\nAsk.\nWrite.');
   assert.equal(requirementsText({ ...paths, templates }, 100_000), '# Requirements interview\nAsk.');
+});
+
+// self-fix S5: 要件の聞き取りの文（requirements*.md）は線いっぱいなので、計画の大きさの決まりは道具 plan_write の説明に置く
+test('self-fix S5 計画の大きさ: plan_write の説明が、件数と時間・量の見込みを言わせ、大きいとき（10 件より多い・「全部」）は ask_owner で分け方を聞いて最初の 1 回分だけ計画させる。説明は短い英語のまま、計画モードで AI に届く', async t => {
+  const rules = [/count the items/iu, /rough time and volume/iu, /over 10 items/iu, /said all of it/iu, /ask with ask_owner how to split it/iu, /first batch/iu];
+  for (const rule of rules) assert.match(planWrite.description, rule);
+  assert.ok(estimateTextTokens(planWrite.description) <= 190, String(estimateTextTokens(planWrite.description)));
+  assert.doesNotMatch(planWrite.description, /[^\x09\x0A\x20-\x7E]/u, 'モデル向けの文は ASCII の英語');
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('a')];
+  await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
+  const seen = s.adapter().calls.at(-1)!.tools.find(tool => tool.name === 'plan_write');
+  assert.equal(seen?.description, planWrite.description);
 });
 
 test('3-2-s 毎回の system（関数）: 製品の計画モードで聞き取りの文があれば、汎用の計画の 1 行と plan_write の 1 行の代わりに入る。製品に属さない計画モード・製品の自動承認のモードは今のまま', () => {
