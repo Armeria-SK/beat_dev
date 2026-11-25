@@ -37,6 +37,17 @@ export function extractToolCalls(text: string, toolNames: ReadonlySet<string>): 
   return { calls, text: rest.replace(/\n{3,}/gu, '\n\n').trim() };
 }
 
+const TEXT_TOOL_CALL = /<tool_call>|\[TOOL_CALLS\]|"name"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters)"/u;
+
 export function looksLikeTextToolCall(text: string): boolean {
-  return /<tool_call>|\[TOOL_CALLS\]|"name"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters)"/u.test(text);
+  return TEXT_TOOL_CALL.test(text);
+}
+
+// 本文に書かれたツール呼び出しの始まりの位置（無ければ -1）。引数（試しの暗証番号など）は、必ず始まりの印より後ろに来る。ここより後ろは、画面への知らせにも書きかけの履歴にも流さない
+export function textToolCallStart(text: string): number {
+  const found = TEXT_TOOL_CALL.exec(text);
+  if (found === null) return -1;
+  if (!found[0].startsWith('"name"')) return found.index;
+  const brace = text.lastIndexOf('{', found.index);
+  return brace === -1 ? found.index : brace;
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { extractToolCalls, looksLikeTextToolCall } from '../src/engine/toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall, textToolCallStart } from '../src/engine/toolcall-parse.ts';
 
 const names = new Set(['file_write', 'shell_run']);
 
@@ -24,4 +24,21 @@ test('予備パーサー: 知らないツール名や普通の JSON は拾わな
   assert.equal(extractToolCalls('設定はこうです: {"name": "beat", "age": 1}', names).calls.length, 0);
   assert.equal(looksLikeTextToolCall('普通の返事'), false);
   assert.equal(looksLikeTextToolCall('<tool_call>{}</tool_call>'), true);
+});
+
+test('textToolCallStart: 本文のツール呼び出しの始まり（引数より前）の位置。印の無い本文は -1。1 文字ずつ足しても、引数が出る前に見つかる', () => {
+  assert.equal(textToolCallStart('普通の返事'), -1);
+  assert.equal(textToolCallStart('設定はこうです: {"name": "beat", "age": 1}'), -1);
+  assert.equal(textToolCallStart('書きます。<tool_call>{"name": "file_write"}'), 5);
+  assert.equal(textToolCallStart('[TOOL_CALLS] [{"name": "shell_run", "arguments": {}}]'), 0);
+  assert.equal(textToolCallStart('先に {"name": "shell_run", "arguments": {"command": "ls"}}'), 3, '印のない形（本文全体の JSON・コードブロック）は、名前の前の { から');
+  assert.equal(textToolCallStart('```json\n{"name": "shell_run", "parameters": {"command": "ls"}}\n```'), 8);
+  for (const text of ['<tool_call>{"name":"file_write","arguments":{"content":"SECRET"}}', '[TOOL_CALLS][{"name":"file_write","arguments":{"content":"SECRET"}}]', '{"name":"file_write","arguments":{"content":"SECRET"}}']) {
+    for (let length = 1; length <= text.length; length += 1) {
+      const start = textToolCallStart(text.slice(0, length));
+      if (start !== -1) assert.ok(start <= text.indexOf('SECRET'), `${text.slice(0, length)}`);
+      if (length <= text.indexOf('SECRET')) continue;
+      assert.ok(start !== -1, `引数が 1 文字でも出るときには、始まりが見えている: ${text.slice(0, length)}`);
+    }
+  }
 });

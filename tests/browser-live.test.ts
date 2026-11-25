@@ -655,7 +655,9 @@ const LOGIN_PAGE = `<form action="/after" method="get"><input id="pw" type="pass
 const AFTER_PAGE = `<h1>Signed in</h1><p id="note">You are in</p><button data-id="out">Log out</button>`;
 
 test('P7（A6）: 本物の Chrome で password の欄に入れる。ページが値を本文・ボタンの名前・URL に出しても、結果・差分・表・本文・探すに値が出ない', options, async t => {
-  const PASS = 'test-pass-1234';
+  // 空白と ! を含む値: GET のフォームは、これを URL に q=Passw0rd%21+x の形で載せる（encodeURIComponent の形とは違う）
+  const PASS = 'Passw0rd! x';
+  const FORMED = 'Passw0rd%21+x';
   const r = await refRig(t, { '/login': LOGIN_PAGE, '/after': AFTER_PAGE });
   const port = Number(new URL(r.ctx.ownerText!()[0]!).port);
   (r.ctx.services as unknown as { background: unknown }).background = { printedPorts: () => new Set<number>(), ownsPort: async (_owner: unknown, asked: number) => asked === port, stoppedPort: () => undefined };
@@ -675,15 +677,15 @@ test('P7（A6）: 本物の Chrome で password の欄に入れる。ページ�
   const outputs: Array<[string, string]> = [['browser_type の結果（差分）', typed.content]];
   for (const mode of ['elements', 'text'] as const) outputs.push([`browser_read ${mode}`, (await browserRead.execute({ mode }, r.ctx)).content]);
   for (const query of ['Echo', 'Hello']) outputs.push([`browser_find ${query}`, (await browserFind.execute({ query } as never, r.ctx)).content]);
-  for (const [name, text] of outputs) assert.ok(!text.includes(PASS), `${name}: ${text}`);
+  for (const [name, text] of outputs) assert.ok(!text.includes(PASS) && !text.includes('Passw0rd'), `${name}: ${text}`);
   assert.ok(typed.content.includes('[REDACTED]'), '差分には、ページが出した値の所が伏せ字で出る: ' + typed.content);
   // Enter で送る（GET で /after?q=<値> へ移る）。行き着いたページの見出し・URL・差分にも値が出ない
   const sent = await browserType.execute({ ref, password: PASS, submit: true }, r.ctx);
   assert.equal(sent.isError, undefined, sent.content);
-  assert.equal((await r.raw()).url(), `http://127.0.0.1:${port}/after?q=${PASS}`, '前提: 本物のページは URL に値を載せて移った');
-  assert.ok(!sent.content.includes(PASS), sent.content);
+  assert.equal((await r.raw()).url(), `http://127.0.0.1:${port}/after?q=${FORMED}`, '前提: 本物のページは URL に値を載せて移った');
+  assert.ok(!sent.content.includes(PASS) && !sent.content.includes('Passw0rd'), sent.content);
   assert.match(sent.content, /Signed in/u, '移ったあとの画面は返っている');
-  assert.ok(!(await browserRead.execute({ mode: 'text' }, r.ctx)).content.includes(PASS));
+  assert.ok(!(await browserRead.execute({ mode: 'text' }, r.ctx)).content.includes('Passw0rd'));
   // text で暗証番号の欄に入れる・ふつうの欄に password で入れるのは、本物のページでも断る（値は入らない）
   await r.open('/login');
   const fresh = await r.raw();

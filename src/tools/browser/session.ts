@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import type { AppConfig } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
+import { redactExact, redactSecrets } from '../../shared/redaction.ts';
 import { selfPortsOf } from '../hooks/self-port.ts';
 import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle } from './driver.ts';
 import { newRefBook, type ElementTable, type RefBook, type RefCounter } from './elements.ts';
@@ -123,6 +124,15 @@ interface TabMirror { raw: PageHandle; runId: string; action: MirrorAction | und
 
 // 会話ごとに覚える、入れた暗証番号・認証コードの数（これより古いものから捨てる）
 const TYPED_KEEP = 16;
+// これより短い値は覚えない（1 文字の値を伏せると、e12 のような番号や本文の 1 がすべて壊れる）。呼び出しの行・フックの password は、短くても伏せる
+const TYPED_MIN = 4;
+
+// 値が URL に載る形。そのまま・encodeURIComponent・GET のフォームの形（空白が +、!'()~ も %）・空白が %20 のまま !'()* まで % にした形（Python・PHP の rawurlencode と同じ）と、16 進の小文字
+function typedForms(value: string): string[] {
+  const form = new URLSearchParams([['', value]]).toString().slice(1);
+  const percent = [encodeURIComponent(value), form, form.replace(/\+/gu, '%20'), encodeURIComponent(value).replace(/[!'()*]/gu, mark => `%${mark.charCodeAt(0).toString(16).toUpperCase()}`)];
+  return [...new Set([value, ...percent, ...percent.map(known => known.replace(/%[0-9A-F]{2}/gu, hex => hex.toLowerCase()))])];
+}
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
 const VIEWPORT = { width: 1280, height: 800 };
@@ -232,13 +242,13 @@ export class BrowserSession {
   secrets(): readonly string[] { return this.#d.secrets?.() ?? []; }
   // この会話で入れた暗証番号・認証コード（P7）。ページがその値をあとで出しても（本文・表の名前・URL・入力欄の値）、その会話のどの出力でも伏せる。会話ごと・上限つき（古いものから捨てる）。会話を消すと忘れる
   readonly #typed = new Map<string, string[]>();
-  // 鍵（設定の鍵・環境の鍵）に、その会話で入れた値を足した、伏せる値の一覧。URL に入った形（encodeURIComponent）も足す
+  // 鍵（設定の鍵・環境の鍵）に、その会話で入れた値を足した、伏せる値の一覧。URL に入った形（typedForms）も足す
   secretsFor(conversationId: string): readonly string[] {
-    const typed = (this.#typed.get(conversationId) ?? []).flatMap(value => { const encoded = encodeURIComponent(value); return encoded === value ? [value] : [value, encoded]; });
+    const typed = (this.#typed.get(conversationId) ?? []).flatMap(typedForms);
     return typed.length === 0 ? this.secrets() : [...this.secrets(), ...typed];
   }
   rememberTyped(conversationId: string, value: string): void {
-    if (value.trim().length === 0) return;
+    if (value.trim().length < TYPED_MIN) return;
     const list = (this.#typed.get(conversationId) ?? []).filter(known => known !== value);
     list.push(value);
     this.#typed.set(conversationId, list.slice(-TYPED_KEEP));
@@ -249,7 +259,9 @@ export class BrowserSession {
   tabUrl(conversationId: string, id?: string): string | undefined {
     const mine = [...this.#tabs.values()].filter(tab => tab.conversationId === conversationId);
     const found = id === undefined ? mine.sort((a, b) => b.used - a.used)[0] : mine.find(tab => tab.id === id);
-    return found?.page.url();
+    // 質問の記録（承認待ちの断り）にも書かれる URL なので、この会話で入れた値は伏せる
+    const url = found?.page.url();
+    return url === undefined ? undefined : redactExact(url, (this.#typed.get(conversationId) ?? []).flatMap(typedForms));
   }
   // この会話のタブの種類（無ければ undefined）。browser_open の事前の判定が、tab の種類違いをブラウザを起動せずに見分ける
   tabKind(conversationId: string, id: string): BrowserTabKind | undefined {
@@ -351,9 +363,11 @@ export class BrowserSession {
     if (!best) return null;
     const { tab, mirror } = best;
     const frame = this.#frames.frame(tab.conversationId, tab.id);
+    // 欄に出す URL・題名・操作した要素の名前は、ページが出したもの。この会話で入れた値は伏せる（画像の中は伏せられない）
+    const hide = (text: string): string => redactSecrets(text, this.secretsFor(tab.conversationId));
     return {
-      tab: tab.id, conversationId: tab.conversationId, runId: mirror.runId, url: mirror.url, title: mirror.title,
-      driving: this.#driving(tab, mirror, now), action: mirror.action!, at: frame?.at ?? null, seq: frame?.seq ?? 0,
+      tab: tab.id, conversationId: tab.conversationId, runId: mirror.runId, url: hide(mirror.url), title: hide(mirror.title),
+      driving: this.#driving(tab, mirror, now), action: { ...mirror.action!, target: hide(mirror.action!.target) }, at: frame?.at ?? null, seq: frame?.seq ?? 0,
       viewport: { ...VIEWPORT },
       profile: tab.kind === 'owner' ? { kind: 'owner', path: this.#d.paths.browserProfile } : { kind: 'work' },
       pointer: mirror.pointer ? { ...mirror.pointer } : null,

@@ -52,7 +52,7 @@ import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_T
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
-import { extractToolCalls, looksLikeTextToolCall } from './toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall, textToolCallStart } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, ToolSpec, Usage } from './types.ts';
 import { estimateMessageTokens, estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
@@ -1561,6 +1561,8 @@ export class ChatEngine {
 
         this.#sentCalls.set(p.runId, sentCalls);
         let text = '';
+        // text のうち、画面に流した長さ
+        let streamed = 0;
         let usage: Usage = {};
         let stop: StopReason = 'other';
         const toolCalls: ToolCall[] = [];
@@ -1585,7 +1587,13 @@ export class ChatEngine {
           }, silentMs);
           for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: maxOutput, ...(effort ? { effort } : {}), signal: p.signal })) {
             if (events++ === 0) clearTimeout(silentTimer);
-            if (event.type === 'text') { text += event.delta; d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: event.delta }); }
+            if (event.type === 'text') {
+              text += event.delta;
+              // 本文に書かれたツール呼び出しの印（<tool_call> など）が見えたら、そこから先は流さない。引数（試しの暗証番号など）が、画面への知らせ・再接続の写し・書きかけの履歴に残らないように（拾うのは返事が終わってから）
+              const start = toolNames.size ? textToolCallStart(text) : -1;
+              const end = start === -1 ? text.length : Math.max(start, streamed);
+              if (end > streamed) { d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: text.slice(streamed, end) }); streamed = end; }
+            }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
             else if (event.type === 'tool_call') toolCalls.push(event.call);
             else if (event.type === 'thinking') thoughts.push(event.block);
@@ -1596,7 +1604,7 @@ export class ChatEngine {
           const e = error instanceof ProviderError ? error
             : p.signal.aborted ? providerError('cancelled', 'cancelled', {}, { retryable: false })
             : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP) });
-          if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
+          if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text.slice(0, streamed), failure: last, route };
           last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}), ...(e.upstream ? { upstream: e.upstream } : {}) };
           // 上限まで 1 つも出来事が来ないまま時間切れで終わった呼び出しは、同じモデルで待ち直しても同じなので試し直さない（鎖に次があればそこへ、無ければここで終える）。
           // 時間切れは、提供元の部品の timeout のほか、標準の fetch（undici）が先に切る 300 秒の頭・本文の時間切れ。出来事が届いてからの失敗・上限より前の失敗は、今までどおり試し直す

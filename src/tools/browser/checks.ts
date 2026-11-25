@@ -14,7 +14,7 @@
 //   ただし、そのポートがこの会話・タスクの止まった（自分で終わった）裏のコマンドのものなら、判定役に回さず断る（#56）
 // Pending で承認された呼び出しは、再実行の前に preCheck をもう一度走らせ、bind が変わっていたら実行しない（src/pending/replay.ts）
 import { languageOf } from '../../shared/language.ts';
-import { sanitizeModelInputText } from '../../shared/redaction.ts';
+import { redactExact, sanitizeModelInputText } from '../../shared/redaction.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import type { PreCheck, ToolContext } from '../types.ts';
 import { pageUrl } from '../web/public-page.ts';
@@ -279,12 +279,12 @@ export function ownerTextsOf(ctx: Pick<ToolContext, 'ownerText'>): string[] {
 }
 
 const flat = (text: string): string => text.replace(/[\p{Cc}\p{Cf}\s]+/gu, ' ').trim();
-const shownName = (name: string): string => { const one = flat(name); return one.length > NAME_SHOWN ? `${one.slice(0, NAME_SHOWN)}…` : one; };
+const shownName = (name: string, secrets: readonly string[]): string => { const one = redactExact(flat(name), secrets); return one.length > NAME_SHOWN ? `${one.slice(0, NAME_SHOWN)}…` : one; };
 
-// 承認の札に出す中身と、承認のあとに比べる指紋
-export function actPreview(kind: 'click' | 'type', input: ActInput, found: Extract<Inspected, { ok: true }>, language: Language): { preview: NonNullable<PreCheck['preview']>; bind: string } {
+// 承認の札に出す中身と、承認のあとに比べる指紋。札に出すページの名前・URL は、この会話で入れた値（secrets）を伏せる（指紋は伏せない）
+export function actPreview(kind: 'click' | 'type', input: ActInput, found: Extract<Inspected, { ok: true }>, language: Language, secrets: readonly string[] = []): { preview: NonNullable<PreCheck['preview']>; bind: string } {
   const lines = [
-    guardText(language, 'browser.act.preview_target', { role: found.item.role, name: shownName(found.item.name), note: guardText(language, 'browser.act.page_name') }),
+    guardText(language, 'browser.act.preview_target', { role: found.item.role, name: shownName(found.item.name, secrets), note: guardText(language, 'browser.act.page_name') }),
   ];
   if (kind === 'type') {
     if (input.password !== undefined) {
@@ -300,7 +300,7 @@ export function actPreview(kind: 'click' | 'type', input: ActInput, found: Extra
   // 要素の番号は、同じ要素で中身も変わっていないあいだだけ生きているので、それ自体が指紋。
   // タブの番号と要素の番号は beat を起動し直すと振り直すので、起動ごとの印（instance）も入れる（起動し直す前の承認は、あとの起動では押さない）
   const bind = JSON.stringify([found.tab.instance, found.tab.id, found.pageUrl, found.item.ref, found.item.role, found.item.name]);
-  return { preview: [{ path: guardText(language, 'browser.act.preview_page', { url: found.pageUrl }), text: lines.join('\n'), truncated: false }], bind };
+  return { preview: [{ path: guardText(language, 'browser.act.preview_page', { url: redactExact(found.pageUrl, secrets) }), text: lines.join('\n'), truncated: false }], bind };
 }
 
 // 道具の preCheck。ブラウザが無効・タブが無いときはブラウザを起動しない
@@ -321,7 +321,7 @@ export async function browserActCheck(kind: 'click' | 'type', input: ActInput, c
     return await browser.run({ grant, signal: ctx.signal }, async api => {
       const found = await inspectAct(api, kind, input, language, browser.loopbackDenied());
       if (!found.ok) return { decision: 'deny', reasons: [found.reason] } satisfies PreCheck;
-      const { preview, bind } = actPreview(kind, input, found, language);
+      const { preview, bind } = actPreview(kind, input, found, language, browser.secretsFor(ctx.conversationId));
       if (kind === 'type' && input.password !== undefined) {
         // 暗証番号は、自分で起動して動いている開発サーバーだけ。通すときも、聞く形（方針の ask・フックの ask）になったら断る鍵（web.password_input）を付け、値を判定役・Pending に回さない
         const refused = await passwordRefusal(found, ctx, language);

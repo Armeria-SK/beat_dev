@@ -12,10 +12,11 @@ import { resolvePaths } from '../src/paths.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { QuestionStore } from '../src/questions/store.ts';
 import { guardText } from '../src/shared/messages/guard.ts';
+import { redactSecrets } from '../src/shared/redaction.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
-import { actPreview, fieldKind } from '../src/tools/browser/checks.ts';
+import { actPreview, browserActCheck, fieldKind } from '../src/tools/browser/checks.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { BackgroundJobs } from '../src/tools/shell/background.ts';
 import { scrubEnv } from '../src/tools/shell/runner.ts';
@@ -496,6 +497,189 @@ test('P7: 会話の AI が password を渡した呼び出し（断られても�
   const stored = s.app.conversations.messages(id).flatMap(m => (m.message.role === 'assistant' ? m.message.toolCalls ?? [] : []));
   assert.ok(stored.some(call => everything(call.arguments).includes(PASS)), '会話には引数をそのまま保存する（モデルに戻す分）');
   assert.ok(!s.logs.some(line => line.includes(PASS)), 'ログにも出ない');
+});
+
+// ── 審査の指摘（P7 の差し戻し）: URL の形・本文のツール呼び出し・欄の URL と題名・承認の札・短い値 ──
+
+// GET のフォームの送り先は、+（空白）と %21（!）の形で値を URL に載せる。名前は伏せる名前の一覧に無い q
+const VALUE = 'Pass/w0rd! x';
+const FORM = 'Pass%2Fw0rd%21+x';
+const AFTER = `${DEV}after?q=${FORM}`;
+const afterLogin = (): FakeSite => {
+  const base = loginSite(undefined);
+  return { ...base, rows: (base.rows ?? []).map(row => (row.name === 'Password' ? { ...row, effect: { navigate: AFTER } } : row)) };
+};
+const afterPage: FakeSite = { title: `Welcome ${VALUE}`, text: 'Welcome', snapshot: ['- heading "Welcome"', `- link "Profile ${VALUE}"`].join('\n'), rows: [{ role: 'link', name: `Profile ${VALUE}` }] };
+
+test('P7: 値の URL の形（フォームの + と %21・大文字小文字の違う 16 進・%20）も伏せる。値を 1 つ覚えれば、どの形でも', async t => {
+  const r = rig(t, own());
+  r.session.rememberTyped('c1', 'Passw0rd! x');
+  const secrets = r.session.secretsFor('c1');
+  const form = new URLSearchParams([['', 'Passw0rd! x']]).toString().slice(1);
+  assert.equal(form, 'Passw0rd%21+x');
+  for (const shown of [form, encodeURIComponent('Passw0rd! x'), 'Passw0rd%21%20x', 'Passw0rd! x']) {
+    const out = redactSecrets(`http://localhost:5173/after?q=${shown}`, secrets);
+    assert.ok(!out.includes('Passw0rd'), `${shown} -> ${out}`);
+  }
+  r.session.rememberTyped('c1', VALUE);
+  for (const shown of [FORM, 'Pass%2fw0rd%21+x', 'Pass%2Fw0rd%21%20x', 'Pass%2fw0rd%21%20x', encodeURIComponent(VALUE)]) {
+    const out = redactSecrets(`http://localhost:5173/after?q=${shown}`, r.session.secretsFor('c1'));
+    assert.ok(!out.includes('w0rd'), `${shown} -> ${out}`);
+  }
+});
+
+test('P7: GET のフォームの送り先 URL に載った値（+ や %21 の形）が、結果の見出し・差分・出来事・記録に出ない', async t => {
+  const r = rig(t, own());
+  r.driver.site(DEV, afterLogin()).site(AFTER, afterPage);
+  await r.open(DEV);
+  const typed = await r.call('browser_type', { ref: 'e2', password: VALUE, submit: true });
+  assert.equal(typed.output.isError, undefined, typed.output.content);
+  assert.match(typed.output.content, /Welcome/u, '送ったあとの画面は返っている');
+  assert.ok(!typed.output.content.includes('w0rd') && !typed.output.content.includes('Pass%2'), typed.output.content);
+  const batch = await r.call('browser_act', { steps: [{ type: 'e2', password: VALUE, submit: true }], then: 'none' });
+  assert.ok(!batch.output.content.includes('w0rd'), batch.output.content);
+  for (const event of r.events.filter(e => e.type === 'tool.result' || e.type === 'tool.call')) assert.ok(!everything(event).includes('w0rd'), everything(event));
+  const rows = r.db.prepare('SELECT input, output_preview FROM tool_calls').all() as Array<{ input: string; output_preview: string }>;
+  for (const row of rows) assert.ok(!row.input.includes('w0rd') && !row.output_preview.includes('w0rd'), everything(row));
+});
+
+test('P7: ブラウザの欄（ミラー）に出す URL と題名も、入れた値を伏せる', async t => {
+  const r = rig(t, own());
+  r.driver.site(DEV, afterLogin()).site(AFTER, afterPage);
+  await r.open(DEV);
+  const typed = await r.call('browser_type', { ref: 'e2', password: VALUE, submit: true });
+  const link = /\b(e\d+)\b[^\n]*link/u.exec(typed.output.content)?.[1];
+  assert.ok(link !== undefined, typed.output.content);
+  await r.call('browser_click', { ref: link });
+  const view = r.session.view('p1', () => ({ attended: true }));
+  assert.ok(view, '欄に出せるタブがある');
+  assert.ok(view.url.startsWith(`${DEV}after`), view.url);
+  assert.ok(view.title.startsWith('Welcome'), view.title);
+  assert.equal(view.action.kind, 'click');
+  assert.ok(view.action.target.startsWith('Profile'), view.action.target);
+  assert.ok(!view.url.includes('w0rd') && !view.title.includes('w0rd') && !view.action.target.includes('w0rd'), everything(view));
+});
+
+test('P7: 質問の記録（断った送信）に書かれる、開いているページの URL も、入れた値を伏せる', async t => {
+  const r = rig(t, own());
+  r.driver.site(DEV, afterLogin()).site(AFTER, afterPage);
+  await r.open(DEV);
+  assert.equal(r.session.tabUrl('c1'), DEV, '入れる前はそのまま（対照）');
+  await r.call('browser_type', { ref: 'e2', password: VALUE, submit: true });
+  const url = r.session.tabUrl('c1');
+  assert.ok(url !== undefined && url.startsWith(`${DEV}after`), url);
+  assert.ok(!url.includes('w0rd'), url);
+});
+
+test('P7: 入れた値を名前・URL に含むページの承認の札（preview）も、値を伏せる。札を出すのは暗証番号でない呼び出しだけ', async t => {
+  const r = rig(t, own());
+  const url = `${LISTED}?q=${PASS}`;
+  r.driver.site(url, { title: 'Shop', text: 'Shop', snapshot: `- button "Send ${PASS}"`, rows: [{ role: 'button', name: `Send ${PASS}`, submits: true }] });
+  await r.open(url);
+  const control = await browserActCheck('click', { ref: 'e1' }, r.ctx);
+  assert.equal(control.decision, 'ask', JSON.stringify(control));
+  assert.ok(everything(control.preview).includes(PASS), '値を覚える前は、そのまま出る（対照）');
+  r.session.rememberTyped('c1', PASS);
+  const check = await browserActCheck('click', { ref: 'e1' }, r.ctx);
+  assert.equal(check.decision, 'ask');
+  assert.ok(check.preview?.[0]?.text.includes('Send'), '札には名前が出る');
+  // 札に出す中身だけ（承認のあとに比べる指紋 bind は札に出ず、中身は beat の中の比べ物なので、ここでは見ない）
+  assert.ok(!everything(check.preview).includes(PASS), everything(check.preview));
+});
+
+test('P7: 4 文字より短い値は、あとの出力の伏せ用に覚えない（1 を入れても e12 のような番号は壊れない）。4 文字以上は伏せる。呼び出しの行は今までどおり伏せる', async t => {
+  const r = rig(t, own());
+  for (const short of ['1', '12', '123', '  12  ']) r.session.rememberTyped('c1', short);
+  assert.deepEqual(r.session.secretsFor('c1'), []);
+  r.session.rememberTyped('c1', '1234');
+  assert.ok(r.session.secretsFor('c1').includes('1234'));
+  const quiet = rig(t, own());
+  await quiet.open(DEV);
+  const typed = await quiet.call('browser_type', { ref: 'e3', password: '1' });
+  assert.equal(typed.output.isError, undefined, typed.output.content);
+  const elements = await browserRead.execute({ mode: 'elements' }, quiet.ctx);
+  assert.match(elements.content, /\be1\b/u, elements.content);
+  assert.match(elements.content, /\be7\b/u, elements.content);
+  assert.ok(!elements.content.includes('[REDACTED]'), elements.content);
+  const called = quiet.events.filter(e => e.type === 'tool.call');
+  assert.ok(called.every(event => event.type === 'tool.call' && event.input.includes('[REDACTED]')), '呼び出しの行の password は 1 文字でも伏せる');
+});
+
+// 本文に書かれたツール呼び出し（<tool_call>）: 引数は、印のあとに来る。印が見えたら、そこから先は画面への知らせにも再接続の写しにも書きかけの履歴にも流さない
+const STREAM_CHUNKS = ['試します。<tool_', 'call>{"name":"browser_type","argu', 'ments":{"ref":"e2","pass', `word":"${PASS}"}}</tool_`, 'call>'];
+// 引数の欄の名前か、値の頭が 1 つでも出たら漏れ
+const leaks = (text: string): boolean => text.includes('password') || text.includes(PASS.slice(0, 6));
+
+async function streamApp(t: TestContext) {
+  const s = await startApp(t, {
+    models: [fakeModel('m1')], browserDriver: new FakeBrowserDriver().site(LISTED, loginSite()),
+    configure: c => { c.tools.browser.enabled = true; c.tools.browser.sites = ['example.com']; c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 }; c.memory.review = false; },
+  });
+  const events: RunEvent[] = [];
+  s.app.bus.subscribe(e => events.push(e.event));
+  return { s, events };
+}
+
+test('P7: 本文に書かれたツール呼び出しの引数は、text.delta・再接続の写し（drafts）・履歴の API の書きかけに流さない。印の前の本文は今までどおり流す。保存される返事と呼び出しは変わらない', async t => {
+  const { s, events } = await streamApp(t);
+  const id = uuid(72);
+  const probes: string[] = [];
+  const streamed: Script = async function* () {
+    for (const part of STREAM_CHUNKS) {
+      yield { type: 'text', delta: part };
+      probes.push(`${s.app.bus.drafts().map(draft => draft.text).join('|')}\n${await (await s.api(`/api/conversations/${id}/messages`)).text()}`);
+    }
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  };
+  s.adapter().scripts = [streamed, finish];
+  s.app.conversations.create({ id, title: '会話' });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  await settled(s.app, sent.body.runId);
+  assert.equal(probes.length, STREAM_CHUNKS.length);
+  assert.ok(probes[0]!.includes('試します。'), `印の前の本文は流れる: ${probes[0]}`);
+  for (const probe of probes) assert.ok(!leaks(probe), probe);
+  const deltas = events.filter(e => e.type === 'text.delta');
+  const shown = deltas.map(e => (e.type === 'text.delta' ? e.text : '')).join('');
+  assert.ok(shown.startsWith('試します。') && !leaks(shown), shown);
+  assert.ok(!everything(events).includes(PASS), 'どの出来事にも出ない');
+  const ring = (s.app.bus.since(0) ?? []).filter(e => e.event.type === 'text.delta');
+  assert.ok(ring.length >= 1 && !leaks(everything(ring)), '再接続の写し（バッファ）の本文にも出ない');
+  assert.match(s.app.runs.get(sent.body.runId)!.flags, /text_tool_calls/u);
+  const saved = s.app.conversations.messages(id);
+  assert.equal(saved.find(m => m.role === 'assistant')!.text, '試します。', '保存される返事は印の前の本文');
+  assert.ok(saved.some(m => m.message.role === 'assistant' && (m.message.toolCalls ?? []).some(call => call.name === 'browser_type')), '本文の呼び出しは拾われる');
+  assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS));
+});
+
+test('P7: 印の無い返事は、今までどおり 1 つずつ流す（欠けも並べ替えも無い）', async t => {
+  const { s, events } = await streamApp(t);
+  const id = uuid(73);
+  const parts = ['やあ、', '今日は', '<b>', ' 晴れ'];
+  s.adapter().scripts = [async function* () { for (const part of parts) yield { type: 'text', delta: part }; yield { type: 'done', stop: 'end_turn' as StopReason }; }];
+  s.app.conversations.create({ id, title: '会話' });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'こんにちは' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(events.filter(e => e.type === 'text.delta').map(e => (e.type === 'text.delta' ? e.text : '')), parts);
+});
+
+test('P7: 本文のツール呼び出しの途中で止めても、止めた返事（途中まで）に引数が残らない', async t => {
+  const { s, events } = await streamApp(t);
+  const id = uuid(74);
+  s.adapter().scripts = [async function* () {
+    for (const part of STREAM_CHUNKS.slice(0, 4)) yield { type: 'text', delta: part };
+    s.app.engine.stop(s.app.engine.activeRuns()[0]!.runId);
+    throw new Error('aborted');
+  }];
+  s.app.conversations.create({ id, title: '会話' });
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
+  await settled(s.app, sent.body.runId);
+  const saved = s.app.conversations.messages(id).filter(m => m.role === 'assistant');
+  assert.equal(saved.length, 1, '止めた返事は保存される');
+  assert.ok(saved[0]!.text.startsWith('試します。'), saved[0]!.text);
+  assert.ok(!leaks(saved[0]!.text) && !everything(saved).includes(PASS), everything(saved));
+  assert.ok(!everything(events).includes(PASS));
+  assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS));
 });
 
 // ── 本物のプロセス（Windows）: ジョブの中で動くサーバーには入れ、ジョブの外のサーバーは、ポートが出力に出ていても断る ──
