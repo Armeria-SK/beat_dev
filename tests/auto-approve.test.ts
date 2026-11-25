@@ -12,13 +12,15 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, JudgeRefused, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
+import { ProviderError } from '../src/providers/types.ts';
+import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, EXFIL_RULE, JudgeRefused, judgeErrorKind, NoJudge, parseVerdict, SECRET_RULE, TAINTED_NOTE, TruncatedReply, type ClassifierInput, type ClassifierPrompt, type JudgeCall, type JudgeErrorKind, type JudgeLimits } from '../src/tools/auto-approve.ts';
 import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { memoryForget, memorySave } from '../src/tools/builtin/memory.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { webFetch } from '../src/tools/builtin/web.ts';
 import { ASK_REASON_KINDS } from '../src/tools/hooks/ask-kinds.ts';
-import { effectiveMode, runToolCall } from '../src/tools/pipeline.ts';
+import { pendingText } from '../src/shared/messages/pending.ts';
+import { effectiveMode, JUDGE_LIMITS, judgeFailedKey, runToolCall, type JudgeLimitSet } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { PendingStore } from '../src/pending/store.ts';
@@ -85,7 +87,7 @@ test('autoDecide: 判定役の失敗・時間切れ・読めない返事・取�
   const controller = new AbortController();
   const cancelled = autoDecide(input(), () => new Promise<string>(() => undefined), controller.signal, 5000);
   controller.abort();
-  assert.deepEqual([(await cancelled).decision, (await cancelled).failed], ['ask', 'error']);
+  assert.deepEqual([(await cancelled).decision, (await cancelled).failed], ['ask', 'cancelled'], '実行が止められたのは、呼べなかった（error）とは分けて cancelled');
 });
 
 test('AP-1d N5: 読めない返事（切れた返事も）は 1 回だけ聞き直す。2 回目が allow なら allow、2 回とも読めなければ unparsable。時間切れ・失敗・取り消しは聞き直さない。聞き直しは残りの時間の中', async () => {
@@ -115,7 +117,7 @@ test('AP-1d N5: 読めない返事（切れた返事も）は 1 回だけ聞き�
   assert.equal(hung.count(), 1, 'a timeout is not asked again');
   const controller = new AbortController();
   const stopped = seq(() => { controller.abort(); return Promise.resolve('わかりません'); }, ALLOW);
-  assert.equal((await autoDecide(input(), stopped.ask, controller.signal)).failed, 'error');
+  assert.equal((await autoDecide(input(), stopped.ask, controller.signal)).failed, 'cancelled');
   assert.equal(stopped.count(), 1, 'a cancelled run is not asked again');
   // The second call runs in what is left of the first call's time: 120 ms + 120 ms is over the 200 ms limit, though each call alone is under it
   const slow = (text: string) => () => new Promise<string>(resolve => setTimeout(() => resolve(text), 120));
@@ -132,8 +134,152 @@ test('AP-1 review: 判定役への文を作るところで投げても、autoDec
   const broken = input();
   Object.defineProperty(broken, 'reasons', { get: () => { throw new Error('broken input'); } });
   assert.throws(() => buildClassifierPrompt(broken), /broken input/u, 'control: the prompt builder does throw on this input');
-  const verdict = await autoDecide(broken, never, new AbortController().signal, { answerMs: 60_000, slotWaitMs: 60_000 });
-  assert.deepEqual(verdict, { decision: 'ask', reason: '', failed: 'error' });
+  const verdict = await autoDecide(broken, never, new AbortController().signal, { answerMs: 60_000, slotWaitMs: 60_000, retryDelayMs: 0 });
+  assert.deepEqual(verdict, { decision: 'ask', reason: '', failed: 'error', detail: { kind: 'internal', text: 'broken input' } });
+});
+
+// ── S3: 判定役を呼べなかったとき（種類・呼び直し・取り消し） ──
+
+const KINDS: JudgeErrorKind[] = ['rate_limit', 'auth', 'provider_timeout', 'context', 'connect', 'provider', 'internal'];
+const staged = (over: Partial<JudgeLimits> = {}): JudgeLimits => ({ answerMs: 5_000, slotWaitMs: 5_000, retryDelayMs: 0, ...over });
+// ask 関数の台本: 1 つずつ使い、足りなければ最後のものを繰り返す。Error は投げ、文字は返事にする
+const script = (...steps: Array<string | Error>) => {
+  let n = 0;
+  return { ask: async (): Promise<string> => { const step = steps[Math.min(n, steps.length - 1)]!; n++; if (step instanceof Error) throw step; return step; }, count: () => n };
+};
+
+test('judgeErrorKind: 閉じた 7 語。ProviderError の kind とつながらない失敗の文の鍵だけで決め、それ以外はすべて internal', () => {
+  const kind = (error: unknown): JudgeErrorKind => judgeErrorKind(error);
+  assert.equal(kind(new ProviderError('rate_limit', 'x')), 'rate_limit');
+  assert.equal(kind(new ProviderError('auth', 'x')), 'auth');
+  assert.equal(kind(new ProviderError('timeout', 'x')), 'provider_timeout');
+  assert.equal(kind(new ProviderError('context_overflow', 'x')), 'context');
+  for (const code of ['connect', 'connect.code', 'anthropic.connect'] as const) assert.equal(kind(new ProviderError('provider_error', 'x', { code })), 'connect', code);
+  assert.equal(kind(new ProviderError('provider_error', 'x')), 'provider');
+  assert.equal(kind(new ProviderError('provider_error', 'x', { code: 'http.rate_limit' })), 'provider', 'つながらない以外の提供元のエラー');
+  assert.equal(kind(new ProviderError('internal', 'x')), 'internal');
+  assert.equal(kind(new ProviderError('cancelled', 'x')), 'internal');
+  assert.equal(kind(new Error('rate_limit 429')), 'internal', '文が種類に見えるだけの例外は、種類にしない');
+  for (const odd of [undefined, null, 'rate_limit', { kind: 'rate_limit' }, 42]) assert.equal(kind(odd), 'internal');
+});
+
+test('autoDecide（S3）: 一瞬の失敗（rate_limit・connect・provider・internal）は 1 回だけ呼び直し、2 回目の allow は allow。呼ぶのは合わせて 2 回まで', async () => {
+  const signal = new AbortController().signal;
+  for (const error of [new ProviderError('rate_limit', 'x'), new ProviderError('provider_error', 'x', { code: 'connect' }), new ProviderError('provider_error', 'x'), new Error('boom')]) {
+    const s = script(error, ALLOW);
+    assert.deepEqual(await autoDecide(input(), s.ask, signal, staged()), { decision: 'allow', reason: '依頼の範囲です' }, error.message);
+    assert.equal(s.count(), 2);
+  }
+  const readable = script(new ProviderError('rate_limit', 'x'), '{"decision":"ask","reason":"check"}');
+  assert.deepEqual(await autoDecide(input(), readable.ask, signal, staged()), { decision: 'ask', reason: 'check' }, '2 回目の答えがそのまま答え');
+
+  // 2 回とも投げたら、確かめる。3 回目は無い
+  const verdict = await autoDecide(input(), script(new ProviderError('rate_limit', 'upstream said UPSTREAM-MARK-1')).ask, signal, staged());
+  assert.deepEqual(verdict, { decision: 'ask', reason: '', failed: 'error', detail: { kind: 'rate_limit', text: 'upstream said UPSTREAM-MARK-1' } });
+  const bounded = script(new ProviderError('rate_limit', 'x'), new ProviderError('rate_limit', 'y'), ALLOW);
+  assert.equal((await autoDecide(input(), bounded.ask, signal, staged())).failed, 'error');
+  assert.equal(bounded.count(), 2, 'a third call would have found ALLOW');
+
+  // 1 回目が読めない返事のあとに 2 回目が投げる・1 回目が投げたあとに 2 回目が読めない返事: どちらも 2 回で止まる
+  const junkThenError = script('わかりません', new ProviderError('rate_limit', 'x'), ALLOW);
+  const a = await autoDecide(input(), junkThenError.ask, signal, staged());
+  assert.deepEqual([a.decision, a.failed, a.detail?.kind], ['ask', 'error', 'rate_limit']);
+  assert.equal(junkThenError.count(), 2);
+  const errorThenJunk = script(new ProviderError('rate_limit', 'x'), 'わかりません', ALLOW);
+  const b = await autoDecide(input(), errorThenJunk.ask, signal, staged());
+  assert.deepEqual([b.decision, b.failed, b.detail], ['ask', 'unparsable', undefined]);
+  assert.equal(errorThenJunk.count(), 2);
+});
+
+test('autoDecide（S3）: auth・provider_timeout・context は呼び直さない。数字 1 つの古い形・始めて 1,000 ms を過ぎた失敗・時間切れ・断り・判定役が無いも呼び直さない', async () => {
+  const signal = new AbortController().signal;
+  for (const [error, kind] of [[new ProviderError('auth', 'x'), 'auth'], [new ProviderError('timeout', 'x'), 'provider_timeout'], [new ProviderError('context_overflow', 'x'), 'context']] as const) {
+    const s = script(error, ALLOW);
+    const v = await autoDecide(input(), s.ask, signal, staged());
+    assert.deepEqual([v.decision, v.failed, v.detail?.kind], ['ask', 'error', kind]);
+    assert.equal(s.count(), 1, kind);
+  }
+  for (const limits of [undefined, 5_000]) {
+    const old = script(new ProviderError('rate_limit', 'x'), ALLOW);
+    assert.equal((await (limits === undefined ? autoDecide(input(), old.ask, signal) : autoDecide(input(), old.ask, signal, limits))).failed, 'error');
+    assert.equal(old.count(), 1, '数字 1 つの形では呼び直さない');
+  }
+
+  let late = 0;
+  const slow = async (): Promise<string> => { late++; await new Promise(resolve => setTimeout(resolve, 1_100)); throw new ProviderError('rate_limit', 'x'); };
+  assert.equal((await autoDecide(input(), slow, signal, staged())).failed, 'error');
+  assert.equal(late, 1, '始めて 1 秒を過ぎた失敗は呼び直さない');
+
+  const refused = script(new JudgeRefused(), ALLOW);
+  assert.equal((await autoDecide(input(), refused.ask, signal, staged())).failed, 'judge_refused');
+  assert.equal(refused.count(), 1);
+  const none = script(new NoJudge('none'), ALLOW);
+  assert.equal((await autoDecide(input(), none.ask, signal, staged())).failed, 'no_judge');
+  assert.equal(none.count(), 1);
+  let hungCalls = 0;
+  const timedOut = await autoDecide(input(), () => { hungCalls++; return new Promise<string>(() => undefined); }, signal, staged({ answerMs: 30 }));
+  assert.equal(timedOut.failed, 'timeout');
+  assert.equal(hungCalls, 1);
+  let slotCalls = 0;
+  const queuedForever = (_prompt: ClassifierPrompt, _signal: AbortSignal, step?: JudgeCall): Promise<string> => { slotCalls++; step?.queued(); return new Promise<string>(() => undefined); };
+  assert.equal((await autoDecide(input(), queuedForever, signal, staged({ slotWaitMs: 30 }))).failed, 'slot_timeout');
+  assert.equal(slotCalls, 1);
+});
+
+test('autoDecide（S3）: 実行が止められたら cancelled（呼び直さない）。呼び直しの待ちの間の取り消しは、待ちを切り上げて、2 回目は呼ばない', async () => {
+  const stopped = new AbortController();
+  stopped.abort();
+  const before = script(new ProviderError('rate_limit', 'x'), ALLOW);
+  const v = await autoDecide(input(), before.ask, stopped.signal, staged());
+  assert.deepEqual([v.decision, v.failed, v.detail], ['ask', 'cancelled', undefined]);
+  assert.ok(before.count() <= 1, '始めから止められていたら、呼び直さない');
+
+  // 待ちの間に外の signal が止まる: 待ちを切り上げ、cancelled。2 回目は呼ばない
+  const controller = new AbortController();
+  const waiting = script(new ProviderError('rate_limit', 'x'), ALLOW);
+  const began = Date.now();
+  const cancelled = autoDecide(input(), waiting.ask, controller.signal, staged({ retryDelayMs: 10_000 }));
+  setTimeout(() => controller.abort(), 40);
+  const c = await cancelled;
+  assert.deepEqual([c.decision, c.failed], ['ask', 'cancelled']);
+  assert.equal(waiting.count(), 1, '待ちの間に止められたら、2 回目は呼ばない');
+  assert.ok(Date.now() - began < 3_000, '待ちは取り消しで切り上がる');
+});
+
+test('autoDecide（S3）: 呼び直しの待ちの間に答えの時計が切れたら、待ちを切り上げて timeout。2 回目は呼ばない', async () => {
+  const clock = script(new ProviderError('rate_limit', 'x'), ALLOW);
+  const began2 = Date.now();
+  const expired = await autoDecide(input(), clock.ask, new AbortController().signal, staged({ answerMs: 50, retryDelayMs: 10_000 }));
+  assert.deepEqual([expired.decision, expired.failed], ['ask', 'timeout']);
+  assert.equal(clock.count(), 1, '待ちの間に時計が切れたら、2 回目は呼ばない');
+  assert.ok(Date.now() - began2 < 3_000, '待ちは時間切れで切り上がる');
+});
+
+test('autoDecide（S3）: 例外の文は 1 行にして秘密を伏せ、120 字までに切って detail.text に入れる', async () => {
+  const leaky = script(new Error(`call failed\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789\nkey sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 ${'あ'.repeat(300)}`));
+  const v = await autoDecide(input(), leaky.ask, new AbortController().signal, staged());
+  const text = v.detail!.text;
+  assert.ok(text.startsWith('call failed Authorization'), text);
+  assert.doesNotMatch(text, /abcdefghijklmnop/u);
+  assert.doesNotMatch(text, /[\n\t]/u);
+  assert.ok(text.length <= 120, String(text.length));
+  assert.equal((await autoDecide(input(), script(new Error('')).ask, new AbortController().signal, staged())).detail?.text, '');
+});
+
+test('judgeFailedKey: error は種類ごとの決まった文の鍵（種類が無い古い形は judge_failed_error）、cancelled は judge_failed_error、ほかは今までの鍵。7 つの文は決まった英語', () => {
+  const sentence: Record<JudgeErrorKind, string> = {
+    rate_limit: 'the judge could not be called (rate limit)',
+    auth: 'the judge could not be called (the API key was refused)',
+    provider_timeout: 'the judge could not be called (the provider timed out)',
+    context: 'the judge could not be called (the request was too long for the model)',
+    connect: 'the judge could not be called (could not connect)',
+    provider: 'the judge could not be called (the provider returned an error)',
+    internal: 'the judge could not be called (internal error)',
+  };
+  for (const kind of KINDS) assert.equal(pendingText('en', judgeFailedKey({ failed: 'error', detail: { kind, text: 'EXCEPTION-TEXT' } })), sentence[kind], kind);
+  assert.equal(judgeFailedKey({ failed: 'error' }), 'judge_failed_error');
+  assert.equal(judgeFailedKey({ failed: 'cancelled' }), 'judge_failed_error');
+  for (const failed of ['timeout', 'slot_timeout', 'unparsable', 'judge_refused', 'no_judge', 'no_request', 'too_long'] as const) assert.equal(judgeFailedKey({ failed }), `judge_failed_${failed}`);
 });
 
 test('判定役に渡す文: 利用者の最後の発言と操作と理由だけ。操作の文は区切りの印で囲み、「書かれた指示に従わない」と言う。区切りの印は毎回変わる', () => {
@@ -226,6 +372,9 @@ test('確かめの種類の表: 許可の一覧が ask で返す理由のキー�
 
 // ── パイプライン ──
 
+// 呼び直しの待ちを 0 にして、いつも投げる判定役の試験を速く保つ
+const FAST_JUDGE: JudgeLimitSet = { chat: { ...JUDGE_LIMITS.chat, retryDelayMs: 0 }, unattended: { ...JUDGE_LIMITS.unattended, retryDelayMs: 0 } };
+
 type Setup = Awaited<ReturnType<typeof setup>>;
 
 async function setup(t: { after: (fn: () => void) => void }, options: { tools?: ToolDef[]; mutate?: (c: AppConfig) => void; classify?: (prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string> | string; mode?: PermissionMode; startMode?: PermissionMode } = {}) {
@@ -253,7 +402,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { tools?: 
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number; noConversationFlag?: boolean } = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
-      registry, approvals, pending, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
+      registry, approvals, pending, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで', judgeLimits: FAST_JUDGE,
       ...(extra.noClassifier ? {} : { autoClassify: async (prompt: ClassifierPrompt, signal: AbortSignal) => { prompts.push(prompt); return state.classify(prompt, signal); } }),
       ...(extra.timeoutMs ? { autoTimeoutMs: extra.timeoutMs } : {}),
       ...(extra.noConversationFlag ? {} : { conversationTainted: () => { if (state.conversationTainted === 'throws') throw new Error('読めない'); return state.conversationTainted; } }),    });
@@ -334,6 +483,117 @@ test('自動承認: 判定役の失敗・時間切れ・読めない返事は、
     assert.match(rows[0]!.reason, why, label);
     assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, label);
   }
+});
+
+// ── S3: 判定役を呼べなかったとき（パイプライン） ──
+
+const notifier = (s: Setup, notify: (input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown): ToolContext =>
+  ({ ...s.ctx, services: { db: s.db, emit: () => undefined, notify } as unknown as ToolContext['services'] });
+const judgeRows = (s: Setup) => s.db.prepare('SELECT outcome, failed, detail FROM judge_calls ORDER BY id').all().map(r => ({ ...r }));
+
+test('自動承認（S3）: 一瞬の失敗は 1 回呼び直す。2 回目が allow なら動き、judge_calls は 1 行（failed なし）。呼ぶのは合わせて 2 回まで', async t => {
+  let n = 0;
+  const flaky = await setup(t, { classify: () => { n++; if (n === 1) throw new ProviderError('provider_error', 'x', { code: 'connect' }); return ALLOW; } });
+  const outcome = await flaky.call('shell_run', { command: flaky.readOutside });
+  assert.deepEqual([outcome.decision, outcome.decidedBy], ['allow', 'auto-mode']);
+  assert.equal(flaky.prompts.length, 2);
+  assert.deepEqual(judgeRows(flaky), [{ outcome: 'allow', failed: null, detail: null }]);
+
+  // 2 回目も失敗なら確かめる。3 回目に allow が待っていても呼ばない
+  let m = 0;
+  const twice = await setup(t, { classify: () => { m++; if (m <= 2) throw new ProviderError('rate_limit', 'x'); return ALLOW; } });
+  const row = await parked(twice, 'shell_run', { command: twice.readOutside });
+  assert.equal(row.kind, 'judge_failed');
+  assert.equal(twice.prompts.length, 2);
+  assert.equal(twice.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+});
+
+test('自動承認（S3）: 呼べなかった理由は種類ごとの決まった文で承認待ちに積まれる。呼び直すのは rate_limit・connect・provider・internal だけ。例外の文は承認待ちの文・モデルへの返事・出来事・行・記録のどこにも出ず、judge_calls.detail にだけ残る', async t => {
+  const MARK = 'UPSTREAM-MARK-7c1e';
+  const cases: Array<[Error, string, number, string]> = [
+    [new ProviderError('rate_limit', `429 ${MARK}`, { upstream: `body ${MARK}` }), 'rate limit', 2, 'rate_limit'],
+    [new ProviderError('auth', `401 ${MARK}`), 'the API key was refused', 1, 'auth'],
+    [new ProviderError('timeout', `timed out ${MARK}`), 'the provider timed out', 1, 'provider_timeout'],
+    [new ProviderError('context_overflow', `too long ${MARK}`), 'the request was too long for the model', 1, 'context'],
+    [new ProviderError('provider_error', `refused ${MARK}`, { code: 'connect.code' }), 'could not connect', 2, 'connect'],
+    [new ProviderError('provider_error', `500 ${MARK}`), 'the provider returned an error', 2, 'provider'],
+    [new Error(`boom ${MARK}`), 'internal error', 2, 'internal'],
+  ];
+  for (const [error, why, calls, kind] of cases) {
+    const s = await setup(t, { classify: () => { throw error; } });
+    const row = await parked(s, 'shell_run', { command: s.readOutside });
+    assert.equal(row.kind, 'judge_failed', kind);
+    assert.equal(row.reason, `the judge could not be called (${why})`, kind);
+    assert.equal(s.prompts.length, calls, kind);
+    assert.deepEqual(judgeRows(s), [{ outcome: 'failed', failed: 'error', detail: `${kind}: ${error.message}` }], kind);
+    const everywhere: Array<[string, string]> = [
+      ['reason', row.reason], ['tool result', row.outcome.output.content], ['events', JSON.stringify(s.events)],
+      ['pending', JSON.stringify(s.db.prepare('SELECT * FROM pending_actions').all())], ['tool_calls', JSON.stringify(s.db.prepare('SELECT * FROM tool_calls').all())],
+      ['approvals', JSON.stringify(s.db.prepare('SELECT * FROM approvals').all())],
+    ];
+    for (const [where, text] of everywhere) assert.ok(!text.includes(MARK), `${kind}: ${where}`);
+  }
+});
+
+test('自動承認（S3）: judge_calls.detail に残す文は、秘密を伏せ、1 行にし、300 字までに切る', async t => {
+  const message = `failed\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789 key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 ${'x'.repeat(400)}`;
+  const s = await setup(t, { classify: () => { throw new ProviderError('auth', message); } });
+  await parked(s, 'shell_run', { command: s.readOutside });
+  const detail = (judgeRows(s)[0] as { detail: string }).detail;
+  assert.ok(detail.startsWith('auth: failed Authorization'), detail);
+  assert.doesNotMatch(detail, /abcdefghijklmnop/u);
+  assert.doesNotMatch(detail, /[\n\t]/u);
+  assert.ok(detail.length <= 300, String(detail.length));
+});
+
+test('自動承認（S3）: 判定役を待つあいだに実行が止められたら cancelled で記録し、承認待ちには積まない。呼び直さない', async t => {
+  const s = await setup(t);
+  s.state.classify = () => { s.controller.abort(); throw new ProviderError('rate_limit', 'x'); };
+  const outcome = await s.call('shell_run', { command: s.readOutside });
+  assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'user']);
+  assert.equal(cards(s), 0);
+  assert.equal(s.prompts.length, 1);
+  assert.deepEqual(judgeRows(s), [{ outcome: 'failed', failed: 'cancelled', detail: null }]);
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+
+  // 始めから止められていた実行: 判定役が allow と答えても使わない（取り消しとして返り、動かさない）
+  const early = await setup(t);
+  early.controller.abort();
+  const stopped = await early.call('shell_run', { command: early.readOutside });
+  assert.deepEqual([stopped.decision, stopped.decidedBy], ['ask', 'user']);
+  assert.equal(cards(early), 0);
+  assert.equal(early.prompts.length, 1, '呼び直さない');
+  assert.doesNotMatch(stopped.output.content, /外のメモ/u, '動いていない');
+  assert.deepEqual(judgeRows(early), [{ outcome: 'failed', failed: 'cancelled', detail: null }]);
+  assert.equal(early.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+});
+
+test('自動承認（S3）: 呼べない失敗が 3 回続いたら、持ち主に 1 つ知らせる（1 時間に 1 つの印）。知らせが投げても判定の結果は同じで、知らせの口が無くても落ちない。止められた呼び出しは数えも知らせもしない', async t => {
+  const notices: Array<{ kind: string; title: string; body?: string; link?: string; dedupKey: string }> = [];
+  const s = await setup(t, { classify: () => { throw new ProviderError('rate_limit', 'x'); } });
+  const ctx = notifier(s, input => { notices.push(input); });
+  for (const expected of [0, 0, 1]) {
+    await parked(s, 'shell_run', { command: s.readOutside }, ctx);
+    assert.equal(notices.length, expected);
+  }
+  assert.equal(notices[0]!.kind, 'info');
+  assert.equal(notices[0]!.title, 'The judge cannot be reached');
+  assert.equal(notices[0]!.body, 'The judge failed 3 times in a row. Until it answers again, the actions it would have judged wait for your approval.');
+  assert.match(notices[0]!.dedupKey, /^judge-failing:\d{4}-\d{2}-\d{2}T\d{2}$/u);
+  assert.equal('link' in notices[0]!, false);
+
+  const throwing = await setup(t, { classify: () => { throw new ProviderError('rate_limit', 'x'); } });
+  const bad = notifier(throwing, () => { throw new Error('notify is broken'); });
+  for (let i = 0; i < 3; i++) assert.equal((await parked(throwing, 'shell_run', { command: throwing.readOutside }, bad)).reason, 'the judge could not be called (rate limit)');
+  for (let i = 0; i < 3; i++) assert.equal((await parked(throwing, 'shell_run', { command: throwing.readOutside })).kind, 'judge_failed', '知らせの口が無くても');
+
+  const stopped: typeof notices = [];
+  const c = await setup(t, { classify: () => { throw new ProviderError('rate_limit', 'x'); } });
+  const stoppedCtx = notifier(c, input => { stopped.push(input); });
+  for (let i = 0; i < 2; i++) await parked(c, 'shell_run', { command: c.readOutside }, stoppedCtx);
+  c.state.classify = () => { c.controller.abort(); throw new ProviderError('rate_limit', 'x'); };
+  await c.call('shell_run', { command: c.readOutside }, stoppedCtx);
+  assert.deepEqual(stopped, [], '止められた呼び出しは、失敗の数に入れず、知らせも出さない');
 });
 
 test('自動承認: 判定役が無い（モデルを呼べない）、利用者の発言が無いときも、judge_failed の Pending に積まれる', async t => {

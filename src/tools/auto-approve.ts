@@ -2,6 +2,7 @@ import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
 import { makeFence } from '../shared/fence.ts';
 import { withoutSecrets } from '../projects/remotes.ts';
 import { redactSecrets } from '../shared/redaction.ts';
+import { ProviderError } from '../providers/types.ts';
 import type { ApprovalPath } from './approvals.ts';
 
 // 自動承認（段 8b）。確かめ（ask）になった操作を、判定役（AI）に「許す / 確かめる」で聞く。どの操作が判定役に来るかはパイプライン（pipeline.ts）が決め、
@@ -167,10 +168,15 @@ export function parseVerdict(reply: string): ParsedVerdict | undefined {
   return { decision, reason: typeof reason === 'string' ? oneLine(reason) : '' };
 }
 
-// failed: 判定役が答えられなかった理由（error = 呼べない・失敗、timeout = 時間切れ、unparsable = 読めない返事、no_request = 利用者の発言が無い、too_long = 操作の文が長すぎる）。決まった答えのときは付かない
-export type AutoVerdict = { decision: 'allow' | 'ask'; reason: string; failed?: 'error' | 'timeout' | 'unparsable' | 'no_request' | 'too_long' | 'slot_timeout' | 'no_judge' | 'judge_refused' };
+// 判定役を呼べなかったときの種類。閉じた 7 語で、承認待ちの文（pending.ts の judge_failed_error_<語>）の鍵になる。例外の文そのものは種類にしない
+export type JudgeErrorKind = 'rate_limit' | 'auth' | 'provider_timeout' | 'context' | 'connect' | 'provider' | 'internal';
 
-export interface JudgeLimits { answerMs: number; slotWaitMs?: number | undefined }
+// failed: 判定役が答えられなかった理由（error = 呼べない・失敗、cancelled = 実行が止められた、timeout = 時間切れ、unparsable = 読めない返事、no_request = 利用者の発言が無い、too_long = 操作の文が長すぎる）。決まった答えのときは付かない。
+// detail は error のときだけ付く。kind は上の閉じた語、text は例外の文を 1 行にして秘密を伏せたもの（記録とログにだけ使う。承認待ちの文・モデルへの返事・出来事には入れない）
+export type AutoVerdict = { decision: 'allow' | 'ask'; reason: string; failed?: 'error' | 'cancelled' | 'timeout' | 'unparsable' | 'no_request' | 'too_long' | 'slot_timeout' | 'no_judge' | 'judge_refused'; detail?: { kind: JudgeErrorKind; text: string } };
+
+// retryDelayMs: 一瞬の失敗のあと、呼び直すまでの待ち（試験から短くする。無ければ RETRY_DELAY_MS）
+export interface JudgeLimits { answerMs: number; slotWaitMs?: number | undefined; retryDelayMs?: number | undefined }
 
 export interface JudgeReply { text: string; model?: string | undefined; usage?: { inputTokens?: number | undefined; outputTokens?: number | undefined } | undefined }
 
@@ -219,7 +225,31 @@ export class NoJudge extends Error {
   constructor(detail: string) { super(detail); }
 }
 
-// 判定役を 1 回呼ぶ（読めない返事のときだけ、残りの時間の中でもう 1 回）。失敗・時間切れ・読めない返事・利用者の発言が無い・操作の文が長すぎるときは、必ず ask（確かめる）。
+// 例外から種類を決める。表に無い値は作らない（ProviderError の kind と、つながらない失敗の文の鍵だけを見る。例外の文は見ない）
+const CONNECT_CODES: ReadonlySet<string> = new Set(['connect', 'connect.code', 'anthropic.connect']);
+
+export function judgeErrorKind(error: unknown): JudgeErrorKind {
+  if (!(error instanceof ProviderError)) return 'internal';
+  switch (error.kind) {
+    case 'rate_limit': return 'rate_limit';
+    case 'auth': return 'auth';
+    case 'timeout': return 'provider_timeout';
+    case 'context_overflow': return 'context';
+    case 'provider_error': return error.code !== undefined && CONNECT_CODES.has(error.code) ? 'connect' : 'provider';
+    default: return 'internal';
+  }
+}
+
+const messageOf = (error: unknown): string => {
+  try { return error instanceof Error ? error.message : String(error); } catch { return ''; }
+};
+
+// 一瞬の失敗だけ、1 回呼び直す: 始めてから RETRY_WITHIN_MS 以内の error で、種類がここにあるもの。auth・provider_timeout・context は呼び直しても変わらないか、待ちが伸びるだけ
+const RETRY_KINDS: ReadonlySet<JudgeErrorKind> = new Set<JudgeErrorKind>(['rate_limit', 'connect', 'provider', 'internal']);
+const RETRY_WITHIN_MS = 1_000;
+export const RETRY_DELAY_MS = 500;
+
+// 判定役を呼ぶ（読めない返事のとき、または一瞬の失敗のときだけ、残りの時間の中でもう 1 回。モデルを呼ぶのは合わせて 2 回まで）。失敗・時間切れ・読めない返事・利用者の発言が無い・操作の文が長すぎるときは、必ず ask（確かめる）。
 // ask 関数は、判定役のモデルに system と user の文を渡して、返事の文字を返す（呼べなければ投げる）
 export async function autoDecide(
   input: ClassifierInput,
@@ -229,6 +259,7 @@ export async function autoDecide(
 ): Promise<AutoVerdict> {
   if (!input.userRequest.trim()) return { decision: 'ask', reason: '', failed: 'no_request' };
   if (input.body.length > ACTION_BODY_LIMIT || estimateTextTokens(input.body) > ACTION_BODY_TOKENS) return { decision: 'ask', reason: '', failed: 'too_long' };
+  const begun = Date.now();
   const staged = typeof limits !== 'number';
   const answerMs = staged ? limits.answerMs : limits;
   const stop = new AbortController();
@@ -243,7 +274,10 @@ export async function autoDecide(
     ? { answerMs, ...(limits.slotWaitMs !== undefined ? { slotWaitMs: limits.slotWaitMs } : {}), queued: () => arm(limits.slotWaitMs, 'slot_timeout'), started: () => arm(answerMs, 'timeout') }
     : undefined;
   const combined = AbortSignal.any([signal, stop.signal]);
-  const failure = (): AutoVerdict => ({ decision: 'ask', reason: '', failed: expired ?? 'error' });
+  // 時間切れ → 外の signal の中止 → それ以外の失敗（種類と 1 行の文を付ける）の順。どれも ask
+  const failure = (error?: unknown): AutoVerdict => expired !== undefined ? { decision: 'ask', reason: '', failed: expired }
+    : signal.aborted ? { decision: 'ask', reason: '', failed: 'cancelled' }
+    : { decision: 'ask', reason: '', failed: 'error', detail: { kind: judgeErrorKind(error), text: oneLine(messageOf(error)) } };
   let prompt: ClassifierPrompt | undefined;
   const once = async (step: JudgeCall | undefined): Promise<AutoVerdict> => {
     try {
@@ -263,14 +297,28 @@ export async function autoDecide(
       if (error instanceof TruncatedReply) return { decision: 'ask', reason: '', failed: 'unparsable' };
       if (error instanceof JudgeRefused && !combined.aborted) return { decision: 'ask', reason: '', failed: 'judge_refused' };
       if (error instanceof NoJudge && !combined.aborted) return { decision: 'ask', reason: '', failed: 'no_judge' };
-      return failure();
+      return failure(error);
     }
   };
+  // The wait before the second call listens to the combined signal: a cancel or a clock that runs out ends it at once
+  const pause = (ms: number): Promise<void> => new Promise<void>(resolve => {
+    if (combined.aborted) { resolve(); return; }
+    const done = (): void => { clearTimeout(wake); combined.removeEventListener('abort', done); resolve(); };
+    const wake = setTimeout(done, ms);
+    combined.addEventListener('abort', done, { once: true });
+  });
   try {
     const first = await once(call);
-    if (first.failed !== 'unparsable' || combined.aborted) return first;
-    // AP-1d: a reply that could not be read is asked once more, inside the time left (the second call does not restart the clock)
-    return await once(call ? { ...call, queued: () => undefined, started: () => undefined } : undefined);
+    // The second call runs in what is left of the first call's time (it does not restart the clock). Whatever it returns is the answer: there is never a third call
+    const second = (): Promise<AutoVerdict> => once(call ? { ...call, queued: () => undefined, started: () => undefined } : undefined);
+    // AP-1d: a reply that could not be read is asked once more
+    if (first.failed === 'unparsable') return combined.aborted ? first : await second();
+    // A quick failure to call the judge (not a refusal, a timeout or a cancel) is asked once more after a short wait, and only with the staged limits
+    if (staged && first.failed === 'error' && first.detail !== undefined && RETRY_KINDS.has(first.detail.kind) && Date.now() - begun < RETRY_WITHIN_MS && !combined.aborted) {
+      await pause(limits.retryDelayMs ?? RETRY_DELAY_MS);
+      return combined.aborted ? failure() : await second();
+    }
+    return first;
   } finally {
     clearTimeout(timer);
   }
