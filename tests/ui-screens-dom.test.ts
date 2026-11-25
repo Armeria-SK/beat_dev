@@ -262,7 +262,7 @@ test('ui/Sidebar（DOM）: 検索の失敗は「0 件」と分けて Could not l
 });
 
 const sideProject = (id: string, name: string, over: Partial<Project> = {}): Project => ({
-  id, name, root: `C:\work\${id}`, check_command: null, scout_mode: 'off', remotes: [], archived_at: null, created_at: 0, updated_at: 0,
+  id, name, root: `C:\\work\\${id}`, check_command: null, scout_mode: 'off', remotes: [], archived_at: null, created_at: 0, updated_at: 0,
   is_git: false, folder_missing: false, waiting: { proposals: 0, questions: 0, pending: 0 }, running: 0, last_activity_at: null, ...over,
 });
 const SHOP = sideProject('p1aaaa', 'Shop', { created_at: 1, waiting: { proposals: 1, questions: 1, pending: 0 } });
