@@ -133,6 +133,8 @@ test('再起動時に閉じた実行（落ちた実行）は、model_calls の�
   const runs = new Runs(db);
   runs.start('r1', 'chat', 'c1');
   call(runs, 'r1', 'turn', 'm-first', { inputTokens: 1000, outputTokens: 10, cacheReadTokens: 700, cacheWriteTokens: 200 });
+  call(runs, 'r1', 'discarded', 'm-first', { inputTokens: 500, outputTokens: 64_000, cacheReadTokens: 100, cacheWriteTokens: 50 });
+  call(runs, 'r1', 'compact', 'm-first', { inputTokens: 4000, outputTokens: 300 });
   call(runs, 'r1', 'turn', 'm-last', { inputTokens: 2000, outputTokens: 20, cacheReadTokens: 1500, cacheWriteTokens: 0 });
   for (const id of ['t1', 't2', 't3']) toolRow(db, 'r1', id);
   runs.start('r-other', 'chat');
@@ -143,7 +145,7 @@ test('再起動時に閉じた実行（落ちた実行）は、model_calls の�
   const done = runs.get('r-done')!;
   assert.equal(runs.closeDangling(), 2);
   const row = runs.get('r1')!;
-  assert.deepEqual(counts(row), [3000, 30, 2200, 200]);
+  assert.deepEqual(counts(row), [3500, 64_030, 2300, 250], 'turn と discarded の合計。compact（4000 / 300）は入らない');
   assert.equal(row.tool_calls, 3);
   assert.equal(row.model_id, 'm-last');
   assert.equal(row.error_kind, 'cancelled');

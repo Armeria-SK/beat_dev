@@ -96,7 +96,7 @@ export class Runs {
     );
   }
 
-  // その実行の model_calls（turn と discarded）の合計。1 行も無い（または量がどれも空）ときは undefined。測るための記録なので、読めなくても終わり方は止めない
+  // その実行の model_calls（turn と discarded）の合計。1 行も無い（または量がどれも空）ときは、量が全部空の {}（書くと null になる）。読めなかったときだけ undefined。測るための記録なので、読めなくても終わり方は止めない
   #callUsage(id: string): Usage | undefined {
     try {
       const sum = this.db.prepare(`

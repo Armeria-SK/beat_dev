@@ -18,7 +18,7 @@ const CUT_MARK = toolText('en', 'pipeline.truncated', { shown: '\u0000', total: 
 
 export type MissReason = 'model' | 'tools' | 'frozen' | 'dynamic' | 'removed' | 'gap_5min' | 'history';
 export const MISS_REASONS: readonly MissReason[] = ['model', 'tools', 'frozen', 'dynamic', 'removed', 'gap_5min', 'history'];
-// 実行の終わり方。engine_runs が量を書くのは ok と failed だけ（cancelled・unfinished・beat の中で落ちた internal_error は書かない）
+// 実行の終わり方。engine_runs が量を書くのは ok・failed と、新しい cancelled（model_calls の合計。前の cancelled は空）だけ（unfinished・beat の中で落ちた internal_error は書かない）
 export type RunState = 'ok' | 'failed' | 'cancelled' | 'unfinished' | 'internal_error';
 export const RUN_STATES: readonly RunState[] = ['ok', 'failed', 'cancelled', 'unfinished', 'internal_error'];
 export interface StateReport { state: RunState; runs: number; volume: Volume; engineInput: number; engineRead: number }
@@ -299,7 +299,7 @@ export function renderReport(r: TokenReport): string {
     `judge calls\t${t.judge.calls}\t${t.judge.input}\t-\t-\t${t.judge.input}\t${t.judge.output}\t${t.judge.input}\t-`,
     `weighted input, all\t${int(t.weightedTotal)}`,
     '',
-    '## By run state (each run on its own, not added to its parent). engine_runs records tokens only for runs that ended ok or failed',
+    '## By run state (each run on its own, not added to its parent). engine_runs has tokens for ok, failed and newer cancelled runs (older cancelled, unfinished and internal_error runs have none)',
     `state\truns\t${VOLUME_HEAD}\tengine_runs_input\tengine_runs_read`,
     ...r.states.map(s => `${s.state}\t${s.runs}\t${volumeCells(s.volume)}\t${s.engineInput}\t${s.engineRead}`),
     `compared with the engine_runs baseline: the ${r.compared.runs} run(s) that ended ok or failed, on both sides; model_calls read share ${pct(r.compared.volume.readShare)}, engine_runs read share ${pct(r.compared.engineReadShare)}. cancelled, unfinished and internal_error runs are left out of both`,
