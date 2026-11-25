@@ -477,7 +477,7 @@ const INERT_LAUNCH_FLAGS = new Set(['-noprofile', '-noninteractive', '-nologo'])
 const LAUNCH_COMMAND_FLAGS = new Set(['-command', '-c']);
 
 const inertLauncher = (st: StatementFacts): boolean => {
-  if ((st.program !== 'powershell' && st.program !== 'pwsh') || st.words.some(w => w.text.includes('"'))) return false;
+  if ((st.program !== 'powershell' && st.program !== 'pwsh') || !/^(?:powershell|pwsh)(?:[.]exe)?$/iu.test(st.words[0]?.text ?? '') || st.words.some(w => w.text.includes('"'))) return false;
   const args = st.words.slice(1).map(w => w.text.toLowerCase());
   for (let i = 0; i < args.length; i++) {
     if (INERT_LAUNCH_FLAGS.has(args[i]!)) continue;

