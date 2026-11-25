@@ -64,7 +64,7 @@ test('a changed test file picks itself', t => {
 
 test('changes that cannot be placed in the graph pick every test, with the reason', t => {
   const graph = new ImportGraph(tree(t));
-  for (const file of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.web.json', 'tests/helpers/h.ts', 'tests/helpers/tsx-loader.mjs', 'src/prompt.md', 'src/data.json', 'tests/fixtures/page.html', 'deploy/x.ts', 'README.md']) {
+  for (const file of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.web.json', 'tests/helpers/h.ts', 'tests/helpers/tsx-loader.mjs', 'tests/helpers/notes.md', 'web/src/icon.svg', 'src/data.json', 'tests/fixtures/page.html', 'deploy/x.ts', 'README.md']) {
     const pick = graph.pick([file, 'src/unrelated.ts']);
     assert.deepEqual(pick.tests, graph.tests, file);
     assert.equal(pick.all.length, 1, file);
@@ -78,6 +78,59 @@ test('a change nothing reaches picks no test', t => {
   assert.deepEqual(pick.tests, []);
   assert.deepEqual(pick.all, []);
   assert.deepEqual(graph.pick([]).tests, []);
+});
+
+// .css / .md は、コードから読まれていれば、その読み方（import・path の文字列・読むフォルダ）が分かるので、コードと同じにグラフで選ぶ。
+// どのコードにも名前が出ない物は、どの試験も読まないので、選ぶ試験は無い。名前がグラフの追えない形で出る物だけ、全部を選ぶ。
+test('どのコードにも名前が出ない .css / .md は、試験を 1 つも選ばない（全部を選ぶ理由にならない）', t => {
+  const graph = new ImportGraph(tree(t, { 'web/src/ui/styles/lonely.css': 'a { color: red; }\n', 'src/notes.md': '# notes\n', 'scripts/guide.md': 'guide\n', 'tests/fixtures/note.md': 'x\n' }));
+  for (const file of ['web/src/ui/styles/lonely.css', 'src/notes.md', 'scripts/guide.md', 'tests/fixtures/note.md']) {
+    const pick = graph.pick([file, 'src/unrelated.ts']);
+    assert.deepEqual(pick.all, [], file);
+    assert.deepEqual(pick.tests, [], file);
+  }
+});
+
+test('コードが import している .css は、それを読み込むモジュールに届く試験だけを選ぶ。消した .css でも同じ', t => {
+  const graph = new ImportGraph(tree(t, {
+    'web/src/style.css': 'a {}\n',
+    'web/src/A.tsx': "import './style.css';\nimport './gone.css';\nimport { bee } from './B.ts';\nexport const A = () => bee;\n",
+  }));
+  for (const file of ['web/src/style.css', 'web/src/gone.css']) {
+    const pick = graph.pick([file]);
+    assert.deepEqual(pick.all, [], file);
+    assert.deepEqual(pick.tests, ['tests/ui.test.ts'], file);
+  }
+});
+
+test('試験が path の文字列や読むフォルダで読む .md は、その試験を選ぶ', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/docs/guide.md': 'x\n',
+    'src/scan/note.md': 'x\n',
+    'tests/lit.test.ts': "import { readFileSync } from 'node:fs';\nreadFileSync('src/docs/guide.md');\n",
+  }));
+  assert.deepEqual(graph.pick(['src/docs/guide.md']).tests, ['tests/lit.test.ts']);
+  assert.deepEqual(graph.pick(['src/scan/note.md']).tests, ['tests/scan.test.ts']);
+  assert.deepEqual(graph.pick(['src/scan/note.md']).all, []);
+});
+
+test('名前がグラフの追えない形で出る .css / .md は、全部を選び、どのコードかを理由に書く', t => {
+  const graph = new ImportGraph(tree(t, {
+    'src/notes.md': 'x\n',
+    'src/reader.ts': "import { join } from 'node:path';\nexport const notes = (dir: string): string => join(dir, 'notes.md');\n",
+    'tests/reader.test.ts': "import '../src/reader.ts';\n",
+    'web/src/ui/other/dup.css': 'a {}\n',
+    'web/src/ui/main.ts': "import './styles/dup.css';\n",
+    'tests/main.test.ts': "import '../web/src/ui/main.ts';\n",
+  }));
+  const named = graph.pick(['src/notes.md', 'src/unrelated.ts']);
+  assert.deepEqual(named.tests, graph.tests);
+  assert.equal(named.all.length, 1);
+  assert.match(named.all[0]!, /^src\/notes\.md: .*src\/reader\.ts/u);
+  // 同じ名前の別の .css を読む import があっても、どちらの .css か決められないので全部を選ぶ
+  const same = graph.pick(['web/src/ui/other/dup.css']);
+  assert.deepEqual(same.tests, graph.tests);
+  assert.match(same.all[0]!, /^web\/src\/ui\/other\/dup\.css: .*web\/src\/ui\/main\.ts/u);
 });
 
 const DYN = {

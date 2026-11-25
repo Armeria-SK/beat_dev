@@ -11,6 +11,9 @@ const LOADER = './tests/helpers/tsx-loader.mjs';
 const PARSED = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs']);
 const SCANNED = ['src/', 'web/src/', 'scripts/', 'tests/'];
 const TRY_EXT = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs'];
+// コードではないが、コードからの読まれ方（import・path の文字列・読むフォルダ）をグラフで追える種類。.json・.html・.svg などは、今までどおり読まれる場所が分からない物として全部を選ぶ
+const ASSET = new Set(['.css', '.md']);
+const ASSET_NAME = /\.(?:css|md)(?![A-Za-z0-9_])/u;
 const JS_TO_TS: Record<string, string[]> = { '.js': ['.ts', '.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
 const REPO_PATH = /^(?:src|web|scripts|templates|assets|deploy|tests)(?:[/\\][^\s'"`]*)?$/u;
 const WHOLE = '';
@@ -26,6 +29,7 @@ export type Scan = {
   loads: string[];
   reads: string[];
   anchors: string[];
+  assets: string[];
 };
 
 export type Pick = {
@@ -36,7 +40,7 @@ export type Pick = {
 };
 
 const slash = (p: string): string => p.replaceAll('\\', '/');
-const emptyScan = (): Scan => ({ edges: [], missing: [], dynamic: [], loads: [], reads: [], anchors: [] });
+const emptyScan = (): Scan => ({ edges: [], missing: [], dynamic: [], loads: [], reads: [], anchors: [], assets: [] });
 const under = (file: string, prefix: string): boolean => file === prefix || file.startsWith(`${prefix}/`);
 
 function isFile(abs: string): boolean {
@@ -163,6 +167,8 @@ export function scanFile(root: string, rel: string, testSide: boolean): Scan {
       && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
       consume(node.left);
     }
+    const written = ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) ? node.text : undefined;
+    if (written !== undefined && ASSET_NAME.test(written)) scan.assets.push(written);
     if (!consumed.has(node) && (isFileAnchor(node) || (testSide && isAppRoot(node)))) { scan.anchors.push(at(node)); consume(node); }
     if (testSide) {
       const value = literal(node);
@@ -198,6 +204,7 @@ export class ImportGraph {
   readonly #scans = new Map<string, Scan>();
   readonly #closures = new Map<string, Set<string>>();
   readonly #dirs = new Map<string, string[]>();
+  #sources: string[] | undefined;
 
   constructor(root: string) {
     this.root = resolve(root);
@@ -227,6 +234,25 @@ export class ImportGraph {
       this.#dirs.set(prefix, files);
     }
     return files;
+  }
+
+  // 試験に限らず、SCANNED の下のコードのすべて
+  #allCode(): string[] {
+    this.#sources ??= SCANNED.flatMap(dir => globSync(`${dir}**/*`, { cwd: this.root, exclude: name => name === 'node_modules' }).map(slash))
+      .filter(file => PARSED.has(extname(file)) && isFile(join(this.root, file)));
+    return this.#sources;
+  }
+
+  // .css / .md の名前がコードの文字列に出ていて、その出方をグラフが追えていないなら、そのコード（追えないものは、実行時に読むかもしれない）
+  #unfollowed(changed: string): string | undefined {
+    const name = changed.slice(changed.lastIndexOf('/') + 1).toLowerCase();
+    for (const file of this.#allCode()) {
+      const scan = this.scan(file);
+      if (!scan.assets.some(text => slash(text).toLowerCase().includes(name))) continue;
+      const followed = scan.edges.includes(changed) || scan.missing.some(list => list.includes(changed)) || [...scan.loads, ...scan.reads].some(p => under(changed, p));
+      if (!followed) return `named in ${file} in a way the import graph cannot follow (it may be read at runtime)`;
+    }
+    return undefined;
   }
 
   #closure(test: string): Set<string> {
@@ -268,7 +294,7 @@ export class ImportGraph {
     const changed = [...new Set(changedFiles.map(slash))].sort();
     const all: string[] = [];
     for (const file of changed) {
-      const why = fallbackReason(file);
+      const why = fallbackReason(file) ?? (ASSET.has(extname(file)) ? this.#unfollowed(file) : undefined);
       if (why) all.push(`${file}: ${why}`);
     }
     const tests = all.length > 0 ? this.tests : this.tests.filter(test => changed.some(file => this.#touches(test, file)));
@@ -281,7 +307,7 @@ export function fallbackReason(file: string): string | undefined {
   if (/^tsconfig[^/]*\.json$/u.test(file)) return 'TypeScript settings changed';
   if (file.startsWith('tests/helpers/')) return 'shared test helper or the test loader changed';
   if (!SCANNED.some(dir => file.startsWith(dir))) return `outside ${SCANNED.join(' ')}`;
-  if (!PARSED.has(extname(file))) return 'not a parsed code file (may be read at runtime by path)';
+  if (!PARSED.has(extname(file)) && !ASSET.has(extname(file))) return 'not a parsed code file (may be read at runtime by path)';
   return undefined;
 }
 
