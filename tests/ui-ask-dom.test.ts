@@ -1,8 +1,9 @@
 import { byText, cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
-import { afterEach, test } from 'node:test';
+import { afterEach, mock, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import type { ChecklistItem, Message } from '../web/src/api.ts';
+import { ANSWER_GUARD_MS } from '../web/src/ui/ask.ts';
 import type { LiveDraft } from '../web/src/ui/live-state.ts';
 
 interface ConversationProps {
@@ -73,18 +74,30 @@ async function renderChat(options: { messages?: Message[]; draft?: LiveDraft; he
 const card = (c: HTMLElement) => c.querySelector<HTMLElement>('.ui-ask');
 const choice = (c: HTMLElement, label: string) => byText(c, '.ui-ask .bt-choice', label)?.querySelector('input') ?? [...c.querySelectorAll<HTMLElement>('.ui-ask .bt-choice')].find(el => el.textContent?.startsWith(label))?.querySelector('input');
 const answerButton = (c: HTMLElement) => byText(c, '.ui-ask .bt-btn', 'Answer') as HTMLButtonElement | undefined;
+const nextButton = (c: HTMLElement) => byText(c, '.ui-ask .bt-btn', 'Next') as HTMLButtonElement | undefined;
 
-test('ui/ask-dom: the card is docked above the composer with the questions, chips, descriptions and Something else; nothing preselected', async () => {
+test('ui/ask-dom: the card is docked above the composer, one question at a time, with chips, descriptions and Something else; nothing preselected', async () => {
   const { container } = await renderChat();
   const ask = card(container);
   assert.ok(ask, 'card shown');
   assert.ok(ask.compareDocumentPosition(container.querySelector('.bt-composer')!) & 4, 'composer follows the card');
   assert.ok(!container.querySelector('.bt-thread .ui-ask'), 'not inside the thread');
-  assert.deepEqual([...ask.querySelectorAll('.bt-question__q')].map(h => h.textContent), ['Which storage should the app use?', 'Which screens come first?']);
-  assert.deepEqual([...ask.querySelectorAll('.ui-ask__header')].map(h => h.textContent), ['Storage', 'Screens']);
+  const questions = () => [...ask.querySelectorAll('.bt-question__q')].map(h => h.textContent);
+  const chips = () => [...ask.querySelectorAll('.ui-ask__header')].map(h => h.textContent);
+  assert.deepEqual(questions(), ['Which storage should the app use?'], 'only the first question is shown');
+  assert.deepEqual(chips(), ['Storage']);
   assert.ok(ask.textContent!.includes('One file next to the app'));
-  assert.equal(ask.querySelectorAll('.bt-choice').length, 3 + 3, 'two options + Something else, twice');
+  assert.equal(ask.querySelectorAll('.bt-choice').length, 3, 'two options + Something else');
   assert.equal(ask.querySelectorAll('input[type=radio]').length, 3);
+  assert.equal(ask.querySelectorAll('input[type=checkbox]').length, 0);
+  assert.equal(ask.querySelectorAll('input:checked').length, 0);
+  assert.equal(answerButton(container), undefined, 'no Answer button before the last question');
+  assert.equal(nextButton(container)?.disabled, true);
+  await click(choice(container, 'SQLite (Recommended)'));
+  await click(nextButton(container));
+  assert.deepEqual(questions(), ['Which screens come first?'], 'the second question replaces the first');
+  assert.deepEqual(chips(), ['Screens']);
+  assert.equal(ask.querySelectorAll('.bt-choice').length, 3);
   assert.equal(ask.querySelectorAll('input[type=checkbox]').length, 3, 'multiSelect uses checkboxes');
   assert.equal(ask.querySelectorAll('input:checked').length, 0);
   assert.equal(answerButton(container)?.disabled, true);
@@ -92,18 +105,25 @@ test('ui/ask-dom: the card is docked above the composer with the questions, chip
 
 test('ui/ask-dom: Answer is enabled only when every question has a pick; Something else needs text; it sends the composed answer through the send path, and the card closes', async () => {
   const { container } = await renderChat();
+  assert.equal(nextButton(container)?.disabled, true, 'first question open');
   await click(choice(container, 'SQLite (Recommended)'));
+  assert.equal(nextButton(container)?.disabled, false);
+  await click(nextButton(container));
   assert.equal(answerButton(container)?.disabled, true, 'second question open');
   await click(choice(container, 'List'));
   await click(choice(container, 'Detail'));
   assert.equal(answerButton(container)?.disabled, false);
   const others = [...container.querySelectorAll<HTMLElement>('.ui-ask .bt-choice')].filter(el => el.textContent === 'Something else');
-  await click(others[1]!.querySelector('input'));
+  assert.equal(others.length, 1, 'only the open question shows its Something else');
+  await click(others[0]!.querySelector('input'));
   assert.ok(container.querySelector('.ui-ask__other'), 'the text field appears');
   assert.equal(answerButton(container)?.disabled, true, 'empty Something else');
   await input(container.querySelector('.ui-ask__other'), 'A map view');
   assert.equal(answerButton(container)?.disabled, false);
-  await click(answerButton(container));
+  // 問いが替わってすぐの Answer は受けない（ダブルクリック・ダブルタップで送らないため）。待たずに、時計だけ進める。
+  const realNow = performance.now.bind(performance);
+  const later = mock.method(performance, 'now', () => realNow() + ANSWER_GUARD_MS);
+  try { await click(answerButton(container)); } finally { later.mock.restore(); }
   await settle();
   await settle();
   assert.equal(sent.length, 1);

@@ -204,6 +204,7 @@ export const EXPLAIN_KEYS = [
   'ui.ask.multi',
   'ui.ask.consequence',
   'ui.ask.lead',
+  'ui.ask.consequenceStep',
   'mode.autoDesc',
   'mode.planDesc',
   'ui.composer.queueHint',

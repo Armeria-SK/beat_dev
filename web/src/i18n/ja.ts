@@ -205,6 +205,7 @@ export const ja = {
   'ui.ask.multi': 'いくつでも選べます',
   'ui.ask.consequence': 'あなたの次の発言として送ります。答えるまで beat は待ちます。',
   'ui.ask.lead': '回答:',
+  'ui.ask.consequenceStep': '答えは、最後の問いのあとにまとめて送ります。',
   'mode.autoDesc': '判定役が操作を 1 つずつ確かめます。外への送信・取り消せない削除・判定役が通せないものは、Pending であなたを待ちます',
   'mode.planDesc': '何も変えません: 調べて計画を書くだけです。使えるのは読む道具と Web の読み取りだけです（Web を読むとき、URL の中の文字はこの PC の外に出ることがあります）',
   'ui.composer.queueHint': '次の自然な区切りで送ります',

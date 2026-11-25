@@ -101,7 +101,7 @@ const HELP = [
   '- `/demo skill` drafts a skill (registered at once when Ask before registering is off)',
   '- `/demo fail` fails on every model',
   '- `/demo slow` writes for 15 seconds (to try Queue, Force and Stop)',
-  '- `/demo ask` asks you two questions as a card (ask_owner)',
+  '- `/demo ask` asks you three questions as a card, one at a time (ask_owner)',
 ].join('\n');
 
 function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
@@ -110,7 +110,7 @@ function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   if (request.tools.some(tool => tool.name === 'task_complete')) return call('task_complete', { summary: 'Finished by the preview model.' });
   const said = [...request.messages].reverse().find(m => m.role === 'user')?.content ?? '';
   if (said.includes('/demo slow')) return slowWords(request.signal);
-  if (said.includes('/demo ask')) return call('ask_owner', { questions: [{ question: 'Where should the notes be kept?', header: 'Storage', options: [{ label: 'One SQLite file (Recommended)', description: 'One file next to the app, easy to back up' }, { label: 'JSON files', description: 'One file per note' }] }, { question: 'Which screens come first?', header: 'Screens', multiSelect: true, options: [{ label: 'List' }, { label: 'Detail' }, { label: 'Settings' }] }] });
+  if (said.includes('/demo ask')) return call('ask_owner', { questions: [{ question: 'Where should the notes be kept?', header: 'Storage', options: [{ label: 'One SQLite file (Recommended)', description: 'One file next to the app, easy to back up' }, { label: 'JSON files', description: 'One file per note' }] }, { question: 'Which screens come first?', header: 'Screens', multiSelect: true, options: [{ label: 'List' }, { label: 'Detail' }, { label: 'Settings' }] }, { question: 'Which theme should it start with?', header: 'Theme', options: [{ label: 'Light' }, { label: 'Dark' }] }] });
   if (said.includes('/demo write')) return call('file_write', { path: join(WORK, 'notes.md'), content: '# Notes\n\nWritten by the preview model.\n' });
   if (said.includes('/demo read')) return call('file_read', { path: join(WORK, 'notes.md') });
   if (said.includes('/demo run')) return call('shell_run', { command: 'node -e "console.log(6*7)"', cwd: WORK });
