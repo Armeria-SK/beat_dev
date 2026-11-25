@@ -89,3 +89,46 @@ test('K3: answersSinceLastRun: only answers after the last run / answer_moved ro
   s.app.tasks.event(task.id, 'answer', 'user', 'after the move');
   assert.deepEqual(s.app.tasks.answersSinceLastRun(task.id).map(e => e.content), ['after the move']);
 });
+
+test('K3: an unread answer that is still inside the window (run, 250 progress, answer, 5 progress) appears once, not twice', async t => {
+  const s = await taskApp(t);
+  const task = s.userTask('Answer inside the window');
+  s.app.tasks.event(task.id, 'run', 'worker', null, 'run-1');
+  for (let i = 0; i < 250; i += 1) s.app.tasks.event(task.id, 'progress', 'beat', `step ${i}`);
+  s.app.tasks.event(task.id, 'answer', 'user', ANSWER);
+  for (let i = 0; i < 5; i += 1) s.app.tasks.event(task.id, 'progress', 'beat', `late ${i}`);
+  const rows = s.app.tasks.events(task.id);
+  assert.equal(rows.length, 200);
+  assert.equal(rows.some(e => e.kind === 'run'), false, 'the run row is outside the window, so the extra read happens');
+  assert.equal(rows.some(e => e.kind === 'answer'), true, 'the answer is inside the window');
+  assert.equal(s.app.tasks.answersSinceLastRun(task.id).length, 1, 'the extra read does return it');
+  const prompt = await promptOf(s);
+  assert.equal(times(prompt, ANSWER), 1, 'it is in the prompt exactly once');
+});
+
+test('K3: 20 unread answers inside the window do not use up the slots for the 5 unread answers outside it (all 25 appear once)', async t => {
+  const s = await taskApp(t);
+  const task = s.userTask('Many answers');
+  const label = (kind: string, i: number): string => `ans-${kind}-${String(i).padStart(2, '0')}-end`;
+  s.app.tasks.event(task.id, 'run', 'worker', null, 'run-1');
+  for (let i = 0; i < 5; i += 1) s.app.tasks.event(task.id, 'answer', 'user', label('old', i));
+  for (let i = 0; i < 250; i += 1) s.app.tasks.event(task.id, 'progress', 'beat', `step ${i}`);
+  for (let i = 0; i < 20; i += 1) s.app.tasks.event(task.id, 'answer', 'user', label('new', i));
+  const rows = s.app.tasks.events(task.id);
+  assert.equal(rows.length, 200);
+  assert.equal(rows.filter(e => e.kind === 'answer').length, 20, 'the 20 newest answers are inside the window');
+  const prompt = await promptOf(s);
+  for (const kind of ['old', 'new']) for (let i = 0; i < (kind === 'old' ? 5 : 20); i += 1) assert.equal(times(prompt, label(kind, i)), 1, label(kind, i));
+});
+
+test('K3: answersSinceLastRun with a before id returns only the answers older than it, and the limit counts those only', async t => {
+  const s = await taskApp(t);
+  const task = s.userTask('Before');
+  s.app.tasks.event(task.id, 'run', 'worker', null, 'run-1');
+  for (let i = 0; i < 6; i += 1) s.app.tasks.event(task.id, 'answer', 'user', `answer ${i}`);
+  const all = s.app.tasks.answersSinceLastRun(task.id);
+  assert.deepEqual(all.map(e => e.content), ['answer 5', 'answer 4', 'answer 3', 'answer 2', 'answer 1', 'answer 0']);
+  const before = all[2]!.id;
+  assert.deepEqual(s.app.tasks.answersSinceLastRun(task.id, 20, before).map(e => e.content), ['answer 2', 'answer 1', 'answer 0'], 'strictly older than the id');
+  assert.deepEqual(s.app.tasks.answersSinceLastRun(task.id, 2, before).map(e => e.content), ['answer 2', 'answer 1'], 'the limit applies after the id');
+});

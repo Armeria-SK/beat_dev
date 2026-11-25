@@ -853,6 +853,31 @@ test('scout sleep: state saved before the row-id marks existed (no seenEvent, no
   assert.equal(s.scoutRows().length, 2);
 });
 
+test('scout sleep: state with no seenEvent compares by time, so a Reject older than the last run is not rethought again (a missing id is not 0) (K1 fallback)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const old = propose(s, 'Add tests');
+  s.app.tasks.finish(old.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not this one');
+  const rejectedAt = s.clock.now;
+  s.adapter().scripts.push(reply('Thought again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'the Reject gives one run');
+  const stateKey = `scout:product:${s.projectId}`;
+  const state = s.app.kv.getJson<Record<string, unknown>>(stateKey)!;
+  assert.equal(typeof state.seenEvent, 'number', 'the run that finished marked the Reject as read');
+  assert.ok((state.last as number) > rejectedAt, 'the Reject is older than the last run');
+  assert.equal(readSleep(s.app.kv, s.projectId), undefined, 'awake: the next patrol goes through the rethink check');
+  // 前の版の状態（seenEvent 無し）に戻す。新しい Reject は無い
+  delete state.seenEvent;
+  s.app.kv.setJson(stateKey, state);
+  s.adapter().scripts.push(reply('one too many'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle', 'no new Reject: by time the old one is already behind the last run');
+  assert.equal(s.scoutRows().length, 2);
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+});
+
 test('scout sleep: when the run a Reject gave ends in a failure, the next patrol rethinks again instead of sleeping again (K2)', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(...checkBoth);

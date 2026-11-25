@@ -1098,12 +1098,12 @@ export class Worker {
   }
 
   // 頼みの文に渡す経過。新しい順の TASK_EVENTS_WINDOW 件に前の run・answer_moved が無く、件数が上限ちょうどなら、前の実行のあとに積まれた経過で
-  // それらも読まれていない答えも窓の外へ落ちている恐れがある。窓に無い答えだけを（古い側の末尾に）足す。taskPrompt は変えない
+  // それらも読まれていない答えも窓の外へ落ちている恐れがある。窓の一番古い行より古い答えだけを（古い側の末尾に）足す
+  // （窓の中の答えは taskPrompt が数えるので、二重に入れず、足す枠も窓の外の答えだけに使う）。taskPrompt は変えない
   #promptEvents(taskId: string): TaskEvent[] {
     const events = this.#d.tasks.events(taskId, TASK_EVENTS_WINDOW);
     if (events.length < TASK_EVENTS_WINDOW || events.some(e => e.kind === 'run' || e.kind === 'answer_moved')) return events;
-    const inWindow = new Set(events.map(e => e.id));
-    return [...events, ...this.#d.tasks.answersSinceLastRun(taskId).filter(e => !inWindow.has(e.id))];
+    return [...events, ...this.#d.tasks.answersSinceLastRun(taskId, undefined, events.at(-1)!.id)];
   }
 
   // 作業コピーで動いた実行の前後で、本体の git（HEAD・ブランチ・参照・stash・共有の設定）が変わっていたら、タスクの経過と知らせで持ち主に伝える（止めも戻しもしない）

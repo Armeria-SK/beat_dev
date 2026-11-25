@@ -276,10 +276,11 @@ export class TaskStore {
   }
 
   // 前の実行（run）・答えの移動（answer_moved）のあとに付いた、文のある答え（新しい順に limit 件）。
-  // events() の窓（新しい順の TASK_EVENTS_WINDOW 件）の外へ落ちた、読まれていない答えを拾うために使う
-  answersSinceLastRun(taskId: string, limit = 20): TaskEvent[] {
+  // events() の窓（新しい順の TASK_EVENTS_WINDOW 件）の外へ落ちた、読まれていない答えを拾うために使う。
+  // before を渡すと、その id より古い答えだけを数える（窓の一番古い行の id を渡せば、limit の枠が窓の外の答えだけに使われ、窓の中の答えと重ならない）
+  answersSinceLastRun(taskId: string, limit = 20, before: number = Number.MAX_SAFE_INTEGER): TaskEvent[] {
     return this.#db.prepare(`SELECT * FROM task_events WHERE task_id = ? AND kind = 'answer' AND content IS NOT NULL AND content != ''
-      AND id > COALESCE((SELECT MAX(id) FROM task_events WHERE task_id = ? AND kind IN ('run', 'answer_moved')), 0) ORDER BY id DESC LIMIT ?`).all(taskId, taskId, limit) as unknown as TaskEvent[];
+      AND id > COALESCE((SELECT MAX(id) FROM task_events WHERE task_id = ? AND kind IN ('run', 'answer_moved')), 0) AND id < ? ORDER BY id DESC LIMIT ?`).all(taskId, taskId, before, limit) as unknown as TaskEvent[];
   }
 
   beatDecided(id: string): boolean {
