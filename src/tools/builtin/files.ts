@@ -220,16 +220,17 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     if (recheck.decision === 'deny') return { content: toolText(language, 'file.recheck_failed', { detail: recheck.reasons.join(' / ') }), isError: true };
     const appending = input.mode === 'append' && exists;
     const previous = appending ? readFileSync(abs) : undefined;
+    // append は元のバイト列の後ろに足した文のバイトをつなぐだけ（UTF-8 として読み直して書き戻すと、UTF-8 として正しくないバイトが U+FFFD に化けて戻らない）。current は行の増減を数えるための読みだけに使う
     const current = previous?.toString('utf8') ?? '';
-    const next = appending ? current + input.content : input.content;
+    const written = previous ? Buffer.concat([previous, Buffer.from(input.content, 'utf8')]) : Buffer.from(input.content, 'utf8');
     const before = appending ? null : exists ? previousForDelta(abs) : '';
-    const recorded = recordToolWrite(ctx, abs, next);
-    atomicWriteFile(abs, next);
+    const recorded = recordToolWrite(ctx, abs, written);
+    atomicWriteFile(abs, written);
     recorded();
-    if (!previous || readLog(ctx).get(abs) === digest(previous)) readLog(ctx).set(abs, digest(Buffer.from(next, 'utf8')));
+    if (!previous || readLog(ctx).get(abs) === digest(previous)) readLog(ctx).set(abs, digest(written));
     if (!exists) ctx.noteCreated?.(abs);
-    const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: (appending ? input.content : next).length.toLocaleString('en-US') };
-    const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, next);
+    const params = { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: input.content.length.toLocaleString('en-US') };
+    const delta = appending ? appendDelta(current, input.content) : before === null ? null : lineDelta(before, input.content);
     if (!delta) return { content: toolText(language, 'file.wrote', params) };
     return { content: toolText(language, 'file.wrote_lines', { ...params, added: delta.added.toLocaleString('en-US'), removed: delta.removed.toLocaleString('en-US') }) };
   },

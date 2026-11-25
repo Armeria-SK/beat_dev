@@ -1039,7 +1039,10 @@ export class Worker {
     if (!conversations.get(conversationId)) conversations.create({ id: conversationId, kind: 'task', title: taskText(language, 'title.task', { title: task.title }), projectId: task.project_id });
     if (this.#d.projects && projectFolderGone(this.#d.projects, task.project_id)) {
       const name = this.#d.projects.get(task.project_id!)?.name ?? task.project_id!;
-      tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.folder_missing', { name }) });
+      // 一番新しい記録がもう同じ文の requeued なら、10 分ごとに同じ記録を積まない（理由を渡さなければ記録は足されない）
+      const reason = taskText(language, 'reason.folder_missing', { name });
+      const last = tasks.events(task.id, 1)[0];
+      tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, ...(last?.kind === 'requeued' && last.content === reason ? {} : { reason }) });
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_folder_missing', { name }), link: `#/p/${task.project_id}`, dedupKey: `project-folder-missing:${task.project_id}`, projectId: task.project_id });
       return 'folder_missing';
     }
