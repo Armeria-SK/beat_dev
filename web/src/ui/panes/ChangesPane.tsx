@@ -4,7 +4,7 @@ import { changesTouched, ownUndo, rememberUndo, useChangesRevision } from '../..
 import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
 import { RedoAction } from '../ChangesRedo.tsx';
-import { changePicks, changeTotals, diffLines, matchChange, refusalText, scopeOf, type ChangesPick } from '../changes.ts';
+import { changePicks, changeTotals, diffLines, matchChange, refusalText, scopeOf, shownHashes, type ChangesPick } from '../changes.ts';
 import { Button, EmptyState, Notice } from '../parts.tsx';
 import '../styles/changes.css';
 
@@ -146,7 +146,7 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
     const scope: ChangesScope = shown === 'conversation' ? scopeOf('conversation', conversation) : { base: view.base.kind };
     const more = paths.length === undoPaths.length ? view.more : 0;
     try {
-      const done = await api.undoChanges(productId, scope, paths);
+      const done = await api.undoChanges(productId, scope, paths, shownHashes(view.files, paths));
       if (done.redo) rememberUndo(done.redo);
       if (done.refused.length) setProblem({ title: t('ui.changes.refused', done.refused.length), text: refusalText(t, done.refused) });
       if (done.undone.length || done.refused.length) onUndone?.({ projectId: productId, batch: done.redo, undone: done.undone.length, refused: done.refused.length, more });

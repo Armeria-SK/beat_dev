@@ -1,12 +1,13 @@
 import { realpathSync } from 'node:fs';
 import type { App } from '../app.ts';
 import { branchEntries, gitEntries, present, recordEntries, type ChangeBase, type ChangeEntry } from '../changes/diff.ts';
-import { changesDir } from '../changes/record.ts';
+import { changesDir, sha256 } from '../changes/record.ts';
 import { redoBatch, undoEntries } from '../changes/restore.ts';
 import { SNAPSHOT_EVENT } from '../projects/snapshot-before.ts';
 import { folderMissing, ProjectError, type ProjectRow } from '../projects/store.ts';
 import { BEAT_BRANCH } from '../projects/worktree.ts';
 import { gitFolder } from '../projects/work-folder.ts';
+import { isInside } from '../tools/hooks/scope.ts';
 import { buildPolicy } from '../tools/policy.ts';
 import { problem, readJson, requireObject, sendJson, type Router } from './http.ts';
 import { projectProblem } from './routes-projects.ts';
@@ -19,6 +20,17 @@ type Base = typeof BASES[number];
 const MAX_PATHS = 1000;
 const WINDOWS = process.platform === 'win32';
 const fold = (p: string): string => (WINDOWS ? p.toLowerCase() : p);
+const HASH = /^[0-9a-f]{64}$/u;
+
+const realOf = (path: string): string => { try { return realpathSync.native(path); } catch { return path; } };
+const overlaps = (a: string, b: string): boolean => isInside(a, b) || isInside(b, a);
+
+function hashTable(raw: unknown): Map<string, string | null> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const entries = Object.entries(raw);
+  if (entries.length > MAX_PATHS || !entries.every(([path, hash]) => path.length > 0 && path.length <= 4096 && (hash === null || (typeof hash === 'string' && HASH.test(hash))))) return undefined;
+  return new Map(entries as Array<[string, string | null]>);
+}
 
 interface Scope { base: Base; task?: string | undefined; conversation?: string | undefined }
 
@@ -35,9 +47,20 @@ export function registerChangeRoutes(router: Router, app: App): void {
     return { project, realRoot };
   };
 
-  const busy = (projectId: string): boolean => {
-    if (app.db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' AND proposed_by IS NOT 'scout-run' LIMIT 1").get(projectId)) return true;
-    return app.engine.activeRuns().some(run => app.conversations.projectOf(run.conversationId) === projectId);
+  // Undo・Redo を断る間: その製品の running のタスク（裏の scout-run も）、フォルダが重なる（入れ子・親）別の製品の実行、
+  // tools.roots の書ける場所がその製品のフォルダに重なるときは、どの会話の実行でも
+  const busy = (projectId: string, realRoot: string): boolean => {
+    if (app.db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status = 'running' LIMIT 1").get(projectId)) return true;
+    const touches = (id: string | null): boolean => {
+      if (id === null || id === projectId) return false;
+      const other = app.projects.get(id);
+      return other !== undefined && overlaps(realRoot, realOf(other.root));
+    };
+    const others = app.db.prepare("SELECT DISTINCT project_id FROM tasks WHERE status = 'running' AND project_id IS NOT NULL AND project_id != ?").all(projectId) as Array<{ project_id: string }>;
+    if (others.some(row => touches(row.project_id))) return true;
+    const runs = app.engine.activeRuns();
+    if (runs.some(run => { const id = app.conversations.projectOf(run.conversationId); return id === projectId || touches(id); })) return true;
+    return runs.length > 0 && buildPolicy(app.config(), app.paths).roots.some(root => root.mode === 'write' && overlaps(realRoot, realOf(root.path)));
   };
 
   const lastBuild = (projectId: string): string | undefined => (app.db.prepare(
@@ -46,9 +69,9 @@ export function registerChangeRoutes(router: Router, app: App): void {
 
   const redoOf = (projectId: string): { id: string; created_at: number; paths: string[] } | null => {
     const last = app.db.prepare(
-      "SELECT batch, MAX(created_at) AS created_at FROM file_changes c WHERE project_id = ? AND place IS NULL AND action = 'undo' AND batch IS NOT NULL AND NOT EXISTS (SELECT 1 FROM file_changes r WHERE r.project_id = c.project_id AND r.batch = c.batch AND r.action = 'redo') GROUP BY batch ORDER BY MAX(id) DESC LIMIT 1",
+      "SELECT batch, MAX(created_at) AS created_at FROM file_changes WHERE project_id = ? AND place IS NULL AND action = 'undo' AND batch IS NOT NULL GROUP BY batch ORDER BY MAX(id) DESC LIMIT 1",
     ).get(projectId) as { batch: string; created_at: number } | undefined;
-    if (!last) return null;
+    if (!last || app.db.prepare("SELECT 1 FROM file_changes WHERE project_id = ? AND batch = ? AND action = 'redo' LIMIT 1").get(projectId, last.batch)) return null;
     const rows = app.db.prepare("SELECT path FROM file_changes WHERE project_id = ? AND batch = ? AND action = 'undo' ORDER BY id").all(projectId, last.batch) as Array<{ path: string }>;
     return { id: last.batch, created_at: last.created_at, paths: rows.map(row => row.path) };
   };
@@ -82,7 +105,11 @@ export function registerChangeRoutes(router: Router, app: App): void {
     const { project, realRoot } = projectOf(params[0]!);
     const scope = scopeOf(project, { base: url.searchParams.get('base'), task: url.searchParams.get('task'), conversation: url.searchParams.get('conversation') });
     const made = await load(project, realRoot, scope);
-    sendJson(res, 200, { base: made.base, files: present(made.entries, { undo: true }), more: made.more, redo: redoOf(project.id) });
+    const files = present(made.entries, { undo: true }).map((file, i) => {
+      const after = made.entries[i]!.after;
+      return file.undo && (after === null || Buffer.isBuffer(after)) ? { ...file, hash: after === null ? null : sha256(after) } : file;
+    });
+    sendJson(res, 200, { base: made.base, files, more: made.more, redo: redoOf(project.id) });
   });
 
   router.add('POST', '/api/projects/:id/changes/undo', async ({ req, res, params }) => {
@@ -91,12 +118,13 @@ export function registerChangeRoutes(router: Router, app: App): void {
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     const paths = body.paths;
     const list = paths === 'all' ? 'all' as const : Array.isArray(paths) && paths.length > 0 && paths.length <= MAX_PATHS && paths.every(p => typeof p === 'string' && p.length > 0 && p.length <= 4096) ? paths as string[] : undefined;
-    if (!list) throw projectProblem(400, new ProjectError('changes_bad_paths'));
+    const expected = body.hashes === undefined ? undefined : hashTable(body.hashes);
+    if (!list || (body.hashes !== undefined && !expected)) throw projectProblem(400, new ProjectError('changes_bad_paths'));
     const scope = scopeOf(project, body);
-    if (busy(project.id)) throw projectProblem(409, new ProjectError('changes_busy'));
+    if (busy(project.id, realRoot)) throw projectProblem(409, new ProjectError('changes_busy'));
     const made = await load(project, realRoot, scope, list === 'all' ? undefined : new Set(list));
-    if (busy(project.id)) throw projectProblem(409, new ProjectError('changes_busy'));
-    const done = undoEntries({ db: app.db, dir: dir(), projectId: project.id, realRoot, deny: deny(), now: app.now() }, made.entries, list);
+    if (busy(project.id, realRoot)) throw projectProblem(409, new ProjectError('changes_busy'));
+    const done = undoEntries({ db: app.db, dir: dir(), projectId: project.id, realRoot, deny: deny(), now: app.now() }, made.entries, list, expected);
     sendJson(res, 200, { ...done, more: list === 'all' ? made.more : 0 });
   });
 
@@ -105,7 +133,7 @@ export function registerChangeRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     if (project.archived_at !== null) throw projectProblem(400, new ProjectError('archived'));
     if (typeof body.redo !== 'string' || !BATCH.test(body.redo)) throw projectProblem(400, new ProjectError('changes_redo_missing'));
-    if (busy(project.id)) throw projectProblem(409, new ProjectError('changes_busy'));
+    if (busy(project.id, realRoot)) throw projectProblem(409, new ProjectError('changes_busy'));
     const done = redoBatch({ db: app.db, dir: dir(), projectId: project.id, realRoot, deny: deny(), now: app.now() }, body.redo);
     if (!done.ok) throw projectProblem(done.reason === 'missing' ? 404 : 409, new ProjectError(done.reason === 'missing' ? 'changes_redo_missing' : 'changes_redo_done'));
     sendJson(res, 200, { redone: done.redone, refused: done.refused });

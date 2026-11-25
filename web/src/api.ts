@@ -573,7 +573,7 @@ export const api = {
   files: (projectId: string, tree: FileTree, dir: string) => call<FolderListing>(`/api/projects/${encodeURIComponent(projectId)}/files?tree=${tree}&dir=${encodeURIComponent(dir)}`),
   file: (projectId: string, tree: FileTree, path: string) => call<FileContent>(`/api/projects/${encodeURIComponent(projectId)}/file?tree=${tree}&path=${encodeURIComponent(path)}`),
   changes: (projectId: string, scope: ChangesScope) => call<ChangesView>(`/api/projects/${encodeURIComponent(projectId)}/changes${changesQuery(scope)}`),
-  undoChanges: (projectId: string, scope: ChangesScope, paths: string[] | 'all') => call<UndoView>(`/api/projects/${encodeURIComponent(projectId)}/changes/undo`, { method: 'POST', body: JSON.stringify({ ...scope, paths }) }),
+  undoChanges: (projectId: string, scope: ChangesScope, paths: string[] | 'all', hashes: ChangeHashes) => call<UndoView>(`/api/projects/${encodeURIComponent(projectId)}/changes/undo`, { method: 'POST', body: JSON.stringify({ ...scope, paths, hashes }) }),
   redoChanges: (projectId: string, redo: string) => call<RedoView>(`/api/projects/${encodeURIComponent(projectId)}/changes/redo`, { method: 'POST', body: JSON.stringify({ redo }) }),
   worktreeChanges: (worktreeId: string) => call<ChangesView>(`/api/worktrees/${encodeURIComponent(worktreeId)}/changes`),
 };
@@ -588,7 +588,8 @@ function changesQuery(scope: ChangesScope): string {
 
 export type ChangeBaseKind = 'build' | 'commit' | 'records' | 'branch';
 export interface ChangesScope { base?: Exclude<ChangeBaseKind, 'branch'> | undefined; conversation?: string | undefined }
-export interface ChangedFile { path: string; status: 'modified' | 'added' | 'deleted'; added: number; removed: number; hunks: string[][] | null; hidden: boolean; undo: boolean }
+export type ChangeHashes = Record<string, string | null>;
+export interface ChangedFile { path: string; status: 'modified' | 'added' | 'deleted'; added: number; removed: number; hunks: string[][] | null; hidden: boolean; undo: boolean; hash?: string | null | undefined }
 export interface ChangesView { base: { kind: ChangeBaseKind; ref: string | null; at: number | null }; files: ChangedFile[]; more: number; redo?: { id: string; created_at: number; paths: string[] } | null }
 export type ChangeRefusal = 'not_changed' | 'hidden' | 'unsafe_path' | 'link' | 'not_kept' | 'too_large' | 'cannot_keep' | 'same_file' | 'changed' | 'failed';
 export interface RefusedChange { path: string; reason: ChangeRefusal }
