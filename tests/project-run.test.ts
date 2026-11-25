@@ -469,6 +469,32 @@ test('製品のタスク: フォルダが無いあいだは始めず 10 分後�
   assert.equal(s.app.tasks.get(id)!.status, 'done');
 });
 
+test('quiet-loss C4 フォルダが無いまま何回回しても requeued の記録は 1 件（10 分ごとに積もらない）。間に別の記録が入ったあと、また消えたときは新しく 1 件', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  const made = await s.json('/api/tasks', 'POST', { title: 'Tidy', when: new Date(Date.now() - 1000).toISOString(), projectId: shop.id });
+  const id = made.body.task.id as string;
+  renameSync(shop.root, `${shop.root}-away`);
+  const missing = () => s.app.tasks.events(id).filter(e => e.kind === 'requeued' && /folder of the product "shop"/u.test(e.content ?? '')).length;
+  for (let round = 1; round <= 3; round++) {
+    const started = Date.now();
+    assert.equal(await s.app.worker.tick(), 'folder_missing', `round ${round}`);
+    const waiting = s.app.tasks.get(id)!;
+    assert.deepEqual([waiting.status, waiting.attempts], ['ready', 0], `round ${round}: 失敗の回数は数えない`);
+    assert.ok(waiting.run_at! >= started + 9 * 60_000, `round ${round}: 10 分後へ回す`);
+    assert.equal(missing(), 1, `round ${round}: 記録は 1 件のまま`);
+    s.app.db.prepare('UPDATE tasks SET run_at = NULL WHERE id = ?').run(id);
+  }
+  assert.equal(s.app.notifications.list().filter(n => n.link === `#/p/${shop.id}`).length, 1, '通知は今までどおり 1 つ');
+  // 間に別の記録が入ったあと（動いてから、また消えたのと同じ並び）は、新しく 1 件足す
+  s.app.tasks.event(id, 'note', 'beat', 'ran in between');
+  assert.equal(await s.app.worker.tick(), 'folder_missing');
+  assert.equal(missing(), 2);
+  s.app.db.prepare('UPDATE tasks SET run_at = NULL WHERE id = ?').run(id);
+  assert.equal(await s.app.worker.tick(), 'folder_missing');
+  assert.equal(missing(), 2, '足したあともまた 1 件のまま');
+});
+
 test('タスクの区切り（2 回目の審査 2）: 外を読んだタスクの実行が task_checkpoint で書いたメモのあと、そのタスクの次の実行は外を読んだ扱いで始まる', async t => {
   const s = await setup(t);
   const shop = await s.product('shop');
