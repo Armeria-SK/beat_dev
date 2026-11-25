@@ -160,7 +160,7 @@ test('提供元が考える部分の送り返しを断って送り直したら�
   assert.deepEqual(JSON.parse(s.app.runs.get(next.runId)!.flags), []);
 });
 
-test('取り消した実行: 終えた呼び出しは model_calls に残り、engine_runs の量は空のまま（決まりは ok か失敗で終わった実行だけ）。考える部分の断りの印は残る', async t => {
+test('取り消した実行: 終えた呼び出しは model_calls に残り、その合計が engine_runs の量になる（途中で切られた最後の 1 回は、提供元が数を返す前なので入らない）。考える部分の断りの印は残る', async t => {
   const s = await setup(t);
   let runId = '';
   const stopped: Script = async function* (req) {
@@ -177,7 +177,8 @@ test('取り消した実行: 終えた呼び出しは model_calls に残り、en
   const run = s.app.runs.get(runId)!;
   assert.equal(run.error_kind, 'cancelled');
   assert.deepEqual(callsOf(s.app, runId).map(r => [r.purpose, r.input_tokens]), [['turn', 1000]]);
-  assert.deepEqual([run.input_tokens, run.cache_read_tokens, run.cache_write_tokens, run.output_tokens], [null, null, null, null], 'engine_runs の量の列は前のまま空');
+  assert.deepEqual([run.input_tokens, run.cache_read_tokens, run.cache_write_tokens, run.output_tokens], [1000, 700, 200, 10], 'engine_runs の量は、終えた呼び出し（1 回目）の合計');
+  assertMatchesRun(s.app, runId);
   assert.deepEqual(JSON.parse(run.flags), ['thinking_replay_rejected']);
 });
 

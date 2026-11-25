@@ -81,6 +81,8 @@ export class Runs {
   finish(id: string, f: RunFinish): void {
     const ended = this.now();
     const row = this.db.prepare('SELECT started_at FROM engine_runs WHERE id = ?').get(id) as { started_at: number } | undefined;
+    // 止められた実行は量を渡されない作りなので、終えた呼び出しの分（model_calls）を量にする。途中で切られた最後の 1 回は提供元が数を返す前なので入らない
+    const usage = f.usage ?? (f.errorKind === 'cancelled' ? this.#callUsage(id) : undefined);
     this.db.prepare(`
       UPDATE engine_runs SET ended_at = ?, duration_ms = ?, ok = ?, model_id = ?, provider_id = ?, model = ?, attempts = ?,
         error_kind = ?, error_message = ?, stop = ?, iterations = ?, tool_calls = ?, input_tokens = ?, output_tokens = ?,
@@ -89,13 +91,30 @@ export class Runs {
     `).run(
       ended, row ? ended - row.started_at : null, f.ok ? 1 : 0, f.modelId ?? null, f.providerId ?? null, f.model ?? null, f.attempts,
       f.errorKind ?? null, f.errorMessage ?? null, f.stop ?? null, f.iterations ?? 0, f.toolCalls ?? 0,
-      f.usage?.inputTokens ?? null, f.usage?.outputTokens ?? null, f.usage?.cacheReadTokens ?? null, f.usage?.cacheWriteTokens ?? null,
+      usage?.inputTokens ?? null, usage?.outputTokens ?? null, usage?.cacheReadTokens ?? null, usage?.cacheWriteTokens ?? null,
       f.estPromptTokens ?? null, JSON.stringify(f.flags ?? []), id,
     );
   }
 
-  // モデルの呼び出し 1 回の量（数字と hash だけ。文は持たない）。ok か失敗で終わった実行では、turn と discarded の合計が engine_runs の量になる
-  // （取り消し・途中で落ちた実行は engine_runs に量を書かないので、行だけが残る）。compact は engine_runs に入らない。
+  // その実行の model_calls（turn と discarded）の合計。1 行も無い（または量がどれも空）ときは undefined。測るための記録なので、読めなくても終わり方は止めない
+  #callUsage(id: string): Usage | undefined {
+    try {
+      const sum = this.db.prepare(`
+        SELECT SUM(input_tokens) AS i, SUM(output_tokens) AS o, SUM(cache_read_tokens) AS r, SUM(cache_write_tokens) AS w
+        FROM model_calls WHERE run_id = ? AND purpose IN ('turn', 'discarded')
+      `).get(id) as { i: number | null; o: number | null; r: number | null; w: number | null };
+      return {
+        ...(sum.i === null ? {} : { inputTokens: sum.i }), ...(sum.o === null ? {} : { outputTokens: sum.o }),
+        ...(sum.r === null ? {} : { cacheReadTokens: sum.r }), ...(sum.w === null ? {} : { cacheWriteTokens: sum.w }),
+      };
+    } catch (error) {
+      this.log?.(`[WARN] could not total the model calls of run ${id}: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
+  // モデルの呼び出し 1 回の量（数字と hash だけ。文は持たない）。turn と discarded の合計が engine_runs の量になる
+  // （ok・失敗の実行は終わりに渡された量。止められた・落ちた実行は、終えた呼び出しのこの合計を finish・closeDangling が書く）。compact は engine_runs に入らない。
   // 測るための記録なので、書けなくても実行は止めない（[WARN] を残す）
   recordCall(c: ModelCallRecord): void {
     const ended = this.now();
@@ -134,10 +153,17 @@ export class Runs {
     return this.db.prepare('SELECT * FROM engine_runs ORDER BY started_at DESC LIMIT ?').all(limit) as unknown as RunRow[];
   }
 
+  // beat が止まったときに終わっていなかった実行を、中断で閉じる。終わりの記録は書かれなかったので、量・道具の数・最後に呼んだモデルは、残っている
+  // model_calls（turn と discarded の合計）と tool_calls の表から埋める（記録が無ければ今までどおり空・0）
   closeDangling(message: string = engineText(DEFAULT_LANGUAGE, 'run.restart_interrupted')): number {
     const now = this.now();
+    const total = (column: string) => `(SELECT SUM(${column}) FROM model_calls WHERE run_id = engine_runs.id AND purpose IN ('turn', 'discarded'))`;
     const result = this.db.prepare(`
-      UPDATE engine_runs SET ended_at = ?, ok = 0, error_kind = 'cancelled', error_message = ?
+      UPDATE engine_runs SET ended_at = ?, ok = 0, error_kind = 'cancelled', error_message = ?,
+        input_tokens = ${total('input_tokens')}, output_tokens = ${total('output_tokens')},
+        cache_read_tokens = ${total('cache_read_tokens')}, cache_write_tokens = ${total('cache_write_tokens')},
+        tool_calls = (SELECT COUNT(*) FROM tool_calls WHERE run_id = engine_runs.id),
+        model_id = (SELECT model FROM model_calls WHERE run_id = engine_runs.id ORDER BY seq DESC LIMIT 1)
       WHERE ended_at IS NULL
     `).run(now, message);
     return Number(result.changes);
