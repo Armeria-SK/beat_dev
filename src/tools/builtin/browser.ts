@@ -14,6 +14,7 @@ import { diffLine, elementLine, formatElements, markShown, type ElementTable, ty
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
+import { sentText } from '../browser/sent.ts';
 import { siteAllows } from '../browser/sites.ts';
 import { TOOL_OUTPUT_LIMIT } from '../pipeline.ts';
 import type { ExecuteInfo, PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
@@ -87,11 +88,13 @@ interface ReadOptions { offset: number; mode: 'text' | 'elements' | undefined; d
 
 // 道具の結果の上限（文字数は pipeline の TOOL_OUTPUT_LIMIT、トークンはその呼び出しに許された量）から、見出し・足跡・伏せ字の揺れの分を引いた残り
 const RENDER_MARGIN_CHARS = 400;
+// 本文は、送る分より余分に読む（伏せて短くなっても、読みの上限で切れた秘密の頭が送る範囲に入らない）
+const TEXT_MARGIN = 4096;
 const RENDER_MARGIN_TOKENS = 120;
 
 // pipeline の切り方（capOutput: 伏せ字のあと、文字数とトークンの上限）で残る部分に、行がそのまま入っている要素だけを返す。
 // 途中で切れた最後の行は、番号が同じ行がほかに無いので、どの要素の行とも一致しない。lineOf: 要素の行の形（表は elementLine、差分は diffLine）
-export function shownIn(items: readonly ListedElement[], content: string, outputTokens: number | undefined, secrets: readonly string[], lineOf: (item: ListedElement) => string = elementLine): ListedElement[] {
+export function shownIn(items: readonly ListedElement[], content: string, outputTokens: number | undefined, secrets: readonly string[], lineOf: (item: ListedElement) => string = item => elementLine(item, secrets)): ListedElement[] {
   const redacted = redactSecrets(content);
   const kept = redacted.slice(0, prefixLength(redacted, TOOL_OUTPUT_LIMIT, outputTokens ?? Infinity));
   const present = new Set(kept.split('\n'));
@@ -110,7 +113,9 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   // 結果は道具の結果の上限の中に収める（収まらない分は pipeline が切り、切られた番号は見せていないのに押せてしまう）
   let chars = TOOL_OUTPUT_LIMIT - RENDER_MARGIN_CHARS - footerRoom - header.length;
   let tokens = (options.outputTokens ?? Infinity) - RENDER_MARGIN_TOKENS - estimateTextTokens(header) - footerRoom / 3.5;
-  const raw = options.mode !== 'elements' ? await until(page.text(options.offset + pageChars + 1), api.signal) : '';
+  // 文は余分に読み、伏せてから切る（伏せで短くなっても、切り目の秘密の頭が、送る範囲に入らない）
+  const asked = options.offset + pageChars + TEXT_MARGIN;
+  const raw = options.mode !== 'elements' ? await until(page.text(asked), api.signal) : '';
   // 大きさは、送る形（block: 枠の文字の置き換え・伏せ字のあと）で測る
   const size = (text: string): { chars: number; tokens: number } => ({ chars: text.length + 1, tokens: estimateTextTokens(text) + 1 });
   let table: ElementTable | undefined;
@@ -124,8 +129,8 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     const more = size(toolText(language, 'browser.more_elements', { count: 999_999 }));
     let used = size(elementsTitle);
     used = { chars: used.chars + more.chars, tokens: used.tokens + more.tokens };
-    const fits = (line: string): boolean => {
-      const one = size(block(line, secrets));
+    const fits = (item: ListedElement): boolean => {
+      const one = size(block(elementLine(item, secrets), secrets));
       const next = { chars: used.chars + one.chars, tokens: used.tokens + one.tokens };
       if (next.chars > chars * share || next.tokens > tokens * share) return false;
       used = next;
@@ -133,27 +138,22 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     };
     table = await rereadTab(tab, url, api.signal, { kind: 'show', fits });
     if (table === undefined) throw new BrowserFailure('page_changed', 'browser.page_changed');
-    elementsText = block(formatElements(table, language), secrets);
+    elementsText = block(formatElements(table, language, undefined, secrets), secrets);
     parts.push(elementsTitle, elementsText);
     const spent = size(`${elementsTitle}\n${elementsText}`);
     chars -= spent.chars;
     tokens -= spent.tokens;
   }
   if (options.mode !== 'elements') {
-    const wanted = raw.slice(options.offset, options.offset + pageChars);
+    const wanted = raw.slice(options.offset);
     const textTitle = toolText(language, 'browser.section_text');
     const moreText = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
-    const roomChars = Math.max(0, chars - size(textTitle).chars - moreText.chars);
+    const roomChars = Math.max(0, Math.min(pageChars, chars - size(textTitle).chars - moreText.chars));
     const roomTokens = Math.max(0, tokens - size(textTitle).tokens - moreText.tokens);
-    // 送る形で上限に収まるまで縮める（枠の文字の置き換えで、測った大きさより大きくなることがある）
-    let room = prefixLength(wanted, roomChars, roomTokens);
-    let sent = block(wanted.slice(0, room), secrets);
-    while (room > 0 && (sent.length > roomChars || estimateTextTokens(sent) > roomTokens)) {
-      room = Math.floor(room * 0.9);
-      sent = block(wanted.slice(0, room), secrets);
-    }
-    parts.push(textTitle, room > 0 ? sent : toolText(language, 'browser.empty_text'));
-    if (room < wanted.length || raw.length > options.offset + pageChars) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + room }));
+    // 伏せてから、送る形で上限に収まるように切る（sentText）
+    const sent = sentText(wanted, secrets, roomChars, roomTokens);
+    parts.push(textTitle, sent.text !== '' ? sent.text : toolText(language, 'browser.empty_text'));
+    if (sent.cut || raw.length >= asked) parts.push(toolText(language, 'browser.more_text', { offset: options.offset + sent.rawUsed }));
   }
   // 読んでいるあいだにページが動いていたら、混ざった中身を返さない
   if (page.url() !== url) throw new BrowserFailure('page_changed', 'browser.page_changed');
@@ -175,6 +175,9 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
   return { content, fetched: true };
 }
 
+// 押したあとの読み（題・本文・表）に使ってよい時間の合計と、押す前の本文の読みの時間（どちらも過ぎたら読まずに進む）
+export const AFTER_READ_MS = 3000;
+export const BEFORE_READ_MS = 1000;
 // 押したあとに返す差分（P3b）の上限: 差分の行 120（超えたら表の形）、表の形は 80 件、増えた文は 20 行・1,500 字
 export const DIFF_MAX_LINES = 120;
 export const DIFF_TABLE_LIMIT = 80;
@@ -198,13 +201,43 @@ export function addedTextLines(before: string, after: string): string[] {
   return added;
 }
 
+// 本文を読む（差分の「増えた文」の元）。上限で切れていたら、最後の行（途中で切れた行）を捨てる。読めなければ空
+export async function pageLines(page: BrowserTab['page'], maxChars: number, signal: AbortSignal): Promise<string> {
+  const text = await until(page.text(maxChars), signal).catch((thrown: unknown) => {
+    if (signal.aborted) throw thrown;
+    return '';
+  });
+  if (text.length < maxChars) return text;
+  const last = text.lastIndexOf('\n');
+  return last < 0 ? '' : text.slice(0, last);
+}
+
 // 押す・入れるのあとの結果: 動作の行（head）+ 外の内容の見出しと枠の中に、触れるものの差分（または移動・大きすぎる差分のときは 80 件の表）と、増えた文。
-// 見出し・枠・伏せ・大きさの測り方・「見せた」の決め方は renderTab と同じ。差分を撮れなかったら（撮るあいだにページが動いた）、題と URL の行だけ
+// 見出し・枠・伏せ・大きさの測り方・「見せた」の決め方は renderTab と同じ。
+// 押したあとの読み（題・本文・表）は合わせて AFTER_READ_MS まで。読めない・時間切れ・撮るあいだにページが動いたときは、動作の行と「読めなかった」の行だけ
+// （動作はもう済んでいるので、失敗として返さない。返すと、済んだ動作をもう一度させることになる）。中止だけはそのまま投げる
 async function renderAfter(api: BrowserApi, tab: BrowserTab, language: Language, secrets: readonly string[], head: readonly string[], beforeText: string, outputTokens: number | undefined): Promise<string> {
   const page = tab.page;
+  const unread = (): string => {
+    let url = '';
+    try { url = page.url(); } catch { url = ''; }
+    return [...head, toolText(language, 'browser.acted_unread', { url: oneLine(url, secrets) })].join('\n');
+  };
+  const signal = AbortSignal.any([api.signal, AbortSignal.timeout(AFTER_READ_MS)]);
+  try {
+    return await renderDiff(api, tab, language, secrets, head, beforeText, outputTokens, signal) ?? unread();
+  } catch (thrown) {
+    if (api.signal.aborted) throw thrown;
+    return unread();
+  }
+}
+
+async function renderDiff(api: BrowserApi, tab: BrowserTab, language: Language, secrets: readonly string[], head: readonly string[], beforeText: string, outputTokens: number | undefined, signal: AbortSignal): Promise<string | undefined> {
+  const page = tab.page;
   const url = page.url();
-  const title = await until(page.title(), api.signal);
-  const afterText = await until(page.text(api.config.limits.pageChars).catch(() => ''), api.signal);
+  const title = await until(page.title(), signal);
+  const afterText = await pageLines(page, api.config.limits.pageChars, signal);
+  if (signal.aborted) return undefined;
   const header = toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) });
   const size = (text: string): { chars: number; tokens: number } => ({ chars: text.length + 1, tokens: estimateTextTokens(text) + 1 });
   const fixed = size([...head, header, '<<<', '>>>'].join('\n'));
@@ -220,17 +253,18 @@ async function renderAfter(api: BrowserApi, tab: BrowserTab, language: Language,
   let used = { chars: titleRoom + moreRoom.chars + deadRoom, tokens: estimateTextTokens('x'.repeat(titleRoom)) + moreRoom.tokens + deadRoom / 3 };
   const elementChars = chars - textRoom.chars;
   const elementTokens = tokens - textRoom.tokens;
-  const fits = (line: string): boolean => {
-    const one = size(block(line, secrets));
+  // 表の形になるか差分の形になるかは読んでから決まるので、差分の行（「+ 」の付く長い方）で測る
+  const fits = (item: ListedElement): boolean => {
+    const one = size(block(diffLine(item, secrets), secrets));
     const next = { chars: used.chars + one.chars, tokens: used.tokens + one.tokens };
     if (next.chars > elementChars || next.tokens > elementTokens) return false;
     used = next;
     return true;
   };
-  const table = await rereadTab(tab, url, api.signal, { kind: 'diff', fits, maxLines: DIFF_MAX_LINES, tableLimit: DIFF_TABLE_LIMIT });
-  if (table?.diff === undefined) return [...head, toolText(language, 'browser.acted_now', { title: oneLine(title, secrets), url: oneLine(url, secrets) })].join('\n');
+  const table = await rereadTab(tab, url, signal, { kind: 'diff', fits, maxLines: DIFF_MAX_LINES, tableLimit: DIFF_TABLE_LIMIT });
+  if (table?.diff === undefined) return undefined;
   const diff = table.diff;
-  const lineOf = (item: ListedElement): string => (diff.form === 'diff' ? diffLine(item, diff.from.get(item.ref)) : elementLine(item));
+  const lineOf = (item: ListedElement): string => (diff.form === 'diff' ? diffLine(item, secrets) : elementLine(item, secrets));
   const elementLines = table.items.map(lineOf);
   let more = table.omitted;
   if (diff.form === 'diff') {
@@ -256,14 +290,10 @@ async function renderAfter(api: BrowserApi, tab: BrowserTab, language: Language,
   const wanted = added.slice(0, DIFF_TEXT_LINES).join('\n');
   const roomChars = Math.max(0, Math.min(DIFF_TEXT_CHARS, chars - size(textTitle).chars - size(toolText(language, 'browser.diff_more_text')).chars));
   const roomTokens = Math.max(0, tokens - size(textTitle).tokens - size(toolText(language, 'browser.diff_more_text')).tokens);
-  let room = prefixLength(wanted, roomChars, roomTokens);
-  let sent = block(wanted.slice(0, room), secrets);
-  while (room > 0 && (sent.length > roomChars || estimateTextTokens(sent) > roomTokens)) {
-    room = Math.floor(room * 0.9);
-    sent = block(wanted.slice(0, room), secrets);
-  }
-  parts.push(textTitle, room > 0 ? sent : toolText(language, 'browser.diff_no_text'));
-  if (room < wanted.length || added.length > DIFF_TEXT_LINES) parts.push(toolText(language, 'browser.diff_more_text'));
+  // 伏せてから切る（sentText）
+  const sent = sentText(wanted, secrets, roomChars, roomTokens);
+  parts.push(textTitle, sent.text !== '' ? sent.text : toolText(language, 'browser.diff_no_text'));
+  if (sent.cut || added.length > DIFF_TEXT_LINES) parts.push(toolText(language, 'browser.diff_more_text'));
   const content = [...head, header, '<<<', ...parts, '>>>'].join('\n');
   // 最後の守り: pipeline が切ったあとに残る行にある番号だけを「見せた」にする
   markShown(tab.refs, shownIn(table.items, content, outputTokens, secrets, lineOf));
@@ -477,7 +507,10 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       // 承認のあとの再実行は、結果がそのままモデルに届かないので差分を作らない（番号を「見せた」にしない）
       const replay = info?.approvedOnce === true;
       // 押す前の文（押したあとの差分の「増えた文」の元）。読めなければ空
-      const beforeText = replay ? '' : await until(tab.page.text(api.config.limits.pageChars).catch(() => ''), api.signal);
+      const beforeText = replay ? '' : await pageLines(tab.page, api.config.limits.pageChars, AbortSignal.any([api.signal, AbortSignal.timeout(BEFORE_READ_MS)])).catch((thrown: unknown) => {
+        if (api.signal.aborted) throw thrown;
+        return '';
+      });
       tab.page.permitSubmits(permit);
       let done: { value: ActionEvents; opened: BrowserTab[]; closed: number };
       try {
@@ -507,7 +540,11 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       if (events.fileChoosers > 0) lines.push(toolText(language, 'browser.acted_filechooser', { count: events.fileChoosers }));
       if (events.blocked > 0) lines.push(toolText(language, 'browser.acted_blocked', { count: events.blocked }));
       if (replay) {
-        const title = await until(tab.page.title(), api.signal);
+        // 動作は済んでいるので、題が読めなくても失敗にしない（中止だけは投げる）
+        const title = await until(tab.page.title(), AbortSignal.any([api.signal, AbortSignal.timeout(AFTER_READ_MS)])).catch((thrown: unknown) => {
+          if (api.signal.aborted) throw thrown;
+          return '';
+        });
         lines.push(toolText(language, 'browser.acted_now', { title: oneLine(title, secrets), url: oneLine(tab.page.url(), secrets) }), toolText(language, 'browser.replay_read_again'));
         return { content: lines.join('\n'), fetched: true };
       }
