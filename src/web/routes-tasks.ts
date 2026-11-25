@@ -377,7 +377,10 @@ export function registerTaskRoutes(router: Router, app: App): void {
       ids = body.ids as number[];
     }
     app.notifications.markRead(ids);
-    sendJson(res, 200, { unread: app.notifications.unread() });
+    const unread = app.notifications.unread();
+    // 別のタブのベルの数がすぐ合うように流す（ids なし = 全部は空の配列）。markRead そのものは流さない（起動の掃除から直に呼ぶ道がある）
+    app.bus.publish({ type: 'notification.read', ids: ids ?? [], unread });
+    sendJson(res, 200, { unread });
   });
 
   // ── プロフィール（名前と姿） ──

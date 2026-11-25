@@ -58,13 +58,27 @@ export function messageText(message: ChatMessage): string {
 
 const AUTO_TITLE_MAX = 40;
 
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+// text の先頭から、見た目の 1 文字（絵文字の合成・国旗・結合文字を含む）の境目だけで、limit 以内（UTF-16 の長さ）まで切り出す
+function headWithinGraphemes(text: string, limit: number): string {
+  let end = 0;
+  for (const { index, segment } of GRAPHEMES.segment(text)) {
+    if (index + segment.length > limit) break;
+    end = index + segment.length;
+  }
+  if (end > 0) return text.slice(0, end);
+  // 先頭の 1 文字が上限より長い（結合文字だらけ）ときだけ。題を空にしないよう字数で切る（サロゲートの片割れは残さない）
+  const cut = text.slice(0, limit);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
 function shortTitle(text: string): string {
   if (text.length <= AUTO_TITLE_MAX) return text;
-  let head = text.slice(0, AUTO_TITLE_MAX - 1);
+  let head = headWithinGraphemes(text, AUTO_TITLE_MAX - 1);
   const space = head.lastIndexOf(' ');
-  if (text[AUTO_TITLE_MAX - 1] !== ' ' && space >= AUTO_TITLE_MAX / 2) head = head.slice(0, space);
-  const last = head.charCodeAt(head.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+  if (text[head.length] !== ' ' && space >= AUTO_TITLE_MAX / 2) head = head.slice(0, space);
   return `${head.trimEnd()}…`;
 }
 
@@ -226,6 +240,12 @@ export class Conversations {
       const now = this.now();
       this.db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(`${ARCHIVED_AT}${id}`, String(now), now);
     }
+  }
+
+  // しまった時刻。しまっていない会話と、時刻を持つ前にしまった会話は null（get は表の行だけで、kv の時刻は一覧と、これで足す）
+  archivedAt(id: string): number | null {
+    const row = this.db.prepare('SELECT CAST(value AS INTEGER) AS at FROM kv WHERE key = ?').get(`${ARCHIVED_AT}${id}`) as { at: number } | undefined;
+    return row?.at ?? null;
   }
 
   unarchive(id: string): void {

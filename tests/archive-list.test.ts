@@ -73,3 +73,25 @@ test('画面: #/archived の経路', () => {
   assert.deepEqual(parseRoute('#/archived'), { view: 'archived' });
   assert.equal(routeHash({ view: 'archived' }), '#/archived');
 });
+
+test('A5: PATCH の返事の conversation.archived_at は、しまったときは時刻、戻したときと、しまっていないときは null', async t => {
+  let clock = 1_700_000_000_000;
+  const s = await startApp(t, { now: () => clock });
+  const id = await make(s, 1, 'しまう', 1);
+  const renamed = await s.json(`/api/conversations/${id}`, 'PATCH', { title: '題だけ変える' });
+  assert.equal(renamed.body.conversation.archived, 0);
+  assert.equal(renamed.body.conversation.archived_at, null, 'しまっていなければ null（キーごと無いのではない）');
+  clock += 5_000;
+  const archived = await s.json(`/api/conversations/${id}`, 'PATCH', { archived: true });
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.conversation.archived, 1);
+  assert.equal(archived.body.conversation.archived_at, clock, '会話そのものはしまわれていて、しまった時刻が返る');
+  const listed = (await s.json('/api/conversations?archived=1', 'GET')).body.conversations.find((c: { id: string }) => c.id === id);
+  assert.equal(listed.archived_at, archived.body.conversation.archived_at, '一覧の archived_at と同じ');
+  clock += 5_000;
+  const again = await s.json(`/api/conversations/${id}`, 'PATCH', { archived: true });
+  assert.equal(again.body.conversation.archived_at, archived.body.conversation.archived_at, 'しまい直しても時刻は動かない');
+  const back = await s.json(`/api/conversations/${id}`, 'PATCH', { archived: false });
+  assert.equal(back.body.conversation.archived, 0);
+  assert.equal(back.body.conversation.archived_at, null);
+});

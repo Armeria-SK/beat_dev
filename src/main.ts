@@ -4,6 +4,7 @@ import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
 import { enterKillOnCloseJob } from './os/win-job.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
+import { createShutdown, installProcessGuards } from './process-guards.ts';
 import { serverHostProblem } from './shared/url.ts';
 import { createWebServer } from './web/server.ts';
 
@@ -37,20 +38,17 @@ async function start(): Promise<void> {
   log('[INFO] There is no login. Anyone who can open this URL (including other programs on this PC) can operate beat');
   app.worker.start();
   log(`[INFO] Worker: ${config.worker.enabled ? 'running' : 'own work off (worker.enabled = false); Builds and tasks you start still run'}`);
-  let closing = false;
-  const shutdown = () => {
-    if (closing) return;
-    closing = true;
-    log('[INFO] Shutting down…');
-    web.close();
-    // 外の MCP サーバーの子のプロセスを閉じる（最大 5 秒待つ）
-    void Promise.race([app.mcp.stop(), new Promise(resolve => setTimeout(resolve, 5000))]).catch(() => undefined).finally(() => {
-      app.close();
-      process.exit(0);
-    });
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  const shutdown = createShutdown({
+    log,
+    closeWeb: () => { web.close(); },
+    // 外の MCP サーバーの子のプロセスを閉じる（最大 5 秒待つ。2 回目の Ctrl+C はその待ちを飛ばす）
+    stopMcp: () => app.mcp.stop(),
+    closeApp: () => { app.close(); },
+    exit: code => process.exit(code),
+    secrets: () => app.registry.secrets(),
+  });
+  // 投げっぱなしの失敗は記録に出して動き続ける。捕まえていない例外と Ctrl+C・終了の合図は、同じ止め方で終わる
+  installProcessGuards({ proc: process, log, shutdown, secrets: () => app.registry.secrets() });
 }
 
 try {

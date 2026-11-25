@@ -9,7 +9,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { hiddenPath, hunksOf, lineEndingsLike, readCurrent } from '../src/changes/diff.ts';
-import { changesDir, insertChange, keepContent, KEEP_MAX_BYTES, type FileChangeRow } from '../src/changes/record.ts';
+import { changesDir, insertChange, keepContent, KEEP_MAX_BYTES, productRel, relParts, type FileChangeRow } from '../src/changes/record.ts';
 import { undoEntries, writeBack } from '../src/changes/restore.ts';
 import { pruneChanges } from '../src/changes/retention.ts';
 import { SNAPSHOT_EVENT, snapshotBeforeBuild, snapshotLine } from '../src/projects/snapshot-before.ts';
@@ -579,4 +579,41 @@ test('8-4 書き戻しは今のファイルの印（実行の印）を残し、�
   assert.equal(statSync(join(root, 'run.sh')).mode & 0o777, 0o755);
   assert.deepEqual(writeBack(root, 'made.sh', Buffer.from('x\n'), [], 0o755), { ok: true });
   assert.equal(statSync(join(root, 'made.sh')).mode & 0o777, 0o755);
+});
+
+// A6: 記録の場所（相対パス）の切り出し。ルート直下の `..foo` は親の指定ではなく、ふつうの名前
+test('A6: ルート直下の `..foo`（ファイルも、フォルダの中も）は記録の場所になる。`..` そのものと `..` + 区切りで始まるもの（製品の外）は断る', t => {
+  const root = realpathSync.native(tempDir(t as never));
+  mkdirSync(join(root, '..bar'), { recursive: true });
+  writeFileSync(join(root, '..foo'), 'x');
+  writeFileSync(join(root, '..bar', 'inner.txt'), 'x');
+  writeFileSync(join(root, 'plain.txt'), 'x');
+  assert.equal(productRel(root, join(root, '..foo')), '..foo');
+  assert.equal(productRel(root, join(root, '..bar', 'inner.txt')), '..bar/inner.txt');
+  assert.equal(productRel(root, join(root, 'plain.txt')), 'plain.txt');
+  assert.equal(productRel(root, root), null, '製品のルートそのもの');
+  assert.equal(productRel(root, join(root, '..')), null, '親');
+  assert.equal(productRel(root, join(root, '..', 'sibling.txt')), null, '製品の外');
+  assert.equal(productRel(root, join(root, '.git', 'config')), null, '.git の中');
+  assert.equal(productRel(root, join(root, '..foo', '..', '.GIT', 'x')), null, '.git の中（大文字小文字ちがい）');
+});
+
+test('A6: 相対パスの区切り。Windows ではバックスラッシュも区切り、Windows でない所では / だけ（バックスラッシュは名前の一部）', () => {
+  const bs = String.fromCharCode(92);
+  assert.deepEqual(relParts(`a${bs}b.txt`, true), ['a', 'b.txt']);
+  assert.deepEqual(relParts('a/b.txt', true), ['a', 'b.txt']);
+  assert.deepEqual(relParts(`a${bs}b.txt`, false), [`a${bs}b.txt`], 'Linux のファイル名 a(バックスラッシュ)b.txt を、a と b.txt の 2 つに割らない');
+  assert.deepEqual(relParts(`a/b${bs}c.txt`, false), ['a', `b${bs}c.txt`]);
+  // 親への指定: `..` そのもの、`..` + 区切り。区切りはその場所の区切りだけ
+  assert.equal(relParts('..', true), null);
+  assert.equal(relParts('..', false), null);
+  assert.equal(relParts(`..${bs}x`, true), null);
+  assert.equal(relParts('../x', true), null);
+  assert.equal(relParts('../x', false), null);
+  assert.deepEqual(relParts(`..${bs}x`, false), [`..${bs}x`], 'Linux では ..(バックスラッシュ)x は、その名前のファイル（親ではない）');
+  // `..` で始まるだけの名前は親ではない
+  assert.deepEqual(relParts('..foo', true), ['..foo']);
+  assert.deepEqual(relParts('..foo', false), ['..foo']);
+  assert.deepEqual(relParts('...', false), ['...']);
+  assert.equal(relParts('', true), null);
 });
