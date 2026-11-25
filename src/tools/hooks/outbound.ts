@@ -459,9 +459,15 @@ function gitHit(st: StatementFacts, before: readonly StatementFacts[], env: Outb
   }
 }
 
+const BARE_VARIABLE = /^\$[A-Za-z_][A-Za-z0-9_]*$/u;
+
+const namesVariableOnly = (st: StatementFacts): boolean =>
+  (st.shell === 'powershell' || st.shell === 'pwsh') && st.words.length === 1 && BARE_VARIABLE.test(st.words[0]!.text) && st.shapes.length === 0
+  && st.env.length === 0 && st.code.length === 0 && !st.codeDynamic && !st.programOdd && st.inner === undefined && st.unknownInner === undefined;
+
 function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
   const p = st.program;
-  if (st.programDynamic || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
+  if ((st.programDynamic && !namesVariableOnly(st)) || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
   if (st.inner === null) return [hit('send', 'send.unknown_command', { cmd: p })];
   if (st.inner) return [...walk(st.inner, [...before, st], env, true), ...[statementHit(st, before, env)].filter((h): h is Hit => !!h)];
   if (!p) return [];
