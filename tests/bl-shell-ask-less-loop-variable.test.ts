@@ -77,7 +77,7 @@ test('L180 の対照: 変数の中身を動かす形（& $x・. $x・Invoke-Expr
   assert.deepEqual(wrong, []);
 });
 
-test('L180 の対照: 変数のメソッド呼び出し（$x.Invoke()）は送るでなくなっても、許す（allow）にはならず確かめ（shape.method）のまま', () => {
+test('L180 の対照: 変数のメソッド呼び出し（$x.Invoke()）は、この変更の前も後も許す（allow）にはならず、確かめ（shape.method）のまま', () => {
   for (const command of ['$x.Invoke()', 'foreach ($f in Get-ChildItem) { $f.Invoke() }']) {
     const got = verdictOf(command, 'powershell');
     assert.equal(got.decision, 'ask', command);
