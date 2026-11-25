@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -359,3 +360,39 @@ function startDb(t: { after: (fn: () => void) => void }) {
   t.after(() => db.close());
   return db;
 }
+
+// quiet-loss C1: append は元のバイト列を UTF-8 として読み直して書き戻さない（UTF-8 として正しくないバイトが U+FFFD に化けて戻らなくなる）
+const sha256Of = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+const logKey = (abs: string): string => (process.platform === 'win32' ? abs.toLowerCase() : abs);
+
+test('quiet-loss C1 append は元のバイトを 1 つも変えず、後ろに足した文だけが増える（UTF-16LE の BOM つき・0x00 と 0xFF を含むバイナリ）', async t => {
+  const d = direct(t);
+  const samples: Array<[string, Buffer]> = [
+    ['utf16.txt', Buffer.from('﻿hello\r\nworld\r\n', 'utf16le')],
+    ['blob.bin', Buffer.from([0x00, 0xff, 0xfe, 0x80, 0xc3, 0x28, 0x00, 0xf0, 0x9f, 0x92, 0x0a])],
+  ];
+  for (const [name, original] of samples) {
+    await t.test(name, async () => {
+      const file = join(d.ctx.workspace, name);
+      writeFileSync(file, original);
+      const key = logKey(file);
+      d.ctx.fileReads!.set(key, sha256Of(original)); // 読んだ記録が今の中身と合っている
+      const out = await fileWrite.execute({ path: name, content: 'tail\n', mode: 'append' }, d.ctx);
+      assert.equal(out.isError, undefined, out.content);
+      const after = readFileSync(file);
+      assert.deepEqual(after.subarray(0, original.length), original, '元のバイトがそのまま先頭に残る');
+      assert.deepEqual(after.subarray(original.length), Buffer.from('tail\n'), '後ろに足した文だけが増える');
+      assert.equal(d.ctx.fileReads!.get(key), sha256Of(after), '読んだ記録は書いたバイト列のハッシュになる');
+    });
+  }
+});
+
+test('quiet-loss C1 UTF-8 のふつうのファイルへの append は、書かれたバイトも返す文も今までと同じ', async t => {
+  const d = direct(t);
+  const file = join(d.ctx.workspace, 'a.txt');
+  writeFileSync(file, 'one\ntwo');
+  const content = 'X\nthree\n';
+  const out = await fileWrite.execute({ path: 'a.txt', content, mode: 'append' }, d.ctx);
+  assert.deepEqual(readFileSync(file), Buffer.from('one\ntwoX\nthree\n'));
+  assert.equal(out.content, toolText('en', 'file.wrote_lines', { verb: toolText('en', 'file.wrote.append'), path: 'a.txt', chars: String(content.length), added: '2', removed: '1' }));
+});
