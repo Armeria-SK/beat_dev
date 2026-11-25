@@ -205,7 +205,7 @@ export function createWebServer(app: App): WebServer {
     app.conversations.setChoice(id, choice);
     if (body.archived === true) { app.conversations.archive(id); changed('archived'); }
     if (body.archived === false) { app.conversations.unarchive(id); changed('unarchived'); }
-    sendJson(res, 200, { conversation: app.conversations.get(id), ...(effortReset ? { effortReset: true } : {}) });
+    sendJson(res, 200, { conversation: { ...app.conversations.get(id), archived_at: app.conversations.archivedAt(id) }, ...(effortReset ? { effortReset: true } : {}) });
   });
   // 要約（読むだけ）。要約が無い会話は summary が null
   router.add('GET', '/api/conversations/:id/summary', ({ res, params }) => {

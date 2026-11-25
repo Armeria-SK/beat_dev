@@ -228,6 +228,12 @@ export class Conversations {
     }
   }
 
+  // しまった時刻。しまっていない会話と、時刻を持つ前にしまった会話は null（get は表の行だけで、kv の時刻は一覧と、これで足す）
+  archivedAt(id: string): number | null {
+    const row = this.db.prepare('SELECT CAST(value AS INTEGER) AS at FROM kv WHERE key = ?').get(`${ARCHIVED_AT}${id}`) as { at: number } | undefined;
+    return row?.at ?? null;
+  }
+
   unarchive(id: string): void {
     this.db.prepare('UPDATE conversations SET archived = 0 WHERE id = ?').run(id);
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(`${ARCHIVED_AT}${id}`);
