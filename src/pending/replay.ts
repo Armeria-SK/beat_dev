@@ -3,6 +3,7 @@ import { rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
+import { productRel } from '../changes/record.ts';
 import type { AppConfig } from '../config/schema.ts';
 import { KV } from '../db/kv.ts';
 import type { AppPaths } from '../paths.ts';
@@ -173,18 +174,34 @@ export async function preparePending(row: PendingRow, deps: ReplayDeps): Promise
   return { ready: { tool, args, ctx, state, signal, productRoots, conversationTainted, recheck, cwd: row.cwd } };
 }
 
-export function sentChanges(state: PendingState, again: PreCheck | undefined): string[] {
+function sentMoved(state: PendingState, again: PreCheck | undefined): Array<{ path: string; line: string }> {
   if (!state.sent?.length) return [];
   const now = boundFacts(state.sent.map(f => f.path));
   return state.sent.flatMap((was, i) => {
     const is = now[i]!;
     const mark = (fact: typeof was): string => (fact.exists ? `${fact.size ?? fact.type ?? ''} ${(fact.hash ?? '').slice(0, 12)}`.trim() : 'none');
-    return boundChanged(was, is, again?.gitStaging === true) ? [pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) })] : [];
+    return boundChanged(was, is, again?.gitStaging === true) ? [{ path: was.path, line: pendingText('en', 'change_line', { what: was.path, before: mark(was), now: mark(is) }) }] : [];
+  });
+}
+
+export function sentChanges(state: PendingState, again: PreCheck | undefined): string[] {
+  return sentMoved(state, again).map(moved => moved.line);
+}
+
+function writtenByParker(row: PendingRow, ctx: ToolContext, db: DatabaseSync, paths: readonly string[]): boolean {
+  const project = ctx.project;
+  if (!project?.root || !paths.length) return false;
+  const find = db.prepare("SELECT 1 FROM file_changes WHERE conversation_id = ? AND project_id = ? AND place IS ? AND path = ? AND action IN ('create', 'modify') AND created_at > ? AND after_hash = ? LIMIT 1");
+  return paths.every(path => {
+    const rel = productRel(project.root!, path);
+    const fact = boundFacts([path])[0]!;
+    if (rel === null || fact.hash === undefined) return false;
+    return find.get(row.conversation_id, project.id, ctx.place?.id ?? null, rel, row.created_at, fact.hash) !== undefined;
   });
 }
 
 export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<ReplayOutcome> {
-  const end = (status: ReplayOutcome['status'], output: string | undefined, extra: Partial<ReplayOutcome> = {}, result: { exitCode?: number | undefined; fullRef?: string | undefined } = {}): ReplayOutcome => {
+  const end = (status: ReplayOutcome['status'], output: string | undefined, extra: Partial<ReplayOutcome> = {}, result: { exitCode?: number | undefined; fullRef?: string | undefined; reason?: string | undefined } = {}): ReplayOutcome => {
     deps.store.finish(row.id, { status, output, ...result, ...(extra.fetched !== undefined ? { fetched: extra.fetched } : {}) });
     return { status, ...(output !== undefined ? { output } : {}), ...extra };
   };
@@ -228,11 +245,15 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
       if (now !== state.destination) return end('stale', pendingText('en', 'changed_target', { before: state.destination.slice(0, 12), now: now.slice(0, 12) }));
     }
     if (state.filesMore) return end('stale', pendingText('en', 'files_unbound'));
-    const moved = sentChanges(state, again);
-    if (moved.length) return end('stale', pendingText('en', 'changed_files', { changes: moved.join('\n') }));
-    if (changes.length) {
+    const moved = sentMoved(state, again);
+    if (moved.length && !writtenByParker(row, ctx, deps.db, moved.map(m => m.path))) return end('stale', pendingText('en', 'changed_files', { changes: moved.map(m => m.line).join('\n') }));
+    if (changes.length && !writtenByParker(row, ctx, deps.db, changes.map(c => c.what))) {
       const lines = changes.map(c => pendingText('en', 'change_line', { ...c })).join('\n');
       return end('stale', pendingText('en', 'changed_state', { changes: lines }), { changes });
+    }
+    if (moved.length || changes.length) {
+      const text = pendingText('en', 'settled_elsewhere');
+      return end('cancelled', text, {}, { reason: text });
     }
     if (state.pushed !== undefined && (state.pushed.startsWith(PUSH_UNCONFIRMED) || pushedNow?.startsWith(PUSH_UNCONFIRMED))) return end('stale', pendingText('en', 'push_unconfirmed'));
     if (state.pushed !== undefined && pushedNow !== state.pushed) return end('stale', pendingText('en', state.pushes?.every(p => p.parsed) ? 'changed_head' : 'changed_commits'));

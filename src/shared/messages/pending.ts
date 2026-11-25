@@ -68,6 +68,7 @@ const en = {
   'push_unconfirmed':'Not run: beat could not confirm what the push would send (it could not tell which repository the git command uses, or could not read that repository). Run it yourself if you want it sent.',
   'files_unbound': 'Not run: it reads or sends more files than beat could record when it was parked, so beat cannot check that they are unchanged. Split it into smaller steps.',
   'changed_files': 'Not run: the files it reads or sends changed after it was parked:\n{changes}',
+  'settled_elsewhere': 'Not run: the conversation that parked it has since changed the files it covers by itself, so it counts as settled another way',
   'note_ran': '[beat] The owner approved Pending #{id} ({tool}) and it ran (exit code {code}).',
   'note_failed': '[beat] The owner approved Pending #{id} ({tool}), but it failed or did not run.',
   'note_stale': '[beat] The owner approved Pending #{id} ({tool}), but it was not run because things changed after it was parked.',
