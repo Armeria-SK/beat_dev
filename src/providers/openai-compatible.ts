@@ -4,7 +4,7 @@ import type { ChatMessage, ImageRef, StopReason, ToolCall } from '../engine/type
 import { contextHint, errorProbeText, evaluateContext, probeText, serverNumber } from './context.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import {
-  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, providerSecrets, readSnippet, readSseData, requireApiKey, withTimeout,
+  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, longWaitFetch, providerSecrets, readSnippet, readSseData, requireApiKey, withTimeout,
 } from './http.ts';
 import { ProviderError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
@@ -103,8 +103,8 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
   readonly provider: ProviderConfig;
   readonly #env: Env;
   readonly #fetch: FetchLike;
-  constructor(provider: ProviderConfig, env: Env, fetchImpl: FetchLike = fetch) {
-    this.provider = provider; this.#env = env; this.#fetch = fetchImpl;
+  constructor(provider: ProviderConfig, env: Env, fetchImpl?: FetchLike) {
+    this.provider = provider; this.#env = env; this.#fetch = fetchImpl ?? longWaitFetch(provider.timeoutMs);
   }
 
   #base(): string {
