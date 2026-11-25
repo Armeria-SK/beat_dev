@@ -203,3 +203,31 @@ test('くっついた鍵: sanitizeModelInputText だけでも、くっついた�
   assert.equal(sanitizeModelInputText('plain text with task-ant-abc and disk-partition-tool').redaction_count, 0);
   assert.equal(redactSecrets(`line one\nxsk-proj-${TAIL}\nline three`, [], { keepLines: true }), 'line one\nx[REDACTED]\nline three');
 });
+
+// 広げた URL の読み方（user に [REDACTED] の印が入っていても読む）は、今までの伏せ方がすべて終わったあとの最後にだけ当てる。
+// 先に当てると、あとの伏せ方が読む文字（`token=@value` の代入など）を password として食べてしまい、その先の値が残る
+test('くっついた鍵: 広げた URL の読み方が、あとの伏せ方の読む文字を食べない（今までの出力に足すだけ）', () => {
+  assert.equal(redactSecrets('a://sk-AAAAAAAAAA:token=@value12345 x'), 'a://[REDACTED]:token=[REDACTED] x');
+  const nested = redactSecrets('a://sk-AAAAAAAAAA:zz://u:pw@SECRETPART@y');
+  assert.equal(nested.includes('SECRETPART'), false, nested);
+  assert.equal(nested.includes('pw@'), false, nested);
+  assert.equal(nested, 'a://[REDACTED]:[REDACTED]@y');
+  assert.equal(redactSecrets('a://sk-AAAAAAAAAA:pw@h'), 'a://[REDACTED]:[REDACTED]@h', '今までは password が残っていた形。広げた読み方が、最後に足す');
+});
+
+test('くっついた鍵: 鍵の無い URL の出力は、今までの出力と同じ（user に印が無ければ広げた読み方は何も足さない）', () => {
+  const sameAsBefore: Array<[string, string]> = [
+    ['a://u:pw@h', 'a://u:[REDACTED]@h'],
+    ['a://u:pw@h:99/x', 'a://u:[REDACTED]@h:99/x'],
+    ['https://a:8080@x', '[REDACTED]x'],
+    ['a://u:@h', 'a://u:@h'],
+    ['x://user:p@ss@host/db', 'x://user:[REDACTED]@host/db'],
+    ['a://:pw@h', 'a://:[REDACTED]@h'],
+    ['ftp://anon:anon@ftp.example.com/pub', 'ftp://anon:[REDACTED]@ftp.example.com/pub'],
+    ['redis://:s3cr3t@cache:6379/0', 'redis://:[REDACTED]@cache:6379/0'],
+    ['a://u:token=@value12345 x', 'a://u:[REDACTED]@value12345 x'],
+    ['see a://u:pw@h and b://v:qq@i', 'see a://u:[REDACTED]@h and b://v:[REDACTED]@i'],
+    ['postgres://u:pw%40x@h/db', 'postgres://u:[REDACTED]@h/db'],
+  ];
+  for (const [input, expected] of sameAsBefore) assert.equal(redactSecrets(input), expected, input);
+});
