@@ -33,7 +33,7 @@ const ERROR_KEY = {
 const BLOCK_KEY = { run_open: 'ui.schedule.block.runOpen', ran: 'ui.schedule.block.ran', linked: 'ui.schedule.block.linked' } as const satisfies Record<DeleteBlock, string>;
 const STATE_KEY = { past: 'ui.schedule.slot.past', live: 'ui.schedule.slot.live', planned: 'ui.schedule.slot.planned' } as const;
 
-const yearOf = (ms: number): string => formatDateTime(ms, 'full').slice(0, 9);
+const yearOf = (ms: number): string => formatDateTime(ms, 'full').slice(0, 4);
 const whenText = (ms: number, now: number): string => (yearOf(ms) === yearOf(now) ? formatDateTimeSmart(ms, now) : formatDateTime(ms, 'full'));
 const dayLabel = (ms: number, options: Intl.DateTimeFormatOptions): string => new Intl.DateTimeFormat('en-GB', { timeZone: getTimezone(), ...options }).format(ms);
 

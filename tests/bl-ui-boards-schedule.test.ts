@@ -6,6 +6,7 @@ import { createElement, type ComponentType } from 'react';
 import { ApiError, type Project, type RepeatingTask, type Task } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { formatDateTime } from '../web/src/i18n/index.ts';
 import { RELOAD_DELAY_MS, repeatingRow, splitSchedule } from '../web/src/ui/schedule.ts';
 
 // backlog 308・309・315（Schedule）: 動いている回の見つけ方、Pause の Undo、しまわれた製品を送らない。
@@ -181,4 +182,36 @@ test('ui/Schedule（DOM, 309）: Undo は、押した時点の Day / Week で読
   await settle();
   assert.ok(spans().length > before, 'Undo のあと、一覧を読み直す');
   assert.equal(spans().at(-1), weekSpan, 'Undo の読み直しは今の範囲（Week）で');
+});
+
+test('ui/Schedule（DOM）: 同じ年のうちの次の実行は、日の十の位や月が替わっても年を付けない短い形（月/日 時:分）で出す。年が替わるときだけ年付き', async () => {
+  const NOW = Date.UTC(2026, 5, 29, 3, 0);
+  const sameMonth = Date.UTC(2026, 5, 30, 3, 0);
+  const nextMonth = Date.UTC(2026, 6, 2, 3, 0);
+  const nextYear = Date.UTC(2027, 0, 2, 3, 0);
+  const full = (ms: number) => formatDateTime(ms, 'full');
+  const compact = (ms: number) => formatDateTime(ms, 'compact');
+  assert.equal(full(sameMonth).slice(0, 4), full(NOW).slice(0, 4), '前提: 同じ年');
+  assert.notEqual(full(sameMonth).slice(0, 9), full(NOW).slice(0, 9), '前提: 日の十の位が違う');
+  assert.notEqual(full(nextMonth).slice(0, 7), full(NOW).slice(0, 7), '前提: 月が違う');
+  assert.notEqual(full(nextYear).slice(0, 4), full(NOW).slice(0, 4), '前提: 年が違う');
+  const realNow = Date.now;
+  Date.now = () => NOW;
+  try {
+    serve(() => ({
+      repeating: [template('a', 'scheduled', { run_at: sameMonth }), template('b', 'scheduled', { run_at: nextMonth }), template('c', 'scheduled', { run_at: nextYear })],
+      active: [],
+    }));
+    const { container } = await render(createElement(Schedule, { revision: 0, projects: [] }));
+    await later(10);
+    await settle();
+    const text = (id: string) => rowOf(container, id).textContent ?? '';
+    assert.ok(text('a').includes(`next ${compact(sameMonth)} · `), `同じ月の別の十の位: 短い形 ${compact(sameMonth)}（実際: ${text('a')}）`);
+    assert.ok(!text('a').includes(full(sameMonth)), '年付きの形は出さない');
+    assert.ok(text('b').includes(`next ${compact(nextMonth)} · `), `次の月: 短い形 ${compact(nextMonth)}（実際: ${text('b')}）`);
+    assert.ok(!text('b').includes(full(nextMonth)), '年付きの形は出さない');
+    assert.ok(text('c').includes(`next ${full(nextYear)} · `), `年が替わるときは年付き ${full(nextYear)}（実際: ${text('c')}）`);
+  } finally {
+    Date.now = realNow;
+  }
 });
