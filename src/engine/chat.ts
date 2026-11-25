@@ -80,6 +80,8 @@ export const MAX_CONTINUATIONS = 3;
 const PENDING_WAIT_MS = 4 * 60_000;
 // モデルを呼んでから（提供元の枠を取ったあと）最初の出来事が来ないまま、これだけたったら「黙っている」と知らせる。知らせるだけで打ち切らない
 const MODEL_SILENT_MS = 60_000;
+// 標準の fetch（undici）が、返事の頭・本文が来ないまま 300 秒で切るときの理由（classifyFetchError が connect.code にする）
+const SILENT_FETCH_TIMEOUTS: ReadonlySet<string> = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 const RESUME_WORD_MAX = 40;
 
 export function resumePoint(text: string): string {
@@ -1565,14 +1567,19 @@ export class ChatEngine {
         const thoughts: ThinkingBlock[] = [];
         let release: (() => void) | undefined;
         let callStarted = 0;
-        // 提供元から届いた出来事の数（種類を問わない）。0 のまま時計が動くと「黙っている」の知らせ、0 のまま時間切れなら試し直さない
+        // 提供元から届いた出来事の数（種類を問わない。progress も数える）。0 のまま上限まで待つと「黙っている」の知らせを出し（silent）、
+        // そのあと時間切れで終わったら試し直さない。上限より前の失敗は、黙っていたことにならないので今までどおり試し直す
         let events = 0;
+        let silent = false;
         let silentTimer: ReturnType<typeof setTimeout> | undefined;
+        let waitStarted = 0;
         try {
           release = await d.limiter.acquire(provider.id, () => provider.maxParallel, p.signal);
           callStarted = d.runs.now();
+          waitStarted = Date.now();
           const silentMs = d.modelSilentMs ?? MODEL_SILENT_MS;
           silentTimer = setTimeout(() => {
+            silent = true;
             const seconds = Math.round(silentMs / 1000);
             d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'model_silent', message: engineText(language, 'warn.model_silent', { model: model.id, seconds }), params: { model: model.id, seconds } });
           }, silentMs);
@@ -1591,10 +1598,10 @@ export class ChatEngine {
             : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP) });
           if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
           last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}), ...(e.upstream ? { upstream: e.upstream } : {}) };
-          // 上限まで 1 つも出来事が来なかった呼び出しは、同じモデルで待ち直しても同じなので試し直さない（鎖に次があればそこへ、無ければここで終える）。
-          // 出来事が届いてからの時間切れは、今までどおり試し直す
-          if (e.kind === 'timeout' && events === 0) {
-            const minutes = Math.max(0.1, Math.round(provider.timeoutMs / 6000) / 10);
+          // 上限まで 1 つも出来事が来ないまま時間切れで終わった呼び出しは、同じモデルで待ち直しても同じなので試し直さない（鎖に次があればそこへ、無ければここで終える）。
+          // 時間切れは、提供元の部品の timeout のほか、標準の fetch（undici）が先に切る 300 秒の頭・本文の時間切れ。出来事が届いてからの失敗・上限より前の失敗は、今までどおり試し直す
+          if (events === 0 && silent && (e.kind === 'timeout' || (e.code === 'connect.code' && SILENT_FETCH_TIMEOUTS.has(String(e.params.code))))) {
+            const minutes = Math.max(0.1, Math.round((Date.now() - waitStarted) / 6000) / 10);
             last = { kind: 'timeout', message: engineText(language, 'run.model_no_answer', { minutes }), code: 'engine.run.model_no_answer', params: { minutes }, retryable: e.retryable, route };
             break;
           }

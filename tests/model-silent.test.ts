@@ -16,7 +16,8 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { EndpointLimiter } from '../src/providers/limiter.ts';
 import { ProviderRegistry } from '../src/providers/registry.ts';
-import { ProviderError } from '../src/providers/types.ts';
+import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
+import { ProviderError, providerError, type StreamEvent } from '../src/providers/types.ts';
 import { engineText } from '../src/shared/messages/engine.ts';
 import { serverText, warningText } from '../web/src/server-text.ts';
 import { FakeAdapter, fail, fakeServer, reply, sse, tempDir, testConfig, type Script } from './helpers.ts';
@@ -78,8 +79,14 @@ function slowStart(ms: number, text = '遅くなりました'): Script {
   };
 }
 
-// 出来事が 1 つも来ないまま、提供元の時間切れで終わる台本
-const timesOut = (): Script => fail(new ProviderError('timeout', 'did not respond in time'));
+// 出来事が 1 つも来ないまま、提供元の時間切れで終わる台本。silentFor が上限（modelSilentMs）より短い（すぐ失敗する）と、黙っていたことにならない
+const timeoutError = (): ProviderError => providerError('timeout', 'timeout');
+const undiciTimeout = (code: string): ProviderError => providerError('provider_error', 'connect.code', { code }, { retryable: true });
+const failsAfter = (silentFor: number, error: Error): Script => async function* () {
+  await pause(silentFor);
+  throw error;
+};
+const timesOut = (): Script => fail(timeoutError());
 
 test('最初の出来事が上限（modelSilentMs）まで来なければ model_silent を 1 回出す。打ち切らず、遅れて届いた返事を受け取る', async t => {
   const s = await setup(t, { scripts: [slowStart(1400)], modelSilentMs: 1000 });
@@ -136,48 +143,74 @@ test('黙っているあいだに止めたら、あとから知らせが出な�
   assert.deepEqual(s.silentWarnings(), []);
 });
 
-test('出来事が 1 つも来ないまま時間切れ: 同じモデルで試し直さず、次のモデルへ（待ちの時間を入れない）', async t => {
-  const s = await setup(t, { scripts: [timesOut(), reply('予備です')] });
+test('上限まで黙ったまま時間切れ: 同じモデルで試し直さず、次のモデルへ（待ちの時間を入れない）。分は待った時間から出す', async t => {
+  const s = await setup(t, { scripts: [failsAfter(200, timeoutError()), reply('予備です')], modelSilentMs: 80 });
   const result = await sendAndWait(s.engine);
   assert.ok(result.ok);
   assert.equal(result.modelId, 'b');
   assert.deepEqual(s.adapter.calls.map(c => c.model.id), ['a', 'b'], 'a は 1 回だけ（既定の試し直し 2 回を使わない）');
   assert.deepEqual(s.sleeps, []);
+  assert.equal(s.silentWarnings().length, 1);
   assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'retrying'), false);
   const switched = s.events.find(e => e.type === 'model.switch');
   assert.ok(switched?.type === 'model.switch');
-  assert.equal(switched.reason, engineText('en', 'run.model_no_answer', { minutes: 10 }));
+  assert.equal(switched.reason, engineText('en', 'run.model_no_answer', { minutes: 0.1 }), '提供元の上限（10 分）ではなく、待った時間');
   assert.equal(s.runs.get(result.runId)!.attempts, 2);
 });
 
-test('次のモデルが無いときは「モデルが N 分応答しませんでした」で、1 回で終わる', async t => {
-  const s = await setup(t, { scripts: [timesOut(), reply('届かないはず')], models: [model('a')] });
+test('次のモデルが無いときは「N 分何も届きませんでした」で、1 回で終わる', async t => {
+  const s = await setup(t, { scripts: [failsAfter(200, timeoutError()), reply('届かないはず')], models: [model('a')], modelSilentMs: 80 });
   const result = await sendAndWait(s.engine);
   assert.equal(result.ok, false);
   if (result.ok) return;
   assert.equal(s.adapter.calls.length, 1);
   assert.equal(result.errorKind, 'timeout');
   assert.equal(result.errorCode, 'engine.run.model_no_answer');
-  assert.deepEqual(result.errorParams, { minutes: 10 });
-  assert.equal(result.errorMessage, engineText('en', 'run.model_no_answer', { minutes: 10 }));
+  assert.deepEqual(result.errorParams, { minutes: 0.1 });
+  assert.equal(result.errorMessage, engineText('en', 'run.model_no_answer', { minutes: 0.1 }));
   assert.equal(result.retryable, true, '送り直せることは今までどおり');
   assert.deepEqual(s.sleeps, []);
   const end = s.events.at(-1);
   assert.ok(end?.type === 'run.end' && end.errorCode === 'engine.run.model_no_answer');
   assert.equal(s.runs.get(result.runId)!.error_kind, 'timeout');
-  assert.match(serverText('engine.run.model_no_answer', { minutes: 10 }, 'ja') ?? '', /10 分.*応答しませんでした/);
+  assert.match(serverText('engine.run.model_no_answer', { minutes: 1.5 }, 'ja') ?? '', /1\.5 分.*何も届きませんでした/);
 });
 
-test('黙ったまま時間切れになった呼び出し: 知らせは 1 回のあと、試し直さずに次へ', async t => {
-  const silentThenTimeout: Script = async function* () {
-    await pause(400);
-    throw new ProviderError('timeout', 'did not respond in time');
-  };
-  const s = await setup(t, { scripts: [silentThenTimeout, reply('予備です')], modelSilentMs: 80 });
+test('提供元の上限（10 分）より手前の、実際の標準の部品の時間切れ（undici の 300 秒）も、黙ったまま来たなら試し直さない', async t => {
+  for (const code of ['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']) {
+    const s = await setup(t, { scripts: [failsAfter(200, undiciTimeout(code)), reply('届かないはず')], models: [model('a')], modelSilentMs: 80 });
+    const result = await sendAndWait(s.engine);
+    assert.equal(result.ok, false, code);
+    if (result.ok) return;
+    assert.equal(s.adapter.calls.length, 1, code);
+    assert.equal(result.errorCode, 'engine.run.model_no_answer', code);
+    assert.deepEqual(s.sleeps, [], code);
+  }
+});
+
+test('上限より前の時間切れ（出来事なし）は、黙っていたことにならないので今までどおり試し直す。待ちの時間も入れる', async t => {
+  const s = await setup(t, { scripts: [timesOut(), timesOut(), timesOut(), reply('予備です')] });
   const result = await sendAndWait(s.engine);
   assert.ok(result.ok);
-  assert.equal(s.silentWarnings().length, 1);
-  assert.deepEqual(s.adapter.calls.map(c => c.model.id), ['a', 'b']);
+  assert.equal(result.modelId, 'b');
+  assert.deepEqual(s.adapter.calls.map(c => c.model.id), ['a', 'a', 'a', 'b']);
+  assert.deepEqual(s.sleeps, [1000, 2000]);
+  assert.equal(s.silentWarnings().length, 0);
+  const only = await setup(t, { scripts: [timesOut(), timesOut(), timesOut()], models: [model('a')] });
+  const failed = await sendAndWait(only.engine);
+  assert.equal(failed.ok, false);
+  if (failed.ok) return;
+  assert.equal(failed.errorCode, 'provider.timeout', '「何も届きませんでした」とは言わない');
+  assert.deepEqual(only.sleeps, [1000, 2000]);
+});
+
+test('黙ったあとの失敗でも、時間切れでないもの（接続のリセットなど）は今までどおり試し直す', async t => {
+  const s = await setup(t, { scripts: [failsAfter(200, undiciTimeout('ECONNRESET')), reply('届きました')], modelSilentMs: 80 });
+  const result = await sendAndWait(s.engine);
+  assert.ok(result.ok);
+  assert.equal(result.modelId, 'a');
+  assert.deepEqual(s.adapter.calls.map(c => c.model.id), ['a', 'a']);
+  assert.deepEqual(s.sleeps, [1000]);
 });
 
 test('出来事が届いてからの時間切れは今までどおり（同じモデルで試し直す）', async t => {
@@ -196,6 +229,21 @@ test('出来事が届いてからの時間切れは今までどおり（同じ�
   assert.deepEqual(s.adapter.calls.map(c => c.model.id), ['a', 'a', 'a']);
   assert.deepEqual(s.sleeps, [1000, 2000]);
   assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'retrying').length, 2);
+});
+
+test('黙って知らせが出たあとに出来事が届き、そのあと時間切れになったものは、出来事が届いてからの時間切れなので今までどおり試し直す', async t => {
+  const lateThenTimeout: Script = async function* () {
+    await pause(200);
+    yield { type: 'reasoning', delta: '考えています' };
+    throw timeoutError();
+  };
+  const s = await setup(t, { scripts: [lateThenTimeout, reply('届きました')], modelSilentMs: 80 });
+  const result = await sendAndWait(s.engine);
+  assert.ok(result.ok);
+  assert.equal(result.modelId, 'a');
+  assert.equal(s.silentWarnings().length, 1);
+  assert.deepEqual(s.adapter.calls.map(c => c.model.id), ['a', 'a']);
+  assert.deepEqual(s.sleeps, [1000]);
 });
 
 test('時間切れ以外（回数の制限・つながらない）は、出来事が無くても今までどおり試し直す', async t => {
@@ -249,4 +297,54 @@ test('本物の openai_compatible の部品: 遅いだけのサーバーは、�
   assert.equal(result.text, '遅れて届きました');
   assert.equal(server.requests.filter(r => r.method === 'POST').length, 1);
   assert.equal(s.silentWarnings().length, 1);
+});
+
+// 本文もツール呼び出しの完成も無いまま、断片だけが次々届くサーバー（弱い GPU で長いツール呼び出しを書いているときの形）
+function trickle(options: { parts: number; gapMs: number; finish: 'tool_calls' | 'stop'; onDone?: () => void }) {
+  return async (req: import('node:http').IncomingMessage, _body: unknown, res: import('node:http').ServerResponse): Promise<void> => {
+    if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ data: [{ id: 'a' }] })); return; }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    for (let i = 0; i < options.parts; i++) {
+      const delta = i === 0 ? { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'memory_save', arguments: '{"body":"' } }] } : { tool_calls: [{ index: 0, function: { arguments: 'x' } }] };
+      res.write(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
+      await pause(options.gapMs);
+    }
+    options.onDone?.();
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"}' } }] }, finish_reason: options.finish }] })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  };
+}
+
+test('openai_compatible の部品: 本文が無く、ツール呼び出しの断片だけが届くあいだも、届いたことを出来事（progress）で知らせる', async t => {
+  let writing = true;
+  const server = await fakeServer(trickle({ parts: 5, gapMs: 120, finish: 'tool_calls', onDone: () => { writing = false; } }));
+  t.after(() => server.close());
+  const adapter = new OpenAiCompatibleAdapter({ id: 'fake', kind: 'openai_compatible', baseUrl: `${server.url}/v1`, maxParallel: 1, timeoutMs: 10_000 }, {});
+  const seen: Array<{ type: string; whileWriting: boolean }> = [];
+  const request = { model: model('a'), system: { frozen: 's', dynamic: '', tail: '' }, messages: [{ role: 'user' as const, content: 'こんにちは' }], tools: [], maxOutputTokens: 1024, signal: new AbortController().signal };
+  for await (const event of adapter.stream(request)) seen.push({ type: event.type, whileWriting: writing });
+  assert.ok(seen.some(e => e.type === 'progress' && e.whileWriting), 'サーバーが書き続けている間に、最初の出来事が届く');
+  assert.equal(seen.filter(e => e.type === 'tool_call').length, 1, '組み立てた呼び出しは今までどおり 1 つ');
+  assert.equal(seen.at(-1)!.type, 'done');
+});
+
+test('出来事の種類に progress が増えても、実行は何もせず数えるだけ（本文・使用量・終了の扱いは変わらない）', async t => {
+  const withProgress: Script = async function* (req) {
+    yield { type: 'progress' } as StreamEvent;
+    yield* reply('届きました')(req);
+  };
+  const s = await setup(t, { scripts: [withProgress] });
+  const result = await sendAndWait(s.engine);
+  assert.ok(result.ok);
+  assert.equal(result.text, '届きました');
+});
+
+test('実行全体: ツール呼び出しの断片が上限より長く届き続けても、model_silent を出さない（本物の部品）', async t => {
+  const server = await fakeServer(trickle({ parts: 6, gapMs: 120, finish: 'stop' }));
+  t.after(() => server.close());
+  const s = await setup(t, { models: [model('a')], modelSilentMs: 300, real: { baseUrl: `${server.url}/v1`, timeoutMs: 10_000 } });
+  await sendAndWait(s.engine);
+  assert.equal(server.requests.filter(r => r.method === 'POST').length >= 1, true);
+  assert.deepEqual(s.silentWarnings(), [], '断片が届いている間は、黙っているとは言わない');
 });
