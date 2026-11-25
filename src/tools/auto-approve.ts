@@ -154,14 +154,21 @@ export interface ParsedVerdict { decision: 'allow' | 'ask'; reason: string }
 
 const oneLine = (text: string) => redactSecrets(text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, REASON_LIMIT);
 
+// JSON の書き方になっている \（\" \\ \/ \b \f \n \r \t と \u + 16 進 4 けた）はそのまま、そうでない \ だけを \\ にする。理由に Windows のパス（C:\Users）を書いた答えが、それだけで読めなくなるのを防ぐ。
+// 足すのは \ だけ: 引用符は閉じず、構造（{ } , :）も decision の値も作れない
+const fixBackslashes = (line: string): string => line.replace(/\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/gu, found => (found === '\\' ? '\\\\' : found));
+
 // 判定役の返事から答えを読む。読むのは、返事の最後の行（コードの囲み ``` だけの行は飛ばす）の JSON 1 つだけ。
 // 返事の途中に答えらしいものがあっても、操作の文を引用していても読まない。読めない・決まった形でない返事は undefined（= 確かめる）
+// 最後の行が JSON として読めないときだけ、正しくない \ を直した文で 1 回だけ読み直す（decision が allow / ask ちょうどでなければ、直しても読まない）
 export function parseVerdict(reply: string): ParsedVerdict | undefined {
   const lines = reply.split(/\r?\n/u).map(line => line.trim()).filter(line => line !== '' && !/^```/u.test(line));
   const last = lines.at(-1);
   if (last === undefined) return undefined;
   let value: unknown;
-  try { value = JSON.parse(last); } catch { return undefined; }
+  try { value = JSON.parse(last); } catch {
+    try { value = JSON.parse(fixBackslashes(last)); } catch { return undefined; }
+  }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const { decision, reason } = value as { decision?: unknown; reason?: unknown };
   if (decision !== 'allow' && decision !== 'ask') return undefined;

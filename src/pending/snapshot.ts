@@ -381,7 +381,12 @@ export function compareSnapshot(before: Snapshot, now: Snapshot): Change[] {
   const nowByPath = new Map(now.paths.map(p => [p.path, p]));
   for (const fact of before.paths) {
     const current = nowByPath.get(fact.path);
-    if (unsure(fact) || unsure(current) || !same(fact, current)) changes.push({ what: fact.path, before: describe(fact), now: describe(current) });
+    const unsured = unsure(fact) || unsure(current);
+    if (!unsured && same(fact, current)) continue;
+    const before = describe(fact);
+    const now = describe(current);
+    // A folder beat could not count to the end reads the same before and now, so a row that looks unchanged is shown as "cannot be checked" on the now side
+    changes.push({ what: fact.path, before, now: unsured && before === now ? unverifiable() : now });
   }
   return changes;
 }

@@ -38,6 +38,8 @@ interface RigOptions {
   secrets?: string[];
   /** 設定の鍵を読む関数が投げる */
   secretsThrow?: boolean;
+  /** 記録の出口（log）が投げる */
+  logThrows?: boolean;
 }
 
 function rig(options: RigOptions = {}): Rig {
@@ -50,8 +52,12 @@ function rig(options: RigOptions = {}): Rig {
     if (options.secretsThrow) throw new Error('registry is not ready');
     return options.secrets ?? [];
   };
+  const log = (line: string): void => {
+    if (options.logThrows) throw new Error('log sink is closed');
+    lines.push(line);
+  };
   const shutdown = createShutdown({
-    log: line => { lines.push(line); },
+    log,
     closeWeb: () => {
       calls.push('web');
       if (options.closeWebThrows) throw new Error('server was never listening');
@@ -69,7 +75,7 @@ function rig(options: RigOptions = {}): Rig {
     mcpWaitMs: options.mcpWaitMs ?? 60_000,
     secrets: secretsOf,
   });
-  installProcessGuards({ proc, log: line => { lines.push(line); }, shutdown, secrets: secretsOf });
+  installProcessGuards({ proc, log, shutdown, secrets: secretsOf });
   return { proc, lines, calls, exits, finishMcp: () => finishMcp() };
 }
 
@@ -299,4 +305,87 @@ test('指摘3 と 4: 鍵を読む関数が投げているときの app.close() �
   assert.equal(failure.length, 1);
   assert.match(failure[0]!, /close failed with/u);
   assert.doesNotMatch(failure[0]!, /sk-ant-test-0000000000000000/u);
+});
+
+// ── BL-pending-judge B5: 失敗の記録の 1 行は、長さに上限があり（伏せてから切る）、1 行で、記録の出口が投げても受け口は止まらない ──
+const SECRET = 'sk-ant-test-0000000000000000';
+const REJECTION_PREFIX = '[ERROR] Unhandled promise rejection: ';
+const LIMIT = 20_000;
+const textOf = (line: string): string => line.slice(REJECTION_PREFIX.length);
+
+test('B5: 鍵が 2 万個ある object を渡しても、記録は 1 行・20,000 字以下で、鍵は出ない。切れたことが分かる', async () => {
+  const r = rig({ secrets: [SECRET] });
+  const huge = Object.fromEntries(Array.from({ length: 20_000 }, (_, i) => [`key${i}`, SECRET]));
+  r.proc.emit('unhandledRejection', huge);
+  assert.equal(r.lines.length, 1);
+  const line = r.lines[0]!;
+  assert.ok(!line.includes('\n'), '1 行');
+  assert.ok(textOf(line).length <= LIMIT, `上限を超えた: ${textOf(line).length}`);
+  assert.doesNotMatch(line, /sk-ant-test-0000000000000000/u);
+  assert.match(line, /… \(\d+ more characters\)$/u, '切れたことと、切った字数が末尾に出る');
+  const long = rig();
+  long.proc.emit('uncaughtException', new Error(`m${'m'.repeat(100_000)}`));
+  assert.ok(long.lines[0]!.length <= '[ERROR] Uncaught exception: '.length + LIMIT, 'uncaughtException も同じ上限');
+  long.finishMcp();
+  await tick();
+});
+
+test('B5: 伏せてから切る。切れ目が鍵にかかる位置を 1 字ずつずらしても、鍵の頭も後半も残らない（形で見つかる鍵・設定の鍵の値そのもの）', () => {
+  const exact = 'hunter2-exact-secret';
+  const r = rig({ secrets: [exact] });
+  for (let pad = LIMIT - 120; pad <= LIMIT; pad += 1) {
+    r.proc.emit('unhandledRejection', `${'a'.repeat(pad)} ${exact} ${SECRET} ${'b'.repeat(300)}`);
+    r.proc.emit('unhandledRejection', new Error(`${'a'.repeat(pad)} ${exact} ${SECRET} ${'b'.repeat(300)}`));
+  }
+  assert.equal(r.lines.length, 2 * 121);
+  for (const line of r.lines) {
+    assert.ok(textOf(line).length <= LIMIT);
+    assert.doesNotMatch(line, /hunter|exact-secret|sk-ant/u, '切れ目で鍵の頭・後半が残った');
+  }
+  assert.ok(r.lines.some(line => line.includes('[REDACTED]')), '伏せた印は残る位置もある');
+});
+
+test('B5: 入れ子の長い文字列の途中に鍵がまたがっても、鍵の頭が残らない（文字列の長さの上限で先に切らない）', () => {
+  const r = rig({ secrets: [SECRET] });
+  for (let pad = 9_970; pad <= 10_000; pad += 1) r.proc.emit('unhandledRejection', { code: 'E', body: `${'x'.repeat(pad)}${SECRET}${'y'.repeat(60)}` });
+  assert.equal(r.lines.length, 31);
+  for (const line of r.lines) assert.doesNotMatch(line, /sk-ant/u);
+});
+
+test('B5: Error でない文は 1 行にする（数字の多い配列・文字列の改行）。Error の stack は今までどおり複数行', () => {
+  const r = rig();
+  r.proc.emit('unhandledRejection', { values: Array.from({ length: 60 }, (_, i) => i * 1000), name: 'x' });
+  r.proc.emit('unhandledRejection', 'first line\n  second line\r\n\r\nthird line');
+  const stackless = new Error('named\nmultiline message');
+  Object.defineProperty(stackless, 'stack', { value: undefined });
+  r.proc.emit('unhandledRejection', stackless);
+  r.proc.emit('unhandledRejection', new Error('with a stack'));
+  assert.equal(r.lines.length, 4);
+  for (const line of r.lines.slice(0, 3)) assert.ok(!line.includes('\n') && !line.includes('\r'), JSON.stringify(line));
+  assert.match(r.lines[0]!, /values: \[\s+0,\s+1000,\s+2000,/u);
+  assert.match(r.lines[0]!, /59000/u);
+  assert.equal(textOf(r.lines[1]!), 'first line second line third line');
+  assert.match(r.lines[2]!, /named multiline message/u);
+  assert.match(r.lines[3]!, /\n\s+at /u, 'Error の stack は直さない');
+});
+
+test('B5: 配列は 100 件までで切り、残りの件数が出る', () => {
+  const r = rig();
+  r.proc.emit('unhandledRejection', { list: Array.from({ length: 500 }, (_, i) => i) });
+  assert.match(r.lines[0]!, /\.\.\. 400 more items/u);
+  assert.ok(!r.lines[0]!.includes('\n'));
+});
+
+test('B5: unhandledRejection の記録の出口が投げても、受け口は投げず、止め方（shutdown）に進まない。次の失敗はまた記録に出る', async () => {
+  const flaky = rig({ logThrows: true });
+  assert.doesNotThrow(() => { flaky.proc.emit('unhandledRejection', new Error('first')); });
+  assert.deepEqual(flaky.calls, [], 'uncaughtException に回って止め方に進まない');
+  assert.deepEqual(flaky.exits, []);
+  assert.deepEqual(flaky.lines, []);
+  // uncaughtException は、記録の出口が投げても止め方に進む（今までどおり）
+  flaky.proc.emit('uncaughtException', new Error('second'));
+  assert.deepEqual(flaky.calls, ['web', 'mcp']);
+  flaky.finishMcp();
+  await tick();
+  assert.deepEqual(flaky.exits, [1]);
 });

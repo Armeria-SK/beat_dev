@@ -1,6 +1,7 @@
 import type { App } from '../app.ts';
 import { transaction } from '../db/database.ts';
-import { PendingError, storedRule, type PendingRow } from '../pending/store.ts';
+import { parentOf } from '../pending/replay.ts';
+import { PendingError, storedRule, type PendingRow, type PendingView } from '../pending/store.ts';
 import { addRule } from '../tools/approval-rules.ts';
 import { startOfDayIn } from '../tasks/schedule.ts';
 import { domainProblem, readJson, requireObject, type Router, sendJson } from './http.ts';
@@ -24,6 +25,14 @@ export function registerPendingRoutes(router: Router, app: App): void {
     const value = url.searchParams.get(name);
     return value === null || value === '' ? undefined : value.slice(0, 200);
   };
+  // The "from" of a child agent's row is the parent's conversation: the child's own title is a line the model wrote. Without a parent or a parent title it stays the child's
+  const titleOf = (item: PendingView): string | null => {
+    const own = app.conversations.get(item.conversation_id)?.title ?? null;
+    if (item.run_kind !== 'agent') return own;
+    const row = app.pending.row(item.id);
+    const parent = row ? parentOf(app.db, row) : undefined;
+    return (parent ? app.conversations.get(parent.conversationId)?.title : undefined) || own;
+  };
   router.add('GET', '/api/pending', ({ res, url }) => {
     const status = text(url, 'status') ?? 'waiting';
     if (status !== 'waiting' && status !== 'decided') throw domainProblem(400, 'invalid_field', new PendingError('invalid_status'));
@@ -36,7 +45,7 @@ export function registerPendingRoutes(router: Router, app: App): void {
     sendJson(res, 200, {
       items: items.map(item => ({
         ...item,
-        conversation_title: app.conversations.get(item.conversation_id)?.title ?? null,
+        conversation_title: titleOf(item),
         project_archived: item.project_id !== null && (app.projects.get(item.project_id)?.archived_at ?? null) !== null,
       })),
     });

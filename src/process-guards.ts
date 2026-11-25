@@ -11,22 +11,40 @@ export interface GuardProcess {
 
 type Secrets = (() => readonly string[]) | undefined;
 
-// 投げられたもの（Error・文字列・素の object・prototype の無い object・stack が文字でない Error）を、投げずに 1 つの文にする
-function describe(reason: unknown): string {
+// 記録の 1 件の文の長さの上限（字）。伏せたあとの文に対して、「… (N more characters)」の分も入れて数える
+const MAX_TEXT = 20_000;
+
+// 投げられたもの（Error・文字列・素の object・prototype の無い object・stack が文字でない Error）を、投げずに 1 つの文にする。
+// stack: Error の stack をそのまま使った（複数行のまま出す）。配列は 100 件まで。文字列の長さでは inspect に切らせない: 切ると、鍵が切れ目にまたがったとき伏せる前に頭だけ残るため（長さの上限は伏せたあとにかける）
+function describe(reason: unknown): { text: string; stack: boolean } {
   try {
     if (reason instanceof Error) {
       const { stack } = reason;
-      return typeof stack === 'string' && stack !== '' ? stack : `${String(reason.name)}: ${String(reason.message)}`;
+      return typeof stack === 'string' && stack !== '' ? { text: stack, stack: true } : { text: `${String(reason.name)}: ${String(reason.message)}`, stack: false };
     }
-    return typeof reason === 'string' ? reason : inspect(reason, { depth: 3, breakLength: Infinity });
-  } catch { return '(a value that could not be printed)'; }
+    return { text: typeof reason === 'string' ? reason : inspect(reason, { depth: 3, breakLength: Infinity, maxArrayLength: 100, maxStringLength: Infinity }), stack: false };
+  } catch { return { text: '(a value that could not be printed)', stack: false }; }
 }
 
-// 記録に出す文は、必ずここを通す（秘密を伏せる）。鍵を読む関数が投げても、形で見つかる鍵は伏せる。伏せること自体が失敗したら、文は出さない
+const oneLine = (text: string): string => text.replace(/\s*[\r\n\p{Zl}\p{Zp}]\s*/gu, ' ');
+
+// 伏せたあとの文を MAX_TEXT 字（付ける一言も入れて）までにする。伏せる前に切ると、切れ目の鍵の頭が残る
+function capped(text: string): string {
+  if (text.length <= MAX_TEXT) return text;
+  const more = (count: number): string => `… (${count} more characters)`;
+  const keep = MAX_TEXT - more(text.length).length;
+  return `${text.slice(0, keep)}${more(text.length - keep)}`;
+}
+
+// 記録に出す文は、必ずここを通す（秘密を伏せる → Error の stack でなければ 1 行にする → 長さを切る、の順）。鍵を読む関数が投げても、形で見つかる鍵は伏せる。伏せること自体が失敗したら、文は出さない
 function printable(reason: unknown, secrets: Secrets): string {
-  const text = describe(reason);
-  try { return redactSecrets(text, secrets?.() ?? []); } catch { /* 下で、鍵の値なしで伏せ直す */ }
-  try { return redactSecrets(text); } catch { return '(text withheld: it could not be redacted)'; }
+  const { text, stack } = describe(reason);
+  let redacted: string;
+  try { redacted = redactSecrets(text, secrets?.() ?? []); } catch {
+    /* 鍵の値なしで伏せ直す */
+    try { redacted = redactSecrets(text); } catch { return '(text withheld: it could not be redacted)'; }
+  }
+  return capped(stack ? redacted : oneLine(redacted));
 }
 
 export interface ShutdownSteps {
@@ -101,7 +119,10 @@ export interface GuardOptions {
 export function installProcessGuards(options: GuardOptions): void {
   const { proc, log, shutdown, secrets } = options;
   // 投げっぱなしの promise の失敗 1 つで beat 全体を止めない。見えるように記録に出して動き続ける
-  proc.on('unhandledRejection', reason => { log(`[ERROR] Unhandled promise rejection: ${printable(reason, secrets)}`); });
+  // 記録の出口が壊れていても、受け口は投げない（投げると uncaughtException に回って、投げっぱなしの失敗 1 つで beat が止まる）
+  proc.on('unhandledRejection', reason => {
+    try { log(`[ERROR] Unhandled promise rejection: ${printable(reason, secrets)}`); } catch { /* 記録の出口が壊れている */ }
+  });
   // 捕まえていない例外は、どこが壊れたか分からない。記録に出して、いまの止め方で終わる（記録に出せなくても止める）
   proc.on('uncaughtException', error => {
     try { log(`[ERROR] Uncaught exception: ${printable(error, secrets)}`); } catch { /* 記録の出口が壊れている */ }
