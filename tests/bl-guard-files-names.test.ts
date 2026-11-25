@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runProtectFiles } from '../src/tools/hooks/protect-files.ts';
 import { isSecretPath, placePath, writeApprovalKind, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { tempDir } from './helpers.ts';
 
@@ -152,4 +153,23 @@ test('161: 畳んで長さが変わる文字（İ）にも、? は 1 文字と�
   assert.deepEqual(runAsLinux(root, ['docs/?.md'], [join(root, 'docs', 'A.md'), join(root, 'docs', 'İ.md'), join(root, 'docs', 'İİ.md')]), ['ask', 'ask', null], '? は 1 文字だけ');
   assert.deepEqual(runAsLinux(root, ['docs/*.md'], [join(root, 'docs', 'İ.md'), join(root, 'docs', 'İİ.md')]), ['ask', 'ask'], '* は何文字でも');
   assert.deepEqual(runAsLinux(root, ['docs/İ*.md'], [join(root, 'docs', 'İx.md'), join(root, 'docs', 'ix.md')]), ['ask', null], '一覧に İ を書いても、畳む前と同じに当たる');
+});
+
+// 161（レビューの指摘）: 1 文字ずつ畳む新しい畳みだけにすると、Windows で元の toLowerCase が「同じ」とみなしていた組が外れる。
+// 末尾の Σ は ς に、İ は i と結合の点になる。元の当たりを残したうえで、新しい畳みの当たりも足す（Windows の試験機でそのまま動く。他の OS は元から畳みが違うので飛ばす）
+const protectedHere = (root: string, always: string[], path: string): string | null => runProtectFiles(
+  { matcher: '.*', builtin: 'protect-files', always },
+  { hook_event_name: 'PreToolUse', tool_name: 'file_write', tool_input: {}, cwd: root, run_id: 'r', conversation_id: 'c', paths: [{ path, write: true }], project_root: root },
+).decision ?? null;
+
+test('161: Windows の元の畳み（toLowerCase）で同じだった組（末尾の Σ と ς、İ と i＋結合の点）は、今も当たる。新しい畳みの当たりも残る', { skip: process.platform !== 'win32' && 'Windows の toLowerCase の当たりを守る試験' }, t => {
+  const root = join(tempDir(t), 'prod');
+  mkdirSync(join(root, 'docs', 'x'), { recursive: true });
+  const bigSigma = 'ΑΣ';
+  assert.equal(protectedHere(root, [`${bigSigma}/**`], join(root, 'ας', 'x.txt')), 'ask', '末尾の Σ と ς');
+  assert.equal(protectedHere(root, [`${bigSigma}/**`], join(root, 'ασ', 'x.txt')), 'ask', '新しい畳みで当たる σ も残る');
+  assert.equal(protectedHere(root, ['docs/*/İ.md'], join(root, 'docs', 'x', 'i̇.md')), 'ask', 'İ と i＋結合の点');
+  assert.equal(protectedHere(root, ['docs/*/?.md'], join(root, 'docs', 'x', 'İ.md')), 'ask', '? は İ を 1 文字として当てる');
+  assert.equal(protectedHere(root, [`${bigSigma}/**`], join(root, 'ab', 'x.txt')), null, '関係ない名前は当たらない');
+  assert.equal(protectedHere(root, ['docs/*/İ.md'], join(root, 'docs', 'x', 'ix.md')), null, 'i だけでは İ に当たらない');
 });
