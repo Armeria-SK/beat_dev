@@ -46,6 +46,7 @@ export const SKILL_AUTO_PER_DAY = 5;
 export const SKILL_REVIEW_PENDING_MAX = 10;
 const AUTO_LOG_KEY = 'skills:auto-registered';
 const SEEN_KEY = 'skill-seen:';
+const SEEN_MAX = MAX_BODY * 2;
 const DAY_MS = 86_400_000;
 const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat)(?:-(\d{1,4}))?\.md$/u;
 
@@ -105,6 +106,7 @@ export class SkillStore {
   readonly #log: (line: string) => void;
   readonly #backups: string | null;
   readonly #grow: () => boolean;
+  readonly #tooBigLogged = new Set<string>();
 
   constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE, log: (line: string) => void = () => undefined, backups: string | null = null, grow: () => boolean = () => true) {
     this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; this.#log = log; this.#backups = backups; this.#grow = grow;
@@ -248,23 +250,29 @@ export class SkillStore {
     if (!SKILL_NAME.test(name)) throw new SkillError('skill.bad_name');
     let previous = '';
     try { if (lstatSync(target).isFile()) previous = readFileSync(target, 'utf8'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    if (previous !== '') this.#keepOutsideEdit(name, previous);
+    this.#keepOutsideEdit(name, previous);
     if (previous === next || (previous === '' && who !== 'beat-auto')) return;
     this.#saveVersion(this.#backups, name, previous, who);
   }
 
   #keepOutsideEdit(name: string, current: string): void {
     if (this.#backups === null) return;
-    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(`${SEEN_KEY}${name}`) as { value: string } | undefined;
-    if (row?.value === current) return;
-    if (row !== undefined && row.value !== '') this.#saveVersion(this.#backups, name, row.value, 'beat');
-    this.#markSeen(name, current);
+    const seen = (this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(`${SEEN_KEY}${name}`) as { value: string } | undefined)?.value ?? '';
+    if (seen === current) return;
+    const tooBig = current.length > SEEN_MAX;
+    if (tooBig && !this.#tooBigLogged.has(name)) {
+      this.#tooBigLogged.add(name);
+      this.#log(`[WARN] Skill "${name}" is longer than ${SEEN_MAX} characters, so its text is not kept when it is changed outside the app`);
+    }
+    if (tooBig && seen === '') return;
+    if (seen !== '') this.#saveVersion(this.#backups, name, seen, 'beat');
+    this.#markSeen(name, tooBig ? '' : current);
   }
 
   #checkOutsideEdit(name: string, text?: string): void {
     const path = join(this.#dir, name, 'SKILL.md');
     try {
-      if (lstatSync(path).isFile()) this.#keepOutsideEdit(name, text ?? readFileSync(path, 'utf8'));
+      this.#keepOutsideEdit(name, lstatSync(path).isFile() ? text ?? readFileSync(path, 'utf8') : '');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.#log(`[WARN] Could not keep the earlier text of skill "${name}" that was changed outside the app: ${(error as Error).message}`);
     }

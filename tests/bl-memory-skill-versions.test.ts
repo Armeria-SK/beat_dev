@@ -172,3 +172,97 @@ test('281 SKILL.md が普通のファイルでないとき（フォルダなど�
   assert.equal(s.seenRows(), 0);
   assert.deepEqual(s.logs, []);
 });
+
+const swapForFolder = (s: ReturnType<typeof setup>, name: string) => {
+  rmSync(join(s.dir, name, 'SKILL.md'));
+  mkdirSync(join(s.dir, name, 'SKILL.md'));
+};
+
+test('281 SKILL.md を普通のファイルでないもの（フォルダ）に差し替えられても、History を開くと元の中身が beat の版として残る', t => {
+  const s = setup(t);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  swapForFolder(s, 'memo');
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']]);
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']], '読み直しても版は増えない');
+});
+
+test('281 差し替えられたあとに持ち主が画面で保存しようとしても、その前に元の中身が版に残る（書く前に控える）', t => {
+  const s = setup(t);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  swapForFolder(s, 'memo');
+  assert.throws(() => s.skills.write({ name: 'memo', description: 'Memo', body: 'owner text' }));
+  assert.equal(s.files('memo').length, 1, '書くのに失敗しても、元の中身は控えてある');
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']]);
+});
+
+test('281 SKILL.md をリンクに差し替えられたあとに持ち主が保存しても、元の中身が版に残り、リンクの先の中身は写さない', t => {
+  const s = setup(t);
+  const other = join(s.root, 'other.md');
+  writeFileSync(other, 'other text');
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  rmSync(join(s.dir, 'memo', 'SKILL.md'));
+  try { symlinkSync(other, join(s.dir, 'memo', 'SKILL.md'), 'file'); } catch (error) { t.skip(`symlink not available: ${(error as NodeJS.ErrnoException).code}`); return; }
+  s.skills.get('memo');
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'owner text' });
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']]);
+});
+
+test('281 外で消されたスキルを画面で作り直すと、消される前に見た中身が beat の版として残る', t => {
+  const s = setup(t);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  rmSync(join(s.dir, 'memo'), { recursive: true });
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'recreated' });
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']]);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'edited again' });
+  assert.deepEqual(pairs(s.skills, 'memo'), [['you', 'recreated'], ['beat', 'original']]);
+});
+
+test('281 見た中身が空（差し替え中）のあとに普通のファイルが戻っても、空の版は作らない', t => {
+  const s = setup(t);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  swapForFolder(s, 'memo');
+  s.skills.history('memo');
+  rmSync(join(s.dir, 'memo', 'SKILL.md'), { recursive: true });
+  s.direct('memo', 'back again');
+  assert.equal(s.skills.get('memo')!.body, 'back again');
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']]);
+});
+
+test('281 大きすぎる中身（2 万字の 2 倍より長い）は見た中身にも版にも写さず、WARN は 1 回だけ。直前に見た中身は版に残す', t => {
+  const s = setup(t);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  s.direct('memo', 'x'.repeat(40_001));
+  s.skills.get('memo');
+  s.skills.get('memo');
+  s.skills.history('memo');
+  assert.deepEqual(pairs(s.skills, 'memo'), [['beat', 'original']]);
+  const stored = s.db.prepare("SELECT coalesce(max(length(value)), 0) AS n FROM kv WHERE key LIKE 'skill-seen:%'").get() as { n: number };
+  assert.equal(stored.n, 0);
+  assert.equal(s.logs.filter(line => /^\[WARN\] Skill "memo" is longer than/u.test(line)).length, 1, s.logs.join('\n'));
+  s.direct('memo', 'y'.repeat(40_002));
+  s.skills.get('memo');
+  assert.equal(s.files('memo').length, 1, '大きい中身は版にならない');
+});
+
+test('281 初めて見るスキルが大きすぎるときも、何も写さず WARN を 1 回だけ出す', t => {
+  const s = setup(t);
+  s.direct('big', 'x'.repeat(40_001));
+  s.skills.get('big');
+  s.skills.list();
+  assert.equal(s.seenRows(), 0);
+  assert.equal(s.logs.filter(line => /longer than/u.test(line)).length, 1, s.logs.join('\n'));
+});
+
+test('281 持ち主の保存の前に、直接の書き換えの前の中身を控えられないときは、その保存を断る（控えずに上書きしない）。読む側とちがい、書く側は WARN で進めない', t => {
+  const root = tempDir(t);
+  const blocker = join(root, 'blocker');
+  writeFileSync(blocker, 'not a folder');
+  const s = setup(t, blocker);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'original' });
+  s.direct('memo', 'rewritten behind the app');
+  assert.throws(() => s.skills.write({ name: 'memo', description: 'Memo', body: 'rewritten behind the app' }), /ENOTDIR|EEXIST|ENOENT|EPERM/u);
+  assert.deepEqual(s.logs, []);
+  rmSync(blocker);
+  s.skills.write({ name: 'memo', description: 'Memo', body: 'owner text' });
+  assert.deepEqual(pairs(s.skills, 'memo'), [['you', 'rewritten behind the app'], ['beat', 'original']]);
+});
