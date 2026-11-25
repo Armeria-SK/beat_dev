@@ -78,6 +78,8 @@ const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
 export const MAX_CONTINUATIONS = 3;
 const PENDING_WAIT_MS = 4 * 60_000;
+// モデルを呼んでから（提供元の枠を取ったあと）最初の出来事が来ないまま、これだけたったら「黙っている」と知らせる。知らせるだけで打ち切らない
+const MODEL_SILENT_MS = 60_000;
 const RESUME_WORD_MAX = 40;
 
 export function resumePoint(text: string): string {
@@ -238,6 +240,8 @@ export interface ChatEngineDeps {
   pendingSweep?: ((taskId: string) => Promise<Array<{ id: number; reason: string }>>) | undefined;
   // P6: 承認待ちだけが残った実行が、決めを待つ時間（ミリ秒）。試験で短くするためだけの上書き。ふつうは 4 分
   pendingWaitMs?: number | undefined;
+  // 最初の出来事が来ないモデルを「黙っている」と知らせるまでの時間（ミリ秒）。試験で短くするためだけの上書き。ふつうは 60 秒
+  modelSilentMs?: number | undefined;
 }
 
 
@@ -1561,10 +1565,19 @@ export class ChatEngine {
         const thoughts: ThinkingBlock[] = [];
         let release: (() => void) | undefined;
         let callStarted = 0;
+        // 提供元から届いた出来事の数（種類を問わない）。0 のまま時計が動くと「黙っている」の知らせ、0 のまま時間切れなら試し直さない
+        let events = 0;
+        let silentTimer: ReturnType<typeof setTimeout> | undefined;
         try {
           release = await d.limiter.acquire(provider.id, () => provider.maxParallel, p.signal);
           callStarted = d.runs.now();
+          const silentMs = d.modelSilentMs ?? MODEL_SILENT_MS;
+          silentTimer = setTimeout(() => {
+            const seconds = Math.round(silentMs / 1000);
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'model_silent', message: engineText(language, 'warn.model_silent', { model: model.id, seconds }), params: { model: model.id, seconds } });
+          }, silentMs);
           for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: maxOutput, ...(effort ? { effort } : {}), signal: p.signal })) {
+            if (events++ === 0) clearTimeout(silentTimer);
             if (event.type === 'text') { text += event.delta; d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: event.delta }); }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
             else if (event.type === 'tool_call') toolCalls.push(event.call);
@@ -1578,6 +1591,13 @@ export class ChatEngine {
             : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP) });
           if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
           last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}), ...(e.upstream ? { upstream: e.upstream } : {}) };
+          // 上限まで 1 つも出来事が来なかった呼び出しは、同じモデルで待ち直しても同じなので試し直さない（鎖に次があればそこへ、無ければここで終える）。
+          // 出来事が届いてからの時間切れは、今までどおり試し直す
+          if (e.kind === 'timeout' && events === 0) {
+            const minutes = Math.max(0.1, Math.round(provider.timeoutMs / 6000) / 10);
+            last = { kind: 'timeout', message: engineText(language, 'run.model_no_answer', { minutes }), code: 'engine.run.model_no_answer', params: { minutes }, retryable: e.retryable, route };
+            break;
+          }
           if (text) {
             d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'partial_discarded', message: engineText(language, 'warn.partial_discarded') });
             break;
@@ -1589,7 +1609,7 @@ export class ChatEngine {
             continue;
           }
           break;
-        } finally { release?.(); }
+        } finally { clearTimeout(silentTimer); release?.(); }
         if ((usage.cacheReadTokens ?? 0) > 0) {
           const seen = this.#cacheSeen.get(p.runId) ?? new Set<string>();
           seen.add(model.id);
