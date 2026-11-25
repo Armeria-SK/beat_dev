@@ -227,7 +227,7 @@ function Record({ record, onChanged, onStart }: { record: ResearchRecord; onChan
             </section>
           )}
           <LibraryList record={record} />
-          {canConfirm(record) && !(record.status === 'failed' && empty) && (
+          {canConfirm(record) && (
             <div className="bt-card__actions ui-rs__actions">
               <Button variant="primary" small disabled={locked} onClick={() => void confirm()}>{t('ui.rs.confirm')}</Button>
               <span className="bt-meta">{t(record.phase === 'products' ? 'ui.rs.confirmWhat' : 'ui.rs.confirmWhatLibraries')}</span>

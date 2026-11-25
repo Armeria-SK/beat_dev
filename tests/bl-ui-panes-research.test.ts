@@ -1,52 +1,38 @@
-import { byText, cleanup, loadTsx, render, update } from './helpers/dom.ts';
+import { cleanup, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
-import type { ResearchItem, ResearchRecord, ResearchStatus, ResearchView } from '../web/src/api.ts';
+import type { ResearchRecord, ResearchStatus, ResearchView } from '../web/src/api.ts';
 
-// backlog 335（Plan の欄の「作る前に調べる」）: 失敗で終わって 1 行も見つからなかった記録には「この選びで計画する」ボタンを出さない
+// backlog 335 は直していない（開いたまま）。確定のボタンは、products の記録から libraries の調べへ進む唯一の口なので、
+// 1 行も見つからなかった記録でも消さない。ボタンの文言を直すときも、この口は残す（ボタンは文言ではなく入れ物で見る）
 
 const { ResearchSection } = await loadTsx<{ ResearchSection: ComponentType<{ productId: string; conversationId: string | undefined; revision: string }> }>('../web/src/ui/panes/ResearchSection.tsx', import.meta.url);
 
 const PRODUCT = 'prod-r1';
 const CONVERSATION = '00000000-0000-4000-8000-000000000001';
-const feature = (id: number, name: string): ResearchItem => ({
-  id, kind: 'feature', name, detail: null, url: null, license: null, updated: null, language: null, products: [], options: null, by: null, defaultChecked: false, defaultReason: null, recommended: null, decision: null, reason: null,
-});
-const record = (status: ResearchStatus, items: ResearchItem[], over: Partial<ResearchRecord> = {}): ResearchRecord => ({
-  id: 'r1', phase: 'products', mode: 'batch', status, partial: false, auto: true, stopReason: null, createdAt: 1, finishedAt: 2, confirmedAt: null, shownHash: 'a'.repeat(64), items, ...over,
+const record = (phase: ResearchRecord['phase'], status: ResearchStatus): ResearchRecord => ({
+  id: 'r1', phase, mode: 'batch', status, partial: false, auto: true, stopReason: status === 'failed' ? 'search_blocked' : null, createdAt: 1, finishedAt: 2, confirmedAt: null, shownHash: 'a'.repeat(64), items: [],
 });
 const SETTINGS = { when: 'new', mode: 'auto', limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 }, askLanguage: true, preferLanguages: [], avoidLanguages: [] } as const;
 
 const realFetch = globalThis.fetch;
 afterEach(async () => { await cleanup(); globalThis.fetch = realFetch; });
 
-async function pane(products: ResearchRecord) {
-  const view: ResearchView = { settings: { ...SETTINGS, preferLanguages: [], avoidLanguages: [] }, products, libraries: null, suggestedCheck: null };
+async function pane(products: ResearchRecord | null, libraries: ResearchRecord | null) {
+  const view: ResearchView = { settings: { ...SETTINGS, preferLanguages: [], avoidLanguages: [] }, products, libraries, suggestedCheck: null };
   globalThis.fetch = (async () => new Response(JSON.stringify(view), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
   const { container } = await render(createElement(ResearchSection, { productId: PRODUCT, conversationId: CONVERSATION, revision: '0' }));
   for (let i = 0; i < 3; i++) await update(() => new Promise(resolve => setTimeout(resolve, 0)));
   return container;
 }
 
-test('335 失敗で終わって 1 行も見つからなかった記録: 「Plan with these picks」と、その説明を出さない。やり直す口（Research again）は残る', async () => {
-  for (const stopReason of ['failed', 'search_blocked']) {
-    const root = await pane(record('failed', [], { stopReason }));
-    assert.ok(root.querySelector('[data-failed]'), `前提: 失敗の文が出ている（${stopReason}）`);
-    assert.ok(!byText(root, 'button', 'Plan with these picks'), `確定のボタンは出さない（${stopReason}）`);
-    assert.ok(!byText(root, '.bt-meta', 'Only what you picked goes into the planning conversation'), '選んだものだけが入るという説明も出さない');
-    assert.ok(byText(root, 'button', 'Research again'), 'やり直す口は残る');
-    await cleanup();
-  }
-});
-
-test('335 ボタンを出す記録は今までどおり: 失敗でも行が見つかっていれば出る。終わった（done）記録は 0 行でも出る', async () => {
-  const failedWithRows = await pane(record('failed', [feature(5, 'Sync')], { stopReason: 'failed' }));
-  assert.ok(byText(failedWithRows, 'button', 'Plan with these picks'), '途中までの行があれば選べる');
+test('335（未修正の見張り）: 失敗して 1 行も見つからなかった記録にも、確定のボタン（libraries の調べへ進む口）を残す。products でも libraries でも', async () => {
+  const products = await pane(record('products', 'failed'), null);
+  assert.ok(products.querySelector('[data-phase="products"] [data-failed]'), '前提: 失敗の文が出ている');
+  assert.ok(products.querySelector('[data-phase="products"] .ui-rs__actions button'), 'products: 確定のボタンがある');
   await cleanup();
-  const doneEmpty = await pane(record('done', []));
-  assert.ok(byText(doneEmpty, 'button', 'Plan with these picks'), 'done の 0 行はこの行の外（今のまま）');
-  await cleanup();
-  const cancelledEmpty = await pane(record('cancelled', []));
-  assert.ok(byText(cancelledEmpty, 'button', 'Plan with these picks'), 'cancelled はこの行の外（今のまま）');
+  const libraries = await pane(record('products', 'confirmed'), record('libraries', 'failed'));
+  assert.ok(libraries.querySelector('[data-phase="libraries"] [data-failed]'), '前提: libraries の失敗の文が出ている');
+  assert.ok(libraries.querySelector('[data-phase="libraries"] .ui-rs__actions button'), 'libraries: やり直す口が無いので、確定のボタンが唯一の口');
 });
