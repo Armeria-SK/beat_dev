@@ -237,8 +237,14 @@ export interface PageHandle {
   screenshot(): Promise<Buffer>;
   // 要求の横取りが最後に断った遷移の理由（goto の前に消し、断られたら入る）
   lastRefusal(): RouteRefusal | undefined;
+  // 画面の大きさ（CSS ピクセル）を変える。持たない driver（偽物）は省ける
+  setViewport?(size: ViewportSize): Promise<void>;
+  // タブが閉じたときの知らせ（持ち主が手で閉じたとき・こちらが閉じたとき・ブラウザごと閉じたとき）。持たない driver（偽物）は省ける
+  onClose?(cb: () => void): void;
   close(): Promise<void>;
 }
+
+export interface ViewportSize { width: number; height: number }
 
 export interface BrowserHandle {
   newPage(): Promise<PageHandle>;
@@ -650,6 +656,8 @@ class PlaywrightPage implements PageHandle {
   noteBlocked(): void { this.#events.blocked++; }
   screenshot(): Promise<Buffer> { return this.page.screenshot({ type: 'png', fullPage: false }); }
   lastRefusal(): RouteRefusal | undefined { return this.refusal; }
+  setViewport(size: ViewportSize): Promise<void> { return this.page.setViewportSize({ width: size.width, height: size.height }); }
+  onClose(cb: () => void): void { this.page.on('close', cb); }
   async close(): Promise<void> { await this.page.close({ runBeforeUnload: false }); }
 }
 

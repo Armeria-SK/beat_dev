@@ -9,7 +9,7 @@ import type { AppConfig } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { selfPortsOf } from '../hooks/self-port.ts';
-import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type LaunchOptions, type PageHandle, type WorkBrowserHandle } from './driver.ts';
+import { BrowserFailure, CLOSE_TIMEOUT_MS, systemLocale, type BrowserDriver, type BrowserHandle, type ElementBox, type ElementTarget, type LaunchOptions, type PageHandle, type ViewportSize, type WorkBrowserHandle } from './driver.ts';
 import { newRefBook, type ElementTable, type RefBook, type RefCounter } from './elements.ts';
 import { startEgressProxy, type EgressProxy, type EgressProxyOptions } from './egress-proxy.ts';
 import { allowedLoopbackUrl, deniedLoopbackPorts, type BrowserGrant } from './loopback.ts';
@@ -33,6 +33,9 @@ export interface BrowserSessionDeps {
   canShowWindow?: (() => boolean) | undefined;
   // 要素の番号の始まり（会話ごとの続きの数の最初）。省くと 1。beat の起動では randomRefStart（elements.ts）を渡す
   refStart?: number | undefined;
+  // この実行（runId）がまだ動いているか。省くと、動いているとみなす（欄は最後の操作から DRIVING_MS のあいだ「動いている」と映す）。
+  // 実行が終わったら、欄の「動いている」の札をすぐ消すのに使う
+  runActive?: ((runId: string) => boolean) | undefined;
 }
 
 // 見えるブラウザの窓を出せるか。Linux は画面（X11 か Wayland）が無ければ出せない。Windows・macOS はいつも出せる
@@ -90,6 +93,8 @@ export interface BrowserApi {
   touch(tab: BrowserTab): void;
   closeTab(id: string): Promise<boolean>;
   closeAll(): Promise<number>;
+  // タブの画面の幅（CSS ピクセル）を変える。高さはそのタブの今のまま。欄の指の位置もこの大きさで数える
+  setViewportWidth(tab: BrowserTab, width: number): Promise<void>;
   // この呼び出しのあいだに中継（持ち主のものと、この会話の文脈のもの）が断った数（403 / 503）
   proxyDelta(): { blocked: number; busy: number };
   // work のあいだにページ側が開いた窓（ポップアップ）を、この会話の新しいタブとして残す。
@@ -119,7 +124,7 @@ export interface BrowserView {
 export type MirrorConversation = (conversationId: string) => { attended: boolean } | undefined;
 
 // タブごとの写しの記録。raw は見張りを付ける前のページ（撮影が自分の見張りに数えられないため）
-interface TabMirror { raw: PageHandle; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string; located: { target: ElementTarget; box: ElementBox } | undefined; pointer: { x: number; y: number } | undefined }
+interface TabMirror { raw: PageHandle; viewport: ViewportSize; runId: string; action: MirrorAction | undefined; actedAt: number; call: number; url: string; title: string; located: { target: ElementTarget; box: ElementBox } | undefined; pointer: { x: number; y: number } | undefined }
 
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
@@ -128,11 +133,11 @@ const VIEWPORT = { width: 1280, height: 800 };
 const sameTarget = (a: ElementTarget, b: ElementTarget): boolean => a.ref === b.ref && a.role === b.role && a.name === b.name;
 
 // 押す・入れる要素の中心。事前の判定（locate）で読んだ位置が同じ要素のもので、見えている範囲の中にあるときだけ
-export function pointerOf(located: { target: ElementTarget; box: ElementBox } | undefined, target: ElementTarget): { x: number; y: number } | undefined {
+export function pointerOf(located: { target: ElementTarget; box: ElementBox } | undefined, target: ElementTarget, viewport: ViewportSize = VIEWPORT): { x: number; y: number } | undefined {
   if (!located || !sameTarget(located.target, target)) return undefined;
   const x = Math.round(located.box.x + located.box.width / 2);
   const y = Math.round(located.box.y + located.box.height / 2);
-  return x >= 0 && y >= 0 && x <= VIEWPORT.width && y <= VIEWPORT.height ? { x, y } : undefined;
+  return x >= 0 && y >= 0 && x <= viewport.width && y <= viewport.height ? { x, y } : undefined;
 }
 
 // 欄の AI の指: locate で要素の位置を覚え、押す・入れるでその中心を指に、開き直しで指を消す
@@ -145,9 +150,9 @@ function trackPointer(page: PageHandle, mirror: TabMirror): PageHandle {
           mirror.located = detail?.box ? { target: element, box: detail.box } : undefined;
           return detail;
         };
-        case 'click': return (element: ElementTarget, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.click(element, timeoutMs); };
-        case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.fill(element, text, submit, timeoutMs); };
-        case 'select': return (element: ElementTarget, label: string, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element); return target.select(element, label, timeoutMs); };
+        case 'click': return (element: ElementTarget, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return target.click(element, timeoutMs); };
+        case 'fill': return (element: ElementTarget, text: string, submit: boolean, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return target.fill(element, text, submit, timeoutMs); };
+        case 'select': return (element: ElementTarget, label: string, timeoutMs: number) => { mirror.pointer = pointerOf(mirror.located, element, mirror.viewport); return target.select(element, label, timeoutMs); };
         case 'goto': return (url: string, timeoutMs: number) => { mirror.pointer = undefined; mirror.located = undefined; return target.goto(url, timeoutMs); };
         default: return Reflect.get(target, prop, target);
       }
@@ -338,7 +343,7 @@ export class BrowserSession {
     return {
       tab: tab.id, conversationId: tab.conversationId, runId: mirror.runId, url: mirror.url, title: mirror.title,
       driving: this.#driving(tab, mirror, now), action: mirror.action!, at: frame?.at ?? null, seq: frame?.seq ?? 0,
-      viewport: { ...VIEWPORT },
+      viewport: { ...mirror.viewport },
       profile: tab.kind === 'owner' ? { kind: 'owner', path: this.#d.paths.browserProfile } : { kind: 'work' },
       pointer: mirror.pointer ? { ...mirror.pointer } : null,
     };
@@ -351,8 +356,10 @@ export class BrowserSession {
     return this.#frames.frame(tab.conversationId, tab.id);
   }
 
+  // 呼び出しの最中か、最後の操作から DRIVING_MS 以内で、その実行がまだ動いているとき（終わった実行の札は、猶予を待たずに消す）
   #driving(tab: BrowserTab, mirror: TabMirror, now: number): boolean {
-    return this.#current?.call.grant.conversationId === tab.conversationId || now - mirror.actedAt < DRIVING_MS;
+    if (this.#current?.call.grant.conversationId === tab.conversationId) return true;
+    return now - mirror.actedAt < DRIVING_MS && (this.#d.runActive?.(mirror.runId) ?? true);
   }
 
   // 1 枚撮る。撮り始めた順を覚え、遅れて終わった古い撮影で新しい画像を上書きしない。閉じたタブ・失敗・時間切れは捨てる
@@ -725,7 +732,7 @@ export class BrowserSession {
   // タブを作る。ページの操作に見張りを付け、操作した実行・いまの操作を覚える（撮るのは呼び出しの終わり）
   #addTab(grant: BrowserGrant, kind: BrowserTabKind, raw: PageHandle, handle: BrowserHandle): BrowserTab {
     const id = `t${this.#nextTab++}`;
-    const mirror: TabMirror = { raw, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '', located: undefined, pointer: undefined };
+    const mirror: TabMirror = { raw, viewport: { ...VIEWPORT }, runId: grant.runId, action: undefined, actedAt: 0, call: 0, url: '', title: '', located: undefined, pointer: undefined };
     const note = (action: MirrorAction): void => {
       const current = this.#current;
       if (current) { mirror.action = mirror.call === current.no ? strongerAction(mirror.action, action) : action; mirror.call = current.no; mirror.runId = current.call.grant.runId; } else mirror.action = action;
@@ -739,6 +746,8 @@ export class BrowserSession {
     this.#tabs.set(tab.id, tab);
     this.#tabHandles.set(tab, handle);
     this.#mirror.set(id, mirror);
+    // 持ち主が手で閉じたタブは、一覧からも maxTabs の数からも外す（こちらで閉じたタブは #closeTab が先に外してある）
+    raw.onClose?.(() => { if (this.#tabs.get(id) === tab) this.#forgetTab(tab); });
     return tab;
   }
 
@@ -798,6 +807,15 @@ export class BrowserSession {
         const mine = own();
         for (const tab of mine) await this.#closeTab(tab);
         return mine.length;
+      },
+      setViewportWidth: async (tab, width) => {
+        const mirror = this.#mirror.get(tab.id);
+        if (!mirror || !tab.page.setViewport) return;
+        const next = { width, height: mirror.viewport.height };
+        await tab.page.setViewport(next);
+        mirror.viewport = next;
+        mirror.pointer = undefined;
+        mirror.located = undefined;
       },
       proxyDelta: () => {
         let blocked = 0; let busy = 0;

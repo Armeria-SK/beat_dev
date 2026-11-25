@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { createWriteStream, mkdirSync, unlinkSync, type WriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync, readdirSync, statSync, unlinkSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { openRunJob, type RunJob } from '../../os/run-job.ts';
@@ -28,6 +28,19 @@ const FLUSH_DELAY_MS = 50;
 const FLUSH_NOW_CHARS = 64 * 1024;
 const MERGE_BELOW_BYTES = 4096;
 const CONVERSATION_ID = /^[A-Za-z0-9_-]{1,128}$/u;
+const LOG_NAME = /^bg-[A-Za-z0-9_-]{1,128}-\d+-[0-9a-f]{8}\.log$/u;
+
+// 前の起動が残した bg-*.log を消す。この起動が始まってからできた・書かれた分は、この起動の裏のコマンドのものなので残す（同じデータのフォルダを使う beat は、錠で 1 つだけ）
+function sweepOldLogs(dir: string): void {
+  const launchedAt = Date.now() - process.uptime() * 1000;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!LOG_NAME.test(name)) continue;
+      const file = join(dir, name);
+      try { if (statSync(file).mtimeMs < launchedAt) unlinkSync(file); } catch { /* 開いている・すでに無い: 次の起動が消す */ }
+    }
+  } catch { /* フォルダがまだ無い */ }
+}
 
 export type BackgroundLimits = typeof BACKGROUND_LIMITS;
 export type JobState = 'running' | 'exited' | 'stopped';
@@ -357,6 +370,7 @@ export class BackgroundJobs {
 
   constructor(options: BackgroundOptions) {
     this.#logDir = options.logDir;
+    sweepOldLogs(this.#logDir);
     this.#now = options.now ?? Date.now;
     this.#limits = { ...BACKGROUND_LIMITS, ...options.limits };
     this.#isOpen = options.isOpen ?? (() => true);

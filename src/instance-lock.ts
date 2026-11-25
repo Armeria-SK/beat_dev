@@ -5,7 +5,7 @@ import { join } from 'node:path';
 export const LOCK_FILE = 'beat.lock';
 
 // 錠を書いた PC の起動の時刻（Date.now() - uptime）は、時計の合わせ直しで少しずれる。これ以上ずれていたら、別の起動のときの錠と見る
-const BOOT_TOLERANCE_MS = 120_000;
+const BOOT_TOLERANCE_MS = 30 * 60_000;
 // 錠のファイルは、作られてから pid が書かれるまでの一瞬、空になる。読めなかったときは、これだけ待って読み直す
 const PARTIAL_WAIT_MS = 200;
 
@@ -64,7 +64,7 @@ export interface LockProcess {
   exit(code: number): unknown;
 }
 
-// 終わるとき（exit）と、窓を閉じたとき・ログオフ・シャットダウン（SIGHUP。リスナーが無いとプロセスは錠を残したまま止まる）に錠を消す。SIGHUP は、消してすぐ終わる（今までの止まり方のまま）
+// 終わるとき（exit）と、窓を閉じたとき（SIGHUP。リスナーが無いとプロセスは錠を残したまま止まる）に錠を消す。SIGHUP は、消してすぐ終わる（今までの止まり方のまま）
 export function releaseOnExit(lock: Extract<InstanceLock, { held: true }>, proc: LockProcess = process): void {
   proc.on('exit', lock.release);
   proc.on('SIGHUP', () => { lock.release(); proc.exit(129); });
