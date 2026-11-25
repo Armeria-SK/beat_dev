@@ -156,18 +156,19 @@ const flatten = (text: string): string => redactSecrets(text.replace(/[\u0000-\u
 
 const oneLine = (text: string) => flatten(text).slice(0, REASON_LIMIT);
 
-// 判定役の理由は、REASON_LIMIT を超えたら、文の終わり（. ! ? のあとが空白か末尾、または 。！？）で切る。半分より前にしか無ければ、語の切れ目、それも無ければ文字の途中で切って … を付ける（サロゲートペアは割らない）。
+// 判定役の理由は、REASON_LIMIT を超えたら必ず … を付けて切る（… を入れて REASON_LIMIT 以内）。文の終わり（. ! ? のあとが空白か末尾、または 。！？）で切るのは、上限の近く（SENTENCE_NEAR 字以内）にあるときだけ:
+// 早い文の終わりで切ると、後ろの文（判定役が気にした所）が丸ごと消える。無ければ語の切れ目（半分より後ろ）、それも無ければ文字の途中で切る（サロゲートペアは割らない）。
 // 秘密は flatten で先に伏せてあるので、切っても見えるものは増えない
 const SENTENCE_END = /^[.!?](?=\s|$)|^[\u{3002}\u{FF01}\u{FF1F}]/u;
+const SENTENCE_NEAR = 20;
 
 function fitReason(text: string): string {
   if (text.length <= REASON_LIMIT) return text;
-  const floor = REASON_LIMIT / 2;
-  for (let at = REASON_LIMIT - 1; at >= floor; at -= 1) if (SENTENCE_END.test(text.slice(at, at + 2))) return text.slice(0, at + 1);
-  const space = text.lastIndexOf(' ', REASON_LIMIT - 2);
-  if (space >= floor) return `${text.slice(0, space).trimEnd()}…`;
-  const end = REASON_LIMIT - 1;
-  return `${text.slice(0, /[\uD800-\uDBFF]/u.test(text[end - 1]!) ? end - 1 : end)}…`;
+  const room = REASON_LIMIT - 1;
+  for (let at = room - 1; at >= REASON_LIMIT - SENTENCE_NEAR; at -= 1) if (SENTENCE_END.test(text.slice(at, at + 2))) return `${text.slice(0, at + 1)}…`;
+  const space = text.lastIndexOf(' ', room - 1);
+  if (space >= REASON_LIMIT / 2) return `${text.slice(0, space).trimEnd()}…`;
+  return `${text.slice(0, /[\uD800-\uDBFF]/u.test(text[room - 1]!) ? room - 1 : room)}…`;
 }
 
 // JSON の書き方になっている \（\" \\ \/ \b \f \n \r \t と \u + 16 進 4 けた）はそのまま、そうでない \ だけを \\ にする。理由に Windows のパス（C:\Users）を書いた答えが、それだけで読めなくなるのを防ぐ。

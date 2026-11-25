@@ -15,14 +15,20 @@ import type { Script } from './helpers.ts';
 
 const reasonOf = (reason: string): string => parseVerdict(JSON.stringify({ decision: 'ask', reason }))!.reason;
 
-test('113: 理由が 120 字を超えるときは、文の終わりで切る（途中で切らない）。文の終わりが半分より前にしか無ければ、語の切れ目で切って … を付ける', () => {
+test('113: 理由が 120 字を超えるときは、切ったことが必ず … で分かる。文の終わりで切るのは上限の近くにあるときだけ（早い文の終わりで後ろを捨てない）', () => {
   const first = 'The command only reads a file inside the product folder and prints it.';
   const second = 'It then sends the text to a remote server that the request did not name at all.';
   assert.ok(first.length >= 60 && first.length + 1 + second.length > 120, `${first.length} ${second.length}`);
-  assert.equal(reasonOf(`${first} ${second}`), first);
+  const early = reasonOf(`${first} ${second}`);
+  assert.ok(early.length <= 120 && early.endsWith('…'), `切ったことが … で分かる: ${early}`);
+  assert.ok(early.includes('sends'), `2 文目（判定役の気にした所）が、1 文目の終わりで丸ごと消えない: ${early}`);
+
+  const late = `${'a'.repeat(100)}. ${'b'.repeat(60)}`;
+  assert.equal(reasonOf(late), `${'a'.repeat(100)}.…`, '文の終わりが上限の近くにあれば、そこで切って … を付ける');
 
   const jp = `${'あ'.repeat(70)}。${'い'.repeat(100)}`;
-  assert.equal(reasonOf(jp), `${'あ'.repeat(70)}。`, '日本語の句点でも切れる');
+  const jpCut = reasonOf(jp);
+  assert.ok(jpCut.length === 120 && jpCut.startsWith(`${'あ'.repeat(70)}。`) && jpCut.endsWith('…'), `日本語でも、早い句点で後ろを捨てない: ${jpCut}`);
 
   const words = reasonOf('word '.repeat(40));
   assert.ok(words.length <= 120 && /word…$/u.test(words), words);
@@ -44,8 +50,8 @@ test('113: 120 字ちょうどまでは切らず、… も付けない。切る�
   assert.doesNotMatch(leaky, /sk-ant|aaaa/u);
   assert.ok(leaky.length <= 120);
 
-  const emoji = reasonOf(`a${'😀'.repeat(100)}`);
-  assert.ok(emoji.length <= 120);
+  const emoji = reasonOf('😀'.repeat(100));
+  assert.ok(emoji.length <= 120 && emoji.endsWith('…'));
   assert.doesNotMatch(emoji, /\p{Surrogate}/u, '割れた半分が残らない');
 });
 

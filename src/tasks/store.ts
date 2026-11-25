@@ -144,6 +144,9 @@ export const OUTSIDE_PLAN_NOTE = 'note: this plan or its acceptance items were w
 export const RUN_EDIT_LABEL = 'The owner then changed the request for this one run to:';
 // aiText: 持ち主が承認・選んだが、文は AI が書いたもの（採った提案・選んだ質問の札・受け入れの結果を写した直しのタスク）。ownerRequestText に入れない（9-1b の D-7）
 interface OwnerRequest { title: string; body: string; doneCriteria: string | null; plan?: string; items?: string[]; outside?: true; aiText?: true }
+// 繰り返しの 1 回で、持ち主がその回だけ直した欄（題・終わりの条件）。直した欄だけを持つ（ひな形の写しを持つと、あとでひな形を狭めても古い広い文が残る）。
+// 本文は持たない: 本文には beat が足したメモが混ざり、画面の本文の保存はそれごと送り返すので、持ち主の文と見分けられない（backlog 199）
+interface RunEdit { title?: string; doneCriteria?: string | null }
 
 function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefined {
   if (!raw) return undefined;
@@ -154,6 +157,16 @@ function ownerRequestOf(raw: string | null | undefined): OwnerRequest | undefine
   if (typeof title !== 'string' || typeof body !== 'string' || (doneCriteria !== null && typeof doneCriteria !== 'string')) return undefined;
   const lines = Array.isArray(items) ? items.filter((line): line is string => typeof line === 'string' && line !== '') : [];
   return { title, body, doneCriteria, ...(typeof plan === 'string' && plan ? { plan } : {}), ...(lines.length ? { items: lines } : {}), ...(outside === true ? { outside: true as const } : {}), ...(aiText === true ? { aiText: true as const } : {}) };
+}
+
+function runEditOf(raw: string | null | undefined): RunEdit | undefined {
+  if (!raw) return undefined;
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return undefined; }
+  const edit = value && typeof value === 'object' ? (value as { runEdit?: unknown }).runEdit : undefined;
+  if (!edit || typeof edit !== 'object' || Array.isArray(edit)) return undefined;
+  const { title, doneCriteria } = edit as Record<string, unknown>;
+  return { ...(typeof title === 'string' && title ? { title } : {}), ...(typeof doneCriteria === 'string' || doneCriteria === null ? { doneCriteria } : {}) };
 }
 
 function firstLine(text: string | null): string | null {
@@ -319,26 +332,31 @@ export class TaskStore {
       if (!root || this.beatDecided(root.id)) return undefined;
       base = root;
     }
-    // 繰り返しの 1 回は、直した文を持っていても、ブラウザが数える持ち主の文はひな形のものだけ（直した文は判定役にだけ届ける。#ownerText）
-    const holder = base.parent_id ? this.get(base.parent_id) : base;
+    // 繰り返しの 1 回は、直した欄を持っていても、ブラウザが数える持ち主の文はひな形のものだけ（直した欄は判定役にだけ届ける。#ownerText）
+    const holder = this.#requestHolder(base);
     const owner = ownerRequestOf(holder?.owner_request);
     if (!owner || !holder || owner.outside || owner.aiText) return undefined;
     return [owner.title, holder.acceptance_items === null ? owner.body : '', owner.doneCriteria].filter(Boolean).join('\n');
   }
 
-  // 繰り返しの 1 回は、ひな形の頼みの文（今までどおり頭にそのまま）のあとに、持ち主がその回だけ直した文を足す。ひな形の文は外さない
+  // 繰り返しの 1 回は、自分の頼みを持たずひな形のものを読む（直した欄だけを持つ回も同じ）。それ以外は、そのタスク自身
+  #requestHolder(task: Task): Task | undefined {
+    return task.parent_id && (task.owner_request === null || runEditOf(task.owner_request)) ? this.get(task.parent_id) : task;
+  }
+
+  // 繰り返しの 1 回は、ひな形の頼みの文（今までどおり頭にそのまま）のあとに、持ち主がその回だけ直した題・終わりの条件を足す。ひな形の文は外さない
   #ownerText(task: Task): string | undefined {
-    const holder = task.parent_id ? this.get(task.parent_id) : task;
+    const holder = this.#requestHolder(task);
     const owner = ownerRequestOf(holder?.owner_request);
     if (!owner || !holder) return undefined;
     const text = [
       owner.title, ...(owner.outside ? [OUTSIDE_PLAN_NOTE] : []), holder.acceptance_items === null ? owner.body : '', owner.doneCriteria,
       ...(owner.items ? [ACCEPTANCE_ITEMS_LABEL, ...owner.items] : []), ...(owner.plan ? [PLAN_GIST_LABEL, owner.plan] : []),
     ].filter(Boolean).join('\n');
-    const edit = task.parent_id ? ownerRequestOf(task.owner_request) : undefined;
+    const edit = holder === task ? undefined : runEditOf(task.owner_request);
     if (!edit) return text;
-    const lines = (request: OwnerRequest): string => [request.title, holder.acceptance_items === null ? request.body : '', request.doneCriteria].filter(Boolean).join('\n');
-    return lines(edit) === lines(owner) ? text : [text, RUN_EDIT_LABEL, lines(edit)].join('\n');
+    const edited = [edit.title, edit.doneCriteria].filter(Boolean);
+    return edited.length ? [text, RUN_EDIT_LABEL, ...edited].join('\n') : text;
   }
 
   #spawnChain(task: Task): Task[] | undefined {
@@ -356,9 +374,11 @@ export class TaskStore {
 
   ownerEdited(id: string, patch: { title?: string | undefined; body?: string | undefined; doneCriteria?: string | null | undefined; aiText?: boolean | undefined }): void {
     const task = this.get(id);
-    // 繰り返しの 1 回は自分の頼みを持たず、ひな形のものを読む。持ち主が直したときだけ、ひな形の頼みに直しを当てたものをその回に持たせる（#ownerText がひな形の文のあとに足す）
-    const template = task && task.owner_request === null && task.parent_id !== null ? this.get(task.parent_id) : undefined;
-    const current = ownerRequestOf(task?.owner_request ?? template?.owner_request);
+    if (task && this.#requestHolder(task) !== task) {
+      this.#runEdited(task, patch);
+      return;
+    }
+    const current = ownerRequestOf(task?.owner_request);
     if (!task || !current) return;
     if (patch.body !== undefined && this.textTainted(id)) {
       this.#db.prepare('UPDATE tasks SET owner_request = NULL WHERE id = ?').run(id);
@@ -374,8 +394,19 @@ export class TaskStore {
       // AI の書いた文の印は、持ち主があとで書き直しても外さない（どこまで書き直したかを見分けないため）
       ...(current.aiText || patch.aiText === true ? { aiText: true as const } : {}),
     };
-    if (template && next.title === current.title && next.body === current.body && next.doneCriteria === current.doneCriteria) return;
     this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(JSON.stringify(next), id);
+  }
+
+  // 繰り返しの 1 回を持ち主が直したとき、ひな形の頼みと違う題・終わりの条件だけをその回に持たせる（本文は持たせない。RunEdit）。ひな形と同じ文に戻した欄は外す
+  #runEdited(run: Task, patch: { title?: string | undefined; doneCriteria?: string | null | undefined }): void {
+    const template = ownerRequestOf(this.get(run.parent_id!)?.owner_request);
+    if (!template) return;
+    const before = runEditOf(run.owner_request);
+    const title = patch.title === undefined ? before?.title : patch.title.trim() && patch.title.trim() !== template.title ? patch.title.trim() : undefined;
+    const doneCriteria = patch.doneCriteria === undefined ? before?.doneCriteria : (patch.doneCriteria || null) !== template.doneCriteria ? patch.doneCriteria || null : undefined;
+    const edit: RunEdit = { ...(title !== undefined ? { title } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}) };
+    const raw = Object.keys(edit).length ? JSON.stringify({ runEdit: edit }) : null;
+    if (raw !== run.owner_request) this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(raw, run.id);
   }
 
   textTainted(id: string): boolean {
@@ -700,7 +731,7 @@ export class TaskStore {
           this.markUntrusted(run.id, 'system', taskText(this.#language(), 'event.schedule_untrusted'));
         }
       }
-      const keptRuns = Number(this.#db.prepare(`UPDATE tasks SET parent_id = NULL, origin = CASE WHEN ? IN ('self', 'curiosity') THEN ? ELSE origin END WHERE parent_id = ?`).run(task.origin, task.origin, id).changes);
+      const keptRuns = Number(this.#db.prepare(`UPDATE tasks SET parent_id = NULL, owner_request = NULL, origin = CASE WHEN ? IN ('self', 'curiosity') THEN ? ELSE origin END WHERE parent_id = ?`).run(task.origin, task.origin, id).changes);
       const events = Number(this.#db.prepare('DELETE FROM task_events WHERE task_id = ?').run(id).changes);
       for (const prefix of TASK_KV_PREFIXES) this.#db.prepare('DELETE FROM kv WHERE key = ?').run(`${prefix}${id}`);
       this.#db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
