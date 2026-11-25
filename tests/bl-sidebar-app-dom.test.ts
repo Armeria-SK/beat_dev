@@ -115,6 +115,23 @@ test('backlog 352（DOM）: 履歴の一覧が読めない環境（navigation �
   assert.deepEqual(went, [-1], '一覧が無ければ、Settings を開いた位置から数えて 1 歩（今までどおり）');
 });
 
+test('backlog 352（DOM）: 積み重ねが履歴の先頭（最初の同じ場所の行）から Settings だけなら、手前に画面は無い。閉じるでアプリの外へ戻らず、後ろの画面へ置き換える', async () => {
+  const nav = fakeHistory(['#/settings/models', '#/settings/memory', '#/kanban']);
+  serve();
+  nav.currentEntry.index = 2;
+  await start('#/kanban');
+  const went: number[] = [];
+  window.history.go = (by?: number) => { went.push(by ?? 0); };
+  nav.currentEntry.index = 1;
+  await update(() => { window.location.hash = '#/settings/memory'; });
+  await settingsShown();
+  await esc();
+  await fallbackDone();
+  assert.deepEqual(went, [], '先頭より手前へは戻らない（戻ると、アプリの外か、前に開いていたページへ出る）');
+  assert.equal(window.location.hash, '#/kanban', '後ろの画面へ置き換えて、Settings は閉じる');
+  assert.equal(document.querySelector('.ui-overlay'), null);
+});
+
 test('backlog 356（DOM）: App が消えたあとは、製品一覧の読み直し（失敗の再試行も、件数の更新の遅れた分も）をもう出さない', async () => {
   const waiting: Array<() => void> = [];
   globalThis.setTimeout = ((run: () => void, ms?: number, ...rest: unknown[]) => {

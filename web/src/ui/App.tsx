@@ -315,7 +315,9 @@ export function App() {
   }, [settingsOpen]);
 
   const closeSettings = useCallback(() => {
-    settingsStart.current = settingsRunStart(settingsStart.current, navigationHashes());
+    const first = settingsRunStart(settingsStart.current, navigationHashes());
+    if (first === 0 && behindRef.current !== null) { location.replace(routeHash(behindRef.current)); return; }
+    settingsStart.current = first;
     closer.fire();
   }, [closer]);
   const clearNotices = useCallback((id: string, runId?: string) => dispatch({ type: 'clearNotices', conversationId: id, runId }), [dispatch]);

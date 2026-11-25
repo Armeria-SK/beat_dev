@@ -259,7 +259,8 @@ test('ui/product-nav（backlog 352）: Settings の積み重ねの最初の位�
   assert.equal(settingsRunStart(0, hashes), 0, '先頭より手前は無い');
   assert.equal(settingsRunStart(3, []), 3, '履歴の一覧が読めなければそのまま');
   assert.equal(settingsRunStart(null, hashes), null);
-  assert.equal(settingsRunStart(1, ['#/settings', '#/settings/models']), 0, '先頭まで Settings なら先頭');
+  assert.equal(settingsRunStart(1, ['#/settings', '#/settings/models']), 0, '先頭まで Settings なら 0。手前に画面は無い印で、App は履歴を戻らず置き換えで閉じる（tests/bl-sidebar-app-dom.test.ts）');
+  assert.equal(settingsRunStart(1, ['#/settings/server', '#/settings/models', '#/']), 0, '先頭から続く Settings の途中から入っても 0（手前の #/ は数えない）');
 });
 
 test('ui/product-nav（backlog 352）: navigationHashes は Navigation API の履歴を # から先の文字にする。無ければ空', () => {

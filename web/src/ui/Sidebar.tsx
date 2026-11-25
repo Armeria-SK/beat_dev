@@ -163,9 +163,22 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
   const searchButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
   useEffect(() => { if (!searching && refocus.current) { refocus.current = false; searchButton.current?.focus(); } }, [searching]);
+  const navRef = useRef<HTMLElement>(null);
+  const landing = useRef<{ id: string; seen: ReadonlySet<string> } | null>(null);
+  useEffect(() => {
+    const want = landing.current;
+    if (!want || !extra.has(want.id)) return;
+    landing.current = null;
+    const held = document.activeElement;
+    if (held !== null && held !== document.body) return;
+    const first = nav.rows.find(r => r.project.id === want.id)?.sessions.find(c => !want.seen.has(c.id));
+    if (!first) return;
+    const href = routeHash({ view: 'chat', id: first.id });
+    [...(navRef.current?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])].find(a => a.getAttribute('href') === href)?.focus();
+  }, [extra, nav]);
   const at = (view: Route['view']) => route.view === view;
   return (
-    <nav className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
+    <nav ref={navRef} className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
       <div className="bt-sidebar__head">
         <a className="bt-wordmark" href="#/">{t('ui.wordmark')}</a>
         {judgeOff && <JudgeOffChip />}
@@ -205,7 +218,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
                   <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
                 </div>
               ) : (
-                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={() => expand(project.id)}>
+                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={e => { landing.current = e.detail === 0 ? { id: project.id, seen: new Set(row.sessions.map(c => c.id)) } : null; expand(project.id); }}>
                   <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
                 </button>
               ))}
