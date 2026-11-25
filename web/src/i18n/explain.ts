@@ -637,8 +637,6 @@ export const EXPLAIN_KEYS = [
   'ui.set.rs.preferDesc',
   'ui.set.rs.avoidDesc',
   'ui.set.rs.columnsDesc',
-  'ui.ps.rs.intro',
-  'ui.ps.rs.badNumber',
 ] as const satisfies readonly DictKey[];
 
 export type ExplainKey = typeof EXPLAIN_KEYS[number];

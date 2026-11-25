@@ -30,16 +30,20 @@ test('前の上書き「調べない」が列に残っている製品: 全体が
   await s.settle();
 });
 
-test('PATCH /api/projects/:id の researchSettings は受け付けない（無視され、列も効く設定も変わらない）', async t => {
+test('PATCH /api/projects/:id の researchSettings は 400 で断る（古い画面の保存が黙って空振りしない。列も効く設定も名前も変わらない）', async t => {
   const s = await researchApp(t, { configure: c => { c.research = { when: 'button' }; } });
   const before = storedOverride(s);
-  const patched = await s.json(`/api/projects/${s.projectId}`, 'PATCH', { researchSettings: STORED });
-  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  for (const value of [STORED, {}, null, 'off']) {
+    const refused = await s.json(`/api/projects/${s.projectId}`, 'PATCH', { name: 'Renamed', researchSettings: value });
+    assert.equal(refused.status, 400, JSON.stringify(value));
+    assert.equal(refused.body.code, 'http.invalid_body', JSON.stringify(value));
+  }
   assert.equal(storedOverride(s), before, 'the column is not written');
   const got = await s.json(`/api/projects/${s.projectId}/research`, 'GET');
   assert.equal(got.body.settings.when, 'button');
-  const renamed = await s.json(`/api/projects/${s.projectId}`, 'PATCH', { name: 'Renamed', researchSettings: STORED });
-  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
-  assert.equal(renamed.body.project.name, 'Renamed', 'the other fields of the same PATCH still apply');
-  assert.equal(storedOverride(s), before);
+  const projects = await s.json('/api/projects', 'GET');
+  assert.equal(projects.body.projects.find((p: { id: string }) => p.id === s.projectId).name, 'Notes', 'nothing else in the refused PATCH was applied');
+  const fine = await s.json(`/api/projects/${s.projectId}`, 'PATCH', { name: 'Renamed' });
+  assert.equal(fine.status, 200, JSON.stringify(fine.body));
+  assert.equal(fine.body.project.name, 'Renamed');
 });

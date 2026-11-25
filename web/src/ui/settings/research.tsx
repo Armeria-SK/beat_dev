@@ -6,14 +6,14 @@ import { Group, NumberField, Row, Seg, Select, Switch, useSet, type Option } fro
 
 type Json = Record<string, any>;
 
-export const WHEN_LABEL = { new: 'ui.set.rs.when.new', button: 'ui.set.rs.when.button', off: 'ui.set.rs.when.off' } as const;
-export const MODE_LABEL = { auto: 'ui.set.rs.mode.auto', one_by_one: 'ui.set.rs.mode.one_by_one', batch: 'ui.set.rs.mode.batch' } as const;
-export const LIMIT_LABEL = {
+const WHEN_LABEL = { new: 'ui.set.rs.when.new', button: 'ui.set.rs.when.button', off: 'ui.set.rs.when.off' } as const;
+const MODE_LABEL = { auto: 'ui.set.rs.mode.auto', one_by_one: 'ui.set.rs.mode.one_by_one', batch: 'ui.set.rs.mode.batch' } as const;
+const LIMIT_LABEL = {
   candidates: ['ui.set.rs.candidates', 'ui.set.rs.candidatesDesc'], searches: ['ui.set.rs.searches', 'ui.set.rs.searchesDesc'],
   fetches: ['ui.set.rs.fetches', 'ui.set.rs.fetchesDesc'], minutes: ['ui.set.rs.minutes', 'ui.set.rs.minutesDesc'],
 } as const;
 
-export function LanguagePicker({ chosen, label, disabled, onToggle }: { chosen: readonly ResearchLanguageName[]; label: string; disabled?: boolean; onToggle: (language: ResearchLanguageName) => void }) {
+function LanguagePicker({ chosen, label, disabled, onToggle }: { chosen: readonly ResearchLanguageName[]; label: string; disabled?: boolean; onToggle: (language: ResearchLanguageName) => void }) {
   return (
     <div className="ui-rs__langs" role="group" aria-label={label}>
       {RESEARCH_LANGUAGE_LIST.map(language => (

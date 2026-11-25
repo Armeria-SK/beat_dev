@@ -125,7 +125,6 @@ export function confirmedLines(record: ResearchRecord): Array<{ kind: 'use' | 'b
   return out.filter((line, i) => line.kind !== 'build' || out.findIndex(l => l.kind === 'build') === i);
 }
 
-// Settings: the research block of the config (global only; the per-product override was removed)
 export const RESEARCH_LANGUAGE_LIST: readonly ResearchLanguageName[] = RESEARCH_LANGUAGES;
 export const LIMIT_KEYS = ['candidates', 'searches', 'fetches', 'minutes'] as const satisfies ReadonlyArray<keyof ResearchLimitsView>;
 export const LIMIT_RANGE: Readonly<Record<keyof ResearchLimitsView, { min: number; max: number; default: number }>> = RESEARCH_LIMIT_RANGE;

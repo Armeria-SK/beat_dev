@@ -2103,13 +2103,5 @@ export const en = {
   'ui.set.rs.avoidDesc': 'The measures rank these lower',
   'ui.set.rs.columns': 'List columns',
   'ui.set.rs.columnsDesc': 'Similar products show name, license, updated, language and link. Features show the name. Choices show the question and its options. These are fixed for now',
-  'ui.ps.rs.title': 'Look before building',
-  'ui.ps.rs.intro': 'Rows left on Global follow Settings. Changes here apply to this product only',
-  'ui.ps.rs.global': 'Global',
-  'ui.ps.rs.on': 'On',
-  'ui.ps.rs.off': 'Off',
-  'ui.ps.rs.own': 'Set for this product',
-  'ui.ps.rs.save': 'Save research settings',
   'ui.home.rs.using': 'You chose to use',
-  'ui.ps.rs.badNumber': (min: number, max: number) => `Use a whole number from ${min} to ${max}, or leave it empty`,
 };
