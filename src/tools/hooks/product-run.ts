@@ -203,7 +203,9 @@ const LINK_WALK_DEEP = new Set(['refs', 'logs']);
 // 外のファイルとハードリンクでつながっていれば、判定役を通らない commit が外のファイルを書き換える。見るのは .git の直下と refs・logs の下で、
 // objects の下は見ない（git clone --local は、オブジェクトを正しくハードリンクする）。
 // 'link': symlink がある・数の上限を超えた・読めない（今までの「リンク有り」）。'hard': symlink は無いが、ハードリンクがある。
-// 見回りの途中でファイル・サブフォルダが消えた（ENOENT。index.lock などはすぐ消える）ときは、「もう無い」として飛ばす。黙って「リンク有り」にすると、鍵の確かめに届かず判定役へ落ちる。ENOENT 以外の失敗は、今までどおり「リンク有り」
+// 見回りの途中でファイル・サブフォルダが消えた（ENOENT。index.lock などはすぐ消える）ときは、「もう無い」として飛ばす。黙って「リンク有り」にすると、鍵の確かめに届かず判定役へ落ちる。ENOENT 以外の失敗は、今までどおり「リンク有り」。
+// 名前が UTF-8 として読めないファイル・フォルダ（Linux の git は ref の名前を生のバイトで扱う）は、readdir が U+FFFD に化けた名前を返し、その名前で lstat・readdir すると ENOENT になる。
+// 上の「消えた」と区別できず、実在するハードリンクを飛ばしてしまうので、U+FFFD を含む名前はどの階層でも「リンク有り」にする
 type GitDirLinks = 'none' | 'hard' | 'link';
 
 function gitDirLinks(gitDir: string, cap: number): GitDirLinks {
@@ -217,7 +219,7 @@ function gitDirLinks(gitDir: string, cap: number): GitDirLinks {
   };
   const clean = (dir: string, depth: number, files: boolean): boolean => {
     for (const entry of list(dir)) {
-      if (++seen > cap || entry.isSymbolicLink()) return false;
+      if (++seen > cap || entry.isSymbolicLink() || entry.name.includes('�')) return false;
       if (!entry.isDirectory()) {
         if (files && entry.isFile() && (lstatSync(join(dir, entry.name), { throwIfNoEntry: false })?.nlink ?? 0) > 1) hard = true;
         continue;

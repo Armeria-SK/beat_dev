@@ -190,3 +190,48 @@ test('G3 審査: ENOENT 以外の失敗（読めない・lstat できない）�
     syncBuiltinESMExports();
   }
 });
+
+// ── 名前が UTF-8 として読めない（U+FFFD に化ける）ファイル・フォルダは、見回しで実在の名前に戻せない。ENOENT（もう無い）と取り違えて飛ばさず、「リンク有り」にする ──
+
+// 指した場所の一覧（withFileTypes）に、名前 name の項目を 1 つ足す
+function addEntry(t: Parameters<typeof tempDir>[0], dir: string, name: string, kind: 'file' | 'folder'): void {
+  const table = fs as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const original = table.readdirSync!;
+  mock.method(table, 'readdirSync', (...args: unknown[]) => {
+    const listed = original(...args);
+    if (resolve(String(args[0])) !== resolve(dir) || (args[1] as { withFileTypes?: boolean } | undefined)?.withFileTypes !== true) return listed;
+    return [...(listed as unknown[]), { name, isSymbolicLink: () => false, isDirectory: () => kind === 'folder', isFile: () => kind === 'file' }];
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mock.restoreAll(); syncBuiltinESMExports(); });
+}
+
+test('G3 審査: 名前に U+FFFD（UTF-8 として読めない名前の化け方）がある項目は、どの階層でも「リンク有り」で判定役へ戻る', { skip: !gitAvailable && 'git が無い' }, t => {
+  const p = product(t);
+  assert.deepEqual(p.stepFour('git commit --allow-empty -m x'), { run: 'product-git' }, '前提: 何も足さなければ product-git');
+  const places: Array<[string, string]> = [
+    ['.git 直下', p.gitDir], ['refs', join(p.gitDir, 'refs', 'heads')], ['logs', join(p.gitDir, 'logs', 'refs', 'heads')], ['objects 直下', join(p.gitDir, 'objects')],
+  ];
+  for (const [where, dir] of places) {
+    for (const kind of ['file', 'folder'] as const) {
+      addEntry(t, dir, 'x\uFFFD', kind);
+      assert.equal(gitDirLinkFree(p.gitDir), false, `${where}・${kind}`);
+      assert.equal(p.stepFour('git commit --allow-empty -m x'), undefined, `${where}・${kind}: 判定役へ`);
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  }
+  assert.equal(gitDirLinkFree(p.gitDir), true, '前提の戻り: 名前が普通なら今までどおり');
+});
+
+test('G3 審査（Linux のみ）: 名前が UTF-8 でないファイルとのハードリンクも、見逃さない', { skip: process.platform !== 'linux' && 'Linux だけ（名前の生のバイトを使えるファイルシステム）' }, t => {
+  const p = product(t);
+  const heads = join(p.gitDir, 'logs', 'refs', 'heads');
+  mkdirSync(heads, { recursive: true });
+  const odd = Buffer.concat([Buffer.from(`${heads}/`), Buffer.from([0x62, 0xff])]);
+  const target = join(p.outside, 'odd-target.log');
+  writeFileSync(target, 'x');
+  linkSync(target, odd);
+  assert.equal(gitDirLinkFree(p.gitDir), false, '名前が UTF-8 でない reflog がハードリンクなら、リンク有り');
+  assert.equal(p.stepFour('git commit --allow-empty -m x'), undefined, '判定役へ');
+});
