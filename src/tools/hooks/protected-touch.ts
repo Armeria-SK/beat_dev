@@ -48,10 +48,18 @@ export function protectedTouchOf(command: string, statements: readonly Statement
 
 export function installTouchOf(statements: readonly StatementFacts[], policy: ScopePolicy, fallbackCwd: string, texts: readonly string[] = []): string | undefined {
   const groups: Array<[string, string[]]> = [...flatten(statements).flatMap(st => basesOf(st, fallbackCwd).map(base => [base, splitTokens(st.code)] as [string, string[]])), [fallbackCwd, splitTokens([...texts])]];
+  const native = new Map<string, string>();
+  const verdicts = new Map<string, boolean>();
+  const guarded = (path: string): boolean => {
+    const real = realish(path, native);
+    return Boolean(guardedRootOf(path, policy, real)) || policy.deny.some(denied => isInside(denied, path) || isInside(denied, real));
+  };
   for (const [base, tokens] of groups) {
     for (const token of tokens) {
       const path = isAbsolute(token) ? token : resolve(base, token);
-      if (guardedRootOf(path, policy) || policy.deny.some(denied => isInside(denied, path) || isInside(denied, realish(path)))) return path;
+      let hit = verdicts.get(path);
+      if (hit === undefined) { hit = guarded(path); verdicts.set(path, hit); }
+      if (hit) return path;
     }
   }
   return undefined;

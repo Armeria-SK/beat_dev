@@ -25,7 +25,7 @@ const record = (over: Partial<ResearchRecord> = {}): ResearchRecord => ({
   ...over,
 });
 const SETTINGS = { when: 'new', mode: 'auto', limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 }, askLanguage: true, preferLanguages: [], avoidLanguages: [] } as const;
-const view = (products: ResearchRecord | null, libraries: ResearchRecord | null = null): ResearchView => ({ settings: { ...SETTINGS, preferLanguages: [], avoidLanguages: [] }, own: null, products, libraries, suggestedCheck: null });
+const view = (products: ResearchRecord | null, libraries: ResearchRecord | null = null): ResearchView => ({ settings: { ...SETTINGS, preferLanguages: [], avoidLanguages: [] }, products, libraries, suggestedCheck: null });
 
 const realFetch = globalThis.fetch;
 const calls: Array<{ path: string; method: string; body: any }> = [];

@@ -20,7 +20,6 @@ const ORDINARY: ReadonlyArray<readonly [string, string]> = [
   ['file:///srv/git/a.git', 'file:///srv/git/a.git'],
   ['git@host.example:a/b.git', 'git@host.example:a/b.git'],
   ['host.example:a/b.git', 'host.example:a/b.git'],
-  ['user:pw@host.example:a/b.git', 'host.example:a/b.git'],
   ['C:/repos/a@b', 'C:/repos/a@b'],
   ['C:\\repos\\a@b', 'C:\\repos\\a@b'],
   ['/srv/git/a@b.git', '/srv/git/a@b.git'],
@@ -31,6 +30,9 @@ const REVIEWED: ReadonlyArray<readonly [string, string]> = [
   ['https://git.example:8443/o/r.git?user=me@corp.example&private_token=SECRETTOKEN', 'https://git.example:8443/o/r.git'],
   ['https://evil.example:443/x@github.com/owner/repo.git', 'https://evil.example:443/x@github.com/owner/repo.git'],
   ['evil.example:x@github.com:owner/repo.git', HIDDEN_URL],
+  // git は scp の形を「最初の : の前がホスト」と読む（ssh の相手は evil と user）。@ より後ろを見せると、実際と違う送り先を見せてしまう
+  ['evil:x@github.com:owner/repo.git', HIDDEN_URL],
+  ['user:pw@host.example:a/b.git', HIDDEN_URL],
   ['https://git.example:8443/org/pkg@1.0.git', 'https://git.example:8443/org/pkg@1.0.git'],
   ['https://u@host/a?x@y/SECRET', HIDDEN_URL],
   ['https://u@host.example/a?x@y/SECRET', 'https://host.example/a'],
@@ -77,6 +79,7 @@ test('送り先の URL: 設定ファイルから読んだ remote に、? 以降�
     '[remote "b"]', '\turl = https://evil.example:443/x@github.com/owner/repo.git',
     '[remote "c"]', '\turl = evil.example:x@github.com:owner/repo.git',
     '[remote "d"]', '\turl = https://user:pa/ss@host.example/a/b.git',
+    '[remote "e"]', '\turl = evil:x@github.com:owner/repo.git',
     '',
   ].join('\n'));
   const remotes = readRemotes(root);
@@ -85,6 +88,8 @@ test('送り先の URL: 設定ファイルから読んだ remote に、? 以降�
     ['b', 'https://evil.example:443/x@github.com/owner/repo.git'],
     ['c', HIDDEN_URL],
     ['d', HIDDEN_URL],
+    ['e', HIDDEN_URL],
   ]);
   assert.equal(/SECRETTOKEN|pa\/ss/u.test(JSON.stringify(remotes)), false);
+  assert.equal(remotes.find(r => r.name === 'e')?.url.includes('github.com'), false, 'ssh の相手は evil。github.com と見せない');
 });

@@ -128,6 +128,8 @@ const REASON_MAX = 500;
 const LIST_MAX = 200;
 const MARK = '[REDACTED]';
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+// Format characters (Cf, e.g. U+200B, U+FEFF) and the control characters that are not whitespace (Cc except \t \n \v \f \r). Not (?!\s): \s holds U+FEFF
+const INVISIBLE = /[\p{Cf}\x00-\x08\x0E-\x1F\x7F-\x9F]/gu;
 
 const marks = (text: string): number => text.split(MARK).length - 1;
 
@@ -136,14 +138,18 @@ const parseJson = <T>(text: string | null, fallback: T): T => {
   try { return JSON.parse(text) as T; } catch { return fallback; }
 };
 
-export function outputTail(text: string): string {
-  const redacted = redactSecrets(text);
-  return redacted.length > OUTPUT_TAIL ? redacted.slice(-OUTPUT_TAIL) : redacted;
+// mark: the held-value marker of the row's tool. It runs after the shape redaction and before the cut, so a value that straddles the tail's edge is already a mark when the text is cut
+export function outputTail(text: string, mark: Mark = same => same): string {
+  const marked = mark(redactSecrets(text));
+  return marked.length > OUTPUT_TAIL ? marked.slice(-OUTPUT_TAIL) : marked;
 }
 
-export function cleanReason(text: string | undefined): string | null {
+// Marks every held value before the cut, for the same reason as outputTail. It marks three times: on the raw text, so a value that itself holds a line break
+// (a multi-line key) is found; after only the invisible characters (Cf and the non-whitespace controls, e.g. U+200B, NUL) are stripped, so a multi-line value split by one of them is
+// found with its line breaks still in place; and after the whole control-character strip, so a value the strip joins back is marked too
+export function cleanReason(text: string | undefined, mark: Mark = same => same): string | null {
   if (text === undefined) return null;
-  const cleaned = text.replace(CONTROL, '').trim().slice(0, REASON_MAX);
+  const cleaned = mark(mark(mark(text).replace(INVISIBLE, '')).replace(CONTROL, '')).trim().slice(0, REASON_MAX);
   return cleaned || null;
 }
 
@@ -295,9 +301,12 @@ function approvalCard(tool: ToolDef, input: unknown, title: string, mark: Mark):
   return { shown: lines.join('\n'), parts };
 }
 
+// A source goes into the mark and into the stored JSON, so quotes, backslashes and control characters are dropped from it
+const cleanSources = (held: readonly HeldValue[]): HeldValue[] => held.map(h => ({ ...h, source: h.source.replace(/["\\\p{Cc}]/gu, '') }));
+
 // The settled row keeps the card it had before it was raw (rest), with every value beat holds marked, also where the pattern redaction does not see a key (a reason, a check, the parked outbound)
 function settled(row: PendingRow, state: PendingState | null, held: readonly HeldValue[]): { shown: string; masked: number; state: string | null; reason: string; checks: string } {
-  const marker = heldMarker(held.map(h => ({ ...h, source: h.source.replace(/["\\\p{Cc}]/gu, '') })));
+  const marker = heldMarker(cleanSources(held));
   const out = settledRaw(row, state);
   return { shown: marker.mark(out.shown), masked: out.masked, state: out.state === null ? null : marker.mark(out.state), reason: marker.mark(row.reason), checks: marker.mark(row.checks) };
 }
@@ -353,6 +362,9 @@ export class PendingStore {
   heldFor(tool: ToolDef): HeldValue[] { return this.#held(tool); }
 
   #heldOf(name: string): HeldValue[] { return this.#allHeld(this.#o.tools.get(name)); }
+
+  // The marker for the text a settled row keeps besides its card (the output tail, the stale reason): the same values and the same sources as `settled`
+  #markerOf(name: string): Mark { return heldMarker(cleanSources(this.#heldOf(name))).mark; }
 
   // Settings lists a rule learned before its value became held with the value marked (the stored row keeps it)
   markHeld(text: string): string { return heldMarker(this.#allHeld()).mark(text); }
@@ -553,7 +565,7 @@ export class PendingStore {
     const rest = settled(current, nextState, this.#heldOf(current.tool));
     const changed = this.#db.prepare(`UPDATE pending_actions SET status = ?, exit_code = ?, output_preview = ?, full_ref = ?, ran_at = ?, decided_at = COALESCE(decided_at, ?), input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ?
       WHERE id = ? AND status = 'running'`).run(
-      result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output), erased ? null : result.fullRef ?? null,
+      result.status, result.exitCode ?? null, erased || result.output === undefined ? null : outputTail(result.output, this.#markerOf(current.tool)), erased ? null : result.fullRef ?? null,
       result.status === 'ran' || result.status === 'failed' ? now : null, now, rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id,
     );
     if (Number(changed.changes) !== 1) return this.view(id);
@@ -602,8 +614,9 @@ export class PendingStore {
     const row = this.row(id);
     if (!row || row.status !== 'waiting') return false;
     const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
+    const mark = this.#markerOf(row.tool);
     const changed = this.#db.prepare(`UPDATE pending_actions SET status = 'stale', output_preview = ?, reject_reason = ?, decided_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'waiting'`)
-      .run(outputTail(reason), cleanReason(reason) ?? 'stale', this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
+      .run(outputTail(reason, mark), cleanReason(reason, mark) ?? 'stale', this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, id);
     if (Number(changed.changes) !== 1) return false;
     this.#changed(this.row(id)!);
     return true;

@@ -20,6 +20,14 @@ const CURL = WIN ? 'curl.exe' : 'curl';
 const TICK = "let n = 0; setInterval(() => console.log('tick ' + (++n)), 100);\n";
 const QUICK = "console.log('quick done');\n";
 
+// 2 秒の待ち（BACKGROUND_SETTLE_SEC）は本物の時計で数える。重い機械では node が間に合わず、「待ちのうちに終わった」ではなく「裏で動いている」の道に入って落ちる（backlog 396）。
+// 終わり次第すぐ戻るので、待ちだけ伸ばす。「2 秒たっても動き続けている」を見る起動（tick.js）には使わないので、伸ばすのは先の calls 回の待ちだけ
+function stretchSettle(jobs: BackgroundJobs, calls = 1, sec = 60): void {
+  const wait = jobs.wait.bind(jobs);
+  let left = calls;
+  jobs.wait = (id, conversationId, asked, signal) => wait(id, conversationId, left-- > 0 ? sec : asked, signal);
+}
+
 const call = (name: string, args: unknown): Script => async function* () {
   const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
   yield { type: 'tool_call', call: toolCall };
@@ -65,6 +73,7 @@ async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
 
 test('6-2: 2 秒以内に終わるコマンドはふつうの結果（終了コードつき）で裏に残らない。動き続けるものは番号と出力が返り、次の発言の system に一覧が出る', async t => {
   const s = await setup(t);
+  stretchSettle(s.app.background);
   const shop = await s.product('shop');
   s.adapter().scripts = [call('shell_run', { command: 'node quick.js', background: true }), call('shell_run', { command: 'node tick.js', background: true }), reply('ok')];
   const runId = await s.send(uuid(1), { text: 'run them', projectId: shop.id, permissionMode: 'auto' });
@@ -470,6 +479,7 @@ test('6-2: 子のエージェントが裏で始めたコマンドは、子の実
 
 test('6-2: 2 秒以内に終わっても出力が輪からあふれたら、終わりの方を返し、番号と全文のログを残す（上限が輪より大きい設定でも）', async t => {
   const s = await setup(t, { configure: c => { c.tools.shell.outputCapBytes = 1024 * 1024; } });
+  stretchSettle(s.app.background);
   const shop = await s.product('shop');
   writeFileSync(join(shop.dir, 'big.js'), "for (let i = 1; i <= 6000; i++) console.log('line ' + i + ' ' + 'x'.repeat(60));\n");
   s.adapter().scripts = [call('shell_run', { command: 'node big.js', background: true }), reply('ok')];
@@ -604,6 +614,7 @@ test('6-2: 外を読んだあとに始めた裏のコマンドが一覧にある
 
 test('6-2: 輪からあふれた出力は、上限（outputCapBytes）が 12,000 より小さければ、その上限までの終わりの方を返す', async t => {
   const s = await setup(t, { configure: c => { c.tools.shell.outputCapBytes = 2048; } });
+  stretchSettle(s.app.background);
   const shop = await s.product('shop');
   writeFileSync(join(shop.dir, 'big.js'), "for (let i = 1; i <= 6000; i++) console.log('line ' + i + ' ' + 'x'.repeat(60));\n");
   s.adapter().scripts = [call('shell_run', { command: 'node big.js', background: true }), reply('ok')];

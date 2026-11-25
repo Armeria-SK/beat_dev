@@ -20,7 +20,7 @@ import { markSetupShown, wasSetupShown, type OnboardingState } from '../onboardi
 import { ONBOARD_DONE_HASH, opensOnLoad, resumeIndex, setupLoads, setupPending } from './onboarding-steps.ts';
 import { pickFocus, underHead } from './focus.ts';
 import { productOf, throttled } from './products.ts';
-import { awaitingProduct, productsMissing, projectLoads, settleLeave } from './product-nav.ts';
+import { awaitingProduct, navigationHashes, productsMissing, projectLoads, settingsRunStart, settleLeave } from './product-nav.ts';
 import { buildToolItem } from './thread.ts';
 import { HOME, isConversation, parseRoute, routeBehind, routeHash, routeProductId, settingsCloser, settingsDepth, type Route } from './routes.ts';
 import { Archived } from './screens/Archived.tsx';
@@ -137,6 +137,7 @@ export function App() {
 
   const [projectsFailing, setProjectsFailing] = useState(false);
   const projectList = useMemo(() => projectLoads(() => api.projects(), projects => dispatch({ type: 'projects', projects }), undefined, undefined, setProjectsFailing), [dispatch]);
+  useEffect(() => projectList.start(), [projectList]);
   const upsertProject = useCallback((project: Project) => {
     dispatch({ type: 'project', project });
     void projectList.load();
@@ -313,7 +314,12 @@ export function App() {
     focusFirst(opener, document.querySelector('[data-settings-button]'), menuButton.current);
   }, [settingsOpen]);
 
-  const closeSettings = closer.fire;
+  const closeSettings = useCallback(() => {
+    const first = settingsRunStart(settingsStart.current, navigationHashes());
+    if (first === 0 && behindRef.current !== null) { location.replace(routeHash(behindRef.current)); return; }
+    settingsStart.current = first;
+    closer.fire();
+  }, [closer]);
   const clearNotices = useCallback((id: string, runId?: string) => dispatch({ type: 'clearNotices', conversationId: id, runId }), [dispatch]);
   const interrupt = useCallback((id: string, on: boolean) => dispatch({ type: 'interrupt', conversationId: id, on }), [dispatch]);
   const closeDrawer = useCallback(() => { setDrawer(false); focusFirst(menuButton.current); }, []);

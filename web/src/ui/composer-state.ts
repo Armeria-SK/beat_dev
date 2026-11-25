@@ -124,23 +124,42 @@ export function bareCommand(text: string): UiSlash | null {
 
 export const NEW_DRAFT = 'new';
 
+export interface DraftClaim { live: () => boolean; release: () => void }
+
 export interface DraftStore {
   get: (key: string) => string;
   set: (key: string, text: string) => void;
   files: (key: string) => UploadView[];
   setFiles: (key: string, files: UploadView[]) => void;
   forget: (key: string) => void;
+  claim: (key: string) => DraftClaim;
 }
 
 export function createDrafts(): DraftStore {
   const kept = new Map<string, string>();
   const attached = new Map<string, UploadView[]>();
+  const claims = new Map<string, Set<{ live: boolean }>>();
   return {
     get: key => kept.get(key) ?? '',
     set: (key, text) => { if (text) kept.set(key, text); else kept.delete(key); },
     files: key => attached.get(key) ?? [],
     setFiles: (key, files) => { if (files.length) attached.set(key, files); else attached.delete(key); },
-    forget: key => { kept.delete(key); attached.delete(key); },
+    forget: key => {
+      kept.delete(key);
+      attached.delete(key);
+      for (const claim of claims.get(key) ?? []) claim.live = false;
+      claims.delete(key);
+    },
+    claim: key => {
+      const mine = { live: true };
+      const held = claims.get(key) ?? new Set<{ live: boolean }>();
+      held.add(mine);
+      claims.set(key, held);
+      return {
+        live: () => mine.live,
+        release: () => { const now = claims.get(key); now?.delete(mine); if (now?.size === 0) claims.delete(key); },
+      };
+    },
   };
 }
 

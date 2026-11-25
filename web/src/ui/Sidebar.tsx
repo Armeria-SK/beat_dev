@@ -1,13 +1,15 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Conversation, type Project } from '../api.ts';
+import { api, ApiError, type Conversation, type Project } from '../api.ts';
 import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
 import { Avatar, CountBadge, Icon, JudgeOffChip } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
 import { memoryHash, productNav } from './product-nav.ts';
-import { routeHash, type Route } from './routes.ts';
+import { moreCount } from './products.ts';
+import { parseRoute, routeHash, type Route } from './routes.ts';
 import { searchView, type SearchState } from './search-state.ts';
+import { SessionMenu } from './SessionMenu.tsx';
 
 export interface SidebarProps {
   state: AgentState;
@@ -36,6 +38,14 @@ function SideLink({ href, icon, name, active, count, countLabel }: {
     <a className={`bt-side${active ? ' is-active' : ''}`} href={href} aria-current={active ? 'page' : undefined}>
       <Icon name={icon} /><span className="bt-side__name">{name}</span>
       {count !== undefined && <CountBadge n={count} label={countLabel} />}
+    </a>
+  );
+}
+
+function SideAdd({ href, label, active }: { href: string; label: string; active: boolean }) {
+  return (
+    <a className={`bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost ui-side-add${active ? ' is-active' : ''}`} href={href} aria-label={label} title={label} aria-current={active ? 'page' : undefined}>
+      <Icon name="plus" />
     </a>
   );
 }
@@ -86,42 +96,97 @@ function SessionRow({ conversation: c, route, running, pending }: { conversation
   const waiting = pending.get(c.id) ?? 0;
   const active = route.view === 'chat' && route.id === c.id;
   const live = running.has(c.id);
+  const title = c.title || t('ui.session.untitled');
+  const [menu, setMenu] = useState(false);
+  const row = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const away = (e: PointerEvent) => { if (!row.current?.contains(e.target as Node)) setMenu(false); };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, [menu]);
+  const close = (refocus: boolean) => { setMenu(false); if (refocus) more.current?.focus(); };
+  const leaveIfOpen = () => { const now = parseRoute(location.hash); if (now.view === 'chat' && now.id === c.id) location.replace(routeHash({ view: 'new' })); };
+  const passFocus = () => {
+    const mine = row.current;
+    if (!mine) return;
+    const held = document.activeElement;
+    if (held !== null && held !== document.body && !mine.contains(held)) return;
+    const nav = mine.closest('nav');
+    const links = [...(nav?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])];
+    const at = links.indexOf(mine.querySelector<HTMLElement>('.ui-side-row__link')!);
+    (links[at + 1] ?? links[at - 1] ?? nav?.querySelector<HTMLElement>('.bt-wordmark'))?.focus();
+  };
+  const archived = (keyboard: boolean) => {
+    if (keyboard) passFocus();
+    setMenu(false);
+    toast({ icon: 'archive', title: t('ui.session.archivedToast'), body: title, action: { label: t('ui.toast.undo'), run: () => { void api.unarchiveConversation(c.id).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: error instanceof ApiError ? error.message : undefined })); } } });
+    leaveIfOpen();
+  };
+  const deleted = (keyboard: boolean) => {
+    if (keyboard) passFocus();
+    setMenu(false);
+    toast({ icon: 'x', title: t('ui.archived.toast.deleted'), body: title });
+    leaveIfOpen();
+  };
   return (
-    <a className={`bt-side bt-side--session${active ? ' is-active' : ''}`} href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
-      <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
-      <span className="bt-side__name">{c.title || t('ui.session.untitled')}</span>
-      <CountBadge n={waiting} label={t('ui.count.waiting', waiting)} />
-    </a>
+    <div ref={row} className={`bt-side bt-side--session ui-side-row${active ? ' is-active' : ''}${menu ? ' has-menu' : ''}`}>
+      <a className="ui-side-row__link" href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
+        <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
+        <span className="bt-side__name">{title}</span>
+        <CountBadge n={waiting} label={t('ui.count.waiting', waiting)} />
+      </a>
+      <button ref={more} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost ui-side-row__more" aria-label={t('ui.session.menuOf', title)} aria-haspopup="menu" aria-expanded={menu}
+        onClick={() => setMenu(open => !open)} onKeyDown={e => { if (e.key === 'ArrowDown' && !menu) { e.preventDefault(); setMenu(true); } }}>
+        <Icon name="more" />
+      </button>
+      {menu && <SessionMenu conversation={c} label={t('ui.session.menuOf', title)} opener={more} floating className="ui-sidemenu" onArchived={archived} onDeleted={deleted} onClose={close} />}
+    </div>
   );
 }
 
-function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<string, Conversation[]>; expand: (projectId: string) => void } {
+function useMoreSessions(conversations: Conversation[]): { extra: ReadonlyMap<string, Conversation[]>; rest: Readonly<Record<string, number>>; expand: (projectId: string) => void } {
   const t = useT();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [extra, setExtra] = useState<ReadonlyMap<string, Conversation[]>>(new Map());
+  const [rest, setRest] = useState<Readonly<Record<string, number>>>({});
   useEffect(() => {
     let live = true;
     for (const id of expanded) {
-      void api.conversationsOf(id).then(r => { if (live) setExtra(old => new Map(old).set(id, r.conversations)); })
+      void api.conversationsOf(id).then(r => { if (!live) return; setExtra(old => new Map(old).set(id, r.conversations)); setRest(old => ({ ...old, [id]: moreCount(r.more, id) })); })
         .catch(() => { if (!live) return; setExpanded(old => { const next = new Set(old); next.delete(id); return next; }); toast({ icon: 'alert', title: t('ui.product.moreFailed') }); });
     }
     return () => { live = false; };
   }, [conversations, expanded, t]);
   const expand = useCallback((projectId: string) => setExpanded(old => new Set(old).add(projectId)), []);
-  return { extra, expand };
+  return { extra, rest, expand };
 }
 
 export function Sidebar({ state, route, foot, kanban, questions, pending, sessionPending, drafts, unread, conversations, conversationsMore, projects, running, color, setupPending, onSetup, judgeOff }: SidebarProps) {
   const t = useT();
-  const { extra, expand } = useMoreSessions(conversations);
-  const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra), [projects, conversations, conversationsMore, extra]);
+  const { extra, rest, expand } = useMoreSessions(conversations);
+  const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra, rest), [projects, conversations, conversationsMore, extra, rest]);
   const [searching, setSearching] = useState(false);
   const searchButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
   useEffect(() => { if (!searching && refocus.current) { refocus.current = false; searchButton.current?.focus(); } }, [searching]);
+  const navRef = useRef<HTMLElement>(null);
+  const landing = useRef<{ id: string; seen: ReadonlySet<string> } | null>(null);
+  useEffect(() => {
+    const want = landing.current;
+    if (!want || !extra.has(want.id)) return;
+    landing.current = null;
+    const held = document.activeElement;
+    if (held !== null && held !== document.body) return;
+    const first = nav.rows.find(r => r.project.id === want.id)?.sessions.find(c => !want.seen.has(c.id));
+    if (!first) return;
+    const href = routeHash({ view: 'chat', id: first.id });
+    [...(navRef.current?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])].find(a => a.getAttribute('href') === href)?.focus();
+  }, [extra, nav]);
   const at = (view: Route['view']) => route.view === view;
   return (
-    <nav className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
+    <nav ref={navRef} className={`bt-sidebar is-${state}`} aria-label={t('ui.sidebar')}>
       <div className="bt-sidebar__head">
         <a className="bt-wordmark" href="#/">{t('ui.wordmark')}</a>
         {judgeOff && <JudgeOffChip />}
@@ -140,7 +205,10 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <SideLink href="#/pending" icon="pause" name={t('ui.nav.pending')} active={at('pending')} count={pending} countLabel={t('ui.count.waiting', pending)} />
         <SideLink href="#/schedule" icon="calendar" name={t('ui.nav.schedule')} active={at('schedule')} />
 
-        <span className="bt-label bt-sidebar__label">{t('ui.product.section')}</span>
+        <div className="ui-sidebar__labelrow">
+          <span className="bt-label bt-sidebar__label">{t('ui.product.section')}</span>
+          <SideAdd href={routeHash({ view: 'newProduct' })} label={t('ui.product.new')} active={at('newProduct')} />
+        </div>
         {nav.rows.map(row => {
           const { project } = row;
           const home = route.view === 'product' && route.id === project.id;
@@ -148,33 +216,35 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
           return (
             <Fragment key={project.id}>
               <div className="bt-side bt-side--product">
-                <a className={`bt-side__ov${home ? ' is-active' : ''}${row.waiting > 0 ? ' has-waiting' : ''}`} href={routeHash({ view: 'product', id: project.id })}
-                  aria-label={row.waiting > 0 ? t('ui.product.overviewWaiting', project.name) : t('ui.product.overviewOf', project.name)} title={t('ui.nav.overview')} aria-current={home ? 'page' : undefined}><Icon name="grid" /></a>
-                <a className="bt-side__name" href={row.nameHref}>{project.name}</a>
+                <a className={`bt-side__home${home ? ' is-active' : ''}${row.waiting > 0 ? ' has-waiting' : ''}`} href={routeHash({ view: 'product', id: project.id })}
+                  aria-label={row.waiting > 0 ? t('ui.product.overviewWaiting', project.name) : t('ui.product.overviewOf', project.name)} title={t('ui.nav.overview')} aria-current={home ? 'page' : undefined}>
+                  <span className="bt-side__ov"><Icon name="grid" /></span><span className="bt-side__name">{project.name}</span>
+                </a>
                 {project.folder_missing && <span className="bt-meta ui-side-missing">{t('ui.product.folderMissing')}</span>}
                 <CountBadge n={row.waiting} label={t('ui.count.waiting', row.waiting)} />
+                <SideAdd href={routeHash({ view: 'productNew', id: project.id })} label={t('ui.session.newIn', project.name)} active={fresh} />
               </div>
               {row.sessions.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
-              {row.more > 0 && (
-                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={() => expand(project.id)}>
+              {row.more > 0 && (extra.has(project.id) ? (
+                <div className="bt-side bt-side--session ui-side-more" style={{ pointerEvents: 'none' }}>
+                  <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
+                </div>
+              ) : (
+                <button type="button" className="bt-side bt-side--session ui-side-more" onClick={e => { landing.current = e.detail === 0 ? { id: project.id, seen: new Set(row.sessions.map(c => c.id)) } : null; expand(project.id); }}>
                   <span className="bt-side__name bt-meta">{t('ui.product.more', row.more)}</span>
                 </button>
-              )}
-              <a className={`bt-side bt-side--session ui-side-new${fresh ? ' is-active' : ''}`} href={routeHash({ view: 'productNew', id: project.id })} aria-current={fresh ? 'page' : undefined}>
-                <Icon name="plus" /><span className="bt-side__name">{t('ui.session.new')}</span>
-              </a>
+              ))}
             </Fragment>
           );
         })}
-        <SideLink href={routeHash({ view: 'newProduct' })} icon="plus" name={t('ui.product.new')} active={at('newProduct')} />
 
         <div className="ui-sidebar__labelrow">
           <span className="bt-label bt-sidebar__label">{t('ui.section.noProduct')}</span>
+          <SideAdd href="#/" label={t('ui.session.new')} active={at('new')} />
           {!searching && <button ref={searchButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
         </div>
         {searching && <SessionSearch onClose={() => { refocus.current = true; setSearching(false); }} />}
         {nav.none.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
-        <SideLink href="#/" icon="plus" name={t('ui.session.new')} active={at('new')} />
 
         <span className="bt-label bt-sidebar__label">{t('ui.section.library')}</span>
         <SideLink href={memoryHash(route, conversations)} icon="book" name={t('ui.nav.memory')} active={at('memory')} />

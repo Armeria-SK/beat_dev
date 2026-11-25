@@ -20,7 +20,7 @@ import { forgetAllow, involvedSnapshot, judgeCacheKey, judgeIdentity, nextCallNu
 import { judgeFailingStreak, recordJudgeCall, type JudgeOutcome } from './judge-stats.ts';
 import { GIT_IDENTITY_KEY, ownerKeysOf, POLICY_KEYS, refusedKeysOf } from './hooks/decision-order.ts';
 import { carriesHeld, newChecks, recheckOf, type PendingKind, type PendingStore } from '../pending/store.ts';
-import { parseRemotes } from '../projects/remotes.ts';
+import { parseRemotes, recordedUrls } from '../projects/remotes.ts';
 import { pendingText, type PendingMessageKey } from '../shared/messages/pending.ts';
 import { QuestionError } from '../questions/store.ts';
 import { runCommandHook, type HookPayload } from './hooks/command-hook.ts';
@@ -131,9 +131,9 @@ function judgeLimitsFor(ctx: ToolContext, deps: PipelineDeps): JudgeLimits {
   return deps.autoTimeoutMs !== undefined ? { ...base, answerMs: deps.autoTimeoutMs } : base;
 }
 
-function trustedOf(ctx: ToolContext): string[] {
+export function trustedOf(ctx: ToolContext): string[] {
   if (!ctx.project) return [];
-  try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes).flatMap(r => [r.url, ...(r.pushUrl ? [r.pushUrl] : [])]); } catch { return []; }
+  try { return recordedUrls(parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes)); } catch { return []; }
 }
 
 const WINDOWS = process.platform === 'win32';

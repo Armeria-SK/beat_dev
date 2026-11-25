@@ -21,6 +21,12 @@ const SECRET_PATTERNS = [
   /(?:^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/iu,
   /(?:^|\/)\.(?:ssh|aws|gnupg|docker|kube)(?:\/|$)/iu,
   /(?:^|\/)\.(?:netrc|npmrc|pypirc|git-credentials)$/iu,
+  /(?:^|\/)(?:_netrc|\.envrc|\.pgpass|\.yarnrc\.yml|\.vault-token|\.s3cfg|\.boto)$/iu,
+  /\.ppk$/iu,
+  /(?:^|\/)id_(?:ecdsa|ed25519)_sk(?:\.pub)?$/iu,
+  /\.tfvars(?:\.json)?$/iu,
+  /\.tfstate(?:\.backup)?$/iu,
+  /(?:^|\/)\.config\/gh\/hosts\.yml$/iu,
 ];
 // 名前が secrets・secret のフォルダ（中のファイルも）。名前だけを出すコマンドでは、これだけでは止めない
 const SECRET_FOLDER = /(?:^|\/)secrets?(?:\/|$)/iu;
@@ -70,21 +76,28 @@ export interface RealPath { path: string; sure: boolean }
 
 const unresolvedPath = (abs: string): string => (WINDOWS ? `\\\\?\\${abs}` : abs);
 
-function resolveReal(abs: string, hops: { left: number }): RealPath {
+export type NativeCache = Map<string, string>;
+
+function resolveReal(abs: string, hops: { left: number }, cache?: NativeCache): RealPath {
   if (isRemotePath(abs)) return { path: abs, sure: true };
   let current = abs;
   const rest: string[] = [];
   for (;;) {
-    if (existsSync(current)) {
-      try { return { path: join(realpathSync.native(current), ...rest.reverse()), sure: true }; } catch { return { path: abs, sure: true }; }
+    const known = cache?.get(current);
+    if (known !== undefined || existsSync(current)) {
+      try {
+        const native = known ?? realpathSync.native(current);
+        cache?.set(current, native);
+        return { path: join(native, ...rest.reverse()), sure: true };
+      } catch { return { path: abs, sure: true }; }
     }
     const link = danglingTarget(current);
     if (link !== undefined) {
       if (--hops.left < 0) return { path: unresolvedPath(abs), sure: false };
       if (isRemotePath(link)) return { path: join(link.replaceAll('/', '\\'), ...rest.reverse()), sure: false };
-      const parent = resolveReal(dirname(current), hops);
+      const parent = resolveReal(dirname(current), hops, cache);
       if (!parent.sure) return { path: unresolvedPath(abs), sure: false };
-      return resolveReal(join(resolve(parent.path, link), ...rest.reverse()), hops);
+      return resolveReal(join(resolve(parent.path, link), ...rest.reverse()), hops, cache);
     }
     const parent = dirname(current);
     if (parent === current) return { path: abs, sure: true };
@@ -93,12 +106,12 @@ function resolveReal(abs: string, hops: { left: number }): RealPath {
   }
 }
 
-export function realPath(abs: string): RealPath {
-  return resolveReal(abs, { left: 40 });
+export function realPath(abs: string, cache?: NativeCache): RealPath {
+  return resolveReal(abs, { left: 40 }, cache);
 }
 
-export function realish(abs: string): string {
-  return realPath(abs).path;
+export function realish(abs: string, cache?: NativeCache): string {
+  return realPath(abs, cache).path;
 }
 
 const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
@@ -151,14 +164,16 @@ export type ProtectedKind = 'persona' | 'skill' | 'git' | 'instructions';
 
 const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fold(part) === '.git');
 
+const within = (root: string, target: string): boolean => isInside(root, target) || isInside(root.toLowerCase(), target.toLowerCase());
+
 export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
   if (isRemotePath(abs)) return 'git';
   const real = realish(abs);
   if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || (real !== abs && insideGitDir(real))) return 'git';
-  if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
+  if (policy.skillsDir && (within(policy.skillsDir, real) || within(policy.skillsDir, abs))) return 'skill';
   const bare = WINDOWS ? windowsNames(abs) : abs;
-  if (policy.instructions?.some(p => isInside(p, real) || isInside(p, abs) || isInside(p, bare))) return 'instructions';
-  return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
+  if (policy.instructions?.some(p => within(p, real) || within(p, abs) || within(p, bare))) return 'instructions';
+  return (policy.askOnWrite ?? []).some(p => within(p, real) || within(p, abs)) ? 'persona' : undefined;
 }
 
 export type Placement =

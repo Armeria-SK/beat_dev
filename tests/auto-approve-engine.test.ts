@@ -647,3 +647,116 @@ test('自動承認（エンジン）: 判定役の返事が max_tokens で途中
   assert.match(rows[0]!.reason, /the judge's answer could not be read/u);
   assert.equal(autoRows(s).length, 0);
 });
+
+// ── E1: 判定役の答えが出力の上限で切れたら、上限を上げて 1 回だけ呼び直す。切れた返事の文字は使わない ──
+const judgeUsage = { inputTokens: 100, outputTokens: 40 };
+const cutWith = (text: string, usage: { inputTokens?: number; outputTokens?: number } = judgeUsage): Script => async function* () {
+  yield { type: 'text', delta: text };
+  yield { type: 'usage', usage };
+  yield { type: 'done', stop: 'max_tokens' as StopReason };
+};
+const answerWith = (text: string, usage: { inputTokens?: number; outputTokens?: number } = { inputTokens: 100, outputTokens: 30 }): Script => async function* () {
+  yield { type: 'text', delta: text };
+  yield { type: 'usage', usage };
+  yield { type: 'done', stop: 'end_turn' as StopReason };
+};
+const classifierLimits = (s: { adapter: () => FakeAdapter }): number[] => s.adapter().calls.filter(isClassifier).map(c => c.maxOutputTokens);
+const wideModels = (limit: number) => ({ models: [fakeModel('m1', { maxOutputTokens: limit }), fakeModel('m2')] });
+
+test('自動承認（エンジン）E1: 判定役の返事が 1024 で切れたら、同じ枠のまま 4096 で 1 回だけ呼び直し、その答えが allow なら許す。使用量は 2 回分', async t => {
+  const s = await startApp(t, wideModels(8192));
+  const outside = outsideRead(s);
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutWith('まず操作を読みます。外のメモを読むだけで、'), answerWith(ALLOW), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [1024, 4096], '1 回目は 1024、切れたら 4096 で呼び直す');
+  assert.equal(s.app.pending.list({ status: 'waiting' }).length, 0, 'Pending に積まれない');
+  assert.deepEqual(autoRows(s).map(r => r.status), ['approved']);
+  assert.ok(JSON.stringify(s.adapter().calls.at(-1)!.messages).includes('外のメモの中身'), '許したコマンドが動く');
+  const rows = s.app.db.prepare('SELECT outcome, failed, input_tokens AS inputTokens, output_tokens AS outputTokens FROM judge_calls').all().map(r => ({ ...r }));
+  assert.deepEqual(rows, [{ outcome: 'allow', failed: null, inputTokens: 200, outputTokens: 70 }], '判定は 1 回として数え、使用量は呼び直しの分も足す');
+});
+
+test('自動承認（エンジン）E1: モデルの出力の上限が 1024 以下なら呼び直しても上限が上がらないので呼び直さず、unparsable。AP-1d の聞き直しも同じ上限', async t => {
+  const s = await startApp(t, wideModels(800));
+  const outside = outsideRead(s);
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutWith(ALLOW), cutWith(ALLOW), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [800, 800], '上げられないので 1 回の聞き方で 1 回だけ。AP-1d の聞き直しも 800');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge_failed']);
+  assert.match(s.app.pending.list({ status: 'waiting' })[0]!.reason, /the judge's answer could not be read/u);
+  assert.equal(autoRows(s).length, 0);
+});
+
+test('自動承認（エンジン）E1: 呼び直しの返事も切れたら、切れた返事は使わず今どおり unparsable。AP-1d の聞き直しでも同じで、判定役への頼みは 4 回まで、Pending に積まれる', async t => {
+  const s = await startApp(t, wideModels(8192));
+  const outside = outsideRead(s);
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutWith(ALLOW), cutWith(ALLOW), cutWith(ALLOW), cutWith(ALLOW), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [1024, 4096, 1024, 4096], '1 回の聞き方で最大 2 回、AP-1d で合わせて 4 回まで（5 回目は無い）');
+  const rows = s.app.pending.list({ status: 'waiting' });
+  assert.deepEqual(rows.map(r => r.kind), ['judge_failed']);
+  assert.match(rows[0]!.reason, /the judge's answer could not be read/u);
+  assert.equal(autoRows(s).length, 0);
+  assert.equal(s.adapter().calls.at(-1)!.messages.some(m => m.role === 'tool' && m.content.includes('外のメモの中身')), false, '動かない');
+});
+
+test('自動承認（エンジン）E1 安全: 1 回目の切れた返事が allow に見えても使わない。呼び直しの答えだけを読み、それが ask なら許さない', async t => {
+  const s = await startApp(t, wideModels(8192));
+  const outside = outsideRead(s);
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutWith(ALLOW), answerWith(ASK), say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [1024, 4096]);
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge'], '呼び直しの ask が答え');
+  assert.equal(autoRows(s).length, 0, '切れた返事の allow は使われていない');
+});
+
+test('自動承認（エンジン）E1 安全: 切れた返事の呼び直しが読めない返事（切れていない）なら、そこから AP-1d の聞き直しに進み、ここでも許さない', async t => {
+  const s = await startApp(t, wideModels(8192));
+  const outside = outsideRead(s);
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutWith(ALLOW), answerWith('allow だと思います'), answerWith('allow だと思います'), say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [1024, 4096, 1024], '2 回目の聞き方は切れなかったので 1 回');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge_failed']);
+  assert.equal(autoRows(s).length, 0);
+});
+
+test('自動承認（エンジン）E1 時間: 呼び直しは判定役の答えの時計の中。時計が切れたら呼び直しの返事を待たず、timeout で確かめる側に倒れる', async t => {
+  const s = await startApp(t, { ...wideModels(8192), judgeLimits: { chat: { ...JUDGE_LIMITS.chat, answerMs: 150, retryDelayMs: 0 }, unattended: { ...JUDGE_LIMITS.unattended, answerMs: 150, retryDelayMs: 0 } } });
+  const outside = outsideRead(s);
+  // 呼び直し（2 回目の頼み）が答えないまま止まる台本。時計が切れると頼みが中止され、abort で終わる
+  const hang: Script = async function* (req) {
+    await new Promise<void>((_resolve, reject) => {
+      if (req.signal.aborted) reject(req.signal.reason);
+      req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true });
+    });
+  };
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutWith(ALLOW), hang, say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [1024, 4096], '呼び直しまで進んだ');
+  assert.deepEqual(s.app.pending.list({ status: 'waiting' }).map(r => r.kind), ['judge_failed']);
+  assert.equal(autoRows(s).length, 0);
+  const row = s.app.db.prepare('SELECT outcome, failed FROM judge_calls').get() as { outcome: string; failed: string };
+  assert.deepEqual([row.outcome, row.failed], ['failed', 'timeout']);
+});
+
+test('自動承認（エンジン）E1 中止: 返事が切れた直後に実行が止められたら、呼び直さない（止めたあとにモデルを呼ばない）', async t => {
+  const s = await startApp(t, wideModels(8192));
+  const outside = outsideRead(s);
+  const cutThenStop: Script = async function* () {
+    yield { type: 'text', delta: 'まず操作を読みます。' };
+    for (const run of s.app.engine.activeRuns()) s.app.engine.stop(run.runId);
+    yield { type: 'done', stop: 'max_tokens' as StopReason };
+  };
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutThenStop, answerWith(ALLOW), say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(classifierLimits(s), [1024], '止められたあとの呼び直しは無い');
+  assert.equal(autoRows(s).length, 0);
+  assert.equal(s.app.runs.get(sent.body.runId)!.error_kind, 'cancelled');
+});

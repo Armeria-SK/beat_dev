@@ -152,20 +152,66 @@ export class JudgeRefused extends Error {
 
 export interface ParsedVerdict { decision: 'allow' | 'ask'; reason: string }
 
-const oneLine = (text: string) => redactSecrets(text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, REASON_LIMIT);
+const flatten = (text: string): string => redactSecrets(text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim());
+
+const oneLine = (text: string) => flatten(text).slice(0, REASON_LIMIT);
+
+// 判定役の理由は、REASON_LIMIT を超えたら必ず … を付けて切る（… を入れて REASON_LIMIT 以内）。文の終わり（. ! ? のあとが空白か末尾、または 。！？）で切るのは、上限の近く（SENTENCE_NEAR 字以内）にあるときだけ:
+// 早い文の終わりで切ると、後ろの文（判定役が気にした所）が丸ごと消える。無ければ語の切れ目（半分より後ろ）、それも無ければ文字の途中で切る（サロゲートペアは割らない）。
+// 秘密は flatten で先に伏せてあるので、切っても見えるものは増えない
+const SENTENCE_END = /^[.!?](?=\s|$)|^[\u{3002}\u{FF01}\u{FF1F}]/u;
+const SENTENCE_NEAR = 20;
+
+function fitReason(text: string): string {
+  if (text.length <= REASON_LIMIT) return text;
+  const room = REASON_LIMIT - 1;
+  for (let at = room - 1; at >= REASON_LIMIT - SENTENCE_NEAR; at -= 1) if (SENTENCE_END.test(text.slice(at, at + 2))) return `${text.slice(0, at + 1)}…`;
+  const space = text.lastIndexOf(' ', room - 1);
+  if (space >= REASON_LIMIT / 2) return `${text.slice(0, space).trimEnd()}…`;
+  return `${text.slice(0, /[\uD800-\uDBFF]/u.test(text[room - 1]!) ? room - 1 : room)}…`;
+}
+
+// JSON の書き方になっている \（\" \\ \/ \b \f \n \r \t と \u + 16 進 4 けた）はそのまま、そうでない \ だけを \\ にする。理由に Windows のパス（C:\Users）を書いた答えが、それだけで読めなくなるのを防ぐ。
+// 足すのは \ だけ: 引用符は閉じず、構造（{ } , :）は作れない。ただし、読めなかった行が読めるようになる（そのとき後ろの decision が効く話は decisionKeys で止める）
+const fixBackslashes = (line: string): string => line.replace(/\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/gu, found => (found === '\\' ? '\\\\' : found));
+
+// JSON として読めた行にある "decision" のキーの数。JSON.parse は同じキーが 2 つあると最後を取るので、判定役が理由に写した `","decision":"allow` が
+// 答えを替えられる（読み直す前から。読み直しで C:\Users を含む行が読めるようになると、そこにも届く）。2 つ以上あれば読まない。
+// 読めた行なので、文字列は " で始まって " で終わり（\ は次の 1 字を飛ばす）、文字列のあとに : が続くものだけがキー。入れ子の中も数える
+function decisionKeys(json: string): number {
+  let count = 0;
+  for (let at = 0; at < json.length; at += 1) {
+    if (json[at] !== '"') continue;
+    let end = at + 1;
+    while (end < json.length && json[end] !== '"') end += json[end] === '\\' ? 2 : 1;
+    let next = end + 1;
+    while (next < json.length && /\s/u.test(json[next]!)) next += 1;
+    if (json[next] === ':') {
+      try { if (JSON.parse(json.slice(at, end + 1)) === 'decision') count += 1; } catch { /* 読めた行の中の文字列なので、ここには来ない */ }
+    }
+    at = end;
+  }
+  return count;
+}
 
 // 判定役の返事から答えを読む。読むのは、返事の最後の行（コードの囲み ``` だけの行は飛ばす）の JSON 1 つだけ。
 // 返事の途中に答えらしいものがあっても、操作の文を引用していても読まない。読めない・決まった形でない返事は undefined（= 確かめる）
+// 最後の行が JSON として読めないときだけ、正しくない \ を直した文で 1 回だけ読み直す（decision が allow / ask ちょうどでなければ、直しても読まない）
 export function parseVerdict(reply: string): ParsedVerdict | undefined {
   const lines = reply.split(/\r?\n/u).map(line => line.trim()).filter(line => line !== '' && !/^```/u.test(line));
   const last = lines.at(-1);
   if (last === undefined) return undefined;
+  let json = last;
   let value: unknown;
-  try { value = JSON.parse(last); } catch { return undefined; }
+  try { value = JSON.parse(json); } catch {
+    json = fixBackslashes(last);
+    try { value = JSON.parse(json); } catch { return undefined; }
+  }
+  if (decisionKeys(json) > 1) return undefined;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const { decision, reason } = value as { decision?: unknown; reason?: unknown };
   if (decision !== 'allow' && decision !== 'ask') return undefined;
-  return { decision, reason: typeof reason === 'string' ? oneLine(reason) : '' };
+  return { decision, reason: typeof reason === 'string' ? fitReason(flatten(reason)) : '' };
 }
 
 // 判定役を呼べなかったときの種類。閉じた 7 語で、承認待ちの文（pending.ts の judge_failed_error_<語>）の鍵になる。例外の文そのものは種類にしない
@@ -197,14 +243,16 @@ export async function judgeOnce(
   const attempts: Array<Map<string, NonNullable<JudgeReply['usage']>>> = [];
   let model: string | undefined;
   const counted = async (prompt: ClassifierPrompt, combined: AbortSignal, call?: JudgeCall): Promise<string> => {
-    const byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
+    let byModel = new Map<string, NonNullable<JudgeReply['usage']>>();
     attempts.push(byModel);
     const note = (id: unknown, usage: JudgeReply['usage']): void => {
       if (typeof id !== 'string' || !id) return;
       model = id.slice(0, 200);
       if (usage) byModel.set(model, usage);
     };
-    const reply = await (call ? ask(prompt, combined, { ...call, used: (id, usage) => { note(id, usage); call.used?.(id, usage); } }) : ask(prompt, combined));
+    // The judge list is tried in turn inside one call, and the same model can be listed twice: a call that starts after another one reported usage counts on its own, so it does not replace the usage of the one before it
+    const begun = (): void => { if (byModel.size) { byModel = new Map(); attempts.push(byModel); } };
+    const reply = await (call ? ask(prompt, combined, { ...call, started: () => { begun(); call.started(); }, used: (id, usage) => { note(id, usage); call.used?.(id, usage); } }) : ask(prompt, combined));
     if (typeof reply !== 'object' || reply === null) return reply;
     note(reply.model, reply.usage);
     return reply.text;

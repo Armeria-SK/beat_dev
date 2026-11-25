@@ -1,4 +1,4 @@
-import { api, ApiError, type Task } from '../api.ts';
+import { api, ApiError, type Project, type Task } from '../api.ts';
 import { toast, type FeedbackItem } from '../feedback.ts';
 import { t } from '../i18n/index.ts';
 import type { SheetAction } from '../task-meta.ts';
@@ -21,19 +21,19 @@ export function reportOpError(error: unknown, deps: Pick<TaskOpDeps, 'toast'> = 
   deps.toast({ icon: 'alert', title, body: reasonOf(error) });
 }
 
-function undo(run: () => Promise<unknown>, deps: TaskOpDeps): { label: string; run: () => void } {
+export function undoAction(run: () => Promise<unknown>, deps: Pick<TaskOpDeps, 'toast'> = REAL): { label: string; run: () => void } {
   return { label: t('ui.toast.undo'), run: () => { void run().catch(error => reportOpError(error, deps, t('ui.task.toast.undoFailed'))); } };
 }
 
 export async function runTaskOp(op: TaskOp, task: Pick<Task, 'id' | 'title'> & Partial<Pick<Task, 'prefix'>>, options: TaskOpOptions = {}, deps: TaskOpDeps = REAL): Promise<boolean> {
   const prefix = task.prefix ?? null;
-  const uncancel = undo(() => deps.api.taskAction(task.id, 'uncancel'), deps);
+  const uncancel = undoAction(() => deps.api.taskAction(task.id, 'uncancel'), deps);
   try {
     switch (op) {
       case 'approve':
         await deps.api.taskAction(task.id, 'approve');
         if (prefix) { deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.prefixApproved'), body: t('ui.task.toast.prefixReady', prefix.branch) }); return true; }
-        deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.approved'), body: task.title, action: undo(() => deps.api.unapproveTask(task.id), deps) });
+        deps.toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.approved'), body: task.title, action: undoAction(() => deps.api.unapproveTask(task.id), deps) });
         return true;
       case 'reject': {
         const reason = options.reason?.trim() ?? '';
@@ -72,6 +72,9 @@ export async function runTaskOp(op: TaskOp, task: Pick<Task, 'id' | 'title'> & P
     return false;
   }
 }
+
+export const liveProductId = (projects: readonly Pick<Project, 'id' | 'archived_at'>[], id: string | null): string | null =>
+  id !== null && projects.some(p => p.id === id && p.archived_at === null) ? id : null;
 
 export const alreadyFinished = (error: unknown): boolean =>
   error instanceof ApiError && error.status === 409 && (error.body as { code?: unknown } | null)?.code === 'http.already_finished';

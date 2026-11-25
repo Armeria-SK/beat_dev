@@ -12,7 +12,7 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
 import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
-import { isInterpreter, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { isInterpreter, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
@@ -190,7 +190,7 @@ const gitRead = (st: StatementFacts): boolean => {
   return false;
 };
 
-const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => /^-f(?:ile)?$/iu.test(w.text));
+const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => PWSH_FILE_FLAG.test(w.text));
 const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0 || pwshFile(st);
 
 // 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
@@ -227,13 +227,36 @@ const NO_VALUE_FLAGS: ReadonlyArray<[RegExp, RegExp]> = [
 ];
 const noValueFlag = (program: string, flag: string): boolean => /^--[^=]+=/u.test(flag) || NO_VALUE_FLAGS.some(([who, ok]) => who.test(program) && ok.test(flag));
 
+// pwsh・powershell の -File より前に置いてよい語: 値を取らない -NoProfile・-NonInteractive・-NoLogo と、値を 1 つ取る -ExecutionPolicy（PowerShell が受ける頭だけの書き方 -nop・-noni・-nol・-ep・-ex も。大文字小文字を問わない）。
+// -Command などほかの語が 1 つでもあれば、PowerShell は -File でなくそちらを動かす（-Command は残りをコマンドとして動かす）ので、x.ps1 は見せない（持ち主）
+function pwshFlagsOk(before: StatementFacts['words']): boolean {
+  for (let i = 0; i < before.length; i++) {
+    const word = before[i]!;
+    if (word.dynamic || word.glob || !/^[-/][A-Za-z]+$/u.test(word.text)) return false;
+    const name = word.text.slice(1).toLowerCase();
+    if ((name.length >= 3 && 'noprofile'.startsWith(name)) || (name.length >= 4 && 'noninteractive'.startsWith(name)) || (name.length >= 3 && 'nologo'.startsWith(name))) continue;
+    if (name !== 'ep' && !(name.length >= 2 && 'executionpolicy'.startsWith(name))) return false;
+    const value = before[++i];
+    if (!value || value.dynamic || value.glob || !/^[A-Za-z]+$/u.test(value.text)) return false;
+  }
+  return true;
+}
+
+// pwsh・powershell の文を -File の旗の前と後ろに分ける。pwsh・powershell でない・-File が無いなら undefined
+function pwshSplit(st: StatementFacts): { lead: StatementFacts['words']; after: StatementFacts['words'] } | undefined {
+  if (!/^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program)) return undefined;
+  const words = st.words.slice(1);
+  const at = words.findIndex(w => PWSH_FILE_FLAG.test(w.text));
+  return at < 0 ? undefined : { lead: words.slice(0, at), after: words.slice(at + 1) };
+}
+
 function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   const program = st.program.toLowerCase().replace(/\.exe$/u, '');
   let words = st.words.slice(1);
   if (program === 'pwsh' || program === 'powershell') {
-    const at = words.findIndex(w => /^-f(?:ile)?$/iu.test(w.text));
-    if (at < 0) return false;
-    words = words.slice(at + 1);
+    const split = pwshSplit(st);
+    if (!split || !pwshFlagsOk(split.lead)) return false;
+    words = split.after;
   } else if (!PLAIN_RUNNERS.test(program)) return false;
   const at = words.findIndex(w => !w.text.startsWith('-'));
   if (at < 0 || words.slice(0, at).some(w => w.text === '--' || w.dynamic || !noValueFlag(program, w.text))) return false;
@@ -243,21 +266,65 @@ function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   return isInside(root, path) && statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 }
 
-const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx', 'bunx']);
+const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx']);
+
+// bun run <先>・bun x <先>・bunx <先>（旗でない最初の語）が、スクリプト名・部品名でなくファイルらしいか。値・ワイルドカードは何になるか分からないので、ファイルらしい側に倒す
+// ファイルらしい = / か \ を含む・. か ~ で始まる・拡張子（ . のあとの英数字）で終わる（大文字小文字を問わない。evil.sh・evil.wasm・evil.TS も）。
+// x・bunx（部品を取ってきて動かす）だけは、先頭が @ の「@スコープ/名前」と、末尾の @版（cowsay@1.5.0）を部品名として外す。bun run @evil.ts の @ は例外にしない
+const FILE_LIKE_TARGET = /^(?:.*[/\\]|[.~]|.*\.[A-Za-z0-9]+$)/u;
+const PACKAGE_NAME = /^@[^/\\@]+\/[^/\\@]+$/u;
+const packageIsFile = (text: string): boolean => {
+  const name = text.replace(/(?<=.)@[^/\\@]*$/u, '');
+  return !PACKAGE_NAME.test(name) && FILE_LIKE_TARGET.test(name);
+};
+function bunRunsFile(st: StatementFacts, from: number, package_: boolean): boolean {
+  const words = st.words.slice(from);
+  const at = words.findIndex(w => !w.text.startsWith('-'));
+  // x・bunx の部品を旗でくっつけて渡す書き方（--package=./evil.tgz・-p=…）は、先の語（tsc）でなく旗の値が取ってくる部品。値が動的・ワイルドカード・ファイルらしいなら実行
+  if (package_ && words.slice(0, at < 0 ? words.length : at).some(w => { const value = /^(?:--package|-p)=(.*)$/su.exec(w.text)?.[1]; return value !== undefined && (w.dynamic || w.glob || packageIsFile(value)); })) return true;
+  const target = words[at];
+  if (target === undefined) return false;
+  if (target.dynamic || target.glob) return true;
+  return package_ ? packageIsFile(target.text) : FILE_LIKE_TARGET.test(target.text);
+}
 
 // 試験の道具・パッケージの道具（--test・-m pytest|unittest は、実行の先より前にあるときだけ）
 function isRunner(st: StatementFacts): boolean {
   const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
   const words = st.words.slice(1).map(w => w.text);
   if (program === 'npx') return true;
-  if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
+  if (program === 'bun') return words[0] === 'test' || (words[0] === 'run' && !bunRunsFile(st, 2, false)) || (words[0] === 'x' && !bunRunsFile(st, 2, true));
+  if (program === 'bunx') return !bunRunsFile(st, 1, true);
   if (RUNNER_PROGRAMS.has(program)) return true;
+  // powershell・pwsh は、--test や -m があっても試験の道具ではない（下の node・python 向けの見分けに通さない）
+  if (program === 'pwsh' || program === 'powershell') return false;
   if (!runsCode(st)) return false;
   const target = words.findIndex(w => !w.startsWith('-'));
   const before = target < 0 ? words : words.slice(0, target);
   if (before.includes('--test')) return true;
   const m = words.indexOf('-m');
   return m >= 0 && (target < 0 || m < target) && MODULE_RUNNERS.has(words[m + 1] ?? '');
+}
+
+// PowerShell の Import-Module・ipmo は、ファイルのコードを動かす。先（旗でない語。-Name の値・-Name:値 も、PowerShell の字句解析が別の語に分ける）が値か、ファイルらしいか
+// ファイルらしい = / か \ を含む・. か ~ で始まる・.psm1 .psd1 .ps1 .dll で終わる。名前だけ（Import-Module Pester）は数えない
+const MODULE_FILE_LIKE = /^(?:.*[/\\]|[.~]|.*\.(?:psm1|psd1|ps1|dll)$)/iu;
+// 先が 1 つも無い Import-Module・ipmo は、前の文から流し込まれる（Get-Item ./x.psm1 | Import-Module）ので、何が入るか分からない＝ファイルらしい側に倒す
+function importsFile(st: StatementFacts): boolean {
+  const names = st.words.slice(1).filter(w => !w.text.startsWith('-'));
+  return names.length === 0 || names.some(w => w.dynamic || w.glob || MODULE_FILE_LIKE.test(w.text));
+}
+
+// runsCode にも isRunner にも数えられない実行: bun・bunx の <ファイルか名前>（bun test と、先がファイルらしくない bun run・x・bunx は道具。bun run evil.ts・bun x ./evil.ts・bunx ./evil.ts は bun evil.ts と同じ実行。旗だけの bun --version は動かさない）と、source・.（PowerShell の . ./x.ps1 も。ファイルのコードをその場で動かす）と、PowerShell の Import-Module・ipmo の <ファイル>（先の無い、流し込まれるものも）と using module・using assembly。
+// 数えないと、道具と同じ文（npx tsx run.ts; bun evil.ts）が「道具だけ」になり、evil.ts が判定役に届かない。
+// 数えても 1 つだけの文は今までどおり持ち主（filesScope の最後で plainFileRun に渡さない。bun は PLAIN_RUNNERS にいるが、今までここへ届かず持ち主だった。判定役に回すのは緩めることになる）
+function looseRun(st: StatementFacts): boolean {
+  const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
+  if (program === 'source' || program === '.' || st.shapes.includes('dot_source')) return true;
+  if (program === 'import-module' || program === 'ipmo') return importsFile(st);
+  // using module・using assembly は中身を読めない文（先がファイルか名前かも分からない）。ファイルのコードを動かしうるので数える
+  if (st.shapes.includes('control_opaque:using')) return true;
+  return (program === 'bun' || program === 'bunx') && !isRunner(st) && st.words.slice(1).some(w => !w.text.startsWith('-'));
 }
 
 type FilesScope = { kind: 'files' } | { kind: 'command' } | { kind: 'owner'; why: string };
@@ -277,7 +344,7 @@ export function filesScope(sts: readonly StatementFacts[], keys: readonly string
       if (st.inner === null) unknown = true;
       const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])]);
       if (listedPlain(st)) continue;
-      if (isRunner(st) || runsCode(st) || inside) { runs.push(st); any = true; }
+      if (isRunner(st) || runsCode(st) || looseRun(st) || inside) { runs.push(st); any = true; }
     }
     return any;
   };
@@ -287,8 +354,11 @@ export function filesScope(sts: readonly StatementFacts[], keys: readonly string
   if (runs.every(isRunner)) return { kind: 'command' };
   if (runs.length > 1) return { kind: 'owner', why: 'more than one code run, or a run inside a wrapper' };
   const [only] = runs;
+  // -Command・-c の文字（code）があっても、-File の前に許す旗以外の語があれば、PowerShell が動かすのは -File の x.ps1 でない（持ち主）
+  const split = pwshSplit(only!);
+  if (split && !pwshFlagsOk(split.lead)) return { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
   if (only!.code.length > 0) return { kind: 'files' };
-  return plainFileRun(only!, root) ? { kind: 'files' } : { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
+  return !looseRun(only!) && plainFileRun(only!, root) ? { kind: 'files' } : { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
 }
 
 function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {

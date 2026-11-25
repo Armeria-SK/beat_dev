@@ -11,11 +11,15 @@ export const PROTECT_FILES_OFFERED = 'hooks.protect-files.offered';
 export const DEFAULT_PROTECT_FILES: BuiltinHookConfig = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] };
 
 const WINDOWS = process.platform === 'win32';
-const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+const ASCII_ONLY = /^[\x00-\x7f]*$/u;
+const foldChar = (c: string): string => { const lower = c.toLowerCase(); return [...lower].length === 1 ? lower : c; };
+const fold = (p: string) => (ASCII_ONLY.test(p) ? p.toLowerCase() : Array.from(p, foldChar).join(''));
+const baseFold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+const inside = (root: string, target: string): boolean => isInside(root, target) || isInside(fold(root), fold(target));
 const GLOB_CHAR = /[*?]/u;
 const WALK_LIMIT = 20_000;
 
-interface Rule { bases: string[]; rest: string[] }
+interface Rule { bases: string[]; rest: string[]; restBase: string[] }
 
 const segCache = new Map<string, RegExp>();
 function segRegex(seg: string): RegExp {
@@ -52,24 +56,30 @@ function rulesOf(pattern: string, roots: string[]): Rule[] {
   const parts = normalized.split('/');
   const first = parts.findIndex(part => GLOB_CHAR.test(part));
   const fixed = (first < 0 ? parts : parts.slice(0, first)).filter((part, i) => part !== '' || (i === 0 && !drive));
-  const rest = (first < 0 ? [] : parts.slice(first)).filter(Boolean).map(fold);
-  const make = (base: string): Rule => ({ bases: [...new Set([base, realish(base)])], rest });
+  const tail = (first < 0 ? [] : parts.slice(first)).filter(Boolean);
+  const rest = tail.map(fold);
+  const restBase = tail.map(baseFold);
+  const make = (base: string): Rule => ({ bases: [...new Set([base, realish(base)])], rest, restBase });
   if (!absolute) return roots.map(root => make(resolve(root, ...fixed)));
   if (WINDOWS && normalized.startsWith('//')) return [make(`\\\\${fixed.filter(Boolean).join('\\')}`)];
   const head = drive ? `${fixed[0]}/` : '/';
   return [make(resolve(head, ...fixed.slice(drive ? 1 : 0).filter(Boolean)))];
 }
 
-function relSegs(base: string, target: string): string[] {
-  const rel = relative(fold(base), fold(target));
+function relSegs(base: string, target: string, f: (p: string) => string): string[] {
+  const rel = relative(f(base), f(target));
   return rel === '' ? [] : rel.split(sep);
+}
+
+function restMatches(rule: Rule, base: string, target: string, dir: boolean): boolean {
+  return matchSegs(rule.rest, relSegs(base, target, fold), dir) || matchSegs(rule.restBase, relSegs(base, target, baseFold), dir);
 }
 
 function hits(rule: Rule, target: string, dir: boolean): boolean {
   return rule.bases.some(base => {
-    if (isInside(target, base)) return true;
-    if (!isInside(base, target)) return false;
-    return rule.rest.length === 0 || matchSegs(rule.rest, relSegs(base, target), dir);
+    if (inside(target, base)) return true;
+    if (!inside(base, target)) return false;
+    return rule.rest.length === 0 || restMatches(rule, base, target, dir);
   });
 }
 
@@ -80,7 +90,7 @@ interface Budget { left: number }
 function protectedInodes(rules: Rule[], budget: Budget): Inodes {
   const found = new Map<string, string>();
   const add = (rule: Rule, base: string, file: string): void => {
-    if (rule.rest.length && !matchSegs(rule.rest, relSegs(base, file), false)) return;
+    if (rule.rest.length && !restMatches(rule, base, file, false)) return;
     try { const st = statSync(file, { bigint: true }); if (st.nlink > 1n) found.set(`${st.dev}:${st.ino}`, file); } catch { }
   };
   for (const rule of rules) {
@@ -144,7 +154,7 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
     const real = resolved.path;
     const dir = entry.dir === true || /[\\/]$/u.test(entry.path) || isDirectory(real);
     const targets = [...new Set([given, lexical, real])];
-    const shown = fold(real) === fold(given) ? entry.path : guardText(language, 'hook.protected_real', { path: entry.path, real });
+    const shown = (WINDOWS ? fold(real) === fold(given) : real === given) ? entry.path : guardText(language, 'hook.protected_real', { path: entry.path, real });
     if (!resolved.sure) { reasons.push(guardText(language, 'hook.protected_unsure', { path: entry.path })); continue; }
     if (rules.some(rule => targets.some(target => hits(rule, target, dir)))) { reasons.push(shown); continue; }
     let st;

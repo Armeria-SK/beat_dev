@@ -554,3 +554,62 @@ test('v3 P1b: その場のコードのメソッドの .exec( は送信に数え�
     `ruby -e "Process.exec('x')"`, `ruby -e "require 'pty'; PTY.spawn('x')"`, `node -e "require('shelljs').exec('id')"`,
   ]);
 });
+
+// 2026-11-26 shell-judge A4: process-starting APIs that the first list missed (a name with a letter after spawn, a name after an underscore or a dot, and calls that were never listed)
+test('A4 その場のコードが別のプログラムを起こす入口の取りこぼし（os.exec*・os.spawn*・posix_spawn・startfile・os.fork・asyncio の subprocess・Open3・process.execve・cluster.fork・Deno.run・pcntl_exec）は send。普通のコードは今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `python -c "import os; os.execv('/bin/sh', ['sh'])"`, `python -c "import os; os.execvp('sh', ['sh'])"`, `python -c "import os; os.execle('/bin/sh', 'sh', {})"`,
+    `python -c "import os; os.spawnl(os.P_NOWAIT, '/bin/sh', 'sh')"`, `python -c "import os; os.spawnvp(os.P_WAIT, 'sh', ['sh'])"`, `python -c "import os; os.posix_spawn('/bin/sh', ['sh'], {})"`,
+    `python -c "import os; os.posix_spawnp('sh', ['sh'], {})"`, `python -c "import os; os.startfile('x.exe')"`, `python -c "import os; os.fork()"`, `python -c "import os; os.forkpty()"`,
+    `python -c "import asyncio; asyncio.create_subprocess_shell('id')"`, `python -c "import asyncio; asyncio.create_subprocess_exec('id')"`,
+    `python -c "import os as o; o.execv('/bin/sh', ['sh'])"`, `python -c "from os import execv; execv('/bin/sh', ['sh'])"`, `python -c "import os as o; o.spawnvp(o.P_WAIT, 'sh', ['sh'])"`,
+    `ruby -e "require 'open3'; Open3.capture2('id')"`, `ruby -e "Open3.popen3('id')"`,
+    `node -e "process.execve('/bin/sh', ['sh'])"`, `node -e "require('cluster').fork()"`, `node -e "const cluster = require('node:cluster'); cluster.fork()"`,
+    `node -e "import('node:cluster')"`, `deno eval "Deno.run({ cmd: ['id'] })"`, `php -r 'pcntl_exec("/bin/sh");'`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    `node -e "console.log(1)"`, `python -c "print(1)"`, `python -c "import os; print(os.getcwd(), os.path.join('a', 'b'))"`, `node -e "console.log(Object.keys({ execute: 1, spawned: 2 }))"`,
+    `python -c "print('forked'.upper())"`, `node -e "const re = /a/; console.log(re.exec('a'))"`, `ruby -e "puts Time.now"`, `php -r 'echo 1;'`, `node -e "console.log(['cluster', 'fork'].join(' '))"`,
+  ]);
+  expectKinds(f.kindOf, 'powershell', 'send', [`python -c "import os; os.execv('/bin/sh', ['sh'])"`, `node -e "require('cluster').fork()"`]);
+});
+
+// 2026-11-26 shell-rest S3: process-starting calls that only differ in letter case (PHP function names), a language's own quote forms (Perl qx, Ruby %x), and python -m with the name stuck on or a flag stuck before it
+test('S3 PHP の関数名の大文字小文字・Perl の qx・Ruby の %x・python の -m名前（-mhttp.server・-Bm http.server）は send。普通のコードと python -m pytest は今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `php -r 'SYSTEM("id");'`, `php -r 'Shell_Exec("id");'`, `php -r 'PCNTL_EXEC("/bin/sh");'`, `php -r 'Passthru("id");'`, `php -r 'proc_open("id", [], $p);'`, `php -r 'pcntl_fork();'`,
+    `perl -e 'print qx(id)'`, `perl -e 'qx{id}'`, `perl -e 'my $x = qx/id/;'`, `perl -e 'qx (id)'`,
+    `ruby -e 'puts %x(id)'`, `ruby -e 'x = %x{id}'`,
+    `python -mhttp.server`, `python -Bm http.server`, `python3 -mhttp.server 8000`, `python -Im http.server`, `python -msimplehttpserver`, `python -m http.server`,
+    `python -mtwine upload dist/x`, `python -Bm twine upload dist/x`, `python3 -u -mtwine upload dist/x`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [
+    `php -r 'echo 1;'`, `perl -e 'print 1'`, `ruby -e 'puts 1'`, `python -c "print('%x' % 255)"`, `python -m pytest`, `python -mpytest`, `python -Bm pytest`, `python -mtwine check dist/x`,
+    `ruby -e 'puts "50%"'`,
+    `node -e "console.log(1)"`, `python -c "print(1)"`, `python -c "import os; print(os.getcwd(), os.path.join('a', 'b'))"`, `node -e "console.log(Object.keys({ execute: 1, spawned: 2 }))"`,
+    `python -c "print('forked'.upper())"`, `node -e "const re = /a/; console.log(re.exec('a'))"`, `ruby -e "puts Time.now"`, `node -e "console.log(['cluster', 'fork'].join(' '))"`,
+  ]);
+  expectKinds(f.kindOf, 'powershell', 'send', [`php -r 'SYSTEM("id");'`, `python -mhttp.server`]);
+});
+
+// 2026-11-26 shell-rest 差し戻し: python の値を取らない旗 -P（先頭にパスを足さない）・-R（ハッシュの乱数化）を -m の前にくっつけても、-m の名前を読む
+test('S3 python の -Pm・-Rm・-PRm のように値を取らない旗をくっつけた -m も読む。-m の名前が普通の道具のものは今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `python -Pm http.server`, `python -Rm http.server`, `python -PRm http.server`, `python3 -IPm http.server 8000`, `python -Pmhttp.server`, `python -Pm twine upload dist/x`, `python -Rmtwine upload dist/x`,
+    `python -P -m http.server`, `python -pm http.server`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [`python -Pm pytest`, `python -Rm pytest`, `python -PRm unittest`, `python -Pm twine check dist/x`, `python -P script.py`]);
+});
+
+// 2026-11-26 shell-rest 差し戻し 3: python の -m が 2 回書かれているときは、最初の 1 つだけでなく全部の名前を読む（どれが実際に動くか迷う書き方は、送るほうに倒す）
+test('S3 python に -m が 2 つ以上あるときは、どの名前が http.server・twine でも送る。-m の名前が全部ふつうの道具のものは今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `python -m pytest -m http.server`, `python -mpytest -mhttp.server`, `python -m pytest -Pm http.server`, `python -m unittest -m twine upload dist/x`, `python3 -Bm pytest -m http.server 8000`,
+    `python -m pytest -m "not slow" -m http.server`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [`python -m pytest -m "not slow"`, `python -m pytest -m slow -m unit`, `python -mpytest -mslow`, `python -m twine check dist/x -m x`]);
+});

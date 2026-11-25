@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { PendingError, PendingStore, type PendingChange } from '../src/pending/store.ts';
+import { cleanReason, PendingError, PendingStore, type PendingChange } from '../src/pending/store.ts';
 import { compareSnapshot, fileFacts, pathFact } from '../src/pending/snapshot.ts';
 import { agentRun } from '../src/tools/builtin/agent.ts';
 import { fileWrite } from '../src/tools/builtin/files.ts';
@@ -13,6 +13,7 @@ import { taskCheckpoint, taskComplete } from '../src/tools/builtin/tasks.ts';
 import { questionAdd } from '../src/tools/builtin/questions.ts';
 import { askOwner } from '../src/tools/builtin/ask.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
+import { pendingText } from '../src/shared/messages/pending.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { buildMcpTool } from '../src/mcp/tool.ts';
 import type { ToolDef } from '../src/tools/types.ts';
@@ -369,4 +370,209 @@ test('前の版で積んだ待ちの行（state.rest が無い・伏せた形で
   assert.equal(decided.shown, oldShown);
   assert.equal(decided.parts.body, 'echo token=[REDACTED] | iex');
   assert.equal(decided.masked, 1);
+});
+
+// BL-pending-judge B1: 動かしたあとの出力の末尾（output_preview）と、古くなって閉じた理由にも、beat が預かった鍵の値は [BEAT-SECRET] の印にして残さない
+const HELD_VALUE = 'zq81-held-value-4f2a9c';
+const heldStore = (s: ReturnType<typeof setup>) => new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env SEARCH_API_KEY', value: HELD_VALUE }] });
+const parkOn = (store: PendingStore, dir: string) => store.park({ tool: 'shell_run', input: { command: 'npm test' }, cwd: dir, kind: 'send', reason: 'r', runId: 'run-1', runKind: 'chat', conversationId: 'conv-h', check: { decision: 'ask', reasons: ['r'] } });
+const dump = (row: unknown): string => JSON.stringify(row);
+
+test('B1: 動かしたあとの出力の末尾に預かった鍵の値が出ても、[BEAT-SECRET] の印にして値は DB に残さない', async t => {
+  const s = setup(t);
+  const store = heldStore(s);
+  const row = await parkOn(store, s.dir);
+  store.claim(row.id);
+  store.finish(row.id, { status: 'ran', exitCode: 0, output: `connecting with ${HELD_VALUE} ... done` });
+  const saved = store.row(row.id)!;
+  assert.equal(saved.output_preview, 'connecting with [BEAT-SECRET: env SEARCH_API_KEY] ... done');
+  assert.ok(!dump(saved).includes(HELD_VALUE), '行のどこにも値が残らない');
+  assert.ok(!dump(store.view(row.id)).includes(HELD_VALUE), '返す形のどこにも値が残らない');
+});
+
+test('B1: 末尾 2000 字の切れ目に鍵がまたがっても、切る前に印にするので鍵の後半が残らない', async t => {
+  const s = setup(t);
+  const store = heldStore(s);
+  const row = await parkOn(store, s.dir);
+  store.claim(row.id);
+  // 切れ目（後ろから 2000 字目）は鍵の 12 字目: 切ったあとにかけると、鍵の残り 10 字が裸で残る
+  const output = `${'x'.repeat(5000)}${HELD_VALUE}${'y'.repeat(1990)}`;
+  store.finish(row.id, { status: 'ran', output });
+  const preview = store.row(row.id)!.output_preview!;
+  assert.ok(preview.length <= 2000);
+  assert.ok(!preview.includes(HELD_VALUE.slice(-10)), `鍵の後半が残らない: ${preview.slice(0, 60)}`);
+  assert.ok(!preview.includes(HELD_VALUE.slice(0, 8)));
+  assert.match(preview, /yyyy$/u, '末尾の中身は残る');
+});
+
+test('B1: 古くなって閉じた行（closeStale）も、output_preview と reject_reason の鍵を印にする。長い理由でも切る前に印にする', async t => {
+  const s = setup(t);
+  const store = heldStore(s);
+  const first = await parkOn(store, s.dir);
+  store.closeStale(first.id, `the folder moved while ${HELD_VALUE} was set`);
+  const a = store.row(first.id)!;
+  assert.equal(a.status, 'stale');
+  assert.equal(a.output_preview, 'the folder moved while [BEAT-SECRET: env SEARCH_API_KEY] was set');
+  assert.equal(a.reject_reason, 'the folder moved while [BEAT-SECRET: env SEARCH_API_KEY] was set');
+  assert.ok(!dump(a).includes(HELD_VALUE));
+  // 理由の上限（500 字）の切れ目に鍵がまたがる
+  const second = await parkOn(store, s.dir);
+  store.closeStale(second.id, `${'r'.repeat(495)}${HELD_VALUE}`);
+  const b = store.row(second.id)!;
+  assert.ok(!dump(b).includes(HELD_VALUE.slice(0, 4)), `切れ目で鍵の頭が残らない: ${b.reject_reason}`);
+  assert.ok(!dump(b).includes(HELD_VALUE.slice(-8)));
+});
+
+test('B1: 預かった鍵が無い行・鍵の出ない出力は、今までと同じ（形での伏せだけ）', async t => {
+  const s = setup(t);
+  const store = heldStore(s);
+  const row = await parkOn(store, s.dir);
+  store.claim(row.id);
+  store.finish(row.id, { status: 'failed', exitCode: 1, output: `token=abc123def456ghi\n${'z'.repeat(3000)}` });
+  const preview = store.row(row.id)!.output_preview!;
+  assert.equal(preview.length, 2000);
+  assert.ok(preview.endsWith('z'.repeat(100)));
+  const plain = await s.park();
+  s.store.claim(plain.id);
+  s.store.finish(plain.id, { status: 'ran', exitCode: 0, output: `Bearer ${SECRET} ok` });
+  assert.equal(s.store.row(plain.id)!.output_preview, '[REDACTED] ok', '形での伏せは先にかかる');
+});
+
+// BL-pending-judge B2: 数え切れなかったフォルダ（more）は前も今も「over N files」の同じ文になる。同じ文のまま「変わった」と並べず、今の側を「確かめられない」にする
+test('B2: 5 万件超のフォルダ（more）の変わった点の行は、前と今が同じ文にならず、今の側が「確かめられない」になる', () => {
+  const big = { path: 'D:/x', exists: true, type: 'dir' as const, size: 1, files: 50_000, newest: 1_700_000_000_000, more: true as const };
+  const changes = compareSnapshot({ git: null, paths: [big] }, { git: null, paths: [{ ...big }] });
+  assert.equal(changes.length, 1, '確かめられないので変わった扱いは今までどおり');
+  assert.match(changes[0]!.before, /over 50000 files/u, 'before は今のまま（前の控えの文）');
+  assert.equal(changes[0]!.now, pendingText('en', 'snap.unverifiable'));
+  assert.notEqual(changes[0]!.before, changes[0]!.now);
+});
+
+test('B2: 前と今の文がちがう行・確かめられない側が 1 つだけの行・もともと確かめられない行は今のまま', () => {
+  const big = { path: 'D:/x', exists: true, type: 'dir' as const, size: 1, files: 50_000, newest: 1_700_000_000_000, more: true as const };
+  // 今のほうは数え終わって件数がちがう: 文がちがうので、今の文のまま
+  const { more: _more, ...counted } = { ...big, files: 7 };
+  const [a] = compareSnapshot({ git: null, paths: [big] }, { git: null, paths: [counted] });
+  assert.match(a!.now, /7 files/u);
+  // フォルダが消えた: 今は missing
+  const [b] = compareSnapshot({ git: null, paths: [big] }, { git: null, paths: [{ path: 'D:/x', exists: false }] });
+  assert.equal(b!.now, pendingText('en', 'snap.missing'));
+  // 確かめられない（ネットワークのパス）は、もともと前も今も「確かめられない」の文
+  const remote = { path: String.raw`\\server\share\x`, exists: false, unverifiable: true as const };
+  const [c] = compareSnapshot({ git: null, paths: [remote] }, { git: null, paths: [remote] });
+  assert.equal(c!.before, pendingText('en', 'snap.unverifiable'));
+  assert.equal(c!.now, pendingText('en', 'snap.unverifiable'));
+  // 確かめられる行が変わったときの文は今までどおり
+  const file = { path: 'D:/f', exists: true, type: 'file' as const, size: 3, mtime: 1_700_000_000_000 };
+  const [d] = compareSnapshot({ git: null, paths: [file] }, { git: null, paths: [{ ...file, size: 9 }] });
+  assert.match(d!.before, /3 bytes/u);
+  assert.match(d!.now, /9 bytes/u);
+  assert.equal(compareSnapshot({ git: null, paths: [file] }, { git: null, paths: [{ ...file }] }).length, 0, '変わっていない確かめられる行は出ない');
+});
+
+// BL-pending-judge B1 (fix-back): cleanReason は制御・書式の文字を消す。消す前に印にするだけだと、U+200B などで割った鍵が、印を素通りして消したあとに元の鍵に戻る
+test('B1: 理由の中の預かった鍵が U+200B（書式の文字）で割られていても、reject_reason は印になる。消す前の印と、消したあとの印の両方が要る', async t => {
+  const s = setup(t);
+  const store = heldStore(s);
+  const zwsp = String.fromCharCode(0x200b);
+  const nul = String.fromCharCode(0);
+  const cases = [
+    `${HELD_VALUE.slice(0, 9)}${zwsp}${HELD_VALUE.slice(9)}`,
+    `${HELD_VALUE.slice(0, 5)}${nul}${HELD_VALUE.slice(5, 14)}${zwsp}${zwsp}${HELD_VALUE.slice(14)}`,
+    HELD_VALUE,
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env SEARCH_API_KEY] was set', JSON.stringify(text));
+    assert.ok(!saved.reject_reason!.includes(HELD_VALUE.slice(0, 8)), '鍵の頭が残らない');
+  }
+});
+
+test('B1: 預かった鍵が改行を含む値（複数行の鍵）でも、理由の中では印になる（制御文字を消したあとだけで印にすると、改行が消えて見つからない）', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const multi = ['-----BEGIN-EXAMPLE-KEY-----', 'abcDEF123456abcDEF', '-----END-EXAMPLE-KEY-----'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const row = await parkOn(store, s.dir);
+  store.closeStale(row.id, `moved while ${multi} was set`);
+  const saved = store.row(row.id)!;
+  assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set');
+  assert.equal(saved.output_preview, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set');
+  assert.ok(!dump(saved).includes('abcDEF123456abcDEF'));
+});
+
+// BL-secret-marks M4: 改行を含む預かった値が、理由の中で見えない文字（U+200B）でも割られているとき。
+// 消す前の印は割れ目で外れ、制御文字を全部消したあとの印は改行が無くなって外れる。書式の文字（Cf）だけを先に消して、改行を残したまま印にする回が要る
+test('M4: 改行を含む預かった値が、理由の中で U+200B でも割られていても、reject_reason は印になる（値の一部が残らない）', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const zwsp = String.fromCharCode(0x200b);
+  const multi = ['line1-first-part', 'line2-secret-part'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const cases = [
+    `line1-first-part${lf}${zwsp}line2-secret-part`,
+    `line1-first-part${zwsp}${lf}line2-secret-part`,
+    `line1-fi${zwsp}rst-part${lf}line2-secret-part`,
+    `line1-first-part${lf}line2-sec${zwsp}${zwsp}ret-part`,
+    `line1-first-part${lf}line2-secret-part`,
+    multi.replace(lf, `${zwsp}${lf}${zwsp}`),
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set', JSON.stringify(text));
+    assert.ok(!saved.reject_reason!.includes('line2'), `値の一部が残らない: ${JSON.stringify(saved.reject_reason)}`);
+  }
+});
+
+test('M4: 理由の見えない文字を消す今の動きは変わらない（預かった値の無い理由・長さの上限・前後の空白）', async t => {
+  const s = setup(t);
+  const zwsp = String.fromCharCode(0x200b);
+  const nul = String.fromCharCode(0);
+  const store = heldStore(s);
+  const row = await parkOn(store, s.dir);
+  store.closeStale(row.id, `  moved${zwsp} while${nul} idle\n `);
+  assert.equal(store.row(row.id)!.reject_reason, 'moved while idle');
+  const long = await parkOn(store, s.dir);
+  store.closeStale(long.id, 'x'.repeat(600));
+  assert.equal(store.row(long.id)!.reject_reason!.length, 500, '切る長さ（REASON_MAX）は今のまま');
+  assert.equal(cleanReason(undefined), null);
+  assert.equal(cleanReason(`${zwsp}`), null, '見えない文字だけの理由は null');
+});
+
+// M4 の続き: 改行の隣が書式の文字（Cf）でなく制御文字（NUL など）で割られた複数行の値も、理由の中で印になる。
+// 先に消すのは Cf と、空白（\t \n \v \f \r）でない制御文字。U+FEFF は \s に入るが Cf なので、行の中にあっても先に消える
+test('M4: 改行を含む預かった値が、理由の中で NUL など（Cf でない制御文字）でも割られていても、reject_reason は印になる', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const multi = ['line1-first-part', 'line2-secret-part'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const c = (code: number): string => String.fromCharCode(code);
+  const cases = [
+    `line1-first-part${lf}${c(0)}line2-secret-part`,
+    `line1-first-part${c(0)}${lf}line2-secret-part`,
+    `line1-first-part${lf}${c(1)}${c(0x7f)}line2-secret-part`,
+    `line1-first-part${lf}${c(0x85)}line2-secret-part`,
+    `line1-fi${c(0)}rst-part${lf}line2-sec${c(0x1f)}ret-part`,
+    `line1-fi${c(0xfeff)}rst-part${lf}line2-secret-part`,
+    `line1-first-part${lf}${c(0xfeff)}line2-sec${c(0xfeff)}ret-part`,
+    `line1-first-part${lf}${c(0x200b)}${c(0)}line2-secret-part`,
+    `line1-first-part${lf}line2-secret-part`,
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set', JSON.stringify(text));
+  }
+});
+
+test('M4: 空白（タブ・改行）を消す今の動きは変わらない', () => {
+  const tab = String.fromCharCode(9);
+  const lf = String.fromCharCode(10);
+  assert.equal(cleanReason(`a${tab}b${lf}c`), 'abc');
+  assert.equal(cleanReason(`a${String.fromCharCode(0)}b${String.fromCharCode(0x200b)}c`), 'abc');
 });

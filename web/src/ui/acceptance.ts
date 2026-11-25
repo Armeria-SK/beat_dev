@@ -121,7 +121,8 @@ export const itemDetails = (entry: AcceptanceItem | NotDoingItem): Detail[] =>
 export const conversationLink = (source: AcceptanceSource): string | null =>
   (source.kind === 'owner_words' && source.conversationId ? routeHash({ view: 'chat', id: source.conversationId }) : null);
 
-export const acceptanceMeta = (acc: Acceptance): string => (acc.draft ? t('ui.acc.draft') : t('ui.acc.version', acc.version));
+export const acceptanceMeta = (acc: Acceptance, building = false): string =>
+  (acc.draft ? (building ? '' : t('ui.acc.draft')) : t('ui.acc.version', acc.version));
 
 export const showAcceptance = (acc: Acceptance | null): boolean =>
   acc !== null && (!acc.draft || shownItems(acc).length > 0 || acc.not_doing.length > 0);

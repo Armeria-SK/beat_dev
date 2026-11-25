@@ -638,6 +638,4 @@ export const ja = {
   'ui.set.rs.preferDesc': '物差しがこの順に上に並べます',
   'ui.set.rs.avoidDesc': '物差しが下に並べます',
   'ui.set.rs.columnsDesc': '似ている製品は名前・ライセンス・更新日・言語・リンク、機能は名前、選択は問いと選択肢を出します。今は変えられません',
-  'ui.ps.rs.intro': 'Global のままの行は Settings に従います。ここで変えたものはこの製品だけに効きます',
-  'ui.ps.rs.badNumber': (min: number, max: number) => `${min}〜${max} の整数にするか、空にしてください`,
 } satisfies { [K in ExplainKey]?: Dict[K] };

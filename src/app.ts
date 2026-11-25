@@ -265,7 +265,7 @@ export class App {
     });
     this.acceptance.repairAll(this.log);
     adoptLegacyPlans({ kv: this.kv, projectsDir: this.paths.projects, backupsDir: this.paths.backups, log: this.log, now });
-    this.questions = new QuestionStore(this.db, { now, onChange: change => { this.bus.publish({ type: 'question.changed', ...change }); this.#questionChanged(change); }, tasks: this.tasks, projects: this.projects, acceptance: this.acceptance });
+    this.questions = new QuestionStore(this.db, { now, onChange: change => { this.bus.publish({ type: 'question.changed', ...change }); this.#questionChanged(change); }, tasks: this.tasks, projects: this.projects, acceptance: this.acceptance, secrets: () => this.registry.held().map(held => held.value) });
     this.memoryFiles = new ProductMemory({ db: this.db, projectsDir: this.paths.projects, projects: this.projects, now });
     this.mesh = new Mesh({ projectsDir: this.paths.projects, backupsDir: this.paths.backups, plans: this.plans, acceptance: this.acceptance, projects: this.projects, tasks: this.tasks, memory: this.memoryFiles, timezone: () => this.config().timezone, now, log: this.log, scoutStale: id => scoutState(this.kv, id).stale });
     for (const project of [...this.projects.list(), ...this.projects.list({ archived: true })]) this.mesh.persist(project.id);

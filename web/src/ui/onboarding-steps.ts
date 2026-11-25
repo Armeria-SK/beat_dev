@@ -66,8 +66,8 @@ export function modelFormOf(form: ConnectForm): ModelForm {
   return { source: 'openai', model: form.model.trim(), baseUrl: form.baseUrl.trim(), server: 'generic', contextLength: form.context.trim(), apiKeyEnv: '' };
 }
 
-export function listPlan(latest: Config, form: ConnectForm): { config: Config; providerId: string; items: Access[] } {
-  const built = setupProviderConfig(latest, modelFormOf(form));
+export function listPlan(latest: Config, form: ConnectForm, modelId: string | null = null): { config: Config; providerId: string; items: Access[] } {
+  const built = setupProviderConfig(latest, modelFormOf(form), modelId);
   const provider = (built.config.providers as Array<Record<string, any>>).find(p => p.id === built.providerId);
   return { ...built, items: [...accessWidening(latest, built.config), ...(form.key.trim() && provider ? keyEntryAccess(provider) : [])] };
 }

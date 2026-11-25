@@ -39,9 +39,22 @@ export async function removeDir(dir: string, waitMs = 10_000): Promise<void> {
   }
 }
 
+// 試験を始めたプロセスが終わるとき、まだ残っている tempDir のフォルダを消す。
+// 同期の試験は t を持たないので `tempDir({ after: () => undefined })` と書かれ、後片付けが登録されないまま一時置き場にたまっていた（backlog 379）。
+// 試験の後片付け（removeDir）が先に済んだフォルダは、ここに残らない。消せなかったもの（開いたままのファイルなど）は、あきらめて次へ進む
+const untidy = new Set<string>();
+let sweeping = false;
+function sweepUntidy(): void {
+  for (const dir of untidy) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* 開いたままなら、次の掃除に任せる */ }
+  }
+}
+
 export function tempDir(t: { after: (fn: () => void | Promise<void>) => void }): string {
   const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
-  t.after(() => removeDir(dir));
+  untidy.add(dir);
+  if (!sweeping) { sweeping = true; process.on('exit', sweepUntidy); }
+  t.after(async () => { await removeDir(dir); untidy.delete(dir); });
   return dir;
 }
 

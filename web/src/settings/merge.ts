@@ -28,8 +28,10 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   return keys.length === defined(right).length && keys.every(k => deepEqual(left[k], right[k]));
 }
 
+const uniqueIds = (list: ReadonlyArray<{ id: string }>): boolean => new Set(list.map(item => item.id)).size === list.length;
+
 // id を持つ一覧（models / providers）は id で突き合わせ、追加・削除・項目の中の編集・並べ替えに分ける。
-// それ以外の一覧（タグ・順番・フック・フォルダ）は 1 つの値として扱う。
+// それ以外の一覧（タグ・順番・フック・フォルダ）と、同じ id が 2 つ以上ある一覧は 1 つの値として扱う（重複を黙って 1 つにせず、サーバーの検査に任せる）。
 export function diffConfig(saved: Config, draft: Config): Edit[] {
   const edits: Edit[] = [];
   walk(saved, draft, [], edits);
@@ -42,7 +44,7 @@ function walk(before: unknown, after: unknown, path: Path, edits: Edit[]): void 
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) walk(before[key], after[key], [...path, key], edits);
     return;
   }
-  if (Array.isArray(before) && Array.isArray(after) && hasIds(before) && hasIds(after)) {
+  if (Array.isArray(before) && Array.isArray(after) && hasIds(before) && hasIds(after) && uniqueIds(before) && uniqueIds(after)) {
     const old = new Map(before.map(item => [item.id, item]));
     for (const item of after) {
       const existing = old.get(item.id);

@@ -8,7 +8,7 @@ import { Value } from '@sinclair/typebox/value';
 import { ResearchConfig } from '../src/config/schema.ts';
 import { parseConfig } from '../src/config/store.ts';
 import { Conversations } from '../src/db/conversations.ts';
-import { parseProjectResearch, researchSettings } from '../src/research/settings.ts';
+import { researchSettings } from '../src/research/settings.ts';
 import { testConfig } from './helpers.ts';
 
 const codeOf = (fn: () => unknown): string => {
@@ -165,16 +165,14 @@ test('記録の store（D9・L4）: 終えるとき、持ち主が元の会話�
   assert.deepEqual(reasons, { 'Markdown preview': 'owner_said', 'Tags': null, 'Full text search': null, 'Sync across devices': null, 'Version history': null, 'Encrypted vault storage': null });
 });
 
-test('設定（D13）: 調べる設定の既定と、製品ごとの上書きが全体より強い。上限の外（候補 9）は設定として通らない', () => {
+test('設定（D13）: 調べる設定の既定と、Settings の全体の設定の反映。上限の外（候補 9）は設定として通らない', () => {
   const base = testConfig();
   const { research: _off, ...plain } = base;
   assert.deepEqual(researchSettings(plain), { when: 'new', mode: 'auto', limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 }, askLanguage: true, preferLanguages: [], avoidLanguages: [] });
-  const merged = researchSettings({ ...base, research: { when: 'button', limits: { fetches: 10 }, preferLanguages: ['Go'] } }, { when: 'off', limits: { minutes: 5 } });
-  assert.deepEqual([merged.when, merged.limits, merged.preferLanguages], ['off', { candidates: 8, searches: 15, fetches: 10, minutes: 5 }, ['Go']]);
+  const global = researchSettings({ ...base, research: { when: 'button', limits: { fetches: 10 }, preferLanguages: ['Go'] } });
+  assert.deepEqual([global.when, global.limits, global.preferLanguages], ['button', { candidates: 8, searches: 15, fetches: 10, minutes: 20 }, ['Go']]);
   assert.equal(Value.Check(ResearchConfig, { limits: { candidates: 9 } }), false);
   assert.equal(Value.Check(ResearchConfig, { preferLanguages: ['COBOL'] }), false);
-  assert.equal(parseProjectResearch('{"limits":{"candidates":9}}'), undefined);
-  assert.deepEqual(parseProjectResearch('{"when":"off"}'), { when: 'off' });
   assert.doesNotThrow(() => parseConfig({ ...base, research: { when: 'new', mode: 'one_by_one' }, routing: { ...base.routing, research: ['claude-haiku'] } }));
 });
 

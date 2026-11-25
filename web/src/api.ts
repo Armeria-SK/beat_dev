@@ -124,7 +124,7 @@ export interface Coverage {
 }
 export type ProjectNote = 'nested_inside' | 'contains_product' | 'inside_config_root' | 'config_root_read_only' | 'not_git';
 export interface NewProject { root: string; name?: string; checkCommand?: string }
-export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode; researchSettings?: ResearchOwn | null }
+export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
@@ -243,8 +243,7 @@ export interface ResearchRecord {
 export type ResearchLanguageName = 'TypeScript / JavaScript' | 'Python' | 'Go' | 'Rust' | 'C#' | 'Java / Kotlin' | 'C / C++' | 'Swift' | 'Dart' | 'PHP' | 'Ruby';
 export interface ResearchLimitsView { candidates: number; searches: number; fetches: number; minutes: number }
 export interface ResearchSettingsView { when: 'new' | 'button' | 'off'; mode: 'auto' | 'one_by_one' | 'batch'; limits: ResearchLimitsView; askLanguage: boolean; preferLanguages: ResearchLanguageName[]; avoidLanguages: ResearchLanguageName[] }
-export type ResearchOwn = Partial<Omit<ResearchSettingsView, 'limits'>> & { limits?: Partial<ResearchLimitsView> };
-export interface ResearchView { settings: ResearchSettingsView; own: ResearchOwn | null; products: ResearchRecord | null; libraries: ResearchRecord | null; suggestedCheck: string | null }
+export interface ResearchView { settings: ResearchSettingsView; products: ResearchRecord | null; libraries: ResearchRecord | null; suggestedCheck: string | null }
 export interface ResearchPick { id: number; decision: string | number; reason?: string; setup?: boolean }
 export interface ScoutState { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null }
 export interface ChatBuild {

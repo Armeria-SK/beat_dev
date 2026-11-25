@@ -161,12 +161,15 @@ export function Composer(props: ComposerProps) {
     const leftOut = attachLeftOut(attached.length, files.length);
     if (leftOut > 0) toast({ kind: 'info', icon: 'alert', title: t('ui.composer.attachLimit', MAX_ATTACHMENTS, leftOut) });
     setUploading(true);
+    const claim = composerDrafts.claim(props.draftKey);
     try {
       for (const picked of [...files].slice(0, attachRoom(attached.length, files.length))) {
         const upload = await api.upload(picked);
+        if (!claim.live()) break;
         setAttached(list => [...list, upload]);
       }
     } catch (error) { props.onAttachFailed(error); } finally {
+      claim.release();
       setUploading(false);
       if (file.current) file.current.value = '';
     }

@@ -11,6 +11,9 @@ export const RUNS_WINDOW = 500;
 
 export const isTemplate = (task: Pick<Task, 'cron' | 'parent_id'>): boolean => task.cron !== null && task.parent_id === null;
 
+// ready なのに、やり直しを使い切った（attempts が max_attempts 以上）。ワーカーは選ばない（pickNext は attempts < max_attempts だけ）。Run now は予定を戻して動かし直す（routes-tasks.ts）
+export const exhausted = (task: Pick<Task, 'status' | 'attempts' | 'max_attempts'>): boolean => task.status === 'ready' && task.attempts >= task.max_attempts;
+
 export const awaitsCheck = (task: Pick<Task, 'status' | 'check_state'>): boolean => task.status === 'done' && task.check_state === 'awaiting';
 
 // beat 8-3: 取り込み待ち（終わったタスクのブランチが、持ち主の merge を待っている）と、取り込まれたブランチ
@@ -21,11 +24,11 @@ export const branchLeft = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'work
 
 export const mergedBranch = (task: Pick<Task, 'status'> & Partial<Pick<Task, 'worktree'>>): boolean => task.status === 'done' && task.worktree?.state === 'merged';
 
-export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state' | 'cancelled_from'> & Partial<Pick<Task, 'worktree'>>): ColumnId | null {
+export function columnOf(task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'check_state' | 'cancelled_from' | 'attempts' | 'max_attempts'> & Partial<Pick<Task, 'worktree'>>): ColumnId | null {
   if (isTemplate(task) || (task.status === 'cancelled' && task.cancelled_from === 'inbox')) return null;
   switch (task.status) {
     case 'inbox': return 'proposed';
-    case 'ready': return 'approved';
+    case 'ready': return exhausted(task) ? 'failed' : 'approved';
     case 'running': case 'waiting': return 'progress';
     case 'done': return awaitsCheck(task) || awaitsMerge(task) ? 'check' : 'done';
     case 'failed': case 'cancelled': return 'failed';

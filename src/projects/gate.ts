@@ -231,20 +231,27 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
   const failures: string[] = [];
   const failedIds: string[] = [];
   const lines: string[] = [];
+  let lastRun: { command: string; run: ToolRunResult; at: number } | undefined;
   for (const entry of mine) {
     if (entry.check?.kind !== 'command') continue;
     const state = stateOf(list, entry.id);
     if (state === 'met' || state === 'unverified' && settled(entry.id)) continue;
     const command = entry.check.command;
     const shown = clip(command, COPY_INPUT);
-    const run: ToolRunResult = ctx.runTool ? await ctx.runTool('shell_run', { command }) : { output: { content: 'shell_run is not available', isError: true }, decision: 'deny', decidedBy: 'run_tool' };
-    if (ctx.signal.aborted || ctx.stopSignal?.aborted) {
-      save(marks);
-      return { kind: 'refuse', text: t('stopped') };
+    // 続けて同じコマンド（文字列が完全に同じ）の項目は 1 回だけ動かし、その結果と時刻を使い回す。間に別のコマンドを動かしたあとの同じコマンドは動かし直す（その間にファイルが変わりうる）
+    let once = lastRun?.command === command ? lastRun : undefined;
+    if (!once) {
+      const fresh: ToolRunResult = ctx.runTool ? await ctx.runTool('shell_run', { command }) : { output: { content: 'shell_run is not available', isError: true }, decision: 'deny', decidedBy: 'run_tool' };
+      if (ctx.signal.aborted || ctx.stopSignal?.aborted) {
+        save(marks);
+        return { kind: 'refuse', text: t('stopped') };
+      }
+      once = { command, run: fresh, at: Date.now() };
+      lastRun = once;
     }
+    const { run, at } = once;
     ran.add(entry.id);
     const result = outcomeOf(run);
-    const at = Date.now();
     if (result === 'met') {
       marks.push({ id: entry.id, state: 'met', evidence: [{ tool: 'shell_run', command: shown, ok: true, at }] });
       lines.push(t('state_met', { id: entry.id }));

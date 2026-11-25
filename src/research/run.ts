@@ -21,7 +21,7 @@ import { dateIn } from '../mesh/files.ts';
 import { DELIVERY_OPTIONS, DELIVERY_QUESTION, deliveryIn, heavyIn, isLanguage, LANGUAGE_OPTIONS_MAX, LANGUAGE_QUESTION, languageDecided, languagesIn, LOAD_OPTIONS, LOAD_QUESTION, pastLanguages, rankLanguages, toolsFor } from './choices.ts';
 import { ResearchError } from './labels.ts';
 import { checkToolchain, TOOLCHAIN, type ToolCheck } from './toolchain.ts';
-import { ONE_BY_ONE_BELOW, parseProjectResearch, researchSettings } from './settings.ts';
+import { ONE_BY_ONE_BELOW, researchSettings } from './settings.ts';
 import { ResearchStore, type ConfirmDecision, type ResearchItemRow, type ResearchPhase, type ResearchRunRow } from './store.ts';
 
 export type ResearchTrigger = 'owner_send' | 'owner_button' | 'owner_confirm';
@@ -229,7 +229,7 @@ export class ResearchRunner {
   #settings(projectId: string) {
     const project = this.#d.projects.get(projectId);
     if (!project) return undefined;
-    return researchSettings(this.#d.config(), parseProjectResearch(project.research_settings));
+    return researchSettings(this.#d.config());
   }
 
   // 頼みに写す持ち主の文（守り 2・R3.11 M4 (a)・L4 (a)）: 元の会話 1 つの、generated・note・askAnswer でない発言だけ。添付は外し、合わせて 2,000 字まで

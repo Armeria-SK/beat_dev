@@ -139,6 +139,34 @@ test('8-4 Undo / Redo（記録の元・git でない製品）: 元に戻り、�
   assert.equal((await s.redo(p.id, '00000000-0000-4000-8000-000000000000')).status, 404);
 });
 
+test('quiet-loss C1 バイナリ・UTF-16 のファイルへの append: 記録は書いたバイト列のハッシュになり、Undo で元のバイトが戻り、Redo で足したバイトまで戻る', async t => {
+  const s = await rig(t);
+  const original = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0xc3, 0x28, 0x00, 0xf0, 0x0a]);
+  const utf16 = Buffer.from('﻿hi\r\n', 'utf16le');
+  const p = await s.product('bin', { 'b.bin': original, 'u.txt': utf16 });
+  await s.run(p.id, [
+    call('file_write', { path: 'b.bin', content: 'tail\n', mode: 'append' }),
+    call('file_write', { path: 'u.txt', content: 'tail\n', mode: 'append' }),
+  ]);
+  const grown = Buffer.concat([original, Buffer.from('tail\n')]);
+  const grownU = Buffer.concat([utf16, Buffer.from('tail\n')]);
+  assert.deepEqual(readFileSync(join(p.root, 'b.bin')), grown);
+  assert.deepEqual(readFileSync(join(p.root, 'u.txt')), grownU);
+  assert.deepEqual(s.rows(p.id).map(r => [r.path, r.action, r.before_hash, r.after_hash]), [
+    ['b.bin', 'modify', sha(original), sha(grown)],
+    ['u.txt', 'modify', sha(utf16), sha(grownU)],
+  ]);
+  const undone = await s.undo(p.id, { base: 'records', paths: 'all' });
+  assert.equal(undone.status, 200, JSON.stringify(undone.body));
+  assert.deepEqual([undone.body.undone, undone.body.refused], [['b.bin', 'u.txt'], []]);
+  assert.deepEqual(readFileSync(join(p.root, 'b.bin')), original);
+  assert.deepEqual(readFileSync(join(p.root, 'u.txt')), utf16);
+  const redone = await s.redo(p.id, undone.body.redo);
+  assert.equal(redone.status, 200, JSON.stringify(redone.body));
+  assert.deepEqual(readFileSync(join(p.root, 'b.bin')), grown);
+  assert.deepEqual(readFileSync(join(p.root, 'u.txt')), grownU);
+});
+
 test('8-4 シェルで変えたファイル: git の製品では「前のコミット」の差分に出て Undo できる。git でない製品の記録には出ない', { skip: !gitAvailable }, async t => {
   const s = await rig(t);
   const g = await s.product('repo', { 'a.txt': 'one\n' }, { git: true });

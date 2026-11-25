@@ -261,7 +261,18 @@ function limitChanges(before: Config, after: Config): Access[] {
       if (typeof was[name] === 'number' && typeof now[name] === 'number' && now[name] > was[name]) out.push({ kind: 'limit-raised', key: `${root}.${name}`, from: was[name], to: now[name] });
     }
   }
+  const searchesBefore = searchesPerHour(before);
+  const searchesAfter = searchesPerHour(after);
+  if (searchesBefore !== null && searchesAfter !== null && searchesAfter > searchesBefore) out.push({ kind: 'limit-raised', key: 'tools.web.maxSearchesPerHour', from: searchesBefore, to: searchesAfter });
   return out;
+}
+
+// 検索の回数の上限は limits の下ではなく tools.web にある。書いていなければ既定（src/config/schema.ts の tools.web.maxSearchesPerHour）。数でない値は比べない
+const DEFAULT_SEARCHES_PER_HOUR = 30;
+function searchesPerHour(config: Config): number | null {
+  const value = obj(obj(config.tools).web).maxSearchesPerHour;
+  if (value === undefined) return DEFAULT_SEARCHES_PER_HOUR;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 // ブラウザ: 無効 → 有効、操作してよいサイトの追加。「=ホスト」（そのホストだけ）が外れて「ホスト」（サブドメインも）が入るのは、広げる変更として別に出す。
