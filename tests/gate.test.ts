@@ -101,7 +101,7 @@ test('5-3b 実機の代わり（台本のモデル・本物のシェル）: 項�
   const task = s.task(p.id, ['A-1', 'A-2', 'A-3']);
   await s.run(task.id, [echo('page'), done([{ id: 'A-3', evidence: 'E-1' }])]);
   assert.deepEqual(s.states(p.id), { 'A-1': 'met', 'A-2': 'met', 'A-3': 'unverified' });
-  assert.deepEqual(s.runs(p.root), ['pass', 'pass']);
+  assert.deepEqual(s.runs(p.root), ['pass'], '同じコマンドの 2 項目は 1 回だけ動かす');
   const after = s.app.tasks.get(task.id)!;
   assert.equal(after.status, 'done');
   assert.equal(after.check_state, 'awaiting');
@@ -641,7 +641,7 @@ test('R13 答えで開き直した項目は直しのタスクが受け持ち、�
   const build = s.task(p.id, ['A-1', 'A-2', 'A-3']);
   await s.run(build.id, [echo('page'), done([{ id: 'A-3', evidence: 'E-1' }])]);
   assert.deepEqual(s.states(p.id), { 'A-1': 'met', 'A-2': 'met', 'A-3': 'unverified' });
-  assert.deepEqual(s.runs(p.root), ['pass', 'pass']);
+  assert.deepEqual(s.runs(p.root), ['pass'], '同じコマンドの 2 項目は 1 回だけ動かす');
   s.clock.now += 1000;
   const question = s.app.questions.add({ projectId: p.id, taskId: build.id, question: 'Say hello or hi?', options: ['hello', 'hi'], chosen: 0, acceptanceItem: 'A-1' });
   s.clock.now += 1000;
@@ -659,7 +659,7 @@ test('R13 答えで開き直した項目は直しのタスクが受け持ち、�
   assert.deepEqual(accepted.body.acceptance.unbuilt, [], '直しのタスクが受け持つので Build を待つ項目ではない');
   assert.equal(s.states(p.id)['A-1'], 'open');
   await s.run(fixId, [done()]);
-  assert.deepEqual(s.runs(p.root), ['pass', 'pass', 'pass'], '門がコマンドを動かし直す');
+  assert.deepEqual(s.runs(p.root), ['pass', 'pass'], '門がコマンドを動かし直す');
   assert.equal(s.app.tasks.get(fixId)!.status, 'done');
   const reran = s.app.acceptance.itemStates(p.id)['A-1']!;
   assert.deepEqual([reran.state, reran.by, reran.taskId], ['met', 'gate', fixId]);
@@ -857,4 +857,46 @@ test('5-3c-u GET /api/tasks の awaiting: しまった製品の確かめ待ち�
     mark.run(s.clock.now + i, s.clock.now + i, row.id);
   }
   assert.equal(((await api('/api/tasks', 'GET')).body.awaiting as unknown[]).length, 200, 'active と同じく 200 件まで');
+});
+
+// quiet-loss C3: 1 回の門の中で、同じコマンド（文字列が完全に同じ）を持つ項目が複数あっても、コマンドは 1 回だけ動かし、その結果を全部の項目に使う
+test('quiet-loss C3 同じコマンドを持つ 2 項目: コマンドは 1 回だけ動き、2 項目とも met で、証拠の時刻も同じ', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Lists files', check: command(PASS) }, { result: 'Saves files', check: command(PASS) }, { result: 'The page looks right', check: look }]);
+  const task = s.task(p.id, ['A-1', 'A-2', 'A-3']);
+  await s.run(task.id, [echo('page'), done([{ id: 'A-3', evidence: 'E-1' }])]);
+  assert.deepEqual(s.runs(p.root), ['pass'], '同じコマンドは 1 回だけ');
+  assert.deepEqual(s.states(p.id), { 'A-1': 'met', 'A-2': 'met', 'A-3': 'unverified' });
+  const [one] = s.evidence(p.id, 'A-1') as Array<{ command: string; ok: boolean; at: number }>;
+  const [two] = s.evidence(p.id, 'A-2') as Array<{ command: string; ok: boolean; at: number }>;
+  assert.deepEqual([one!.command, one!.ok], [PASS, true]);
+  assert.deepEqual(two, one, '証拠は同じ 1 回の結果（時刻も同じ）');
+  const result = lastText(s.toolTexts(task.id), 'task_complete');
+  assert.match(result.text, /A-1 met \(its command passed\)/u);
+  assert.match(result.text, /A-2 met \(its command passed\)/u);
+});
+
+test('quiet-loss C3 違うコマンドの項目は今までどおり順に 1 回ずつ動く', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Lists files', check: command(PASS) }, { result: 'Saves files', check: command(`${PASS} extra`) }]);
+  const task = s.task(p.id, ['A-1', 'A-2']);
+  await s.run(task.id, [done()]);
+  assert.deepEqual(s.runs(p.root), ['pass', 'pass'], '文字列が違えば別のコマンド');
+  assert.deepEqual(s.states(p.id), { 'A-1': 'met', 'A-2': 'met' });
+});
+
+test('quiet-loss C3 同じコマンドが失敗したときも 1 回だけ動き、2 項目とも open で、失敗の出力の末尾は同じ', async t => {
+  const s = await setup(t);
+  const p = s.product('shop', [{ result: 'Tests pass', check: command(FAIL) }, { result: 'Still pass', check: command(FAIL) }]);
+  const task = s.task(p.id, ['A-1', 'A-2']);
+  await s.run(task.id, [done()]);
+  assert.deepEqual(s.runs(p.root), ['fail'], '同じコマンドは 1 回だけ');
+  assert.deepEqual(s.states(p.id), { 'A-1': 'open', 'A-2': 'open' });
+  const [one] = s.evidence(p.id, 'A-1') as Array<{ output: string; ok: boolean }>;
+  const [two] = s.evidence(p.id, 'A-2') as Array<{ output: string; ok: boolean }>;
+  assert.equal(one!.ok, false);
+  assert.match(one!.output, /2 tests failed/u);
+  assert.deepEqual(two, one, '失敗の証拠も同じ 1 回の結果（出力の末尾・時刻とも同じ）');
+  const [event] = s.events(task.id, 'item_check_failed');
+  assert.match(event!.content ?? '', /A-1, A-2/u);
 });

@@ -231,20 +231,27 @@ export async function runGate(ctx: ToolContext, task: Task, input: readonly Gate
   const failures: string[] = [];
   const failedIds: string[] = [];
   const lines: string[] = [];
+  const ranCommands = new Map<string, { run: ToolRunResult; at: number }>();
   for (const entry of mine) {
     if (entry.check?.kind !== 'command') continue;
     const state = stateOf(list, entry.id);
     if (state === 'met' || state === 'unverified' && settled(entry.id)) continue;
     const command = entry.check.command;
     const shown = clip(command, COPY_INPUT);
-    const run: ToolRunResult = ctx.runTool ? await ctx.runTool('shell_run', { command }) : { output: { content: 'shell_run is not available', isError: true }, decision: 'deny', decidedBy: 'run_tool' };
-    if (ctx.signal.aborted || ctx.stopSignal?.aborted) {
-      save(marks);
-      return { kind: 'refuse', text: t('stopped') };
+    // この門の中で同じコマンド（文字列が完全に同じ）は 1 回だけ動かし、その結果と時刻を、同じコマンドを持つ全部の項目に使う
+    let once = ranCommands.get(command);
+    if (!once) {
+      const fresh: ToolRunResult = ctx.runTool ? await ctx.runTool('shell_run', { command }) : { output: { content: 'shell_run is not available', isError: true }, decision: 'deny', decidedBy: 'run_tool' };
+      if (ctx.signal.aborted || ctx.stopSignal?.aborted) {
+        save(marks);
+        return { kind: 'refuse', text: t('stopped') };
+      }
+      once = { run: fresh, at: Date.now() };
+      ranCommands.set(command, once);
     }
+    const { run, at } = once;
     ran.add(entry.id);
     const result = outcomeOf(run);
-    const at = Date.now();
     if (result === 'met') {
       marks.push({ id: entry.id, state: 'met', evidence: [{ tool: 'shell_run', command: shown, ok: true, at }] });
       lines.push(t('state_met', { id: entry.id }));
