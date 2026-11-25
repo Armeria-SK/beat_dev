@@ -28,26 +28,41 @@ const frozen = {
   frozen: { version: 1, hash: 'a1', plan_hash: 'p1', created_at: 5, source: 'build', build_task_id: 't1' },
 } as unknown as Acceptance;
 
-interface Rig { container: HTMLElement; finishBuild: (status: number, body: unknown) => void; setAcceptance: (next: Acceptance) => void }
+interface Rig {
+  container: HTMLElement; finishBuild: (status: number, body: unknown) => void; setAcceptance: (next: Acceptance) => void;
+  hold: () => void; held: () => number; release: (index: number) => void; bump: () => Promise<void>;
+}
 
 async function openPlan(first: Acceptance = draft): Promise<Rig> {
   let acceptance = first;
   let answer: (response: Response) => void = () => undefined;
+  let holding = false;
+  const held: Array<() => void> = [];
   globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
     const [route] = String(path).split('?');
     const method = init?.method ?? 'GET';
     const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
     if (route === `/api/projects/${PRODUCT}/plan`) return reply(200, { plan: { content: '# Parser', hash: 'p1', updated_at: 1, updated_by: 'owner', tainted: false, writing: false, reviewLocked: false, built_hash: null } });
-    if (route === `/api/projects/${PRODUCT}/acceptance`) return reply(200, { acceptance });
+    if (route === `/api/projects/${PRODUCT}/acceptance`) {
+      if (!holding) return reply(200, { acceptance });
+      const snapshot = acceptance;
+      return new Promise<Response>(resolve => { held.push(() => resolve(reply(200, { acceptance: snapshot }))); });
+    }
     if (route === `/api/projects/${PRODUCT}/acceptance/versions`) return reply(200, { versions: [] });
     if (route === `/api/projects/${PRODUCT}/build` && method === 'POST') return new Promise<Response>(resolve => { answer = resolve; });
     return reply(404, { error: 'not found' });
   }) as typeof fetch;
-  const { container } = await render(createElement(PlanPane, { productId: PRODUCT, conversationId: CHAT, revision: '0', isGit: true }));
+  const pane = (revision: string) => createElement(PlanPane, { productId: PRODUCT, conversationId: CHAT, revision, isGit: true });
+  const { container, root } = await render(pane('0'));
   await settle();
   await settle();
+  let revision = 0;
   return {
     container,
+    hold: () => { holding = true; },
+    held: () => held.length,
+    release: index => held[index]!(),
+    bump: async () => { revision += 1; await update(() => root.render(pane(String(revision)))); await settle(); },
     finishBuild: (status, body) => answer(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })),
     setAcceptance: next => { acceptance = next; },
   };
@@ -92,4 +107,32 @@ test('333 ui/PlanPane（DOM）: すでに固めた版に残りがあって 2 回
   await click(buildButton(rig.container));
   await settle();
   assert.equal(header(rig.container), en['ui.acc.version'](1));
+});
+
+test('333 ui/PlanPane（DOM）: 固めた知らせ（acceptance.changed）が Build の読み直しと同時に来て、Build の読み直しが追い越されても、版の番号が出るまで Draft に戻らない', async () => {
+  const rig = await openPlan();
+  const seen: string[] = [];
+  const watch = () => { seen.push(header(rig.container) ?? '(none)'); };
+  await click(buildButton(rig.container));
+  await settle();
+  watch();
+  rig.setAcceptance(frozen);
+  rig.hold();
+  rig.finishBuild(201, { task: { id: 't1', status: 'ready' }, version: 1 });
+  await settle();
+  await settle();
+  assert.equal(rig.held(), 1, '前提: Build の読み直しが 1 本、返事待ち');
+  await rig.bump();
+  assert.equal(rig.held(), 2, '前提: 生きた知らせの読み直しがもう 1 本（こちらが新しい）');
+  watch();
+  rig.release(0);
+  await settle();
+  await settle();
+  watch();
+  assert.ok(!header(rig.container)?.startsWith('Draft'), '古い読み直しの返事が着いて Build が終わっても、新しい読み直しが着くまで Draft とは言わない');
+  rig.release(1);
+  await settle();
+  await settle();
+  watch();
+  assert.deepEqual(seen, ['', '', '', en['ui.acc.version'](1)]);
 });

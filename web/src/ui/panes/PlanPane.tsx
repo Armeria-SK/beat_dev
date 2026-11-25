@@ -757,7 +757,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
             {accNotice?.failure.kind === 'stale' && <div role="status"><Notice tone="warn" icon="alert" title={t(accNotice.what === 'edit' ? 'ui.acc.edit.stale' : 'ui.acc.change.staleNotice')} /></div>}
             {accNotice?.failure.kind === 'failed' && <Notice tone="fail" title={t(accNotice.what === 'edit' ? 'ui.acc.edit.failed' : 'ui.acc.change.failed')} text={accNotice.failure.detail ?? undefined} />}
             {change && <ProposedChange acc={acc} change={change} busy={accBusy} onDecide={decision => void decide(decision)} />}
-            {showAcceptance(acc) && <AcceptanceList acc={acc} editing={editing} differs={differs} building={building} />}
+            {showAcceptance(acc) && <AcceptanceList acc={acc} editing={editing} differs={differs} building={building || sentBuild !== null} />}
             {deviations && <Differs data={deviations} />}
             {acc.frozen && <Versions productId={productId} latest={acc.frozen.version} />}
           </>
