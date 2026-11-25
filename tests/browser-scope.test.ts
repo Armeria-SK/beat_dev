@@ -36,10 +36,10 @@ async function chat(s: Started, id: string, text: string, model?: string): Promi
 
 const names = (s: Started, n: number) => offered(s.adapter().calls[n]!);
 const browserNames = (s: Started, n: number) => names(s, n).filter(isBrowserTool).sort();
-const ALL = ['browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type'];
+const ALL = ['browser_act', 'browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type'];
 const enable = (c: ReturnType<typeof testConfig>) => { c.tools.browser.enabled = true; };
 
-test('T-09 組み込みの道具に browser_open / read / find / screenshot / close / click / type がある。既定（無効）ではモデルに渡らない', async t => {
+test('T-09 組み込みの道具に browser_open / read / find / screenshot / close / click / type / act がある。既定（無効）ではモデルに渡らない', async t => {
   assert.deepEqual(builtinTools().map(tool => tool.name).filter(isBrowserTool).sort(), ALL);
   assert.deepEqual(BROWSER_TOOLS.map(tool => tool.name).sort(), ALL);
   const s = await startApp(t, { models: [fakeModel('m1')] });
@@ -49,13 +49,22 @@ test('T-09 組み込みの道具に browser_open / read / find / screenshot / cl
   assert.ok(names(s, 0).includes('file_read'), '前提: ほかの道具は渡っている');
 });
 
-test('T-09 有効にするとチャットの実行に 7 つとも渡る。モデルを選んだ会話でも渡る', async t => {
+test('T-09 有効にするとチャットの実行に 8 つとも渡る。モデルを選んだ会話でも渡る', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')], configure: enable });
   s.adapter().scripts = [reply('こんにちは'), reply('こんにちは')];
   await chat(s, uuid(1), 'やあ');
   assert.deepEqual(browserNames(s, 0), ALL);
   await chat(s, uuid(2), 'やあ', 'm1');
   assert.deepEqual(browserNames(s, 1), ALL, 'モデルを選んだ会話でも渡る');
+});
+
+test('P5 browser_click か browser_type を止めると、browser_act もモデルに渡す一覧から外れる（ほかの browser_* は残る）', async t => {
+  for (const name of ['browser_click', 'browser_type']) {
+    const s = await startApp(t, { models: [fakeModel('m1')], configure: c => { enable(c); c.tools.policies = { [name]: 'block' }; } });
+    s.adapter().scripts = [reply('こんにちは')];
+    await chat(s, uuid(1), 'やあ');
+    assert.deepEqual(browserNames(s, 0), ALL.filter(tool => tool !== name && tool !== 'browser_act'), name);
+  }
 });
 
 test('T-09 計画モードには、読むだけの browser_* は渡り、送信になりうる道具（submits）は渡らない', async t => {
@@ -68,7 +77,7 @@ test('T-09 計画モードには、読むだけの browser_* は渡り、送信�
   s.app.conversations.create({ id, title: '計画' });
   const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: '計画して', permissionMode: 'plan' });
   await settled(s.app, sent.body.runId);
-  // browser_close は効果が meta、click / type は submits なので、計画モードには渡らない（読む open / read / find / screenshot だけ）
+  // browser_close は効果が meta、click / type / act は submits なので、計画モードには渡らない（読む open / read / find / screenshot だけ）
   assert.deepEqual(browserNames(s, 0), ['browser_find', 'browser_open', 'browser_read', 'browser_screenshot']);
 });
 

@@ -66,6 +66,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   browser_close: { icon: 'archive', desc: 'tool.browser_close' },
   browser_click: { icon: 'globe', desc: 'tool.browser_click' },
   browser_type: { icon: 'pencil', desc: 'tool.browser_type' },
+  browser_act: { icon: 'globe', desc: 'tool.browser_act' },
   agent_run: { icon: 'cpu', desc: 'tool.agent_run' },
 };
 

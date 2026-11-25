@@ -511,12 +511,12 @@ function toolRig(t: TestContext, change: (config: AppConfig) => void = () => und
   return { driver, session, config, ctx };
 }
 
-test('道具の一覧: 7 つとも会話・タスク・子の担当（押す・入れるは 9-1b から）。振り返りと考える実行には browser_* が無い（T9 の一覧の壁）', () => {
+test('道具の一覧: 8 つとも会話・タスク・子の担当（押す・入れるは 9-1b から）。振り返りと考える実行には browser_* が無い（T9 の一覧の壁）', () => {
   const tools = builtinTools();
   const browserNames = (kind: string) => tools.filter(tool => tool.name.startsWith('browser_') && (tool.allowedIn as readonly string[]).includes(kind)).map(tool => tool.name).sort();
-  assert.deepEqual(browserNames('chat'), ['browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
-  assert.deepEqual(browserNames('task'), ['browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
-  assert.deepEqual(browserNames('agent'), ['browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
+  assert.deepEqual(browserNames('chat'), ['browser_act', 'browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
+  assert.deepEqual(browserNames('task'), ['browser_act', 'browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
+  assert.deepEqual(browserNames('agent'), ['browser_act', 'browser_click', 'browser_close', 'browser_find', 'browser_open', 'browser_read', 'browser_screenshot', 'browser_type']);
   assert.deepEqual(browserNames('review'), []);
   assert.deepEqual([...SCOUT_TOOLS].filter(name => name.startsWith('browser_')), []);
 });

@@ -463,3 +463,27 @@ test('P3a: 速さ: 1 MB の長い名前の行の中に同じ名前のボタン�
   assert.equal(refsOf(t, 'Pick').length, 300, '見せるのは 300 個まで（手がかりは組の 2,000 個全部で作る）');
   assert.ok(took < 500, `${Math.round(took)} ms`);
 });
+
+test('P5 名前で指す: 同じ役割で名前が完全に同じ要素を、表の並びのまま返す（部分一致・別の役割は入らない）。無ければ空', () => {
+  const book = newRefBook();
+  const lines = ai('- button "Save" [ref=a1]', '- button "Save draft" [ref=a2]', '- link "Save" [ref=a3]:', '  - /url: /save', '- button "Save" [ref=a4]');
+  readElements(lines, URL_FORM, book, 0);
+  const named = readElements(lines, URL_FORM, book, 0, { kind: 'check', named: { role: 'button', name: 'Save' } }).named!;
+  assert.deepEqual(named.map(e => e.pwRef), ['a1', 'a4']);
+  assert.deepEqual(named.map(e => e.role), ['button', 'button']);
+  const none = readElements(lines, URL_FORM, book, 0, { kind: 'check', named: { role: 'button', name: 'Sav' } }).named!;
+  assert.deepEqual(none, []);
+  assert.equal(readElements(lines, URL_FORM, book, 0, { kind: 'check' }).named, undefined);
+});
+
+test('P5 画面のまとめ（shape）: 入力欄の値と焦点だけの変化では変わらず、文・要素の増減・名前の変化では変わる。頼まなければ作らない', () => {
+  const book = newRefBook();
+  const shape = (...lines: string[]) => readElements(ai(...lines), URL_FORM, book, 0, { kind: 'check', shape: true }).shape!;
+  const base = shape('- heading "Step 1" [level=1] [ref=a1]', '- textbox "Name" [ref=a2]', '- button "Next" [ref=a3]');
+  assert.match(base, /^[0-9a-f]{16,}$/u);
+  assert.equal(shape('- heading "Step 1" [level=1] [ref=a1]', '- textbox "Name" [active] [ref=a2]: Taro', '- button "Next" [ref=a3]'), base, '打った値と焦点では変わらない');
+  assert.notEqual(shape('- heading "Step 2" [level=1] [ref=a1]', '- textbox "Name" [ref=a2]', '- button "Next" [ref=a3]'), base, '見出しの文');
+  assert.notEqual(shape('- heading "Step 1" [level=1] [ref=a1]', '- textbox "Name" [ref=a2]', '- button "Next" [ref=a3]', '- button "Delete all" [ref=a4]'), base, '要素が増えた');
+  assert.notEqual(shape('- heading "Step 1" [level=1] [ref=a1]', '- textbox "Name" [ref=a2]', '- button "Pay now" [ref=a3]'), base, '名前');
+  assert.equal(readElements(ai('- button "Next" [ref=a3]'), URL_FORM, book, 0, { kind: 'check' }).shape, undefined);
+});

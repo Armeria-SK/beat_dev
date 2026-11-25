@@ -209,6 +209,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   browser_close: [{}, 'Close tab', 'all tabs'],
   browser_click: [{ ref: 'e12' }, 'Click', 'element e12'],
   browser_type: [{ ref: 'e7', text: 'hello' }, 'Type text', 'element e7'],
+  browser_act: [{ steps: [{ click: 'e3' }, { type: 'e4', text: 'my words' }] }, 'Page steps', '2 steps'],
 };
 
 test('ui/tool-row: 組み込みの道具のどれも、ふつうの引数なら行に人の言葉の名前と空でない対象が出る（snake_case の名前を出さない）', () => {
