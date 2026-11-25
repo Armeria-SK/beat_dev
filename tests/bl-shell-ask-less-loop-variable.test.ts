@@ -38,6 +38,12 @@ const EVERYDAY: ReadonlyArray<readonly [string, Shell]> = [
   ["foreach ($f in Get-ChildItem) { $f.Name -replace 'a', 'b' }", 'powershell'],
   ['foreach ($f in Get-ChildItem) { $f | Out-Null }', 'powershell'],
   ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'powershell'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'pwsh'],
+  ["pwsh -NoProfile -c 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
+  ["powershell -NoProfile -NonInteractive -NoLogo -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
+  ["powershell -noprofile -command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash'],
+  ['foreach ($f in Get-ChildItem) { "x" }', 'powershell'],
   ['Get-ChildItem | ForEach-Object { $_.FullName }', 'powershell'],
   ['$files = Get-ChildItem; $files.Count', 'powershell'],
 ];
@@ -124,6 +130,21 @@ const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask'] | readonly 
   ["env X=1 powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
   ["xargs powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
   ["wsl powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { \"Remove-Item victim.txt\" }'", 'powershell', 'ask'],
+  ["powershell -NoProfile -c 'foreach ($f in Get-ChildItem) {}; \"Remove-Item victim.txt\"'", 'powershell', 'ask'],
+  ["Start-Process powershell -ArgumentList '-NoProfile','-c','foreach ($f in Get-ChildItem) { \"Remove-Item victim.txt\" }' -Wait -NoNewWindow", 'powershell', 'ask'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { \"x\" }'", 'bash', 'ask'],
+  ["powershell -NoProfile -PSConsoleFile x.psc1 -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["powershell -NoProfile -ConfigurationName x -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["pwsh -NoProfile -SettingsFile s.json -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["powershell -NoProfile -WorkingDirectory d -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["pwsh -NoProfile -Login -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["powershell -NoProfile -ExecutionPolicy Bypass -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["pwsh -c 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
+  ["powershell -NoProfile -EncodedCommand AAAA", 'bash', 'ask'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { $f.Name }' extra", 'bash', 'ask'],
 ];
 
 test('L180 の対照: 変数の中身を動かす形・メソッドの呼び出し・メンバーへの代入・ネットワークの集まり・読むだけと言い切れない本体・ループの外の文や包み（Start-Job・Invoke-Command・Start-Process・npm exec・; curl・; Remove-Item など）は、origin/main と同じに送るのまま（守りの判定も同じ）', () => {

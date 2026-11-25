@@ -131,7 +131,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
-  assert.deepEqual(parked, ['foreach ($f in Get-ChildItem *.txt) { $f.Name }'], '4-2a の見方で「何を動かすか分からない文」（$f.Name）を含む形は、送るに数えて Pending に積む（backlog）');
+  assert.deepEqual(parked, [], 'B5（L180）: foreach の頭の変数だけの文は、集まりと本体が読むだけ（$f.Name）なら送るに数えず、承認なしで動いてファイル名が出る');
   if (which('rg')) assert.match((await s.call('rg --version')).output.content, /ripgrep/u);
 });
 

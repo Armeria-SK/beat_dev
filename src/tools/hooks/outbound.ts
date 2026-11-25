@@ -473,6 +473,19 @@ const quietWrapper = (st: StatementFacts): boolean =>
   st.shapes.length === 0 && st.env.length === 0 && st.urls.length === 0 && st.writes.length === 0 && !st.deletes
   && !st.programDynamic && !st.programOdd && !st.words.some(w => w.dynamic) && st.inner !== null;
 
+const INERT_LAUNCH_FLAGS = new Set(['-noprofile', '-noninteractive', '-nologo']);
+const LAUNCH_COMMAND_FLAGS = new Set(['-command', '-c']);
+
+const inertLauncher = (st: StatementFacts): boolean => {
+  if ((st.program !== 'powershell' && st.program !== 'pwsh') || st.words.some(w => w.text.includes('"'))) return false;
+  const args = st.words.slice(1).map(w => w.text.toLowerCase());
+  for (let i = 0; i < args.length; i++) {
+    if (INERT_LAUNCH_FLAGS.has(args[i]!)) continue;
+    return LAUNCH_COMMAND_FLAGS.has(args[i]!) && i === args.length - 2 && args.slice(0, i).includes('-noprofile');
+  }
+  return false;
+};
+
 const wrappersOf = (list: readonly StatementFacts[], target: StatementFacts): StatementFacts[] | undefined => {
   for (const st of list) {
     if (st === target) return [];
@@ -487,7 +500,7 @@ const loopReadsOnly = (header: StatementFacts, root: readonly StatementFacts[]):
   let expressions = 0;
   for (const st of flatten(root)) {
     if (st === header || namesVariableOnly(st)) continue;
-    if (enclosing.has(st)) { if (!quietWrapper(st)) return false; continue; }
+    if (enclosing.has(st)) { if (!quietWrapper(st) || !inertLauncher(st)) return false; continue; }
     if (!quietStatement(st)) return false;
     if (st.program === '' && st.words.length === 0 && ++expressions > 1) return false;
   }
