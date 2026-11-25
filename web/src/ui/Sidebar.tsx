@@ -1,13 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type Conversation, type Project } from '../api.ts';
+import { api, ApiError, type Conversation, type Project } from '../api.ts';
 import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import type { AgentState, FootLine } from './agent-state.ts';
 import { Avatar, CountBadge, Icon, JudgeOffChip } from './parts.tsx';
 import type { UiIconName } from './icons.ts';
 import { memoryHash, productNav } from './product-nav.ts';
-import { routeHash, type Route } from './routes.ts';
+import { parseRoute, routeHash, type Route } from './routes.ts';
 import { searchView, type SearchState } from './search-state.ts';
+import { SessionMenu } from './SessionMenu.tsx';
 
 export interface SidebarProps {
   state: AgentState;
@@ -86,12 +87,51 @@ function SessionRow({ conversation: c, route, running, pending }: { conversation
   const waiting = pending.get(c.id) ?? 0;
   const active = route.view === 'chat' && route.id === c.id;
   const live = running.has(c.id);
+  const title = c.title || t('ui.session.untitled');
+  const [menu, setMenu] = useState(false);
+  const row = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menu) return undefined;
+    const away = (e: PointerEvent) => { if (!row.current?.contains(e.target as Node)) setMenu(false); };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, [menu]);
+  const close = (refocus: boolean) => { setMenu(false); if (refocus) more.current?.focus(); };
+  const leaveIfOpen = () => { const now = parseRoute(location.hash); if (now.view === 'chat' && now.id === c.id) location.replace(routeHash({ view: 'new' })); };
+  const passFocus = () => {
+    const mine = row.current;
+    if (!mine) return;
+    const nav = mine.closest('nav');
+    const links = [...(nav?.querySelectorAll<HTMLElement>('.ui-side-row__link') ?? [])];
+    const at = links.indexOf(mine.querySelector<HTMLElement>('.ui-side-row__link')!);
+    (links[at + 1] ?? links[at - 1] ?? nav?.querySelector<HTMLElement>('.bt-wordmark'))?.focus();
+  };
+  const archived = (keyboard: boolean) => {
+    if (keyboard) passFocus();
+    setMenu(false);
+    toast({ icon: 'archive', title: t('ui.session.archivedToast'), body: title, action: { label: t('ui.toast.undo'), run: () => { void api.unarchiveConversation(c.id).catch(error => toast({ icon: 'alert', title: t('ui.task.toast.undoFailed'), body: error instanceof ApiError ? error.message : undefined })); } } });
+    leaveIfOpen();
+  };
+  const deleted = (keyboard: boolean) => {
+    if (keyboard) passFocus();
+    setMenu(false);
+    toast({ icon: 'x', title: t('ui.archived.toast.deleted'), body: title });
+    leaveIfOpen();
+  };
   return (
-    <a className={`bt-side bt-side--session${active ? ' is-active' : ''}`} href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
-      <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
-      <span className="bt-side__name">{c.title || t('ui.session.untitled')}</span>
-      <CountBadge n={waiting} label={t('ui.count.waiting', waiting)} />
-    </a>
+    <div ref={row} className={`bt-side bt-side--session ui-side-row${active ? ' is-active' : ''}${menu ? ' has-menu' : ''}`}>
+      <a className="ui-side-row__link" href={routeHash({ view: 'chat', id: c.id })} aria-current={active ? 'page' : undefined}>
+        <span className={`bt-side__state${live ? ' bt-side__state--running' : ''}`} role="img" aria-label={live ? t('ui.session.running') : t('ui.session.idle')} />
+        <span className="bt-side__name">{title}</span>
+        <CountBadge n={waiting} label={t('ui.count.waiting', waiting)} />
+      </a>
+      <button ref={more} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost ui-side-row__more" aria-label={t('ui.session.menuOf', title)} aria-haspopup="menu" aria-expanded={menu}
+        onClick={() => setMenu(open => !open)} onKeyDown={e => { if (e.key === 'ArrowDown' && !menu) { e.preventDefault(); setMenu(true); } }}>
+        <Icon name="more" />
+      </button>
+      {menu && <SessionMenu conversation={c} label={t('ui.session.menuOf', title)} opener={more} floating className="ui-sidemenu" onArchived={archived} onDeleted={deleted} onClose={close} />}
+    </div>
   );
 }
 

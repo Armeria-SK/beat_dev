@@ -424,6 +424,8 @@ export const en = {
   'ui.session.keep': 'Keep',
   'ui.session.gone': 'This session no longer exists',
   'ui.session.goneText': 'It was deleted, or the link is wrong.',
+  'ui.session.menuOf': (title: string) => `Menu for ${title}`,
+  'ui.session.archivedToast': 'Session archived',
   'ui.meter': 'Context',
   'ui.meter.high': 'summarise soon',
   'ui.tool.edit': 'Edit',

@@ -29,3 +29,13 @@ export function menuFit(anchor: Box, bounds: Box, size: { width: number; height:
   const left = size.width > towardLeft && towardRight > towardLeft;
   return { up, left, maxHeight: Math.floor(up ? above : below), maxWidth: Math.floor(Math.max(0, left ? towardRight : towardLeft)) };
 }
+
+export interface FixedMenu { top?: number; bottom?: number; left?: number; right?: number; maxHeight: number; maxWidth: number }
+
+export function menuFixed(anchor: Box, fit: MenuFit, view: { width: number; height: number }, gap: number): FixedMenu {
+  return {
+    ...(fit.up ? { bottom: Math.round(view.height - anchor.top + gap) } : { top: Math.round(anchor.bottom + gap) }),
+    ...(fit.left ? { left: Math.round(anchor.left) } : { right: Math.round(view.width - anchor.right) }),
+    maxHeight: fit.maxHeight, maxWidth: fit.maxWidth,
+  };
+}
