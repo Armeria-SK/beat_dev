@@ -124,7 +124,7 @@ export interface ChatRequest { frozen: string; baseTools: string[]; meshTools: s
 export function productChatRequest(config: AppConfig, paths: AppPaths, model: ModelConfig, root: string, language: Language, smallestAvailable?: number): ChatRequest {
   const registry = new ToolRegistry();
   for (const tool of builtinTools()) if (!MEMORY_TOOL_NAMES.includes(tool.name)) registry.register(tool);
-  const usual = new Set(usualTools(registry.list(), true, 'auto', model));
+  const usual = new Set(usualTools(registry.list(), true, 'auto', model, smallestAvailable));
   const exclude = (t: ToolDef) => (t.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(t.name) && !config.tools.browser.enabled)
     || effectivePolicy(t.name, config) === 'block' || !acceptanceAllows(t, false) || !(isCore(t) || usual.has(t.name));
   const chat = registry.forRun('chat', { exclude });
