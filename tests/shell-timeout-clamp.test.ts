@@ -34,6 +34,7 @@ test('timeoutSec が上限より大きいとき、返事に「切り下げた」
   const out = await shellRun.execute({ command: QUICK, timeoutSec: 900 }, s.ctx, undefined as never);
   assert.equal(out.isError, false, out.content);
   assert.match(out.content, /timeoutSec was 900 s, but the limit is 2 s, so 2 s was used/u);
+  assert.equal(out.content.split('timeoutSec was 900').length - 1, 1, '切り下げの行は 1 回だけ');
 });
 
 test('上限を超える timeoutSec で本当に切られたとき、切られた秒数の行と切り下げの行の両方がある', async t => {
@@ -42,6 +43,8 @@ test('上限を超える timeoutSec で本当に切られたとき、切られ�
   assert.equal(out.isError, true);
   assert.match(out.content, /Stopped after the 1 s timeout/u);
   assert.match(out.content, /timeoutSec was 900 s, but the limit is 1 s, so 1 s was used/u);
+  assert.equal(out.content.split('timeoutSec was 900').length - 1, 1, '切り下げの行は 1 回だけ');
+  assert.equal(out.content.split('Stopped after the 1 s timeout').length - 1, 1, '止めた行も 1 回だけ');
 });
 
 test('上限以下の timeoutSec・timeoutSec 無しでは、切り下げの行を付けない', async t => {

@@ -576,7 +576,6 @@ export const shellRun: ToolDef<ShellInput> = {
     if (result.truncated) parts.push(toolText(language, 'shell.truncated', { total: result.totalBytes.toLocaleString('en-US'), cap: settings.outputCapBytes.toLocaleString('en-US'), tail: result.fullOutputPath ? toolText(language, 'shell.truncated_tail', { path: result.fullOutputPath }) : '' }));
     if (result.timedOut) parts.push(toolText(language, 'shell.timeout', { seconds: timeoutSec }));
     if (input.timeoutSec !== undefined && input.timeoutSec > timeoutSec) parts.push(toolText(language, 'shell.timeout_lowered', { asked: input.timeoutSec, seconds: timeoutSec }));
-    if (input.timeoutSec !== undefined && input.timeoutSec > timeoutSec) parts.push(toolText(language, 'shell.timeout_lowered', { asked: input.timeoutSec, seconds: timeoutSec }));
     if (result.aborted) parts.push(toolText(language, 'shell.aborted'));
     return {
       content: shellTranscript(input.command, header, parts),
