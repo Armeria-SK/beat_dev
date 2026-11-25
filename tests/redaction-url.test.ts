@@ -375,11 +375,13 @@ test('伏せ字（exact）: 同じ鍵の組み立ては使い回す（呼ぶた�
   } finally { globalThis.RegExp = Original; }
 });
 
-test('伏せ字（exact）: 4 文字以下の数字だけの値は、要素の番号（e1234）の中を伏せない。ほかの場所・長い数字・数字以外の値は今までどおり', () => {
-  assert.equal(redactSecrets('ref e1234 / [e1234] / x1234 / 1234 / port:1234 / ee1234', ['1234']), 'ref e1234 / [e1234] / x[REDACTED] / [REDACTED] / port:[REDACTED] / ee[REDACTED]');
-  assert.equal(redactSecrets('e123456 and 123456', ['123456']), 'e[REDACTED] and [REDACTED]', '5 文字以上は要素の番号にならないので、そのまま伏せる');
+test('伏せ字（exact）: 渡した値は、e のあとの数字（要素の番号に見える形）の中でも、ほかの場所と同じに伏せる（main と同じ。どの鍵の一覧にも例外を作らない）', () => {
+  assert.equal(redactSecrets('job e4821 done', ['4821']), 'job e[REDACTED] done');
+  assert.equal(redactSecrets('ref e1234 / [e1234] / x1234 / 1234 / port:1234 / ee1234', ['1234']), 'ref e[REDACTED] / [e[REDACTED]] / x[REDACTED] / [REDACTED] / port:[REDACTED] / ee[REDACTED]');
+  assert.equal(redactSecrets('e14819 e14820 e14821 e14822', ['4821']), 'e14819 e14820 e1[REDACTED] e14822');
+  assert.equal(redactSecrets('e123456 and 123456', ['123456']), 'e[REDACTED] and [REDACTED]');
   assert.equal(redactSecrets('e1234 and e1234', ['e1234']), '[REDACTED] and [REDACTED]', '値そのものが e で始まるときは伏せる');
-  assert.equal(redactSecrets('ref e12ab and 12ab', ['12ab']), 'ref e[REDACTED] and [REDACTED]', '数字だけでない値は、e の後ろでも伏せる');
+  assert.equal(redactSecrets('ref e12ab and 12ab', ['12ab']), 'ref e[REDACTED] and [REDACTED]');
 });
 
 test('伏せ字: 振り返りに渡す道具の呼び出し（reviewWindow の skill）は、値に " が入っていても password を丸ごと伏せる', () => {
@@ -420,6 +422,18 @@ test('伏せ字: 値がバックスラッシュで終わる引用符つきの代
   for (const [input, expected, name] of cases) assert.equal(redactSecrets(input), expected, name);
 });
 
+test('伏せ字: バックスラッシュで終わる値のあとに、先読み（256 字）より遠くまで続く次の秘密（: が遠い名前・長い mysql の -p・長いユーザー名の -u）が同じ行にあっても、main と同じに伏せる', () => {
+  const BS = String.fromCharCode(92);
+  const head = `password="C:${BS}pw${BS}"`;
+  const farKey = redactSecrets(`${head} token"${' '.repeat(300)}: "tok_ABCDEFGHIJ123"`);
+  assert.equal(farKey, `password=[REDACTED] token"${' '.repeat(300)}: [REDACTED]`, ': が 300 字先の、閉じの引用符つきの名前');
+  const longMysql = redactSecrets(`${head} mysql -h x -p"${'S'.repeat(300)}"`);
+  assert.equal(longMysql, 'password=[REDACTED] mysql -h x -p[REDACTED]', '300 字の mysql の -p');
+  const longUser = redactSecrets(`${head} curl -u "${'u'.repeat(300)}:Secret77777" http://x`);
+  assert.equal(longUser, `password=[REDACTED] curl -u "${'u'.repeat(300)}:[REDACTED]" http://x`, '300 字のユーザー名の -u');
+  for (const out of [farKey, longMysql, longUser]) assert.ok(!out.includes('tok_ABC') && !out.includes('SSSS') && !out.includes('Secret77777'), out);
+});
+
 test('伏せ字: バックスラッシュで終わる値のあとに秘密でない名前の代入だけが続くときは、次の引用符まで伏せる（記録した伏せすぎ。値は残さない）', () => {
   const BS = String.fromCharCode(92);
   assert.equal(redactSecrets(`password="abc${BS}" name="x"`), 'password=[REDACTED]x"');
@@ -430,14 +444,6 @@ test('伏せ字: 振り返りに渡す道具の呼び出しは、password が配
   const transcript = reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }, undefined, 'skill').transcript;
   assert.ok(transcript.includes('browser_type'), transcript);
   assert.ok(!transcript.includes('aaaa-1111') && !transcript.includes('bbbb-2222'), transcript);
-});
-
-test('伏せ字（exact）: 要素の番号が 5 桁（e14819）でも、4 文字以下の数字の値は番号の中を伏せない。e の前に語の字があれば伏せる', () => {
-  assert.equal(redactSecrets('e14819 e14820 e14821 e14822', ['4821']), 'e14819 e14820 e14821 e14822');
-  assert.equal(redactSecrets('e4821 / 4821 / x4821 / e 4821 / ee4821 / a4821', ['4821']), 'e4821 / [REDACTED] / x[REDACTED] / e [REDACTED] / ee[REDACTED] / a[REDACTED]');
-  assert.equal(redactSecrets('e1234567', ['4567']), 'e1234567', 'e のあとの数字が 3 桁のあとの位置は伏せない');
-  assert.equal(redactSecrets('e123456789', ['6789']), 'e123456789', 'e のあとの数字が 5 桁のあとの位置は伏せない（上限）');
-  assert.equal(redactSecrets('e1234567890 and 7890', ['7890']), 'e123456[REDACTED] and [REDACTED]', 'e のあとの数字が 6 桁以上のあとの位置は伏せる');
 });
 
 test('伏せ字（exact）: 値の中の空白（スペース・タブ・改行）を JSON の \\u0020・\\u0009・\\u000A・\\u000D で書いた写しも伏せる', () => {
