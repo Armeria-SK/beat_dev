@@ -50,16 +50,20 @@ test('ui/ask-step: カードは 1 度に 1 問だけ出し、答えると次へ�
 
   await click(container.querySelectorAll('input')[1]);
   assert.equal(named('Next')?.disabled, false);
+  now += ANSWER_GUARD_MS;
   await click(named('Next'));
   assert.deepEqual(headings(), ['Which screens?'], '次の問いに替わる（並ばない）');
   assert.ok(named('Back'), '戻れる');
 
+  now += ANSWER_GUARD_MS;
   await click(named('Back'));
   assert.deepEqual(headings(), ['Which storage?']);
   assert.equal(container.querySelectorAll('input')[1] && (container.querySelectorAll('input')[1] as HTMLInputElement).checked, true, '戻っても答えは残る');
+  now += ANSWER_GUARD_MS;
   await click(named('Next'));
 
   await click(container.querySelectorAll('input')[0]);
+  now += ANSWER_GUARD_MS;
   await click(named('Next'));
   assert.deepEqual(headings(), ['Which theme?']);
   assert.equal(named('Answer')?.disabled, true, '最後の問いも答えるまで送れない');
@@ -95,6 +99,11 @@ async function mount() {
   return {
     container, sent,
     tick: (ms: number) => { time.now += ms; },
+    // Next / Back も問いが替わってすぐは受けないので、押す前に窓の分だけ時計を進める。
+    async go(text: 'Next' | 'Back') {
+      time.now += ANSWER_GUARD_MS;
+      await click(this.button(text));
+    },
     headings: () => [...container.querySelectorAll('h3')].map(h => h.textContent),
     inputs: () => [...container.querySelectorAll('input')],
     button: (text: string) => [...container.querySelectorAll('button')].find(b => b.textContent === text),
@@ -102,9 +111,9 @@ async function mount() {
     // 3 問とも答え、最後の問いまで進める。
     async answerAll() {
       await click(this.inputs()[0]);
-      await click(this.button('Next'));
+      await this.go('Next');
       await click(this.inputs()[0]);
-      await click(this.button('Next'));
+      await this.go('Next');
       await click(this.inputs()[1]);
     },
   };
@@ -126,24 +135,24 @@ test('ui/ask-step: Back keeps every earlier answer (choices, several picks, Some
   const card = await mount();
   await click(card.inputs()[2]);
   await input(card.container.querySelector('textarea'), 'flat files');
-  await click(card.button('Next'));
+  await card.go('Next');
   await click(card.inputs()[0]);
   await click(card.inputs()[1]);
-  await click(card.button('Next'));
+  await card.go('Next');
   await click(card.inputs()[1]);
   assert.deepEqual(card.headings(), ['Which theme?']);
 
-  await click(card.button('Back'));
+  await card.go('Back');
   assert.deepEqual(card.headings(), ['Which screens?']);
   assert.deepEqual(card.inputs().map(i => i.checked), [true, true, false], '2 問目: List と Detail が残る');
 
-  await click(card.button('Back'));
+  await card.go('Back');
   assert.deepEqual(card.headings(), ['Which storage?']);
   assert.deepEqual(card.inputs().map(i => i.checked), [false, false, true], '1 問目: Something else が残る');
   assert.equal(card.container.querySelector('textarea')?.value, 'flat files', '1 問目: 書いた文が残る');
 
-  await click(card.button('Next'));
-  await click(card.button('Next'));
+  await card.go('Next');
+  await card.go('Next');
   assert.deepEqual(card.headings(), ['Which theme?']);
   assert.deepEqual(card.inputs().map(i => i.checked), [false, true, false], '3 問目: Dark が残る');
   card.tick(ANSWER_GUARD_MS);
@@ -154,10 +163,11 @@ test('ui/ask-step: Back keeps every earlier answer (choices, several picks, Some
 test('ui/ask-step: a double-click on Next after Back does not send: the click that continues is not also a click on Answer', async () => {
   const card = await mount();
   await card.answerAll();
-  await click(card.button('Back'));
+  await card.go('Back');
   assert.deepEqual(card.headings(), ['Which screens?']);
 
   const next = card.button('Next')!;
+  card.tick(ANSWER_GUARD_MS);
   await clickWith(next, 1);
   await clickWith(next, 2);
   assert.deepEqual(card.headings(), ['Which theme?'], '最後の問いまで進んだだけ');
@@ -167,8 +177,9 @@ test('ui/ask-step: a double-click on Next after Back does not send: the click th
 test('ui/ask-step: the second click of a double-click lands on whatever now sits under the pointer: it never sends, a later single click does', async () => {
   const card = await mount();
   await card.answerAll();
-  await click(card.button('Back'));
+  await card.go('Back');
 
+  card.tick(ANSWER_GUARD_MS);
   await clickWith(card.primary(), 1);
   assert.deepEqual(card.headings(), ['Which theme?']);
   assert.equal(card.button('Answer')?.disabled, false, '答えはそろっていて、送れる状態');
@@ -184,8 +195,9 @@ test('ui/ask-step: the second click of a double-click lands on whatever now sits
 test('ui/ask-step: a double-tap (two clicks that both report detail 1) right after Back does not send, whatever the input device reports; a click once the window has passed does', async () => {
   const card = await mount();
   await card.answerAll();
-  await click(card.button('Back'));
+  await card.go('Back');
 
+  card.tick(ANSWER_GUARD_MS);
   await clickWith(card.button('Next'), 1);
   assert.deepEqual(card.headings(), ['Which theme?'], '1 回目のタップで最後の問いへ。Answer が同じ場所に出る');
   await clickWith(card.primary(), 1);
@@ -211,10 +223,11 @@ test('ui/ask-step: Answer reached by Tab and pressed with the keyboard (click wi
 test('ui/ask-step: two quick keyboard presses (Enter / Space click with detail 0) neither send nor skip a question', async () => {
   const card = await mount();
   await card.answerAll();
-  await click(card.button('Back'));
+  await card.go('Back');
 
   const next = card.button('Next')!;
   next.focus();
+  card.tick(ANSWER_GUARD_MS);
   await clickWith(next, 0);
   assert.deepEqual(card.headings(), ['Which theme?']);
   assert.notEqual(document.activeElement?.tagName, 'BUTTON', '進んだあとは、押したボタンにフォーカスを残さない');
@@ -222,11 +235,12 @@ test('ui/ask-step: two quick keyboard presses (Enter / Space click with detail 0
   assert.deepEqual(card.sent, [], '2 回目の押下では送らない');
   assert.deepEqual(card.headings(), ['Which theme?']);
 
-  await click(card.button('Back'));
-  await click(card.button('Back'));
+  await card.go('Back');
+  await card.go('Back');
   assert.deepEqual(card.headings(), ['Which storage?']);
   const first = card.button('Next')!;
   first.focus();
+  card.tick(ANSWER_GUARD_MS);
   await clickWith(first, 0);
   await clickWith(document.activeElement, 0);
   assert.deepEqual(card.headings(), ['Which screens?'], '2 回目の押下で答え済みの問いを飛ばさない');
@@ -239,11 +253,11 @@ test('ui/ask-step: focus follows the question: it moves to the new question on N
   const group = () => card.container.querySelector('fieldset');
 
   await click(card.inputs()[0]);
-  await click(card.button('Next'));
+  await card.go('Next');
   assert.equal(document.activeElement, group());
   assert.equal(group()?.getAttribute('aria-label'), 'Which screens?');
 
-  await click(card.button('Back'));
+  await card.go('Back');
   assert.equal(document.activeElement, group(), 'Back で押したボタンが消えても、フォーカスは body に落ちない');
   assert.equal(group()?.getAttribute('aria-label'), 'Which storage?');
 });
@@ -265,9 +279,9 @@ test('ui/ask-step: Enter does nothing to the card: a newline in the Something el
   }
 
   await click(card.inputs()[0]);
-  await click(card.button('Next'));
+  await card.go('Next');
   await click(card.inputs()[0]);
-  await click(card.button('Next'));
+  await card.go('Next');
   await click(card.inputs()[1]);
   await enter(card.inputs()[1]);
   await enter(card.inputs()[1], { isComposing: true });

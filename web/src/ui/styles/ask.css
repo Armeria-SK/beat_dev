@@ -3,7 +3,7 @@
 .ui-ask .bt-question { display: flex; flex-direction: column; max-width: none; }
 .ui-ask__chips { display: flex; align-items: center; gap: var(--space-2); }
 .ui-ask__header { padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink-soft); }
-.ui-ask .bt-choices:focus { outline: none; }
+.ui-ask .bt-choices:focus:not(:focus-visible) { outline: none; }
 .ui-ask__option { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .ui-ask .bt-question__q { overflow-wrap: anywhere; }
 .ui-ask__other { box-sizing: border-box; width: 100%; resize: vertical; }

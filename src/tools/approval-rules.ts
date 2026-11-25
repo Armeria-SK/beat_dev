@@ -7,6 +7,7 @@ import { inspectRepo } from './hooks/git-repo.ts';
 import type { Outbound } from './hooks/outbound.ts';
 import { repoInside } from './hooks/product-run.ts';
 import { toolPolicy, type HasPolicies } from './tool-policy.ts';
+import { POLICY_KEYS } from './hooks/decision-order.ts';
 import { isInside, realish, windowsNames } from './hooks/scope.ts';
 import type { StatementFacts } from './hooks/shell-guard.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef } from './types.ts';
@@ -31,7 +32,7 @@ export interface RuleCandidate { kind: RuleKind; tool: string; base: string; key
 // What the shell pre-check knows beyond the statements: the script files the command runs, and a git runner to check where a repository lives
 export interface ShapeEnv { scripts?: readonly string[] | undefined; ownHooksDir?: string | null | undefined; git?: ((dir: string, args: string[]) => string | undefined) | undefined; ownerHooks?: (() => boolean) | undefined; config?: HasPolicies | undefined }
 export interface RuleHit { id: number; shown: string }
-export interface RuleView { id: number; project_id: string; project_name: string | null; archived: boolean; kind: RuleKind; tool: string; shown: string; created_at: number; push?: true; outside?: true }
+export interface RuleView { id: number; project_id: string; project_name: string | null; archived: boolean; kind: RuleKind; tool: string; shown: string; created_at: number; push?: true; outside?: true; inactive?: true }
 
 const SHOWN_MAX = 300;
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
@@ -380,12 +381,22 @@ export function outsideRule(candidate: Pick<RuleCandidate, 'kind' | 'tool' | 'ba
   return candidate.kind === 'send' || candidate.kind === 'delete' || pushRule(candidate);
 }
 
+// A rule made from the owner's Ask list (before AP-1 offered one there) holds the Ask-list key among the reasons it was learned with. A call with that key always goes to the owner
+// (pipeline.ts ruleBlockers), so the rule is never looked up: the Settings list says so instead of showing it as a rule that works
+export function inactiveRule(keys: string): boolean {
+  try {
+    const list: unknown = JSON.parse(keys);
+    return Array.isArray(list) && list.some(key => typeof key === 'string' && POLICY_KEYS.has(key));
+  } catch { return false; }
+}
+
 export function listRules(db: DatabaseSync): RuleView[] {
-  const rows = db.prepare(`SELECT r.id, r.project_id, p.name AS project_name, p.archived_at, r.kind, r.tool, r.base, r.shown, r.created_at
-    FROM approval_rules r LEFT JOIN projects p ON p.id = r.project_id ORDER BY p.name, r.id`).all() as Array<Omit<RuleView, 'archived' | 'push' | 'outside'> & { archived_at: number | null; base: string }>;
-  return rows.map(({ archived_at, base, ...r }) => ({
+  const rows = db.prepare(`SELECT r.id, r.project_id, p.name AS project_name, p.archived_at, r.kind, r.tool, r.base, r.keys, r.shown, r.created_at
+    FROM approval_rules r LEFT JOIN projects p ON p.id = r.project_id ORDER BY p.name, r.id`).all() as Array<Omit<RuleView, 'archived' | 'push' | 'outside' | 'inactive'> & { archived_at: number | null; base: string; keys: string }>;
+  return rows.map(({ archived_at, base, keys, ...r }) => ({
     ...r, id: Number(r.id), created_at: Number(r.created_at), archived: archived_at !== null && archived_at !== undefined,
     ...(pushRule({ tool: r.tool, base }) ? { push: true as const } : {}), ...(outsideRule({ kind: r.kind, tool: r.tool, base }) ? { outside: true as const } : {}),
+    ...(inactiveRule(keys) ? { inactive: true as const } : {}),
   }));
 }
 

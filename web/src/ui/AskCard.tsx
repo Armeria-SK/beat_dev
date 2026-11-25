@@ -32,9 +32,11 @@ export function AskCard({ ask, busy, onAnswer, clock = now }: { ask: OpenAsk; bu
   const type = q.multiSelect ? 'checkbox' : 'radio';
   // Next のあと、Answer は同じ場所に出る。ダブルクリックやダブルタップの 2 回目がそこに当たって送らないよう、
   // 問いが替わってすぐ（ANSWER_GUARD_MS 以内）の押下と、ダブルクリックの 2 回目（detail 2）は受けない。
-  // タップは detail が 1 のままのことがあるので、時間のほうが決め手。
+  // タップは detail が 1 のままのことがあるので、時間のほうが決め手。Next / Back も同じ（2 回目が次の問いの Next に当たって 1 問飛ばない）。
+  const quick = (e: MouseEvent<HTMLButtonElement>) => e.detail > 1 || clock() - changedAt.current < ANSWER_GUARD_MS;
+  const move = (e: MouseEvent<HTMLButtonElement>, to: number) => { if (!quick(e)) go(to); };
   const send = (e: MouseEvent<HTMLButtonElement>) => {
-    if (e.detail > 1 || clock() - changedAt.current < ANSWER_GUARD_MS) return;
+    if (quick(e)) return;
     onAnswer(answerText(ask.questions, picks, t('ui.ask.lead')));
   };
   return (
@@ -65,11 +67,11 @@ export function AskCard({ ask, busy, onAnswer, clock = now }: { ask: OpenAsk; bu
         </div>
       </div>
       <div className="bt-card__actions ui-ask__actions">
-        {!s.first && <Button key="back" variant="ghost" small disabled={busy} onClick={() => go(qi - 1)}>{t('ui.ask.back')}</Button>}
+        {!s.first && <Button key="back" variant="ghost" small disabled={busy} onClick={e => move(e, qi - 1)}>{t('ui.ask.back')}</Button>}
         {s.last ? (
           <Button key="answer" variant="primary" small disabled={busy || !s.canSend} onClick={send}>{t('ui.ask.answer')}</Button>
         ) : (
-          <Button key="next" variant="primary" small disabled={busy || !s.canNext} onClick={() => go(qi + 1)}>{t('ui.ask.next')}</Button>
+          <Button key="next" variant="primary" small disabled={busy || !s.canNext} onClick={e => move(e, qi + 1)}>{t('ui.ask.next')}</Button>
         )}
         <span className="bt-meta">{s.last ? t('ui.ask.consequence') : t('ui.ask.consequenceStep')}</span>
       </div>

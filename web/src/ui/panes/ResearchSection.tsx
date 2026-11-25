@@ -202,6 +202,8 @@ function Record({ record, onChanged, onStart }: { record: ResearchRecord; onChan
   };
   const choices = itemsOf(record, 'choice');
   const empty = record.items.length === 0;
+  // 似ている製品の調べが失敗して 0 件のとき、このボタンは「選びで計画する」ではなく、次の段（ライブラリの調べ）へ進む唯一の道
+  const goesOn = record.phase === 'products' && record.status === 'failed' && empty;
   return (
     <div className="ui-rs__record" data-phase={record.phase} data-status={record.status}>
       <div className="ui-rs__bar">
@@ -229,7 +231,7 @@ function Record({ record, onChanged, onStart }: { record: ResearchRecord; onChan
           <LibraryList record={record} />
           {canConfirm(record) && (
             <div className="bt-card__actions ui-rs__actions">
-              <Button variant="primary" small disabled={locked} onClick={() => void confirm()}>{t('ui.rs.confirm')}</Button>
+              <Button variant="primary" small disabled={locked} onClick={() => void confirm()}>{t(goesOn ? 'ui.rs.confirmGoOn' : 'ui.rs.confirm')}</Button>
               <span className="bt-meta">{t(record.phase === 'products' ? 'ui.rs.confirmWhat' : 'ui.rs.confirmWhatLibraries')}</span>
             </div>
           )}
