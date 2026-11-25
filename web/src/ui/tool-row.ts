@@ -31,7 +31,7 @@ export interface ToolResult { text: string; isError: boolean }
 const EDIT = EDIT_TOOLS;
 const SEARCH = new Set([
   'file_read', 'file_list', 'file_search', 'doc_read', 'image_view',
-  'web_search', 'web_fetch', 'browser_read',
+  'web_search', 'web_fetch', 'browser_read', 'browser_find',
   'history_search', 'history_read', 'memory_search', 'skill_view',
   'mesh_read', 'mesh_search',
 ]);
@@ -101,6 +101,7 @@ const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
   question_list: () => t('ui.toolTarget.product'),
   date_calc: dateTarget,
   browser_read: a => tabOf(a, t('ui.toolTarget.page')),
+  browser_find: a => str(a, 'query'),
   browser_screenshot: a => tabOf(a, t('ui.toolTarget.page')),
   browser_close: a => tabOf(a, t('ui.toolTarget.allTabs')),
   browser_click: element,

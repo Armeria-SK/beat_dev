@@ -120,6 +120,7 @@ export const ja = {
   'tool.web_download': 'ファイルを downloads/ にダウンロードします',
   'tool.browser_open': 'ブラウザでページを開きます（既定ではオフ。Settings でオンにします）',
   'tool.browser_read': '開いているページの文字と要素の一覧を読みます',
+  'tool.browser_find': '開いているページの要素を名前で、文字を言葉で探します（読むだけです）',
   'tool.browser_screenshot': '開いているページのスクリーンショットを撮ります（画像を見られるモデルだけ）',
   'tool.browser_close': 'ブラウザのタブを閉じます（指定がなければこの会話のすべてのタブ）',
   'tool.browser_click': 'ブラウザのページの要素をクリックします（一覧のサイトとあなたが書いたアドレスでは聞かずに押し、ほかは先に確かめます。フォームの送信は毎回 Pending であなたの OK を待ち、タスクでは断ります）',

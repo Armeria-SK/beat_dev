@@ -204,6 +204,7 @@ const REAL: Record<string, [unknown, string, string]> = {
   proposal_add: [{ title: 'Add retry to upload', kind: 'bug', why: 'w', size: 'S' }, 'Propose', 'Add retry to upload'],
   browser_open: [{ url: 'https://example.com' }, 'Open page', 'https://example.com'],
   browser_read: [{}, 'Search', 'current page'],
+  browser_find: [{ query: 'Delete' }, 'Search', 'Delete'],
   browser_screenshot: [{ tab: 't2' }, 'Screenshot', 'tab t2'],
   browser_close: [{}, 'Close tab', 'all tabs'],
   browser_click: [{ ref: 'e12' }, 'Click', 'element e12'],

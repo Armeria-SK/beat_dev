@@ -18,6 +18,7 @@ const ROUTES: Readonly<Record<string, { route: Route; why: string }>> = {
   web_fetch: { route: 'none', why: 'a GET; secret-looking URL text is refused at order 1' },
   web_download: { route: 'none', why: 'a GET saved under downloads/; secret-looking URL text is refused at order 1' },
   browser_read: { route: 'none', why: 'reads the open tab' },
+  browser_find: { route: 'none', why: 'searches the open tab; the query stays on this PC' },
   browser_screenshot: { route: 'none', why: 'captures the open tab' },
   image_view: { route: 'none', why: 'a GET for a remote image (networkCall); secret-looking URL text is refused at order 1' },
 };

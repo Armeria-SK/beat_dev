@@ -61,6 +61,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   web_download: { icon: 'archive', desc: 'tool.web_download' },
   browser_open: { icon: 'globe', desc: 'tool.browser_open' },
   browser_read: { icon: 'globe', desc: 'tool.browser_read' },
+  browser_find: { icon: 'globe', desc: 'tool.browser_find' },
   browser_screenshot: { icon: 'paperclip', desc: 'tool.browser_screenshot' },
   browser_close: { icon: 'archive', desc: 'tool.browser_close' },
   browser_click: { icon: 'globe', desc: 'tool.browser_click' },

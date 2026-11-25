@@ -441,7 +441,7 @@ test('T-1 後回しにしない実行（振り返り）でも、無い道具の�
   for (const name of ['file_write', 'shell_run', 'browser_open', 'agent_run', 'tool_search']) assert.ok(!review.includes(name), `review: ${name}`);
 });
 
-const BROWSER = ['browser_open', 'browser_read', 'browser_screenshot', 'browser_close', 'browser_click', 'browser_type'];
+const BROWSER = ['browser_open', 'browser_read', 'browser_find', 'browser_screenshot', 'browser_close', 'browser_click', 'browser_type'];
 
 test('T-1 ブラウザの道具は群でまとめて読み込む: v3 の続きの実行と同じ 3 回の tool_search で、道具の並び（tools_hash）が変わるのは 1 回だけ。最初の読み込みのあとは browser_read も渡り、読み込み前の呼び出しとして断られる形（E-46）が起きない', async t => {
   const s = await setup(t, { configure: c => { c.tools.browser.enabled = true; } });
@@ -463,7 +463,7 @@ test('T-1 ブラウザの群の読み込みは、外された道具を足さず�
   s.adapter().scripts = [search('browser_read'), reply('ok')];
   await s.send(uuid(1), { text: 'plan', projectId: shop.id, permissionMode: 'plan' });
   const planned = s.calls().at(-1)!;
-  assert.ok(s.names(planned).includes('browser_open') && s.names(planned).includes('browser_read'));
+  assert.ok(s.names(planned).includes('browser_open') && s.names(planned).includes('browser_read') && s.names(planned).includes('browser_find'));
   for (const name of ['browser_click', 'browser_type']) {
     assert.ok(!s.names(planned).includes(name), `plan: ${name} is not passed`);
     assert.ok(!s.lastResult().includes(name), `plan: ${name} is not named`);
