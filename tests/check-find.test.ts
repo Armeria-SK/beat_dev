@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { MAX_CHECK_COMMANDS, findChecks, type FindOptions } from '../src/projects/check-find.ts';
@@ -211,6 +211,11 @@ test('find dotnet: .sln がちょうど 1 つ、または .sln が無く .csproj
   assert.deepEqual(commandsOf(site(t, { 'A.sln': '', 'B.sln': '' })), []);
   assert.deepEqual(commandsOf(site(t, { 'A.csproj': '', 'B.csproj': '' })), []);
   assert.deepEqual(commandsOf(site(t, { 'sub/App.csproj': '<Project/>' })), []);
+  for (const other of ['Sub.slnf', 'Next.slnx', 'Build.proj', 'Native.vcxproj', 'Data.sqlproj']) {
+    assert.deepEqual(commandsOf(site(t, { 'App.sln': '', [other]: '<Project/>' })), [], `MSBuild counts ${other}`);
+    assert.deepEqual(commandsOf(site(t, { 'App.csproj': '<Project/>', [other]: '<Project/>' })), [], `MSBuild counts ${other}`);
+  }
+  assert.deepEqual(commandsOf(site(t, { 'App.sln': '', 'notes.projects': '', 'readme.sln.txt': '' })), expected);
   const two = findChecks(site(t, { 'A.sln': '', 'B.sln': '' }));
   assert.ok(two.none);
 });
@@ -231,15 +236,60 @@ test('find python: pytest の設定（pyproject の [tool.pytest]・pytest.ini�
   }
 });
 
-test('find python: python が Windows の WindowsApps の入口なら選ばず、理由を none に書く。python が無いときも選ばない', t => {
-  const stub = bin(t, ['python'], join('Microsoft', 'WindowsApps'));
+function storeAlias(t: Tee, ...folders: string[]): string {
+  const dir = join(scratch(t), ...(folders.length > 0 ? folders : ['Microsoft', 'WindowsApps']));
+  const target = join(scratch(t), 'gone');
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(target);
+  symlinkSync(target, join(dir, 'python.exe'), 'junction');
+  rmdirSync(target);
+  return dir;
+}
+
+const search = (...dirs: string[]): FindOptions => ({ env: { PATH: dirs.join(';'), PATHEXT: '.EXE' }, windows: true });
+
+test('find python: PATH の最初の python が Windows の WindowsApps の入口（stat は失敗し lstat は成功する実物と同じ形）なら選ばず、理由を none に書く', t => {
+  const alias = storeAlias(t);
+  assert.throws(() => statSync(join(alias, 'python.exe')), 'precondition: stat fails like the real alias (EACCES there, dangling here)');
+  assert.ok(lstatSync(join(alias, 'python.exe')), 'precondition: lstat sees the entry');
   const folder = site(t, { 'pytest.ini': '' });
-  const viaStub = findChecks(folder, stub);
-  assert.deepEqual(viaStub.commands, []);
-  assert.match(viaStub.none ?? '', /WindowsApps/u);
+  const real = join(scratch(t), 'Python314');
+  mkdirSync(real);
+  writeFileSync(join(real, 'python.exe'), '');
+  const viaAlias = findChecks(folder, search(alias));
+  assert.deepEqual(viaAlias.commands, []);
+  assert.match(viaAlias.none ?? '', /WindowsApps/u);
+  const aliasFirst = findChecks(folder, search(alias, real));
+  assert.deepEqual(aliasFirst.commands, [], 'the first python on PATH decides, as the shell would run it');
+  assert.match(aliasFirst.none ?? '', /WindowsApps/u);
+  assert.deepEqual(commandsOf(folder, search(real, alias)), ['python -m pytest']);
+  assert.deepEqual(commandsOf(folder, search(storeAlias(t, 'Tools'), real)), ['python -m pytest'], 'a broken python link outside WindowsApps is skipped');
+  const skipped = findChecks(folder, search(storeAlias(t, 'Tools'), alias));
+  assert.deepEqual(skipped.commands, [], 'skipping the broken link leads on to the store alias');
+  assert.match(skipped.none ?? '', /WindowsApps/u);
+});
+
+test('find python: WindowsApps の下で lstat が「無い」以外で失敗したら入口として扱う。ほかの場所での失敗は読み飛ばす', t => {
+  const folder = site(t, { 'pytest.ini': '' });
+  const real = join(scratch(t), 'Python314');
+  mkdirSync(real);
+  writeFileSync(join(real, 'python.exe'), '');
+  const broken = (...parts: string[]): string => join(scratch(t), ...parts, 'bad\0entry');
+  const stub = findChecks(folder, search(broken('Microsoft', 'WindowsApps'), real));
+  assert.deepEqual(stub.commands, []);
+  assert.match(stub.none ?? '', /WindowsApps/u);
+  assert.deepEqual(commandsOf(folder, search(broken('tools'), real)), ['python -m pytest']);
+});
+
+test('find python: WindowsApps の下の普通のファイルの python も選ばない。python が無いときも選ばず、別の理由を書く', t => {
+  const folder = site(t, { 'pytest.ini': '' });
+  const viaFile = findChecks(folder, bin(t, ['python'], join('Microsoft', 'WindowsApps')));
+  assert.deepEqual(viaFile.commands, []);
+  assert.match(viaFile.none ?? '', /WindowsApps/u);
   const missing = findChecks(folder, NO_TOOLS);
   assert.deepEqual(missing.commands, []);
   assert.match(missing.none ?? '', /python/iu);
+  assert.doesNotMatch(missing.none ?? '', /WindowsApps/u);
   assert.deepEqual(commandsOf(folder, bin(t, ['python'], join('Python314'))), ['python -m pytest']);
 });
 

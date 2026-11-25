@@ -1,5 +1,5 @@
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { findExecutable, scrubEnv } from '../tools/shell/runner.ts';
 
 export interface CheckCommand { command: string; source: string }
@@ -30,7 +30,11 @@ interface Listing { names: string[]; files: Set<string> }
 
 interface Kind { commands: CheckCommand[]; guards: string[]; blocked?: true; note?: string }
 
-interface PackageInfo { scripts: Record<string, string>; hasDependencies: boolean }
+export const PACKAGE_SETTING_KEYS = ['ava', 'babel', 'c8', 'eslintConfig', 'jest', 'mocha', 'nyc'] as const;
+
+interface PackageInfo { scripts: Record<string, string>; hasDependencies: boolean; settings: Record<string, string> }
+
+const emptyPackage = (): PackageInfo => ({ scripts: {}, hasDependencies: false, settings: {} });
 
 function listing(root: string): Listing {
   try {
@@ -49,15 +53,20 @@ export function readRegular(root: string, name: string, max = TEXT_MAX): string 
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const byKey = (a: [string, unknown], b: [string, unknown]): number => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+
+const canonical = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) => (isObject(item) ? Object.fromEntries(Object.entries(item).sort(byKey)) : item));
+
 export function readPackage(root: string): PackageInfo | undefined {
   const text = readRegular(root, 'package.json', PACKAGE_MAX);
   if (text === undefined) return undefined;
   let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { return { scripts: {}, hasDependencies: false }; }
-  if (!isObject(parsed)) return { scripts: {}, hasDependencies: false };
+  try { parsed = JSON.parse(text); } catch { return emptyPackage(); }
+  if (!isObject(parsed)) return emptyPackage();
   const scripts = isObject(parsed.scripts) ? Object.fromEntries(Object.entries(parsed.scripts).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : {};
   const hasDependencies = ['dependencies', 'devDependencies'].some(key => isObject(parsed[key]) && Object.keys(parsed[key] as object).length > 0);
-  return { scripts, hasDependencies };
+  const settings = Object.fromEntries(PACKAGE_SETTING_KEYS.filter(key => Object.hasOwn(parsed, key)).map(key => [key, canonical(parsed[key])]));
+  return { scripts, hasDependencies, settings };
 }
 
 const only = (list: Listing, pattern: RegExp): string[] => list.names.filter(name => pattern.test(name));
@@ -117,7 +126,7 @@ function makeKind(root: string, list: Listing, env: Record<string, string>, wind
 }
 
 function dotnetKind(list: Listing): Kind | undefined {
-  const found = [...list.files].filter(name => /\.(sln|slnx|csproj|fsproj|vbproj)$/iu.test(name)).sort();
+  const found = [...list.files].filter(name => /\.(sln|slnx|slnf|\w*proj)$/iu.test(name)).sort();
   const chosen = found.length === 1 && /\.(sln|csproj)$/iu.test(found[0]!) ? found[0]! : undefined;
   if (!chosen) return undefined;
   return { commands: ['dotnet build', 'dotnet test'].map(command => ({ command, source: chosen })), guards: [chosen, ...only(list, /^Directory\.Build\.props$/u)] };
@@ -129,12 +138,32 @@ function pythonConfigured(root: string, list: Listing): boolean {
   return sections.some(([name, pattern]) => list.files.has(name) && pattern.test(readRegular(root, name) ?? ''));
 }
 
+function pythonOnPath(env: Record<string, string>, cwd: string, windows: boolean): 'found' | 'stub' | 'missing' {
+  const lookup = (key: string): string | undefined => env[key] ?? Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1];
+  const exts = windows ? (lookup('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(ext => ext.toLowerCase()) : [''];
+  for (const raw of (lookup('PATH') ?? '').split(windows ? ';' : delimiter)) {
+    const dir = raw === '' || raw === '.' ? cwd : raw;
+    for (const ext of exts) {
+      const file = join(dir, `python${ext}`);
+      const store = WINDOWS_APPS.test(file);
+      try {
+        lstatSync(file);
+        if (store) return 'stub';
+        if (statSync(file).isFile()) return 'found';
+      } catch (error) {
+        if (store && !['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return 'stub';
+      }
+    }
+  }
+  return 'missing';
+}
+
 function pythonKind(root: string, list: Listing, env: Record<string, string>, windows: boolean | undefined): Kind | undefined {
   if (!pythonConfigured(root, list)) return undefined;
   const guards = PYTHON_FILES.filter(name => list.names.includes(name));
-  const exe = findExecutable('python', env, root, windows === undefined ? {} : { windows });
-  if (!exe) return { commands: [], guards, note: PYTHON_MISSING };
-  if (WINDOWS_APPS.test(exe)) return { commands: [], guards, note: PYTHON_STUB };
+  const python = pythonOnPath(env, root, windows ?? process.platform === 'win32');
+  if (python === 'missing') return { commands: [], guards, note: PYTHON_MISSING };
+  if (python === 'stub') return { commands: [], guards, note: PYTHON_STUB };
   return { commands: [{ command: 'python -m pytest', source: 'pytest configuration' }], guards };
 }
 

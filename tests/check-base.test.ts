@@ -90,7 +90,7 @@ test('base 中身: JSON に書いて読み戻しても同じ。壊れた形は i
   assert.deepEqual(again, print);
   assert.ok(isBasePrint(again));
   assert.equal(isBasePrint({ unavailable: true }), false);
-  for (const bad of [null, undefined, 'x', 5, [], {}, { ...print, git: 3 }, { ...print, guards: [] }, { ...print, checks: null }, { ...print, at: 'now' }, { ...print, scripts: 3 }, { ...print, git: { head: 1, dirty: {} } }]) {
+  for (const bad of [null, undefined, 'x', 5, [], {}, { ...print, git: 3 }, { ...print, guards: [] }, { ...print, checks: null }, { ...print, at: 'now' }, { ...print, scripts: 3 }, { ...print, git: { head: 1, dirty: {} } }, { ...print, settings: 3 }, { ...print, settings: { jest: 1 } }, { ...print, settings: undefined }]) {
     assert.equal(isBasePrint(bad), false, JSON.stringify(bad));
   }
 });
@@ -162,7 +162,29 @@ test('base 上限: dirty は 2000 パスまで・1 ファイル 1MB まで。超
   const edge = await base(repo);
   assert.equal((edge.git!.dirty as Record<string, string>)['big.bin'], sha(Buffer.alloc(DIRTY_FILE_MAX, 1)));
   repo.write('big.bin', Buffer.alloc(DIRTY_FILE_MAX + 1, 1));
-  assert.equal((await base(repo)).git?.dirty, 'over');
+  const big = await base(repo);
+  assert.equal((big.git!.dirty as Record<string, string>)['big.bin'], `over:${DIRTY_FILE_MAX + 1}`, 'one big file is marked on its own; the whole map stays');
+});
+
+test('base 大きい 1 ファイル: dirty 全体は over にならない。そのファイルだけ over:<大きさ> で、ほかは今までどおり中身のハッシュ', { skip: !gitAvailable }, async t => {
+  const repo = product(t);
+  repo.write('big.bin', Buffer.alloc(DIRTY_FILE_MAX + 5, 1));
+  repo.write('src/a.ts', 'changed\n');
+  repo.write('tests/draft.test.ts', 'draft');
+  const print = await base(repo);
+  assert.deepEqual(print.git?.dirty, { 'big.bin': `over:${DIRTY_FILE_MAX + 5}`, 'src/a.ts': sha('changed\n'), 'tests/draft.test.ts': sha('draft') });
+  assert.ok(isBasePrint(JSON.parse(JSON.stringify(print))));
+});
+
+test('base settings: package.json の jest・mocha・ava・nyc・c8・eslintConfig・babel の中身を控える。ほかのキーは入れない。64KB を超えたら over。package.json が無ければ null', { skip: !gitAvailable }, async t => {
+  const settings = { jest: { testPathIgnorePatterns: ['failing'] }, mocha: { grep: 'x' }, ava: { files: ['a'] }, nyc: { all: true }, c8: { all: true }, eslintConfig: { rules: {} }, babel: { presets: ['p'] } };
+  const repo = product(t, { 'package.json': pkg({ test: 'jest' }, { ...settings, prettier: { semi: false }, keywords: ['k'] }) });
+  const print = await base(repo);
+  assert.deepEqual(print.settings, Object.fromEntries(Object.entries(settings).map(([key, value]) => [key, JSON.stringify(value)])));
+  assert.deepEqual((await base(product(t))).settings, {});
+  assert.equal((await base(folder(t, false))).settings, null);
+  const huge = { testPathIgnorePatterns: Array.from({ length: 700 }, (_, i) => `${'x'.repeat(100)}${i}`) };
+  assert.equal((await base(product(t, { 'package.json': pkg({ test: 'jest' }, { jest: huge }) }))).settings, 'over');
 });
 
 test('base 上限: package.json の scripts が 64KB を超えたら scripts: over', { skip: !gitAvailable }, async t => {
@@ -246,7 +268,7 @@ test('compare V2: 始めから未コミットの変更（package.json の script
   assert.equal(result.verified, true);
 });
 
-test('compare unchanged は時刻でなく中身で決める: 中身を変えて更新時刻を戻しても changed。追加・削除・コミットも changed', { skip: !gitAvailable }, async t => {
+test('compare unchanged: 大きさが変わる書き換えは、更新時刻を戻しても changed。追加・削除・コミットも changed（同じ大きさの書き換えは git の stat キャッシュ頼みで、ここでは確かめない）', { skip: !gitAvailable }, async t => {
   const repo = product(t);
   const print = await base(repo);
   const original = statSync(join(repo.dir, 'src/a.ts'));
@@ -289,6 +311,26 @@ test('compare unchanged: 控えが git でない・dirty が over・今が over 
   assert.equal((await compare(print, repo)).unchanged, false);
 });
 
+test('compare 大きい未コミットのファイルがあっても: 試験の消去は確かめられる。unchanged は同じ大きさなら null、大きさや別のファイルが変われば false', { skip: !gitAvailable }, async t => {
+  const repo = product(t);
+  repo.write('big.bin', Buffer.alloc(DIRTY_FILE_MAX + 1, 1));
+  repo.write('tests/draft.test.ts', 'draft');
+  const print = await base(repo);
+  assert.deepEqual(await compare(print, repo), { unchanged: null, tampering: [], tamperingMore: 0, verified: true });
+  repo.write('big.bin', Buffer.alloc(DIRTY_FILE_MAX + 1, 2));
+  assert.equal((await compare(print, repo)).unchanged, null, 'same size: the content is not hashed, so it cannot be called unchanged');
+  repo.write('big.bin', Buffer.alloc(DIRTY_FILE_MAX + 2, 1));
+  assert.equal((await compare(print, repo)).unchanged, false, 'size differs');
+  repo.write('big.bin', Buffer.alloc(DIRTY_FILE_MAX + 1, 1));
+  repo.write('src/a.ts', 'changed\n');
+  assert.equal((await compare(print, repo)).unchanged, false, 'another file changed');
+  repo.write('src/a.ts', 'x\n');
+  repo.remove('tests/draft.test.ts');
+  const removed = await compare(print, repo);
+  assert.deepEqual(removed.tampering, [{ kind: 'test_removed', path: 'tests/draft.test.ts' }]);
+  assert.equal(removed.verified, true);
+});
+
 test('compare V5: scripts の変更（親玉の script を足す・test を書き換える・test が呼ぶ script を書き換える）を、命令の列と script 名で返す', { skip: !gitAvailable }, async t => {
   const onlyTest = product(t, { 'package.json': pkg({ test: 'node --test' }) });
   const print = await base(onlyTest);
@@ -324,6 +366,35 @@ test('compare scripts: 確かめに届かない script・dependencies だけの�
   const result = await compare(print, repo);
   assert.deepEqual(result.tampering, []);
   assert.equal(result.unchanged, false);
+});
+
+test('compare 試験の道具の設定（package.json の jest・babel など）: 書き換え・足す・消すを setting として返す。無関係なキー・書式だけの違いは返さない', { skip: !gitAvailable }, async t => {
+  const repo = product(t, { 'package.json': pkg({ test: 'jest' }, { jest: { testPathIgnorePatterns: ['x'], bail: 1 }, babel: { presets: ['a'] } }) });
+  const print = await base(repo);
+  repo.write('package.json', JSON.stringify({ version: '9', keywords: ['k'], prettier: { semi: false }, babel: { presets: ['a'] }, jest: { bail: 1, testPathIgnorePatterns: ['x'] }, scripts: { test: 'jest' }, name: 'renamed' }, null, 4));
+  const same = await compare(print, repo);
+  assert.deepEqual(same.tampering, [], 'other keys, key order and layout are not changes');
+  assert.equal(same.verified, true);
+
+  repo.write('package.json', pkg({ test: 'jest' }, { jest: { testPathIgnorePatterns: ['x', 'failing'], bail: 1 }, babel: { presets: ['a'] } }));
+  assert.deepEqual((await compare(print, repo)).tampering, [{ kind: 'setting', name: 'jest' }]);
+  repo.write('package.json', pkg({ test: 'jest' }, { jest: { testPathIgnorePatterns: ['x'], bail: 1 }, mocha: { grep: 'skip-all' } }));
+  assert.deepEqual((await compare(print, repo)).tampering, [{ kind: 'setting', name: 'babel' }, { kind: 'setting', name: 'mocha' }]);
+  repo.write('package.json', pkg({ test: 'jest' }, { jest: { testPathIgnorePatterns: ['x'], bail: 1 }, babel: { presets: ['a'] }, eslintConfig: { rules: { 'no-undef': 'off' } } }));
+  assert.deepEqual((await compare(print, repo)).tampering, [{ kind: 'setting', name: 'eslintConfig' }]);
+});
+
+test('compare 試験の道具の設定: 控えの settings が over なら判断せず verified: false（over）。package.json の無い控えへ jest を足しても返す', { skip: !gitAvailable }, async t => {
+  const repo = product(t);
+  const print = await base(repo);
+  const over = await compare({ ...print, settings: 'over' } as BasePrint, repo);
+  assert.equal(over.verified, false);
+  assert.equal(over.unverified, 'over');
+  const plain = folder(t, false, { 'index.html': '<p>hi</p>' });
+  const plainPrint = await base(plain);
+  assert.equal(plainPrint.settings, null);
+  plain.write('package.json', JSON.stringify({ name: 'p', jest: { bail: 1 } }));
+  assert.deepEqual((await compare(plainPrint, plain)).tampering, [{ kind: 'setting', name: 'jest' }]);
 });
 
 test('compare V3: guards の変更（設定を書き換える・追っていない新しい設定を作る・消す）を返す。中身が同じなら返さない', { skip: !gitAvailable }, async t => {

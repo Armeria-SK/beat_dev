@@ -20,6 +20,7 @@ export interface BaseGit { head: string | null; dirty: Record<string, string> | 
 export interface BasePrint {
   checks: FoundChecks;
   scripts: Record<string, string> | 'over' | null;
+  settings: Record<string, string> | 'over' | null;
   guards: Record<string, string | null>;
   git: BaseGit | null;
   at: number;
@@ -32,6 +33,7 @@ export interface CaptureOptions { timeoutMs?: number; find?: FindOptions }
 export type Tampering =
   | { kind: 'commands'; before: string[]; after: string[] }
   | { kind: 'script'; name: string }
+  | { kind: 'setting'; name: string }
   | { kind: 'guard'; path: string }
   | { kind: 'test_removed'; path: string };
 
@@ -59,7 +61,7 @@ function isChecks(value: unknown): value is FoundChecks {
 const isGit = (value: unknown): value is BaseGit => isObject(value) && (value.head === null || typeof value.head === 'string') && (value.dirty === 'over' || isStringMap(value.dirty));
 
 export function isBasePrint(value: unknown): value is BasePrint {
-  return isObject(value) && isChecks(value.checks) && (value.scripts === null || value.scripts === 'over' || isStringMap(value.scripts)) && isStringMap(value.guards, true)
+  return isObject(value) && isChecks(value.checks) && (value.scripts === null || value.scripts === 'over' || isStringMap(value.scripts)) && (value.settings === null || value.settings === 'over' || isStringMap(value.settings)) && isStringMap(value.guards, true)
     && (value.git === null || isGit(value.git)) && typeof value.at === 'number';
 }
 
@@ -120,7 +122,6 @@ async function gitPart(real: string, dataDir: string, deadline: number): Promise
       }
       const rel = paths[i]!;
       const value = viaLink(real, rel, seen) ? 'unreadable' : fingerprint(real, rel, DIRTY_FILE_MAX);
-      if (value?.startsWith('over:')) return { head, dirty: 'over' as const };
       entries.push([rel, value ?? 'deleted']);
     }
     return { head, dirty: mapOf(entries) };
@@ -137,10 +138,11 @@ async function capture(root: string, dataDir: string, find: FindOptions | undefi
   const checks = findChecks(real, find);
   const info = readPackage(real);
   const scripts = info ? (Buffer.byteLength(JSON.stringify(info.scripts)) > SCRIPTS_MAX ? 'over' as const : info.scripts) : null;
+  const settings = info ? (Buffer.byteLength(JSON.stringify(info.settings)) > SCRIPTS_MAX ? 'over' as const : info.settings) : null;
   const guards = Object.fromEntries(checks.guards.filter(name => name !== 'package.json').map(name => [name, fingerprint(real, name, GUARD_FILE_MAX)]));
   const git = await gitPart(real, dataDir, deadline);
   if (git === undefined) return unavailable();
-  return { checks, scripts, guards, git, at: Date.now() };
+  return { checks, scripts, settings, guards, git, at: Date.now() };
 }
 
 export async function captureBase(root: string, dataDir: string, options: CaptureOptions = {}): Promise<CheckBase> {
@@ -158,7 +160,8 @@ function unchangedOf(base: BaseGit | null, now: BaseGit | null): boolean | null 
   if (base.head !== now.head) return false;
   if (base.dirty === 'over') return null;
   if (now.dirty === 'over') return false;
-  return sameMap(base.dirty, now.dirty);
+  if (!sameMap(base.dirty, now.dirty)) return false;
+  return Object.values(now.dirty).some(value => value.startsWith('over:')) ? null : true;
 }
 
 async function removedTests(base: BaseGit, real: string, dataDir: string): Promise<string[] | undefined> {
@@ -201,6 +204,13 @@ export async function compareBase(base: unknown, root: string, dataDir: string, 
     try {
       for (const name of changedScripts(scriptsText(base.scripts), scriptsText(now.scripts), [...(before ?? []), ...after].join(' && '))) found.push({ kind: 'script', name });
     } catch { unsure('unreadable'); }
+  }
+
+  if (base.settings === 'over' || now.settings === 'over') unsure('over');
+  else {
+    const was = base.settings ?? {};
+    const is = now.settings ?? {};
+    for (const name of [...new Set([...Object.keys(was), ...Object.keys(is)])].sort()) if (own(was, name) !== own(is, name)) found.push({ kind: 'setting', name });
   }
 
   const names = [...new Set([...Object.keys(base.guards), ...now.checks.guards])].filter(name => name !== 'package.json').sort();
