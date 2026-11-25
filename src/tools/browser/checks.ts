@@ -4,7 +4,9 @@
 //   - 番号は、読んだときのページ（URL が同じ表）のものだけ。移動のあとの古い番号は拒否。
 //     番号は、判定のたびにその場で取り直した表から引く（要素が変わった・中身が変わって使えなくなった番号、モデルに見せていない番号は拒否。elements.ts）
 //   - 実行の直前に、番号が結ぶ Playwright の印で要素を引き直し、1 つの主フレームの要素で、見えていて、有効でなければ実行しない
-//   - browser_type は、パスワード・認証コード・カード番号の欄（type=password・autocomplete・名前）に入れない
+//   - browser_type は、カード番号の欄（cc-* の autocomplete・名前）に入れない。パスワード・認証コードの欄（type=password・autocomplete・名前）には text では入れず、
+//     password の引数で試しの値だけを、beat が自分で起動して動いている開発サーバーのページ（そのポートの待ち受けがこの会話・タスクの裏のコマンドの入れ物の中）にだけ入れる（P7）。
+//     この入力は、方針・フックが ask でも承認待ち・判定役に回さず断る（web.password_input は拒否の印）
 // 通り方（9-1b。PLAN Approach 4 の順）: 秘密に見える文を入れる → 公開のページ・開発サーバーでないループバックは断る、開発サーバーは判定役 /
 //   その実行の開発サーバー（持ち主が書いたループバックのポート・この会話かタスクの裏のコマンドが出力に出したポート）→ 判定役なし（送信も）/
 //   送信 → 送る（会話は Pending、会話の外は断る）/ 一覧のサイト → 判定役なし / 持ち主が書いた URL のホスト → 判定役なし / ほか → 判定役。
@@ -29,16 +31,21 @@ export const TEXT_ROLES: ReadonlySet<string> = new Set(['textbox', 'searchbox', 
 export const SELECT_ROLES: ReadonlySet<string> = new Set(['combobox', 'listbox']);
 export const TYPE_TEXT_MAX = 2000;
 const NAME_SHOWN = 120;
-const SECRET_AUTOCOMPLETE = new Set(['current-password', 'new-password', 'one-time-code']);
-// ページが付けた名前が、秘密の欄だと言っているもの（属性で区別できない欄の安全側の追加）
-const SECRET_NAME = /password|passcode|passwd|パスワード|暗証|one[- ]?time|verification code|認証コード|card number|カード番号|cvc|cvv|security code|セキュリティコード/iu;
+const PASSWORD_AUTOCOMPLETE = new Set(['current-password', 'new-password', 'one-time-code']);
+// ページが付けた名前が、暗証番号の欄・カードの欄だと言っているもの（属性で区別できない欄の安全側の追加）
+const PASSWORD_NAME = /password|passcode|passwd|パスワード|暗証|one[- ]?time|verification code|認証コード/iu;
+const CARD_NAME = /card number|カード番号|cvc|cvv|security code|セキュリティコード/iu;
 
-export interface ActInput { tab?: string | undefined; ref: string; text?: string | undefined; submit?: boolean | undefined }
+// password は、暗証番号・認証コードの欄。P7 で、password の引数で試しの値を入れてよい（自分の開発サーバーだけ）。card はカード番号の欄で、どこでも断る
+export type FieldKind = 'ordinary' | 'password' | 'card';
+
+// password は text ではなく専用の欄で渡す。text は引数のまま、password は伏せて記録に出る欄
+export interface ActInput { tab?: string | undefined; ref: string; text?: string | undefined; password?: string | undefined; submit?: boolean | undefined }
 
 // place: ページが公開のページか、その実行に許されたループバック（製品の開発サーバー）か。submits: この操作がフォームを送るか（D-5）
 // shape: 探し直しに使った表の、画面のまとめ（ActPick.shape を渡したときだけ）
 export type Inspected =
-  | { ok: true; tab: BrowserTab; pageUrl: string; item: ListedElement; target: ElementTarget; detail: ElementDetail; place: 'public' | 'loopback'; submits: boolean; shape?: string | undefined }
+  | { ok: true; tab: BrowserTab; pageUrl: string; item: ListedElement; target: ElementTarget; detail: ElementDetail; field: FieldKind; place: 'public' | 'loopback'; submits: boolean; shape?: string | undefined }
   | { ok: false; reason: string };
 
 // 名前で指した目標（browser_act の step。P5）。nth は表の並び（木の順）で数え、1 が最初
@@ -59,12 +66,20 @@ function hostOf(url: string): string | undefined {
   try { return new URL(url).host.toLowerCase(); } catch { return undefined; }
 }
 
-export function isSecretField(detail: { type?: string | null | undefined; autocomplete?: string | null | undefined }, name: string): boolean {
-  if (detail.type === 'password') return true;
+// 欄の種類。カードに当たるもの（cc-* の autocomplete・カードの名前）は、暗証番号にも当たってもカード（type=password と cc-csc の欄はカード）
+export function fieldKind(detail: { type?: string | null | undefined; autocomplete?: string | null | undefined }, name: string): FieldKind {
+  let password = detail.type === 'password' || PASSWORD_NAME.test(name);
+  let card = CARD_NAME.test(name);
   for (const token of (detail.autocomplete ?? '').split(/\s+/u)) {
-    if (SECRET_AUTOCOMPLETE.has(token) || token.startsWith('cc-')) return true;
+    if (token.startsWith('cc-')) card = true;
+    else if (PASSWORD_AUTOCOMPLETE.has(token)) password = true;
   }
-  return SECRET_NAME.test(name);
+  return card ? 'card' : password ? 'password' : 'ordinary';
+}
+
+// 暗証番号・カードのどちらでも true（選ぶ・キーを送るは、どちらの欄にも今までどおり断る）
+export function isSecretField(detail: { type?: string | null | undefined; autocomplete?: string | null | undefined }, name: string): boolean {
+  return fieldKind(detail, name) !== 'ordinary';
 }
 
 // ページの置き場所: そのタブで許されたループバック、公開のページ、またはどちらでもない（押さない）
@@ -142,11 +157,17 @@ export async function inspectAct(api: BrowserApi, kind: 'click' | 'type' | 'sele
   if (!detail.visible) return refuse(guardText(language, 'browser.act.hidden', { ref: input.ref }));
   if (!detail.enabled) return refuse(guardText(language, 'browser.act.disabled', { ref: input.ref }));
   if (kind === 'select' && detail.tag !== 'select') return refuse(guardText(language, 'browser.act.not_select', { ref: input.ref, role: item.role }));
-  if (kind === 'type' && isSecretField(detail, item.name)) return refuse(guardText(language, 'browser.act.secret_field', { ref: input.ref }));
+  if (kind === 'type') {
+    // カードの欄は、どの引数でも断る。暗証番号の欄は password の引数だけ（そのページの確かめは passwordRefusal）。ふつうの欄に password は入れない
+    const field = fieldKind(detail, item.name);
+    if (field === 'card') return refuse(guardText(language, 'browser.act.secret_field', { ref: input.ref }));
+    if (input.password !== undefined && field !== 'password') return refuse(guardText(language, 'browser.act.password_not_secret', { ref: input.ref }));
+    if (input.password === undefined && field === 'password') return refuse(guardText(language, 'browser.act.password_use_field', { ref: input.ref }));
+  }
   if (kind === 'select' && isSecretField(detail, item.name)) return refuse(guardText(language, 'browser.act.secret_select', { ref: input.ref }));
   // 入れるは submit（Enter）のときだけ送信。押すは要素で決める。選ぶは <select> で、送信の部品ではない（change が送ろうとするのは、送信の守りが断る）
   const submits = kind === 'type' ? input.submit === true : detail.form.submits;
-  return { ok: true, tab, pageUrl, item, target, detail, place, submits, ...(table.shape !== undefined ? { shape: table.shape } : {}) };
+  return { ok: true, tab, pageUrl, item, target, detail, field: fieldKind(detail, item.name), place, submits, ...(table.shape !== undefined ? { shape: table.shape } : {}) };
 }
 
 // press（P6）の探し直し: 押す先は番号の要素でなく、いまキーボードの焦点がある要素。ページの置き場所を同じ決まりで確かめ、焦点を読んで、枠の中・秘密に見える欄なら鍵を送らない。
@@ -222,8 +243,35 @@ export function stoppedServerText(pageUrl: string, ctx: Pick<ToolContext, 'servi
   return guardText(language, stopped.stoppedBy === 'owner' ? 'browser.act.server_stopped_owner' : 'browser.act.server_ended', { port: stopped.port, job: stopped.jobId });
 }
 
+// 暗証番号の欄に入れてよいページ（P7）: 開発サーバーのページ（devServerPage）で、そのポートで待ち受けているプロセスが、この会話・タスクの動いている裏のコマンドの入れ物（Job Object）の中にいること。
+// 出力にポートが出ただけ・持ち主が書いただけでは足りない（beat が自分で起動して、いま動いている証拠にならない）。確かめられない（Windows 以外・問い合わせの失敗）ときは入れない
+export async function ownDevServer(pageUrl: string, ctx: Pick<ToolContext, 'ownerText' | 'services' | 'conversationId' | 'task' | 'parent'>): Promise<boolean> {
+  if (!devServerPage(pageUrl, ctx)) return false;
+  let url: URL;
+  try { url = new URL(pageUrl); } catch { return false; }
+  const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+  try {
+    return await ctx.services?.background?.ownsPort?.({ conversationId: ctx.conversationId, taskId: ctx.task?.id ?? ctx.parent?.taskId }, port) === true;
+  } catch { return false; }
+}
+
+// 暗証番号を入れてよい場所かの断る文（無ければ入れてよい）。止めた開発サーバーは止めた理由、公開のページ・自分の開発サーバーでないページは「自分の開発サーバーだけ」
+export async function passwordRefusal(found: Pick<Extract<Inspected, { ok: true }>, 'place' | 'pageUrl'>, ctx: Pick<ToolContext, 'ownerText' | 'services' | 'conversationId' | 'task' | 'parent'>, language: Language): Promise<string | undefined> {
+  if (found.place === 'loopback' && await ownDevServer(found.pageUrl, ctx)) return undefined;
+  const stopped = found.place === 'loopback' && !devServerPage(found.pageUrl, ctx) ? stoppedServerText(found.pageUrl, ctx, language) : undefined;
+  return stopped ?? guardText(language, 'browser.act.password_own_only');
+}
+
 // 入れる文が API の鍵・トークンに見えるか（web_fetch と同じ見分け）
 export const secretText = (kind: 'click' | 'type' | 'select', input: ActInput): boolean => kind === 'type' && sanitizeModelInputText(input.text ?? '').redaction_count > 0;
+
+// 入れる値の形の断り: text と password はどちらか 1 つ。password が API の鍵・トークンに見えたら（本物の鍵を入れさせない）、判定役に見せずに断る
+export function typedInputRefusal(kind: 'click' | 'type' | 'select', input: Pick<ActInput, 'text' | 'password'>, language: Language): string | undefined {
+  if (kind !== 'type') return undefined;
+  if ((input.text === undefined) === (input.password === undefined)) return guardText(language, 'browser.act.text_or_password');
+  if (input.password !== undefined && sanitizeModelInputText(input.password).redaction_count > 0) return guardText(language, 'browser.act.password_key_like');
+  return undefined;
+}
 
 // 持ち主が書いた文の束。読めないときは空（判定役へ行く側）
 export function ownerTextsOf(ctx: Pick<ToolContext, 'ownerText'>): string[] {
@@ -257,7 +305,9 @@ export async function browserActCheck(kind: 'click' | 'type', input: ActInput, c
   if (!ctx.config.tools.browser.enabled || browser === undefined) return { decision: 'deny', reasons: [guardText(language, 'browser.off')] };
   const grant = grantOf(ctx);
   if (grant === undefined) return { decision: 'deny', reasons: [guardText(language, 'browser.no_grant')] };
-  if (kind === 'type' && (input.text ?? '').length > TYPE_TEXT_MAX) return { decision: 'deny', reasons: [guardText(language, 'browser.act.too_long', { max: TYPE_TEXT_MAX })] };
+  const badInput = typedInputRefusal(kind, input, language);
+  if (badInput !== undefined) return { decision: 'deny', reasons: [badInput] };
+  if (kind === 'type' && (input.text ?? input.password ?? '').length > TYPE_TEXT_MAX) return { decision: 'deny', reasons: [guardText(language, 'browser.act.too_long', { max: TYPE_TEXT_MAX })] };
   if (browser.tabCount(ctx.conversationId) === 0) {
     const failure = input.tab === undefined ? new BrowserFailure('no_tab', 'browser.no_tabs') : new BrowserFailure('no_tab', 'browser.no_tab', { tab: input.tab });
     return { decision: 'deny', reasons: [failure.text(language)] };
@@ -267,6 +317,12 @@ export async function browserActCheck(kind: 'click' | 'type', input: ActInput, c
       const found = await inspectAct(api, kind, input, language, browser.loopbackDenied());
       if (!found.ok) return { decision: 'deny', reasons: [found.reason] } satisfies PreCheck;
       const { preview, bind } = actPreview(kind, input, found, language);
+      if (kind === 'type' && input.password !== undefined) {
+        // 暗証番号は、自分で起動して動いている開発サーバーだけ。通すときも、聞く形（方針の ask・フックの ask）になったら断る鍵（web.password_input）を付け、値を判定役・Pending に回さない
+        const refused = await passwordRefusal(found, ctx, language);
+        if (refused !== undefined) return { decision: 'deny', reasons: [refused] } satisfies PreCheck;
+        return { decision: 'allow', reasons: [guardText(language, 'web.password_input')], reasonKeys: ['web.password_input'], bind, fetched: true } satisfies PreCheck;
+      }
       const devServer = found.place === 'loopback' && devServerPage(found.pageUrl, ctx);
       const stopped = found.place === 'loopback' && !devServer ? stoppedServerText(found.pageUrl, ctx, language) : undefined;
       if (stopped !== undefined) return { decision: 'deny', reasons: [stopped] } satisfies PreCheck;

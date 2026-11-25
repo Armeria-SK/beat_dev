@@ -471,6 +471,21 @@ export class BackgroundJobs {
     return out;
   }
 
+  // そのポートで待ち受けているプロセスが全部、この会話かこのタスクの動いている裏のコマンドのジョブの中のものか（browser-rethink P7: 暗証番号の欄に入れてよい「beat が自分で起動して、いま動いている」開発サーバー）。
+  // 出力に出たポート（printedPorts）や持ち主が書いたポートは証拠にしない。Windows のジョブの中のプロセスだけが証拠で、ジョブに入れられなかったコマンド・止まっていくコマンド・分からない（unknown）・Windows 以外は false
+  async ownsPort(owner: { conversationId: string; taskId?: string | undefined }, port: number): Promise<boolean> {
+    if (!WINDOWS) return false;
+    const mine = [...this.#jobs.values()].filter(job => job.state === 'running' && (job.conversationId === owner.conversationId || (owner.taskId !== undefined && job.taskId === owner.taskId)));
+    for (const job of mine) {
+      const runJob = job.runJob;
+      if (runJob === undefined || job.jobClosing || job.containReason !== undefined) continue;
+      const answer = await runJob.listens(port).catch((): 'unknown' => 'unknown');
+      // 聞いているあいだに止まった・入れ物を失ったなら、その答えは使わない
+      if (answer === 'yes' && job.state === 'running' && !job.jobClosing && job.containReason === undefined) return true;
+    }
+    return false;
+  }
+
   // この会話かこのタスクが始めて、もう動いていない裏のコマンドが出したポート（いちばん新しく止まったもの）
   stoppedPort(owner: { conversationId: string; taskId?: string | undefined }, port: number): StoppedPort | undefined {
     let found: StoppedPort | undefined;

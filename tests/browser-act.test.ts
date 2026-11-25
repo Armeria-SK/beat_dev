@@ -1033,6 +1033,30 @@ test('P3b: 決まった秘密は、伏せてから切る（差分の名前・増
   assert.ok(next.content.includes('[REDACTED]') && next.content.includes('tail'), next.content);
 });
 
+// 複数行の決まった秘密（改行をはさんで 2 行）
+const MULTI = 'Mq9-first-line-Rt41\nMq9-second-line-Wk77';
+
+test('P3b（読む上限の切り目）: 本文が読む上限で切れ、複数行の決まった秘密の 2 行目の途中で切れても、1 行目を増えた文として送らない', async t => {
+  const r = rig(t, { secrets: [MULTI], mutate: c => { c.tools.browser.limits.pageChars = 2000; } });
+  const lead = 'Orders\nOrder 1\nOrder 2';
+  const added = 'Deleted order number one';
+  const filler = Array.from({ length: 12 }, (_, i) => `Filler line number ${String(i).padStart(2, '0')} with some words`).join('\n');
+  const first = MULTI.split('\n')[0]!;
+  // 切り目（2000 字目）が、秘密の 2 行目の 5 字目に来る。押す前は「増えた文」の 1 行ぶん短く、切れずに読み切れる
+  const head = `${lead}\n${added}\n${filler}\n`;
+  const pad = 'y'.repeat(1995 - head.length - first.length - 2);
+  const afterText = `${head}${pad}\n${MULTI}`;
+  const beforeText = `${lead}\n${filler}\n${pad}\n${MULTI}`;
+  assert.equal(afterText.indexOf('Mq9-second') + 5, 2000);
+  assert.ok(beforeText.length < 2000);
+  const base = listSite({});
+  r.driver.site(LIST, { ...listSite({ mutate: { ...base, text: afterText } }), text: beforeText });
+  await opened(r, LIST);
+  const output = await browserClick.execute({ ref: 'e4' }, r.ctx);
+  assert.ok(!output.content.includes('Mq9'), output.content);
+  assert.ok(fenced(output.content).includes(added), '切り目の手前の増えた文は出ている');
+});
+
 test('P3b: 「あと N 件」は、番号を振れなかった増えた要素と、書けなかった行だけを数える（変わった要素を二重に数えない）', async t => {
   const r = rig(t);
   const names = Array.from({ length: 60 }, (_, i) => `Product with a fairly long name ${'x'.repeat(60)} ${i + 1}`);
