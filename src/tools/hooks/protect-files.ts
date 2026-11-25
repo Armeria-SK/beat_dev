@@ -11,7 +11,9 @@ export const PROTECT_FILES_OFFERED = 'hooks.protect-files.offered';
 export const DEFAULT_PROTECT_FILES: BuiltinHookConfig = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] };
 
 const WINDOWS = process.platform === 'win32';
-const fold = (p: string) => p.toLowerCase();
+const ASCII_ONLY = /^[\x00-\x7f]*$/u;
+const foldChar = (c: string): string => { const lower = c.toLowerCase(); return [...lower].length === 1 ? lower : c; };
+const fold = (p: string) => (ASCII_ONLY.test(p) ? p.toLowerCase() : Array.from(p, foldChar).join(''));
 const inside = (root: string, target: string): boolean => isInside(fold(root), fold(target));
 const GLOB_CHAR = /[*?]/u;
 const WALK_LIMIT = 20_000;

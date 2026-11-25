@@ -160,11 +160,12 @@ function linkOnWay(base: string, target: string): boolean {
   return false;
 }
 // 書かれたままの指し方 raw（resolve で畳む前）の中で、リンクのすぐあとに .. が来るか。POSIX の OS は .. をリンクの先の 1 つ上として解くが、resolve は先に畳むので、見る場所と git が使う場所がずれる
-function dotDotAfterLink(base: string, raw: string): boolean {
-  if (!/(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(raw)) return false;
+export function dotDotAfterLink(base: string, raw: string): boolean {
   const root = isAbsolute(raw) ? parse(raw).root : '';
+  const parts = raw.slice(root.length).split(process.platform === 'win32' ? /[\\/]/u : /\//u);
+  if (!parts.includes('..')) return false;
   let current = root === '' ? resolve(base) : root;
-  for (const part of raw.slice(root.length).split(/[\\/]/u)) {
+  for (const part of parts) {
     if (part === '' || part === '.') continue;
     if (part !== '..') { current = join(current, part); continue; }
     try { if (lstatSync(current).isSymbolicLink()) return true; } catch (error) {

@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findGitDir, inspectRepo } from '../src/tools/hooks/git-repo.ts';
 import { tempDir } from './helpers.ts';
+
+const LOADER = new URL('./helpers/tsx-loader.mjs', import.meta.url).href;
+const GIT_REPO = pathToFileURL(fileURLToPath(new URL('../src/tools/hooks/git-repo.ts', import.meta.url))).href;
 
 const PLAIN = '[core]\n\trepositoryformatversion = 0\n\tbare = false\n';
 
@@ -99,4 +104,70 @@ test('165: リンクを通らない .. （ふつうのフォルダのあと・�
   mkdirSync(join(altGit, 'objects', 'info'));
   writeFileSync(join(altGit, 'objects', 'info', 'alternates'), '../../../real.git/objects\n');
   assert.equal(inspectRepo(alt).unreadable, false, 'alternates の先頭の ..');
+});
+
+// 165（レビューの指摘）: POSIX ではバックスラッシュはふつうの名前の文字。区切りに数えると、l、k をバックスラッシュでつないだ名前のリンクのあとの .. を見逃し、見る場所と git が使う場所がずれる。
+// Windows では名前にバックスラッシュを使えないので、実機の POSIX だけで動かす
+const POSIX_ONLY = process.platform === 'win32' && 'Windows では名前にバックスラッシュを使えない';
+
+test('165: （POSIX のみ）名前にバックスラッシュを含むリンクのあとの .. も、gitdir・commondir・alternates で「読めない」にする', { skip: POSIX_ONLY }, t => {
+  const base = tempDir(t);
+  const away = join(base, 'away');
+  mkdirSync(away);
+
+  const viaFile = join(base, 'a');
+  mkdirSync(viaFile);
+  symlinkSync(away, join(viaFile, 'l\\k'));
+  makeGitDir(join(viaFile, 'real.git'));
+  writeFileSync(join(viaFile, '.git'), 'gitdir: l\\k/../real.git\n');
+  assert.equal(findGitDir(viaFile)?.broken, true, 'gitdir');
+  assert.equal(inspectRepo(viaFile).unreadable, true, 'gitdir');
+
+  const viaCommon = join(base, 'b');
+  const commonGit = join(viaCommon, '.git');
+  mkdirSync(commonGit, { recursive: true });
+  writeFileSync(join(commonGit, 'HEAD'), 'ref: refs/heads/main\n');
+  symlinkSync(away, join(commonGit, 'l\\k'));
+  makeGitDir(join(commonGit, 'common'));
+  writeFileSync(join(commonGit, 'commondir'), 'l\\k/../common\n');
+  assert.equal(findGitDir(viaCommon)?.broken, true, 'commondir');
+
+  const viaAlt = join(base, 'c');
+  const altGit = makeGitDir(join(viaAlt, '.git'));
+  mkdirSync(join(altGit, 'objects', 'info'));
+  symlinkSync(away, join(altGit, 'objects', 'l\\k'));
+  mkdirSync(join(altGit, 'objects', 'store', 'objects'), { recursive: true });
+  writeFileSync(join(altGit, 'objects', 'info', 'alternates'), 'l\\k/../store/objects\n');
+  assert.equal(inspectRepo(viaAlt).unreadable, true, 'alternates');
+});
+
+test('165: （POSIX のみ）名前にバックスラッシュを含むふつうのフォルダのあとの .. は、今までどおり読める', { skip: POSIX_ONLY }, t => {
+  const base = tempDir(t);
+  const dir = join(base, 'a');
+  mkdirSync(join(dir, 'p\\q'), { recursive: true });
+  makeGitDir(join(dir, 'real.git'));
+  writeFileSync(join(dir, '.git'), 'gitdir: p\\q/../real.git\n');
+  assert.equal(inspectRepo(dir).unreadable, false);
+  assert.equal(inspectRepo(dir).found, true);
+});
+
+// 上の試験は実機の POSIX でしか動かない。Windows でも赤くなるように、子のプロセスで POSIX を模して dotDotAfterLink を直接見る
+// （process.platform を linux、node:path を posix の関数にし、lstat は決めた名前だけリンクと答える）
+test('165（POSIX を模す）: 区切りは / だけ。名前にバックスラッシュを含むリンクのあとの .. も見つけ、ふつうのフォルダのあとの .. は見つけない', () => {
+  const script = [
+    "import path from 'node:path';",
+    "import fs from 'node:fs';",
+    "import { syncBuiltinESMExports } from 'node:module';",
+    "Object.defineProperty(process, 'platform', { value: 'linux' });",
+    `const mod = await import(${JSON.stringify(GIT_REPO)});`,
+    "for (const k of ['resolve', 'relative', 'join', 'dirname', 'basename', 'isAbsolute', 'normalize', 'parse', 'sep', 'delimiter']) path[k] = path.posix[k];",
+    "const links = new Set(['/base/dir/l\\\\k', '/base/dir/lnk']);",
+    "fs.lstatSync = p => { if (links.has(p)) return { isSymbolicLink: () => true }; if (p.startsWith('/base')) return { isSymbolicLink: () => false }; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };",
+    'syncBuiltinESMExports();',
+    "const raws = ['l\\\\k/../real.git', 'lnk/../real.git', '/base/dir/l\\\\k/../real.git', 'sub/../real.git', '../real.git', 'p\\\\q/../real.git', 'a\\\\..\\\\b'];",
+    "process.stdout.write(JSON.stringify(raws.map(raw => mod.dotDotAfterLink('/base/dir', raw))));",
+  ].join('\n');
+  const result = spawnSync(process.execPath, ['--import', LOADER, '--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [true, true, true, false, false, false, false]);
 });

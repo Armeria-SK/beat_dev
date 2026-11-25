@@ -164,14 +164,16 @@ export type ProtectedKind = 'persona' | 'skill' | 'git' | 'instructions';
 
 const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fold(part) === '.git');
 
+const within = (root: string, target: string): boolean => isInside(root, target) || isInside(root.toLowerCase(), target.toLowerCase());
+
 export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
   if (isRemotePath(abs)) return 'git';
   const real = realish(abs);
   if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || (real !== abs && insideGitDir(real))) return 'git';
-  if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
+  if (policy.skillsDir && (within(policy.skillsDir, real) || within(policy.skillsDir, abs))) return 'skill';
   const bare = WINDOWS ? windowsNames(abs) : abs;
-  if (policy.instructions?.some(p => isInside(p, real) || isInside(p, abs) || isInside(p, bare))) return 'instructions';
-  return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
+  if (policy.instructions?.some(p => within(p, real) || within(p, abs) || within(p, bare))) return 'instructions';
+  return (policy.askOnWrite ?? []).some(p => within(p, real) || within(p, abs)) ? 'persona' : undefined;
 }
 
 export type Placement =
