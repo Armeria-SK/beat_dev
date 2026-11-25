@@ -161,9 +161,9 @@ test('3-2-s 毎回の system（本物の App）: 製品の計画モードの会�
 
 test('3-2-s 量: 計画モードでは mesh_state_set を渡さない（自動承認のモードでは渡す）。acceptance_write の説明は短くし、選んだ答えの扱いを言わない', async t => {
   assert.notEqual(meshStateSet.planOk, true);
-  assert.ok(estimateTextTokens(acceptanceWrite.description) <= 125, String(estimateTextTokens(acceptanceWrite.description)));
+  assert.ok(estimateTextTokens(acceptanceWrite.description) <= 135, String(estimateTextTokens(acceptanceWrite.description)));
   assert.doesNotMatch(acceptanceWrite.description, /owner_choice|your answer/iu);
-  for (const rule of [/never translate/iu, /command/u, /look/u, /notDoing/u, /checked against the conversation/u]) assert.match(acceptanceWrite.description, rule);
+  for (const rule of [/never translate/iu, /command/u, /look/u, /notDoing/u, /checked against what the owner said in this product's conversations/u]) assert.match(acceptanceWrite.description, rule);
   const s = await setup(t);
   const shop = await s.product('shop');
   s.adapter().scripts = [reply('a'), reply('b')];

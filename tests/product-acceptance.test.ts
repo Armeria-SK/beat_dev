@@ -212,6 +212,11 @@ test('3-1b 出どころ: owner_words は一致した持ち主の文をまるご�
   assert.ok(front.length <= 500 && front.startsWith('Note: the import') && front.endsWith('…'), front.slice(0, 40));
 });
 
+test('acceptance_write の説明は、引用を「この製品の会話での持ち主の発言」と照らすと書く（実際の照らし先は製品全体の発言。1 つの会話に限らない）', () => {
+  assert.match(acceptanceWrite.description, /Quotes are checked against what the owner said in this product's conversations\.$/u);
+  assert.doesNotMatch(acceptanceWrite.description, /against the conversation/u);
+});
+
 test('3-1b 道具の印: acceptance_write は meta・planOk・projectOnly・会話だけ。作る役（タスク）と子の担当から名前で呼ばせても、パイプラインが断る', async t => {
   assert.equal(acceptanceWrite.effect, 'meta');
   assert.equal(acceptanceWrite.planOk, true);

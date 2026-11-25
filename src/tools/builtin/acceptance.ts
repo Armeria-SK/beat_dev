@@ -98,7 +98,7 @@ function unconfirmedText(changed: Partial<Record<string, number>>): string {
 
 export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   name: 'acceptance_write',
-  description: "Replace this conversation's draft acceptance list (owner-facing documents language): one checkable result per item, not how to build it. source: owner_words with quote (the owner's exact words; never translate) or ai_added. check: a command that succeeds only when the item holds, whenever possible; else look or read (keep these few; split mixed items). notDoing: what the owner ruled out. Quotes are checked against the conversation.",
+  description: "Replace this conversation's draft acceptance list (owner-facing documents language): one checkable result per item, not how to build it. source: owner_words with quote (the owner's exact words; never translate) or ai_added. check: a command that succeeds only when the item holds, whenever possible; else look or read (keep these few; split mixed items). notDoing: what the owner ruled out. Quotes are checked against what the owner said in this product's conversations.",
   input: INPUT,
   effect: 'meta',
   allowedIn: ['chat'],
