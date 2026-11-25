@@ -18,7 +18,7 @@ import { inFilter, newTaskProduct, optionLabel, productName, settleFilter, withP
 import { ALL_PRODUCTS, filterOptions, filterQuery, sidebarOrder, type ProductFilter } from '../products.ts';
 import '../styles/product-filter.css';
 import { routeHash } from '../routes.ts';
-import { checkOp, reportOpError, runTaskOp } from '../task-ops.ts';
+import { checkOp, liveProductId, reportOpError, runTaskOp } from '../task-ops.ts';
 
 type T = ReturnType<typeof useT>;
 
@@ -37,6 +37,7 @@ export interface KanbanProps {
 }
 
 interface Loaded {
+  filter: ProductFilter;
   active: Task[]; finished: Task[]; next: FinishedCursor | null; total: number; runs: RunRow[]; lists: ReadonlyMap<string, Acceptance>;
   changed: ReadonlySet<string>; deviations: ReadonlyMap<string, readonly DeviationRow[]>;
 }
@@ -349,6 +350,7 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<TaskDraft>) => { setDraft(d => ({ ...d, ...patch })); setError(''); };
+  const liveProduct = liveProductId(projects, product);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
@@ -359,7 +361,7 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
       const { task } = await api.createTask(withProduct(built.task, product));
       toast({ kind: 'done', icon: 'check', title: t('ui.task.toast.created'), body: task.title, href: routeHash({ view: 'task', id: task.id }) });
       onClose();
-    } catch (failure) { reportOpError(failure); setBusy(false); }
+    } catch (failure) { reportOpError(failure); setProduct(liveProduct); setBusy(false); }
   };
   return (
     <form className="ui-newtask bt-rise" aria-label={t('ui.kanban.new')} onSubmit={e => void submit(e)}
@@ -367,7 +369,7 @@ function NewTask({ projects, product: initial, onClose }: { projects: readonly P
       <input className="bt-field" autoFocus value={draft.title} maxLength={200} aria-label={t('ui.task.title')} placeholder={t('ui.task.title')} onChange={e => set({ title: e.target.value })} />
       <textarea className="bt-field" rows={3} value={draft.body} maxLength={20_000} aria-label={t('ui.task.body')} placeholder={t('ui.newtask.body')} onChange={e => set({ body: e.target.value })} />
       <div className="ui-newtask__row">
-        <ProductPick projects={projects} value={product} onChange={setProduct} />
+        <ProductPick projects={projects} value={liveProduct} onChange={setProduct} />
         <span className="bt-seg" role="group" aria-label={t('ui.task.priority')}>
           {PRIORITIES.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={draft.priority === p} onClick={() => set({ priority: p })}>{t(PRIORITY_KEY[p])}</button>)}
         </span>
@@ -426,7 +428,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
         Promise.all(productsOf(task => awaitsCheck(task) || awaitsMerge(task)).map(id => api.deviationRows(id).then(r => [id, r.deviations.rows] as const, () => null))).then(entries => new Map(entries.filter(entry => entry !== null))),
       ]);
       if (!loads.current.isCurrent(ticket)) return;
-      setData({ active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, lists, changed: new Set(checks.map(c => c.conversation_id)), deviations });
+      setData({ filter, active, finished: finished.tasks, next: finished.next, total: finished.total, runs: runs.runs, lists, changed: new Set(checks.map(c => c.conversation_id)), deviations });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
@@ -459,6 +461,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
     () => (data ? buildBoard({ active: inFilter(data.active, filter), finished: inFilter(data.finished, filter), hasMore: data.next !== null, finishedTotal: data.total, sessions, checklists }) : null),
     [data, filter, sessions, checklists],
   );
+  const settled = data?.filter === filter;
   const options = projects.some(p => p.archived_at === null) ? filterOptions(projects) : [];
   const ticking = sessions.some(card => card.outcome === 'running');
   const now = useNow(ticking ? 1000 : 30_000);
@@ -583,7 +586,7 @@ export function Kanban({ conversations, drafts, checklists, revision, projects, 
                   <div className="ui-col__cards">
                     {column.cards.map((card, index) => renderCard(card, index, index === firstTask))}
                     {column.id === 'proposed' && column.cards.length === 0 && (emptyProposed ?? <p className="bt-meta ui-col__empty">{t('ui.kanban.noProposals')}</p>)}
-                    {(column.id === 'done' || column.id === 'failed') && board.more > 0 && (
+                    {(column.id === 'done' || column.id === 'failed') && settled && board.more > 0 && (
                       <button type="button" className="bt-tool__link bt-meta ui-more" disabled={moreBusy} title={t('ui.kanban.moreHint')} onClick={() => void more()}>{t('ui.kanban.more', board.more)}</button>
                     )}
                   </div>

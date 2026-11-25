@@ -6,17 +6,19 @@ import { WEEKDAYS } from '../weekdays.ts';
 export type RepeatState = 'active' | 'paused' | 'ended';
 export type DeleteBlock = 'run_open' | 'ran' | 'linked';
 
-export interface RepeatingRow { task: RepeatingTask; state: RepeatState; next: number | null; last: TaskLastRun | null; runOpen: boolean; blocked: DeleteBlock | null }
+export interface OpenRun { id: string; status: TaskStatus }
+export interface RepeatingRow { task: RepeatingTask; state: RepeatState; next: number | null; last: TaskLastRun | null; openRun: OpenRun | null; runOpen: boolean; blocked: DeleteBlock | null }
 export interface TimedRow { task: Task; at: number; blocked: DeleteBlock | null }
 
 const OPEN: ReadonlySet<TaskStatus> = new Set(['running', 'waiting']);
 const STATE_ORDER: Record<RepeatState, number> = { active: 0, paused: 1, ended: 2 };
 
-export function repeatingRow(task: RepeatingTask): RepeatingRow {
+export function repeatingRow(task: RepeatingTask, opened: OpenRun | null = null): RepeatingRow {
   const state: RepeatState = task.status === 'scheduled' ? 'active' : task.status === 'cancelled' ? 'paused' : 'ended';
-  const runOpen = task.last_run !== null && OPEN.has(task.last_run.status);
+  const openRun = task.last_run !== null && OPEN.has(task.last_run.status) ? { id: task.last_run.id, status: task.last_run.status } : opened;
+  const runOpen = openRun !== null;
   return {
-    task, state, next: state === 'active' ? task.run_at : null, last: task.last_run, runOpen,
+    task, state, next: state === 'active' ? task.run_at : null, last: task.last_run, openRun, runOpen,
     blocked: runOpen ? 'run_open' : task.conversation_id !== null ? 'linked' : null,
   };
 }
@@ -25,7 +27,9 @@ export const isTimed = (task: Pick<Task, 'status' | 'cron' | 'parent_id' | 'run_
   task.status === 'ready' && task.cron === null && task.parent_id === null && task.run_at !== null;
 
 export function splitSchedule(input: { repeating: readonly RepeatingTask[]; active: readonly Task[] }): { repeating: RepeatingRow[]; timed: TimedRow[] } {
-  const repeating = input.repeating.map(repeatingRow)
+  const opened = new Map<string, OpenRun>();
+  for (const run of input.active) if (run.parent_id !== null && OPEN.has(run.status) && !opened.has(run.parent_id)) opened.set(run.parent_id, { id: run.id, status: run.status });
+  const repeating = input.repeating.map(task => repeatingRow(task, opened.get(task.id) ?? null))
     .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (a.next ?? 0) - (b.next ?? 0) || a.task.created_at - b.task.created_at);
   const timed = input.active.filter(isTimed)
     .map(task => ({ task, at: task.run_at!, blocked: task.conversation_id !== null ? 'ran' as const : null }))
