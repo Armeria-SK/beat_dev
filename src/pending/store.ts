@@ -128,7 +128,8 @@ const REASON_MAX = 500;
 const LIST_MAX = 200;
 const MARK = '[REDACTED]';
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-const FORMAT = /\p{Cf}/gu;
+// Format characters (Cf, e.g. U+200B, U+FEFF) and the control characters that are not whitespace (Cc except \t \n \v \f \r). Not (?!\s): \s holds U+FEFF
+const INVISIBLE = /[\p{Cf}\x00-\x08\x0E-\x1F\x7F-\x9F]/gu;
 
 const marks = (text: string): number => text.split(MARK).length - 1;
 
@@ -144,11 +145,11 @@ export function outputTail(text: string, mark: Mark = same => same): string {
 }
 
 // Marks every held value before the cut, for the same reason as outputTail. It marks three times: on the raw text, so a value that itself holds a line break
-// (a multi-line key) is found; after only the format characters (Cf, e.g. U+200B) are stripped, so a multi-line value split by an invisible character is found with
-// its line breaks still in place; and after the whole control-character strip, so a value the strip joins back is marked too
+// (a multi-line key) is found; after only the invisible characters (Cf and the non-whitespace controls, e.g. U+200B, NUL) are stripped, so a multi-line value split by one of them is
+// found with its line breaks still in place; and after the whole control-character strip, so a value the strip joins back is marked too
 export function cleanReason(text: string | undefined, mark: Mark = same => same): string | null {
   if (text === undefined) return null;
-  const cleaned = mark(mark(mark(text).replace(FORMAT, '')).replace(CONTROL, '')).trim().slice(0, REASON_MAX);
+  const cleaned = mark(mark(mark(text).replace(INVISIBLE, '')).replace(CONTROL, '')).trim().slice(0, REASON_MAX);
   return cleaned || null;
 }
 

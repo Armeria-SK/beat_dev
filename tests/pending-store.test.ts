@@ -542,3 +542,37 @@ test('M4: 理由の見えない文字を消す今の動きは変わらない（�
   assert.equal(cleanReason(undefined), null);
   assert.equal(cleanReason(`${zwsp}`), null, '見えない文字だけの理由は null');
 });
+
+// M4 の続き: 改行の隣が書式の文字（Cf）でなく制御文字（NUL など）で割られた複数行の値も、理由の中で印になる。
+// 先に消すのは Cf と、空白（\t \n \v \f \r）でない制御文字。U+FEFF は \s に入るが Cf なので、行の中にあっても先に消える
+test('M4: 改行を含む預かった値が、理由の中で NUL など（Cf でない制御文字）でも割られていても、reject_reason は印になる', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const multi = ['line1-first-part', 'line2-secret-part'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const c = (code: number): string => String.fromCharCode(code);
+  const cases = [
+    `line1-first-part${lf}${c(0)}line2-secret-part`,
+    `line1-first-part${c(0)}${lf}line2-secret-part`,
+    `line1-first-part${lf}${c(1)}${c(0x7f)}line2-secret-part`,
+    `line1-first-part${lf}${c(0x85)}line2-secret-part`,
+    `line1-fi${c(0)}rst-part${lf}line2-sec${c(0x1f)}ret-part`,
+    `line1-fi${c(0xfeff)}rst-part${lf}line2-secret-part`,
+    `line1-first-part${lf}${c(0xfeff)}line2-sec${c(0xfeff)}ret-part`,
+    `line1-first-part${lf}${c(0x200b)}${c(0)}line2-secret-part`,
+    `line1-first-part${lf}line2-secret-part`,
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set', JSON.stringify(text));
+  }
+});
+
+test('M4: 空白（タブ・改行）を消す今の動きは変わらない', () => {
+  const tab = String.fromCharCode(9);
+  const lf = String.fromCharCode(10);
+  assert.equal(cleanReason(`a${tab}b${lf}c`), 'abc');
+  assert.equal(cleanReason(`a${String.fromCharCode(0)}b${String.fromCharCode(0x200b)}c`), 'abc');
+});

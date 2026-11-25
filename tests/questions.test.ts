@@ -843,7 +843,7 @@ test('question: 古い待ち（waiting_text）を写した行も、登録済み�
   assert.deepEqual(rows.map(r => r.question), ['Which key, [REDACTED] or the other?']);
 });
 
-test('question: App が作る QuestionStore は、登録済みの提供元の鍵（環境の値）を伏せて保存する', async t => {
+function appWithProviderKey(t: { after: (fn: () => void) => void }, value: string): App {
   const dir = tempDir(t);
   const paths = resolvePaths(dir);
   mkdirSync(paths.data, { recursive: true });
@@ -852,12 +852,38 @@ test('question: App が作る QuestionStore は、登録済みの提供元の鍵
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   writeFileSync(paths.config, JSON.stringify(config));
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, env: { HELD_PROVIDER_KEY: HELD }, adapterOverride: p => new FakeAdapter(p) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, env: { HELD_PROVIDER_KEY: value }, adapterOverride: p => new FakeAdapter(p) });
   t.after(() => app.close());
+  return app;
+}
+
+test('question: App が作る QuestionStore は、登録済みの提供元の鍵（環境の値）を伏せて保存する', async t => {
+  const app = appWithProviderKey(t, HELD);
   assert.deepEqual(app.registry.secrets(), [HELD]);
   const row = app.questions.add({ question: `Use ${HELD}?`, why: HELD, options: [HELD, 'no'], chosen: 1 });
   const stored = app.questions.get(row.id)!;
   assert.equal(stored.question, 'Use [REDACTED]?');
   assert.equal(stored.why, '[REDACTED]');
   assert.deepEqual(JSON.parse(stored.options), ['[REDACTED]', 'no']);
+});
+
+// 登録済みの鍵のうち 16 字より短い値（lm-studio のような仮の値・1 字の値）は、ふつうの語にも当たるので、質問の文を伏せない。
+// 質問は伏せた文をそのまま保存し、持ち主の答えにつけてモデルにも戻るので、短い語を伏せると「Use [REDACTED] on port 1234」になる
+test('question: 16 字より短い提供元の鍵（lm-studio など）は、質問の文を伏せない。16 字以上は伏せる', async t => {
+  for (const placeholder of ['lm-studio', 'x', 'ollama', '1234567890abcde']) {
+    const app = appWithProviderKey(t, placeholder);
+    assert.deepEqual(app.registry.secrets(), [placeholder], '準備: 登録はされている');
+    const row = app.questions.add({ question: `Use ${placeholder} on port 1234?`, why: `Because ${placeholder} is local`, options: [`Keep ${placeholder}`, 'Stop'], chosen: 0 });
+    const stored = app.questions.get(row.id)!;
+    assert.equal(stored.question, `Use ${placeholder} on port 1234?`, placeholder);
+    assert.equal(stored.why, `Because ${placeholder} is local`);
+    assert.deepEqual(JSON.parse(stored.options), [`Keep ${placeholder}`, 'Stop']);
+    const answered = app.questions.answer(row.id, { choice: null, text: `use ${placeholder} please` });
+    assert.equal(answered?.question.answer, `use ${placeholder} please`, '答えの文も伏せない');
+  }
+  const exactly16 = '1234567890abcdef';
+  const app = appWithProviderKey(t, exactly16);
+  assert.equal(exactly16.length, 16);
+  const row = app.questions.add({ question: `Use ${exactly16}?`, options: ['a', 'b'], chosen: 0 });
+  assert.equal(app.questions.get(row.id)!.question, 'Use [REDACTED]?', '16 字ちょうどは伏せる（承認の札の決めと同じ）');
 });

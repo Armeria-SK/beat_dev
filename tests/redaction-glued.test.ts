@@ -72,3 +72,56 @@ test('くっついた鍵: ふつうの文の中の sk で終わる語・sk- を�
   assert.equal(redactSecrets(text), text);
   assert.equal(sanitizeModelInputText(text).redaction_count, 0);
 });
+
+// 鍵を伏せた [REDACTED] の印が、あとの URL の user の読み方（URL_USERINFO_PASSWORD）を切らない。
+// 切れると、user に鍵がくっついた URL の password が、前は伏せていたのに出てしまう
+const PASSWORD = 'hunter2pass';
+const A16 = 'AAAAAAAAAAAAAAAA';
+
+test('くっついた鍵: URL の user に鍵がくっついていても password は伏せる（redactSecrets）', () => {
+  const cases: Array<[string, string]> = [
+    [`postgres://xsk-proj-${A16}:${PASSWORD}@db/app`, 'postgres://x[REDACTED]:[REDACTED]@db/app'],
+    [`redis://tokensk-ant-api03-${A16}:${PASSWORD}@cache`, 'redis://token[REDACTED]:[REDACTED]@cache'],
+    [`ftp://userghp_${GH36}:${PASSWORD}@h/`, 'ftp://user[REDACTED]:[REDACTED]@h/'],
+    [`postgres://sk-proj-${A16}:${PASSWORD}@db/app`, 'postgres://[REDACTED]:[REDACTED]@db/app'],
+    [`amqp://sk-or-v1-${A16}:${PASSWORD}@mq`, 'amqp://[REDACTED]:[REDACTED]@mq'],
+  ];
+  for (const [input, expected] of cases) {
+    const out = redactSecrets(input);
+    assert.equal(out.includes(PASSWORD), false, `password が残っている: ${input} -> ${out}`);
+    assert.equal(out.includes(A16), false, `鍵が残っている: ${input} -> ${out}`);
+    assert.equal(out, expected, input);
+  }
+});
+
+test('くっついた鍵: http(s) の URL は、sanitizeModelInputText だけでも user の鍵と password を残さない', () => {
+  const out = sanitizeModelInputText(`see https://xsk-proj-${A16}:${PASSWORD}@db.example/app now`).text;
+  assert.equal(out.includes(PASSWORD), false, out);
+  assert.equal(out.includes(A16), false, out);
+});
+
+test('くっついた鍵: 鍵のない URL の読み方は今のまま（user:password は伏せ、host:port は変えない）', () => {
+  assert.equal(redactSecrets('postgres://u:pw@h'), 'postgres://u:[REDACTED]@h');
+  assert.equal(redactSecrets('postgres://u:pw@h/db?x=1'), 'postgres://u:[REDACTED]@h/db?x=1');
+  assert.equal(redactSecrets('http://a:8080/b'), 'http://a:8080/b');
+  assert.equal(redactSecrets('https://example.com:443/path'), 'https://example.com:443/path');
+  assert.equal(redactSecrets('ssh://git@example.com:22/repo.git'), 'ssh://git@example.com:22/repo.git');
+});
+
+test('くっついた鍵: [REDACTED] が何度も続く入力でも時間は入力の長さに比例する（URL の user の読み方が崩れない）', () => {
+  const R = '[REDACTED]';
+  const inputs = [
+    `postgres://${R.repeat(20_000)}`,
+    `postgres://${R.repeat(20_000)}:`,
+    `postgres://${R.repeat(20_000)}:pw`,
+    R.repeat(40_000),
+    `x://${R.repeat(40)}`.repeat(2_000),
+    `postgres://${'a'.repeat(100)}${R}`.repeat(1_500),
+  ];
+  for (const input of inputs) {
+    const start = performance.now();
+    redactSecrets(input);
+    const took = performance.now() - start;
+    assert.ok(took < 2_000, `${input.length} 字に ${Math.round(took)}ms かかった`);
+  }
+});

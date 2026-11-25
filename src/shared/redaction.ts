@@ -7,7 +7,8 @@ const SECRET_PATTERNS = [
   /gh[pousr]_[A-Za-z0-9]{36,}/g,
 ];
 const URL_CREDENTIAL = /(?:https?:\/\/)[^\s/@:]+:[^\s/]+@/gi;
-const URL_USERINFO_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:[]*:)(?:[^\s/?#]+@|(?!\d*(?:[/?#"',)\]}\\]|$))[^\s@]{1,256}@)/gi;
+// user の部分は、鍵を伏せた [REDACTED] の印をまたいで読む（user にくっついた鍵を先に伏せても、そのあとの password を残さない）
+const URL_USERINFO_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/(?:[^\s/?#@:[]|\[REDACTED\])*:)(?:[^\s/?#]+@|(?!\d*(?:[/?#"',)\]}\\]|$))[^\s@]{1,256}@)/gi;
 const URL_USERINFO_TOKEN = /\b(https?:\/\/)[^\s/?#@:]{20,}@/gi;
 const URL_PARAM = /(?<=[?&#;]|\\u0026)((?:[A-Za-z0-9_.[\]-]|%[0-9A-Fa-f]{2})+)=((?:[^\s&#"'`<>\\]|\\\/)+(?:["'`<>](?=[A-Za-z0-9])(?:[^\s&#"'`<>\\]|\\\/)*)*)/g;
 const ENCODED_URL_PARAM = /(?<=%3F|%26|%23)([A-Za-z0-9_.-]+)%3D(?:(?!%26|%23)[^\s&#"'`<>\\])+/gi;

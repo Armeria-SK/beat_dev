@@ -131,7 +131,7 @@ export interface QuestionStoreOptions {
   tasks?: TaskStore | undefined;
   projects?: ProjectStore | undefined;
   acceptance?: AcceptanceStore | undefined;
-  // 登録済みの秘密の値（持ち主が設定した鍵など）。質問・理由・選び・答えは、形が鍵らしくなくても、この値を伏せてから保存する。呼ぶたびに今の一覧を聞く
+  // 登録済みの秘密の値（持ち主が設定した鍵など）。質問・理由・選び・答えは、形が鍵らしくなくても、この値を伏せてから保存する。呼ぶたびに今の一覧を聞く。短い値は普通の語にも当たるので、呼ぶ側が外す（App は 16 字以上だけの `registry.held()` を渡す）
   secrets?: (() => readonly string[]) | undefined;
 }
 
