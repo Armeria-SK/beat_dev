@@ -1,7 +1,7 @@
 import type { App } from '../app.ts';
 import { ResearchError } from '../research/labels.ts';
 import { OwnerAct } from '../research/run.ts';
-import { parseProjectResearch, researchSettings } from '../research/settings.ts';
+import { researchSettings } from '../research/settings.ts';
 import type { ConfirmPick } from '../research/confirm.ts';
 import { checkCommandFor } from '../research/choices.ts';
 import { pickedLanguage, type ResearchItemRow, type ResearchRunRow } from '../research/store.ts';
@@ -47,8 +47,7 @@ export function registerResearchRoutes(router: Router, app: App): void {
     const project = projectOf(params[0]!);
     const store = app.research.store;
     sendJson(res, 200, {
-      settings: researchSettings(app.config(), parseProjectResearch(project.research_settings)),
-      own: parseProjectResearch(project.research_settings) ?? null,
+      settings: researchSettings(app.config()),
       products: recordView(app, store.latest(project.id, 'products')),
       libraries: recordView(app, store.latest(project.id, 'libraries')),
       // R-3: 確かめのコマンドが空のときだけ、確定した言語の既定の案（持ち主が押すと製品の PATCH で入る）

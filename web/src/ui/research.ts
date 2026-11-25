@@ -1,4 +1,4 @@
-import type { ResearchItem, ResearchLanguageName, ResearchLimitsView, ResearchOwn, ResearchPick, ResearchRecord, ResearchStatus } from '../api.ts';
+import type { ResearchItem, ResearchLanguageName, ResearchLimitsView, ResearchPick, ResearchRecord, ResearchStatus } from '../api.ts';
 import { RESEARCH_LANGUAGES, RESEARCH_LIMIT_RANGE } from '../../../src/shared/research-languages.ts';
 import { pruned, type Config } from '../settings/model.ts';
 import { apiDetail } from './plan.ts';
@@ -125,7 +125,7 @@ export function confirmedLines(record: ResearchRecord): Array<{ kind: 'use' | 'b
   return out.filter((line, i) => line.kind !== 'build' || out.findIndex(l => l.kind === 'build') === i);
 }
 
-// Settings: the research block of the config (global) and the product's own override (R-4)
+// Settings: the research block of the config (global only; the per-product override was removed)
 export const RESEARCH_LANGUAGE_LIST: readonly ResearchLanguageName[] = RESEARCH_LANGUAGES;
 export const LIMIT_KEYS = ['candidates', 'searches', 'fetches', 'minutes'] as const satisfies ReadonlyArray<keyof ResearchLimitsView>;
 export const LIMIT_RANGE: Readonly<Record<keyof ResearchLimitsView, { min: number; max: number; default: number }>> = RESEARCH_LIMIT_RANGE;
@@ -153,10 +153,4 @@ export function toggleLanguage(lists: { prefer: readonly ResearchLanguageName[];
   const list = lists[which].includes(language) ? lists[which].filter(l => l !== language) : [...lists[which], language];
   const rest = lists[other].filter(l => l !== language);
   return which === 'prefer' ? { prefer: list, avoid: rest } : { prefer: rest, avoid: list };
-}
-
-export function ownSettings(own: ResearchOwn): ResearchOwn | null {
-  const limits = own.limits ? pruned({ ...own.limits }) : undefined;
-  const out = pruned({ ...own, limits: limits && Object.keys(limits).length ? limits : undefined }) as ResearchOwn;
-  return Object.keys(out).length ? out : null;
 }

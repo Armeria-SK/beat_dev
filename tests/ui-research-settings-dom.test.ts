@@ -5,35 +5,35 @@ import { createElement, type ComponentType } from 'react';
 import { defaultConfig, parseConfig } from '../src/config/store.ts';
 import type { Project } from '../web/src/api.ts';
 
-// beat R (M7・R-4): Settings の「Look before building」と、製品の設定の節
+// beat R: Settings の「Look before building」（調べる設定の置き場所はここだけ）。製品の設定の画面には調べる設定の節がない
 
 interface SettingsProps { section: string | undefined; onClose: () => void; held: (() => void) | null; onReplay: () => void; onSaved: () => void; onProfile: () => void }
 const { Settings } = await loadTsx<{ Settings: ComponentType<SettingsProps> }>('../web/src/ui/settings/Settings.tsx', import.meta.url);
-const { ProductResearch } = await loadTsx<{ ProductResearch: ComponentType<{ project: Project }> }>('../web/src/ui/screens/ProductResearch.tsx', import.meta.url);
+const { ProductSettings } = await loadTsx<{ ProductSettings: ComponentType<{ project: Project; onProject: (p: Project) => void }> }>('../web/src/ui/screens/ProductSettings.tsx', import.meta.url);
 
 type Json = Record<string, any>;
 window.HTMLElement.prototype.scrollTo ??= () => undefined;
 const realFetch = globalThis.fetch;
 afterEach(async () => { await cleanup(); globalThis.fetch = realFetch; });
 
-function serve(config: Json, research?: () => Json): { saved: Json[]; patches: Json[] } {
+function serve(config: Json, research?: () => Json): { saved: Json[]; asked: string[] } {
   const saved: Json[] = [];
-  const patches: Json[] = [];
+  const asked: string[] = [];
   let current = structuredClone(config);
   const view = () => ({ config: current, apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' });
   globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
     const url = String(path);
     const method = init?.method ?? 'GET';
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Json : null;
+    asked.push(`${method} ${url}`);
     let out: unknown;
     if (url === '/api/settings' && method === 'GET') out = view();
     if (url === '/api/settings' && method === 'PUT') { current = body!.config; saved.push(current); out = { ...view(), models: [] }; }
     if (url === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
     if (url.endsWith('/research') && research) out = research();
-    if (method === 'PATCH') { patches.push(body!); out = { project: {} }; }
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
-  return { saved, patches };
+  return { saved, asked };
 }
 const settle = async () => { for (let i = 0; i < 3; i++) await update(() => new Promise(resolve => setTimeout(resolve, 0))); };
 const blur = (el: Element | null | undefined) => update(() => { el?.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true })); });
@@ -70,20 +70,15 @@ test('Settings › Look before building: いつ・調べ方・上限・言語を
   assert.deepEqual(parseConfig(saved.at(-1)!).research, { when: 'button', mode: 'one_by_one', limits: { searches: 5 }, avoidLanguages: ['Go'], askLanguage: false });
 });
 
-test('製品の設定の節: Global のままなら上書きなし。行を変えて保存すると researchSettings を送り、範囲の外の数では押せない', async () => {
+test('製品の設定の画面: 調べる設定の節（製品ごとの上書き）は出ない。調べる記録を読み戻す口が答えても、Save research settings も When to research の欄も無い', async () => {
   const settings = { when: 'new', mode: 'auto', limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 }, askLanguage: true, preferLanguages: [], avoidLanguages: [] };
-  const { patches } = serve(defaultConfig() as Json, () => ({ settings, own: null, products: null, libraries: null, suggestedCheck: null }));
-  const { container } = await render(createElement(ProductResearch, { project: { id: 'p1' } as Project }));
+  const { asked } = serve(defaultConfig() as Json, () => ({ settings, products: null, libraries: null, suggestedCheck: null }));
+  const project = { id: 'p1aaaa', name: 'Uploader', root: '/w/up', check_command: 'npm test', scout_mode: 'research', remotes: [], archived_at: null, created_at: 1, updated_at: 1, is_git: true, folder_missing: false, waiting: { proposals: 0, questions: 0, pending: 0 }, running: 0, last_activity_at: null } as Project;
+  const { container } = await render(createElement(ProductSettings, { project, onProject: () => undefined }));
   await settle();
-  const save = () => button(container, 'Save research settings')!;
-  assert.equal(save().disabled, true, 'nothing changed yet');
-  const when = container.querySelector<HTMLSelectElement>('#ui-ps-rs-when')!;
-  await update(() => { when.value = 'off'; when.dispatchEvent(new window.Event('change', { bubbles: true })); });
-  const minutes = [...container.querySelectorAll<HTMLLabelElement>('label.bt-form-row')].find(l => l.textContent?.startsWith('Minutes'))!.querySelector('input')!;
-  await input(minutes, '500');
-  assert.equal(save().disabled, true, 'an out-of-range number cannot be saved');
-  await input(minutes, '7');
-  await click(save());
-  await settle();
-  assert.deepEqual(patches, [{ researchSettings: { when: 'off', limits: { minutes: 7 } } }]);
+  assert.equal(container.querySelector('[data-scout-mode]') !== null, true, 'the screen itself rendered');
+  assert.equal(container.querySelector('[data-research-settings]') === null, true, 'no research settings section');
+  assert.equal(button(container, 'Save research settings') === undefined, true, 'no Save research settings button');
+  assert.equal(container.querySelector('[id^="ui-ps-rs-"]') === null, true, 'no per-product research fields');
+  assert.deepEqual(asked.filter(a => a.endsWith('/research')), [], 'the screen does not read the research view for a settings section any more');
 });
