@@ -302,16 +302,32 @@ const START_PARAMS = ['filepath', 'argumentlist', 'workingdirectory', 'verb', 'w
 const START_SWITCHES = new Set(['wait', 'passthru', 'nonewwindow', 'loaduserprofile', 'usenewenvironment']);
 const CMD_SYNTAX = /[&|<>^%"]/u;
 const isCmdExe = (t: string): boolean => /^cmd(?:\.exe)?$/iu.test(t.replace(/^.*[\\/]/u, '').replace(/[ .]+$/u, ''));
+const isConhost = (t: string): boolean => /^conhost(?:\.exe)?$/iu.test(t.replace(/^.*[\\/]/u, '').replace(/[ .]+$/u, ''));
+
+function cmdExeArgs(args: readonly Word[], st: Statement, acc: Acc, deny: (w: Word) => void): void {
+  const w = args.find(x => x.dynamic);
+  if (w) { deny(w); return; }
+  const syntax = args.find(x => CMD_SYNTAX.test(x.text));
+  if (syntax) acc.add('once', 'list.cmd_syntax', { detail: syntax.text }, false);
+  else if (st.pipedIn) acc.add('once', 'list.cmd_syntax', { detail: '|' }, false);
+}
 
 export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) => boolean, acc: Acc): void {
   const words = st.words;
   const deny = (w: Word) => acc.add('deny', 'list.winargs', { detail: `${name}: ${w.text}` }, false);
-  if (isCmdExe(name)) {
-    const w = words.slice(1).find(x => x.dynamic);
-    if (w) { deny(w); return; }
-    const syntax = words.slice(1).find(x => CMD_SYNTAX.test(x.text));
-    if (syntax) acc.add('once', 'list.cmd_syntax', { detail: syntax.text }, false);
-    else if (st.pipedIn) acc.add('once', 'list.cmd_syntax', { detail: '|' }, false);
+  if (isCmdExe(name)) { cmdExeArgs(words.slice(1), st, acc, deny); return; }
+  if (isConhost(name)) {
+    const rest = words.slice(1);
+    const splat = rest.find(w => w.kind === 'splat');
+    if (splat) { deny(splat); return; }
+    rest.forEach((w, i) => {
+      if (!w.dynamic && /^(?:-|\/[A-Za-z?]$)/u.test(w.text)) return;
+      if (!(w.dynamic || isCmdExe(w.text) || cmdTarget(w.text) || cmdTarget(w.text.replace(/[ .]+$/u, '') || w.text))) return;
+      const args = rest.slice(i + 1);
+      if (!w.dynamic && isCmdExe(w.text)) { cmdExeArgs(args, st, acc, deny); return; }
+      const bad = args.find(x => x.dynamic || /[&|<>^%!]/u.test(x.text));
+      if (bad) deny(bad);
+    });
     return;
   }
   if (!START_PROCESS.has(name.toLowerCase())) return;
@@ -346,7 +362,7 @@ export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) 
   const fileCandidates = files.length ? [...files, ...(unknown ? positional : [])] : unknown ? positional : positional.slice(0, 1);
   const args = [...list, ...(unknown ? positional : files.length ? positional : positional.slice(1))];
   if (splat) { deny(splat); return; }
-  const host = fileCandidates.some(f => f.dynamic || isCmdExe(f.text) || cmdTarget(f.text) || cmdTarget(f.text.replace(/[ .]+$/u, '') || f.text));
+  const host = fileCandidates.some(f => f.dynamic || isCmdExe(f.text) || isConhost(f.text) || cmdTarget(f.text) || cmdTarget(f.text.replace(/[ .]+$/u, '') || f.text));
   if (!host) return;
   const w = args.find(x => x.dynamic || /[&|<>^%!]/u.test(x.text));
   if (w) deny(w);

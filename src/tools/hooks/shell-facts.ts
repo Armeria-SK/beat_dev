@@ -267,6 +267,29 @@ function startProcess(args: readonly Word[]): InnerSource {
   return { text: [quote(file, false), cmdLine(argTokens)].filter(Boolean).join(' '), shell: 'bash' };
 }
 
+const CONHOST_SWITCHES: ReadonlySet<string> = new Set(['--headless', '--inheritcursor']);
+const CONHOST_VALUES: ReadonlySet<string> = new Set(['--width', '--height', '--signal', '--server', '--vtmode', '--feature']);
+
+function conhostCommand(args: readonly Word[], ps: boolean, shell: ShellKind): InnerSource {
+  const unreadable = (w: Word): boolean => w.dynamic || w.kind !== 'plain';
+  let i = 0;
+  for (; i < args.length; i++) {
+    const w = args[i]!;
+    if (unreadable(w)) return null;
+    if (w.text === '--') { i++; break; }
+    if (CONHOST_SWITCHES.has(w.text)) continue;
+    if (CONHOST_VALUES.has(w.text)) {
+      if (!args[i + 1] || unreadable(args[i + 1]!)) return null;
+      i++;
+      continue;
+    }
+    if (/^(?:-|\/[A-Za-z?]$)/u.test(w.text)) return null;
+    break;
+  }
+  const rest = args.slice(i);
+  return rest.length === 0 || rest.some(unreadable) ? null : { text: joinWords(rest, ps), shell };
+}
+
 function wslCommand(args: readonly Word[]): InnerSource {
   for (let i = 0; i < args.length; i++) {
     const t = args[i]!.text;
@@ -323,6 +346,7 @@ export function innerSource(program: string, words: readonly Word[], shell: Shel
   if (program === 'git') return gitInner(words);
   if (START_PROCESS.has(program) && (ps || program !== 'start')) return startProcess(args);
   if (program === 'wsl') return wslCommand(args);
+  if (program === 'conhost') return conhostCommand(args, ps, shell);
   if (SPAWNERS_WITH_BLOCKS.has(program)) return words.some(w => w.kind === 'block') ? undefined : null;
   return undefined;
 }

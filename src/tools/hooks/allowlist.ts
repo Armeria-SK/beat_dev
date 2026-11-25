@@ -133,22 +133,64 @@ function psCdShape(st: Statement, acc: Acc, ctx: MatchCtx): void {
   if (cd) acc.cwd = qualified[1]!.toLowerCase() === 'microsoft.powershell.management' ? cd : { ...cd, maybe: true };
 }
 
-function linkFormOf(key: string, words: readonly Word[], ps: boolean): string | undefined {
+interface LinkForm { detail: string; operands: Word[]; deep?: Word[] }
+
+const ELEVATORS: ReadonlySet<string> = new Set(['gsudo']);
+const commandBase = (w: Word): string => (w.dynamic || w.kind !== 'plain' ? '' : (w.text.split(/[\\/]/u).pop() ?? '').replace(/[ .]+$/u, '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, ''));
+const longOption = (text: string, name: string, min: number): boolean => {
+  const head = text.split('=', 1)[0]!;
+  return head.length >= min && name.startsWith(head);
+};
+
+function operandsOf(args: readonly Word[]): Word[] {
+  const out: Word[] = [];
+  let ended = false;
+  for (const w of args) {
+    if (w.kind !== 'plain') continue;
+    if (ended || w.dynamic || !w.text.startsWith('-') || w.text === '-') { out.push(w); continue; }
+    if (w.text === '--') { ended = true; continue; }
+    const attached = /^--[^=]+=(.+)$/su.exec(w.text) ?? /^-[A-Za-z]*?t(.+)$/su.exec(w.text);
+    if (attached) out.push({ ...w, text: attached[1]! });
+  }
+  return out;
+}
+
+function linkFormOf(key: string, words: readonly Word[], ps: boolean): LinkForm | undefined {
   const args = words.slice(1);
-  if (key === 'ln' || key === 'mklink') return key;
+  if (key === 'ln') return { detail: key, operands: operandsOf(args) };
+  if (key === 'mklink') return { detail: key, operands: args.filter(w => w.kind === 'plain' && (w.dynamic || !/^\/[A-Za-z]$/u.test(w.text))) };
   if (key === 'cmd') {
     const at = args.findIndex(w => /^\/[ckr]/iu.test(w.text));
     if (at < 0 || args.slice(at).some(w => w.dynamic)) return undefined;
     const tokens = [args[at]!.text.slice(2), ...args.slice(at + 1).map(w => w.text)].join(' ').split(/\s+/u).map(t => t.replace(/^["@(]+|"+$/gu, '')).filter(Boolean);
     while (tokens[0]?.toLowerCase() === 'call') tokens.shift();
     const inner = tokens.map((text): Word => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' }));
-    return inner[0] ? linkFormOf(inner[0].text.toLowerCase().replace(/\.exe$/u, ''), inner, false) : undefined;
+    const form = inner[0] ? linkFormOf(inner[0].text.toLowerCase().replace(/\.exe$/u, ''), inner, false) : undefined;
+    return form && { ...form, operands: form.operands.map(w => ({ ...w, text: w.text.replace(/\)+$/u, '') })).filter(w => w.text !== '') };
   }
-  if (key === 'fsutil') return args.find(w => w.dynamic || w.text.toLowerCase() === 'hardlink')?.text;
+  if (key === 'fsutil') {
+    const at = args.findIndex(w => w.dynamic || w.text.toLowerCase() === 'hardlink');
+    if (at < 0) return undefined;
+    const sub = args[at + 1];
+    const listing = sub !== undefined && !sub.dynamic && sub.text.toLowerCase() === 'list';
+    return { detail: args[at]!.text, operands: listing ? [] : args.slice(at + 1).filter(w => w.kind === 'plain' && (w.dynamic || w.text.toLowerCase() !== 'create')) };
+  }
   if (key === 'cp' && !ps) {
-    return args.find(w => !w.dynamic && ((w.text.length >= 3 && '--link'.startsWith(w.text)) || (w.text.length >= 4 && '--symbolic-link'.startsWith(w.text)) || /^-[A-Za-z]*[ls]/u.test(w.text)))?.text;
+    const flag = args.find(w => !w.dynamic && ((w.text.length >= 3 && '--link'.startsWith(w.text)) || (w.text.length >= 4 && '--symbolic-link'.startsWith(w.text)) || /^-[A-Za-z]*[ls]/u.test(w.text)))?.text;
+    if (flag === undefined) return undefined;
+    const operands = operandsOf(args);
+    const tree = args.some(w => !w.dynamic && (longOption(w.text, '--recursive', 5) || longOption(w.text, '--archive', 4) || (/^-[A-Za-z]*[rRa]/u.test(w.text) && !w.text.startsWith('--'))));
+    const targeted = args.some(w => !w.dynamic && (longOption(w.text, '--target-directory', 3) || (/^-[A-Za-z]*t/u.test(w.text) && !w.text.startsWith('--'))));
+    return { detail: flag, operands, deep: tree ? (targeted ? operands : operands.slice(0, -1)) : [] };
   }
   return undefined;
+}
+
+function addLink(acc: Acc, key: string, text: string, words: readonly Word[], ps: boolean): void {
+  const link = linkFormOf(key, words, ps);
+  if (link === undefined) return;
+  acc.add('once', 'list.form', { cmd: text, detail: link.detail }, false);
+  for (const w of link.operands) acc.write(w, link.deep?.includes(w) ?? false);
 }
 
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
@@ -170,17 +212,19 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
 
   const name = st.words[0]!;
   const text = name.text;
+  const base = commandBase(name);
+  if (ELEVATORS.has(base)) acc.add('deny', 'guard.elevate', {}, false);
   const named = quotedName || (name.kind === 'plain' && !name.dynamic && !name.quoted && !name.home && (NAME_RE.test(text) || (ps ? text === '%' || text === '?' : BASH_SPECIAL.has(text)) || text === 'tree.com' || text === 'where.exe'));
   if (!named) {
     acc.add('once', 'list.command', { cmd: text }, true);
+    addLink(acc, base, text, st.words, ps);
     if (ps) { unlistedArgs(st, acc, ctx); psCdShape(st, acc, ctx); }
     return acc.result();
   }
   let key = ctx.windows || ps ? text.toLowerCase() : text;
   let exe = false;
   if (ctx.windows && key.endsWith('.exe') && key !== 'where.exe') { key = key.slice(0, -4); exe = true; }
-  const link = linkFormOf(key, st.words, ps);
-  if (link !== undefined) acc.add('once', 'list.form', { cmd: text, detail: link }, false);
+  addLink(acc, key, text, st.words, ps);
   if (ps) { runPs(key, exe, st, acc, ctx); return acc.result(); }
 
   if (key === 'git') {
