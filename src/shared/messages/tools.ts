@@ -87,6 +87,7 @@ const en = {
   'shell.omitted': '[... {bytes} bytes left out ...]',
   'shell.truncated_tail': '. Full output: {path}',
   'shell.timeout': '[Stopped after the {seconds} s timeout (child processes included)]',
+  'shell.timeout_lowered': '[timeoutSec was {asked} s, but the limit is {seconds} s, so {seconds} s was used]',
   'shell.aborted': '[Stopped]',
   'summary.shell_background': 'Run a command (background): it runs with no time limit until stopped',
   'shell.bg_unavailable': 'Background commands are not available in this run. Run it without background',
