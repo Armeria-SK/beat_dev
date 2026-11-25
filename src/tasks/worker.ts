@@ -346,7 +346,9 @@ export class Worker {
 
   #hold(): 'paused' | 'chat' | undefined {
     if (this.paused) return 'paused';
-    if (this.#d.engine.chatting) return 'chat';
+    // 会話の返事を作っていても、提供元に空きがあれば裏の実行は動く。待つのは、会話の実行のいる提供元（裏の実行が最初に使う提供元）が満杯のときだけ（会話の実行も空きの数に入る）。
+    // 裏の実行だけで埋まっているときは「会話」ではなく枠（slots）の待ち
+    if (this.#d.engine.chatHoldsBackground()) return 'chat';
     return undefined;
   }
 
@@ -431,7 +433,7 @@ export class Worker {
       if (!skillOn) this.#d.reviews?.skipPending('skill', taskText(languageOf(c), 'review.skill_off'));
       const hold = this.#hold();
       if (hold === 'paused') { reschedule(); return 'paused'; }
-      // ユーザーとの会話の返事を作っている間は始めない（終われば onRunEnd で起こされる）
+      // ユーザーとの会話の返事を作っていて、提供元に空きが無い間は始めない（終われば onRunEnd で起こされる）
       if (hold === 'chat') { reschedule(now + 60_000); return 'busy'; }
       // 「今すぐ実行」を頼まれたものは、1時間の上限より先に実行する（上限は、ひとりでに動く分の費用を抑えるためのもの）
       let task: Task | undefined;
@@ -960,7 +962,7 @@ export class Worker {
     return view('idle');
   }
 
-  // Think now（持ち主の頼み。D-4: worker が Off でも 1 回動く。一時停止・会話の返事中は tick の順で待つ。D-7: クラウドの 0 と休みのあいだは断る）
+  // Think now（持ち主の頼み。D-4: worker が Off でも 1 回動く。一時停止・会話の返事が提供元を埋めているあいだ（裏の先頭は #hold、考える役の提供元は scoutRoute の room）は tick の順で待つ。D-7: クラウドの 0 と休みのあいだは断る）
   scoutNow(projectId: string): ScoutAsk | undefined {
     const project = this.#d.projects?.get(projectId);
     if (!project) return undefined;

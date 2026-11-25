@@ -454,7 +454,7 @@ test('5-3a: 会話から task_update で done にできないのは、確かめ�
 
 for (const outcome of ['pass', 'fail'] as const) {
   test(`5-3a: 確かめの途中で会話に譲っても確かめは止まらず、結果を残す（${outcome}）`, async t => {
-    const s = await setup(t);
+    const s = await setup(t, c => { c.providers[0]!.maxParallel = 1; });
     const { row, root } = s.product('shop', 'node slow.js');
     writeFileSync(join(root, 'slow.js'), [
       "const fs = require('fs');",
@@ -622,7 +622,7 @@ async function preemptDuringCheck(s: Awaited<ReturnType<typeof setup>>, script: 
 const within = <T>(p: Promise<T>, ms: number, what: string) => Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(what)), ms).unref())]);
 
 test('5-3a: 会話に譲ったあとに持ち主が実行を止めると、確かめは止まり、タスクは完了にならない', { timeout: 30_000 }, async t => {
-  const s = await setup(t);
+  const s = await setup(t, c => { c.providers[0]!.maxParallel = 1; });
   const { root, task, runId, ticking } = await preemptDuringCheck(s, "require('fs').writeFileSync('started', ''); setTimeout(() => process.exit(0), 3000);");
   const start = Date.now();
   assert.equal(s.app.engine.stop(runId), true);
@@ -635,7 +635,7 @@ test('5-3a: 会話に譲ったあとに持ち主が実行を止めると、確�
 });
 
 test('5-3a: 会話に譲ったあとに beat を閉じると、閉じる呼び出しが返る時には確かめのプロセスが止まっている', { timeout: 30_000 }, async t => {
-  const s = await setup(t);
+  const s = await setup(t, c => { c.providers[0]!.maxParallel = 1; });
   const { root, ticking } = await preemptDuringCheck(s, "const fs = require('fs'); fs.writeFileSync('pid', String(process.pid)); fs.writeFileSync('started', ''); setTimeout(() => process.exit(0), 20000);");
   const pid = Number(readFileSync(join(root, 'pid'), 'utf8'));
   const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };

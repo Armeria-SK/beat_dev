@@ -354,9 +354,12 @@ test('会話の送信で動いている 2 本の振り返りが止められた�
   await waitFor(() => s.adapter().calls.length === base + 2, '2 本目が始まる');
   const runs = s.app.worker.status().runningAll;
   assert.equal(runs.length, 2);
-  s.adapter().scripts.push(reply('はい'));
+  s.adapter().scripts.push(reply('はい'), reply('はい'));
+  // 提供元が満杯のとき、会話の送信 1 回が止めるのは足りない 1 本だけ（beat self-fix S1）。2 本とも止めるので、送るのも 2 回
   const sent = s.app.engine.send('c3', 'こんにちは');
   assert.ok(sent.ok, JSON.stringify(sent));
+  const sentAgain = s.app.engine.send('c4', 'こんにちは');
+  assert.ok(sentAgain.ok, JSON.stringify(sentAgain));
   assert.deepEqual(await within(Promise.all([t1, t2]), '2 本とも止められて戻る'), ['ran', 'ran']);
   for (const run of runs)assert.equal(s.app.engine.wasPreempted(run.runId), true, '2 本とも会話に譲って止められた');
   for (const job of [j1, j2]) {
@@ -367,6 +370,7 @@ test('会話の送信で動いている 2 本の振り返りが止められた�
   assert.equal(s.app.kv.get('review:skill-upto:c2'), undefined);
   assert.equal(s.app.worker.status().runningAll.length, 0);
   await s.app.engine.wait(sent.runId);
+  await s.app.engine.wait(sentAgain.runId);
   s.app.engine.lastUserActivity = 0;
   s.adapter().scripts.push(reply('変更なし'), reply('変更なし'));
   assert.equal(await s.app.worker.tick(), 'ran');
@@ -390,14 +394,18 @@ test('会話の送信は、同じ提供元で動いているタスクと振り�
   await waitFor(() => s.adapter().calls.length === base + 2, '振り返りが始まる');
   assert.deepEqual(s.app.worker.status().runningAll.map(r => r.kind), ['task', 'review']);
   const runIds = s.app.worker.status().runningAll.map(r => r.runId);
-  s.adapter().scripts.push(reply('はい'));
+  s.adapter().scripts.push(reply('はい'), reply('はい'));
+  // 提供元が満杯のとき、会話の送信 1 回が止めるのは足りない 1 本だけ（beat self-fix S1）。両方を止めるので、送るのも 2 回
   const sent = s.app.engine.send('c3', 'こんにちは');
   assert.ok(sent.ok, JSON.stringify(sent));
+  const sentAgain = s.app.engine.send('c4', 'こんにちは');
+  assert.ok(sentAgain.ok, JSON.stringify(sentAgain));
   assert.deepEqual(await within(Promise.all([t1, t2]), 'タスクも振り返りも止められて戻る'), ['ran', 'ran']);
   for (const runId of runIds)assert.equal(s.app.engine.wasPreempted(runId), true);
   assert.equal(s.app.tasks.get(a.id)!.status, 'ready');
   assert.equal(jobOf(s, job.id).status, 'pending');
   await s.app.engine.wait(sent.runId);
+  await s.app.engine.wait(sentAgain.runId);
   assert.deepEqual(s.app.engine.activeRuns(), [], '会話も含め、動いている実行は残らない');
 });
 

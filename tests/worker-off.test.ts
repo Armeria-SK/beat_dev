@@ -157,7 +157,7 @@ test('7-4: a self / curiosity task waiting in ready says it waits for the owner 
 });
 
 test('waiting reasons match what the worker does: paused, chat reply, hourly limit, product busy, no free slot', async t => {
-  const s = await setup(t, c => { c.worker.maxRunsPerHour = 2; });
+  const s = await setup(t, c => { c.worker.maxRunsPerHour = 2; c.providers[0]!.maxParallel = 1; });
   const { app } = s;
   const task = app.tasks.create({ title: 'Build: shop', origin: 'user', actor: 'user' });
   const reason = () => app.worker.status().waiting[task.id] ?? null;
@@ -167,10 +167,21 @@ test('waiting reasons match what the worker does: paused, chat reply, hourly lim
   assert.equal(await app.worker.tick(), 'paused');
   app.worker.setPaused(false);
 
-  Object.defineProperty(app.engine, 'chatting', { configurable: true, get: () => true });
+  // 会話の返事を書いている最中（本物の会話の実行。提供元は maxParallel 1 なので、会話だけで埋まる。会話の実行がいるだけでは待たない。beat self-fix S1）
+  s.adapter().scripts.push(async function* (req) {
+    yield { type: 'text', delta: '…' };
+    await new Promise((_, reject) => {
+      if (req.signal.aborted) reject(req.signal.reason);
+      req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true });
+    });
+  });
+  const chatting = app.engine.send('c1', 'hello');
+  assert.ok(chatting.ok, JSON.stringify(chatting));
+  await waitFor(() => s.adapter().calls.length === 1, 'a chat reply is being written');
   assert.deepEqual(reason(), { kind: 'chat' });
   assert.equal(await app.worker.tick(), 'busy');
-  delete (app.engine as unknown as Record<string, unknown>).chatting;
+  app.engine.stop(chatting.runId);
+  await app.engine.wait(chatting.runId);
 
   const insert = app.db.prepare("INSERT INTO engine_runs (id, kind, started_at) VALUES (?, 'task', ?)");
   insert.run('r1', s.clock.now - 45 * 60_000);

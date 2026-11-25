@@ -50,6 +50,7 @@ export const engineJa = {
   'warn.compaction_failed': "古いメッセージの要約に失敗したので、要約なしで外しました",
   'warn.queued_saved': "返事が止まったので、待っていたメッセージ {count} 件は保存だけしました。続けるにはもう一度送るか、Retry を押してください",
   'warn.queued_not_started': "返事を始められる使えるモデルが無かったので、待っていたメッセージ {count} 件は保存だけしました。モデルを確かめてから、もう一度送るか、Retry を押してください",
+  'warn.task_paused': "この返事にモデルを回すため、裏の作業 {count} 件を一時止めました。止めてから 2 分後に実行待ちへ戻り、モデルが空きしだい続きから再開します",
   'warn.server_truncation': "サーバーが受け取った入力（{actual} トークン）が見込み（{estimate}）よりずっと少ないので、サーバーが切ったのかもしれません",
   'truncation.disable': "{message}（{strikes} 回続けて）。サーバーの context length を確かめてから、設定の画面でもう一度確かめを動かしてください",
   'message.stopped_partway': "（途中で止めました）",

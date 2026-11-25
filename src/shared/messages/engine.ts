@@ -49,6 +49,7 @@ const en = {
   'warn.compaction_failed': 'Summarizing the older messages failed, so they are left out without a summary',
   'warn.queued_saved': 'The reply stopped, so the {count} waiting message(s) were only saved. Send again or press retry to continue',
   'warn.queued_not_started': 'No usable model was available to start a reply, so the {count} waiting message(s) were only saved. Check the models, then send again or press retry',
+  'warn.task_paused': 'Paused {count} background run(s) to give this reply the model. They are queued again 2 minutes after the pause and continue from where they stopped once the model is free.',
   'warn.server_truncation': 'The input the server received ({actual} tokens) was much smaller than the estimate ({estimate}), so the server may have cut it off',
   'truncation.disable': '{message} ({strikes} times in a row). Check the context length on the server, then run the check again from the settings screen',
   'message.stopped_partway': '(stopped partway)',

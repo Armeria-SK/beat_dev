@@ -59,6 +59,7 @@ import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
 import { openPendingIds } from '../tasks/pending-wake.ts';
+import { buildSection, type BuildLine } from '../tasks/build-status.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../shared/messages/tools.ts';
 import { plainLine, stripHidden } from '../shared/plain-text.ts';
@@ -281,7 +282,7 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
 
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
 // tainted: 外から読んだ一覧・裏のコマンドの節を載せた tail の発言の id（その tail は以後も送るので、要約で外れるまで次の実行を「外から読んだ」で始める）
-interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background' | 'product', number>>; tainted?: Partial<Record<'checklist' | 'background', number[]>> }
+interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background' | 'product' | 'build', number>>; tainted?: Partial<Record<'checklist' | 'background', number[]>> }
 // 1 回の実行の要約の状態: 要約した回数・失敗したか（失敗したら外すだけ）・要約した発言の合計・要約せずに外した発言の合計
 interface CompactionState { count: number; failed: boolean; summarized: number; trimmed: number }
 
@@ -319,6 +320,8 @@ export class ChatEngine {
   #preempted = new Set<string>();
   // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
   #preemptedTasks = new Map<string, string[]>();
+  // 会話の実行が始まるときに止めた実行の数（タスクの無い振り返りなども含む）。実行の始まりに 1 回だけ画面へ知らせる
+  #pausedCount = new Map<string, number>();
   #initialTaint = new Map<string, string[]>();
   #reviewEvidence = new Map<string, NonNullable<ToolContext['reviewEvidence']>>();
   #scoutEnds = new Map<string, ScoutEnd>();
@@ -426,7 +429,7 @@ export class ChatEngine {
       this.#d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode });
     }
     const runId = randomUUID();
-    if (preempted.length) this.#preemptedTasks.set(runId, preempted);
+    this.#notePreempted(runId, preempted);
     let firstId: number | undefined;
     for (const item of items) {
       const { content, attachments } = item;
@@ -657,7 +660,7 @@ export class ChatEngine {
     const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const runId = randomUUID();
-    if (preempted.length) this.#preemptedTasks.set(runId, preempted);
+    this.#notePreempted(runId, preempted);
     this.#taintFromHistory(runId, conversationId);
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, conversation?.effort ?? null);
     return { ok: true, runId };
@@ -725,8 +728,9 @@ export class ChatEngine {
     if (!first) return null;
     let host = '';
     try { host = first.provider.baseUrl ? new URL(first.provider.baseUrl).hostname : ''; } catch { host = ''; }
+    // 会話の実行も数える（会話の返事を書いている提供元に、考える実行を重ねない。`backgroundHasRoom` と同じ数え方）
     let running = 0;
-    for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
+    for (const active of this.#active.values()) if (active.primary === first.provider.id) running += 1;
     const { capacity, maxOutput } = this.#d.status.limits(first.model);
     return { modelId: first.model.id, providerId: first.provider.id, local: host !== '' && isLoopbackHost(host), room: running < first.provider.maxParallel, available: capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined };
   }
@@ -810,13 +814,29 @@ export class ChatEngine {
   }
 
   // 裏の実行（タスク・振り返り）をもう 1 本始めても、先に使う提供元の maxParallel を越えないか。
-  // 数えるのは、動いている裏の実行の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
+  // 数えるのは、動いている実行（会話・子の担当・裏の実行）の「最初に使う提供元」（道具を動かしている最中で limiter の枠を返しているものも含む）。
+  // 会話の実行も数える（会話で埋まった提供元に、裏の実行を重ねない。`#preemptFor` が数える範囲と同じ）。使えるモデルが無いときは true（始めて、いつもの失敗の道に任せる）
   backgroundHasRoom(): boolean {
     const first = this.#chain('background').usable[0];
     if (!first) return true;
     let running = 0;
-    for (const active of this.#active.values()) if (active.kind !== 'chat' && active.primary === first.provider.id) running += 1;
+    for (const active of this.#active.values()) if (active.primary === first.provider.id) running += 1;
     return running < first.provider.maxParallel;
+  }
+
+  // 裏の実行が最初に使う提供元が、会話の実行がいるせいで満杯か（ワーカーの待つ理由を「会話の返事」と言うか「枠」と言うかの区別。
+  // 満杯でも、そこに会話の実行がいなければ false。会話が別の提供元で動いているだけなら、待たせているのは裏の実行で埋まった枠）
+  chatHoldsBackground(): boolean {
+    const first = this.#chain('background').usable[0];
+    if (!first) return false;
+    let running = 0;
+    let chat = false;
+    for (const active of this.#active.values()) {
+      if (active.primary !== first.provider.id) continue;
+      running += 1;
+      if (active.kind === 'chat') chat = true;
+    }
+    return chat && running >= first.provider.maxParallel;
   }
 
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
@@ -859,17 +879,31 @@ export class ChatEngine {
     return smallest;
   }
 
-  // 会話の実行が使うプロバイダを使っている裏の実行を止める。止めたタスクの id を返す
-  #preemptFor(routes: Route[]): string[] {
-    const providers = new Set(routes.map(r => r.provider.id));
-    const tasks: string[] = [];
-    for (const active of this.#active.values()) {
-      if (active.kind === 'chat' || active.kind === 'agent' || ![...active.providers].some(p => providers.has(p))) continue;
+  // 会話の実行が始まるとき、裏の実行を止めるのは、会話が最初に使う提供元（routes[0]）に空きが無いときだけ（Q-SF-1）。
+  // 数えるのは、その提供元を最初に使って動いている実行の全部（会話・子の担当・裏の実行。いま始める会話の実行はまだ入っていない）。maxParallel より少なければ何も止めない。
+  // すでに止めた（止めかけで、まだ終わりきっていない）実行は、数にも止める候補にも入れない（二重に知らせず、生きている実行を余計に止めない。枠の本当の同時数は、モデルを呼ぶ 1 回ごとに limiter が抑える）。
+  // 空きが無ければ、足りない分（数 − maxParallel + 1 本）を、始まりの新しい順に止める。止める候補（会話・子の担当以外）が無ければ止めず、提供元の枠の待ち行列に任せる。
+  // 会話の鎖の後ろにだけ同じ提供元がある裏の実行は止めない（会話が後ろへ落ちたら、モデルを呼ぶ 1 回ごとに枠を待つ）。止めたタスクの id と、止めた実行の数を返す
+  #preemptFor(routes: Route[]): { tasks: string[]; count: number } {
+    const first = routes[0];
+    const stopped = { tasks: [] as string[], count: 0 };
+    if (!first) return stopped;
+    const same = [...this.#active.values()].filter(active => active.primary === first.provider.id && !this.#preempted.has(active.runId));
+    const lack = same.length - first.provider.maxParallel + 1;
+    if (lack <= 0) return stopped;
+    for (const active of same.filter(a => a.kind !== 'chat' && a.kind !== 'agent').reverse().slice(0, lack)) {
       this.#preempted.add(active.runId);
-      if (active.taskId) tasks.push(active.taskId);
+      if (active.taskId) stopped.tasks.push(active.taskId);
+      stopped.count += 1;
       active.controller.abort(new ProviderError('cancelled', engineText(DEFAULT_LANGUAGE, 'run.preempted'), { retryable: false }));
     }
-    return tasks;
+    return stopped;
+  }
+
+  // 止めたタスク（引き継ぎのメモの相手）と、止めた実行の数（始まりの知らせの件数）を、この会話の実行に結びつける
+  #notePreempted(runId: string, stopped: { tasks: string[]; count: number }): void {
+    if (stopped.tasks.length) this.#preemptedTasks.set(runId, stopped.tasks);
+    if (stopped.count) this.#pausedCount.set(runId, stopped.count);
   }
 
   stop(runId: string): boolean {
@@ -952,6 +986,7 @@ export class ChatEngine {
         this.created.end(runId).catch(() => {});
         this.#byConversation.delete(conversationId);
         this.#preemptedTasks.delete(runId);
+        this.#pausedCount.delete(runId);
         this.#runModel.delete(runId);
         this.#runMode.delete(runId);
         this.#runFence.delete(runId);
@@ -1033,6 +1068,9 @@ export class ChatEngine {
     if (forbid instanceof ResearchAllow && !research) throw new Error('A research run needs its research session');
     const snapshot = this.#snapshot(conversationId, resolved, scout || fix, research !== undefined);
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
+    // この返事にモデルを回すために裏の実行を止めたときは、最初の往復の前に 1 回だけ知らせる（止めたのは提供元に空きが無かったとき）
+    const paused = this.#pausedCount.get(runId) ?? 0;
+    if (paused > 0) d.bus.publish({ type: 'warning', runId, conversationId, code: 'task_paused', message: engineText(languageOf(d.config()), 'warn.task_paused', { count: paused }), params: { count: paused } });
     const flags: string[] = chain[0]!.backup ? ['fallback'] : [];
     const usage: Usage = {};
     const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0, workDone: 0, changeDone: 0 };
@@ -1642,6 +1680,12 @@ export class ChatEngine {
     const jobs = d.background?.list({ conversationId: p.conversationId }) ?? [];
     const checklist = checklistSection(list, language);
     const background = backgroundSection(jobs, language);
+    // この会話の計画から作った、開いている Build の様子（会話の実行だけ。新しい順に 3 件まで。決まった英語の文と id・数字だけで、タスクの文は入れない）
+    // 止めたタスクのうち、同じ返事のあいだに動き直したもの（止められていない実行がいる）は、止めた扱いにしない
+    const restarted = new Set([...this.#active.values()].filter(active => active.taskId !== undefined && !this.#preempted.has(active.runId)).map(active => active.taskId!));
+    const paused = new Set((p.runId ? this.#preemptedTasks.get(p.runId) ?? [] : []).filter(id => !restarted.has(id)));
+    const openBuilds = p.kind === 'chat' ? (d.tasks?.buildsFrom(p.conversationId) ?? []).filter(task => task.status === 'ready' || task.status === 'running' || task.status === 'waiting').slice(-3).reverse() : [];
+    const build = buildSection(openBuilds.map((task): BuildLine => ({ id: task.id, status: task.status as BuildLine['status'], pausedNow: paused.has(task.id), pending: task.status === 'waiting' ? openPendingIds(d.conversations.db, task.id) : [] })));
     const bare = p.forbid instanceof ResearchAllow;
     const row = p.project?.root && !bare ? d.projects?.get(p.project.id) : undefined;
     const planMemory = p.kind === 'chat' && mode === 'plan' && row?.archived_at === null && !d.botMemory && d.memoryFiles ? (config.memory.review ? 'review' as const : 'off' as const) : undefined;
@@ -1653,7 +1697,7 @@ export class ChatEngine {
     const now = d.now?.() ?? new Date();
     const fence = this.#fence(p.runId, p.conversationId);
     const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
-    const sections = { checklist, background, product: productStatus };
+    const sections = { checklist, background, product: productStatus, build };
     const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
     const apiTools = specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
@@ -1697,7 +1741,7 @@ export class ChatEngine {
       if (due) {
         const carriers: TailState['carriers'] = lost ? {} : { ...state.carriers };
         carriers.time = last.id;
-        for (const key of ['product', 'checklist', 'background'] as const) {
+        for (const key of ['product', 'build', 'checklist', 'background'] as const) {
           if (lost || (state.sent?.[key] ?? '') !== sections[key]) { if (sections[key]) carriers[key] = last.id; else delete carriers[key]; }
         }
         const upto = conversation?.summary_upto ?? 0;

@@ -814,3 +814,20 @@ test('TE-2 状態の行を載せた発言だけが要約で消え、時刻はあ
   const req = withTools(s).at(-1)!;
   assert.match(statusOf(req), /^- acceptance\.json — not written yet$/mu, '状態の行が送る範囲のどこかにある');
 });
+
+test('nextTail（Build の節）: 変わらなければ 10 分たつまで送り直さない。変わったときは Build の節と時刻を送る。空になったら「Build: none open now.」の 1 行', () => {
+  const at = new Date('2026-11-04T20:00:00Z');
+  const none = { checklist: '', background: '' };
+  const building = { ...none, build: 'BUILD LINES' };
+  const first = nextTail(undefined, 'UTC', 'en', at, building);
+  assert.equal(first?.text, 'Current time: Wed, Nov 4, 2026, 20:00 (UTC)\n\nBUILD LINES');
+  assert.equal(nextTail(first!.sent, 'UTC', 'en', new Date(at.getTime() + TAIL_TIME_MINUTES * MIN - 1), building), undefined, '何も変わらず 10 分たたなければ送らない');
+  assert.equal(nextTail(first!.sent, 'UTC', 'en', new Date(at.getTime() + TAIL_TIME_MINUTES * MIN), building)?.text, 'Current time: Wed, Nov 4, 2026, 20:10 (UTC)', '10 分たてば時刻だけ');
+  const changed = nextTail(first!.sent, 'UTC', 'en', new Date(at.getTime() + MIN), { ...none, build: 'OTHER LINES' });
+  assert.equal(changed?.text, 'Current time: Wed, Nov 4, 2026, 20:01 (UTC)\n\nOTHER LINES', '状態が変わったら 10 分たたなくても送る');
+  const cleared = nextTail(changed!.sent, 'UTC', 'en', new Date(at.getTime() + 2 * MIN), none);
+  assert.equal(cleared?.text, 'Current time: Wed, Nov 4, 2026, 20:02 (UTC)\n\nBuild: none open now.');
+  assert.equal(nextTail(cleared!.sent, 'UTC', 'en', new Date(at.getTime() + 3 * MIN), none), undefined, '空になった行は 1 回だけ');
+  const { build: _build, ...old } = cleared!.sent;
+  assert.equal(nextTail(old, 'UTC', 'en', new Date(at.getTime() + 3 * MIN), none), undefined, 'build を持たない古い状態から、Build が無いままなら「空になった」を送らない');
+});
