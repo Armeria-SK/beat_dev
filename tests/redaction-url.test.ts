@@ -328,3 +328,26 @@ test('道具に渡した引数の秘密: 会話にはそのまま保存してモ
   assert.deepEqual(await (await s.api(`/api/history?q=${S3}`)).json(), { hits: [] }, 'GET /api/history');
   clean(reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }).transcript, '振り返りに渡す会話の写し（reviewWindow）');
 });
+
+// 伏せたい値が URL に入る形は、符号化する側（ブラウザの URL・フォームの送信・PHP・Python・ページの JS）で違う。
+// 記号の 1 文字ずつが、そのままか %XX（16 進の大文字・小文字）で、空白は %20 か + で書かれたものを、同じ値として伏せる
+test('伏せ字（exact）: URL に入った値は、符号化の仕方（そのまま・%XX・空白は %20 と +・16 進の大文字小文字）が違っても、同じ値として伏せる', () => {
+  const cases: Array<[string, string[]]> = [
+    ["a b!c(d)e*f'g", ['a%20b!c(d)e*f%27g', 'a+b%21c%28d%29e%2Af%27g', 'a%20b!c(d)e*f\'g', 'a%20b%21c%28d%29e%2Af%27g', 'a%20b%21c%28d%29e%2af%27g', "a b!c(d)e*f'g"]],
+    ['P@ss word', ['P@ss%20word', 'P%40ss+word', 'P%40ss%20word', 'P@ss+word']],
+    ['a/b c!d', ['a/b%20c!d', 'a%2Fb+c%21d', 'a%2fb%20c!d', 'a/b+c%21d']],
+    ['日本 語?x=1&y', ['日本%20語%3Fx%3D1%26y', '%E6%97%A5%E6%9C%AC+%E8%AA%9E?x=1&y', '%e6%97%a5%e6%9c%ac%20%e8%aa%9e%3fx%3d1%26y']],
+  ];
+  for (const [value, forms] of cases) {
+    for (const form of forms) assert.equal(redactSecrets(`http://localhost:5173/after?q=${form}&z=1`, [value]), 'http://localhost:5173/after?q=[REDACTED]&z=1', `${value} / ${form}`);
+  }
+});
+
+test('伏せ字（exact）: 符号化の幅を広げても、ほかの文字・短い断片・英数字だけの値は今までどおり（余計に伏せない・取りこぼさない）', () => {
+  assert.equal(redactSecrets('before a b!c after', ['a b!c']), 'before [REDACTED] after');
+  assert.equal(redactSecrets('q=a%20b!d', ['a b!c']), 'q=a%20b!d', '1 文字違えば伏せない');
+  assert.equal(redactSecrets('q=axb!c', ['a b!c']), 'q=axb!c', '空白の所に別の文字なら伏せない');
+  assert.equal(redactSecrets(`x ${S1} y %41%42 ${S1.toLowerCase()}`, [S1]), 'x [REDACTED] y %41%42 ' + S1.toLowerCase(), '英数字だけの値は、そのままの形だけ（大文字小文字も区別する）');
+  assert.equal(redactSecrets('{"k":"a\\"b c"}', ['a"b c']), '{"k":"[REDACTED]"}', 'JSON の書き方も今までどおり');
+  assert.equal(redactSecrets('a\n  b', ['a b']), '[REDACTED]', '空白の並びが違っても伏せる（今までどおり）');
+});

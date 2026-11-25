@@ -426,7 +426,7 @@ test('P7: 覚えた値は会話ごと・上限つき（古いものから捨て�
   const r = rig(t, own());
   r.session.rememberTyped('c1', 'a b&c');
   assert.ok(r.session.secretsFor('c1').includes('a b&c'));
-  assert.ok(r.session.secretsFor('c1').includes(encodeURIComponent('a b&c')), 'URL に入った形も');
+  assert.equal(redactSecrets('x?q=a%20b%26c&y=a+b%26c', r.session.secretsFor('c1')), 'x?q=[REDACTED]&y=[REDACTED]', 'URL に入った形も');
   r.session.rememberTyped('c1', '   ');
   for (let i = 0; i < 40; i += 1) r.session.rememberTyped('c1', `pass-${i}-xxxxxxxx`);
   const kept = r.session.secretsFor('c1').filter(s => s.startsWith('pass-'));
@@ -652,6 +652,49 @@ test('P7: 本文に書かれたツール呼び出しの引数は、text.delta・
   assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS));
 });
 
+// 引数を先に書く・args という欄・名前と arguments のあいだに別の欄・1 つの囲みの配列、のあとに普通の呼び出しが続く返事（審査・確かめ役が挙げた形）。
+// 引数を 1 文字でも流した呼び出しは実行しない: 流す前に止まる（流れない）ので、呼び出しは今までどおり拾って実行してよい
+const FENCE = '```';
+const READ_BLOCK = '{"name":"browser_read","arguments":{}}';
+const withSecondCall = (body: string): string => `まず\n${FENCE}json\n${body}\n${FENCE}\n次に\n${FENCE}json\n${READ_BLOCK}\n${FENCE}`;
+const REPLY_SHAPES: Array<[string, string]> = [
+  ['arguments before name', withSecondCall(`{"arguments":{"ref":"e2","password":"${PASS}"},"name":"browser_type"}`)],
+  ['args key', withSecondCall(`{"name":"browser_type","args":{"ref":"e2","password":"${PASS}"}}`)],
+  ['extra key between name and arguments', withSecondCall(`{"name":"browser_type","id":"c1","arguments":{"ref":"e2","password":"${PASS}"}}`)],
+  ['one fence holding an array', `${FENCE}json\n[{"arguments":{"ref":"e2","password":"${PASS}"},"name":"browser_type"},${READ_BLOCK}]\n${FENCE}`],
+];
+
+test('P7: 本文のツール呼び出しの形が、引数が先・args・間に別の欄・配列でも、引数は text.delta・再接続の写し・履歴の書きかけに流れない。呼び出しは今までどおり拾う', async t => {
+  for (const [name, reply] of REPLY_SHAPES) {
+    const { s, events } = await streamApp(t);
+    const id = uuid(80 + REPLY_SHAPES.findIndex(([known]) => known === name));
+    const probes: string[] = [];
+    s.adapter().scripts = [async function* () {
+      for (let at = 0; at < reply.length; at += 9) {
+        yield { type: 'text', delta: reply.slice(at, at + 9) };
+        probes.push(`${s.app.bus.drafts().map(draft => draft.text).join('|')}\n${await (await s.api(`/api/conversations/${id}/messages`)).text()}`);
+      }
+      yield { type: 'done', stop: 'end_turn' as StopReason };
+    }, finish];
+    s.app.conversations.create({ id, title: '会話' });
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
+    assert.equal(sent.status, 202, JSON.stringify(sent.body));
+    await settled(s.app, sent.body.runId);
+    assert.ok(probes.length >= 5, name);
+    for (const probe of probes) assert.ok(!leaks(probe), `${name}: ${probe}`);
+    const shown = events.filter(e => e.type === 'text.delta').map(e => (e.type === 'text.delta' ? e.text : '')).join('');
+    assert.ok(shown.startsWith('まず') || shown.startsWith(FENCE) || shown === '', `${name}: ${shown}`);
+    assert.ok(!leaks(shown), `${name}: ${shown}`);
+    const ring = (s.app.bus.since(0) ?? []).filter(e => e.event.type === 'text.delta');
+    assert.ok(ring.length >= 1 && !leaks(everything(ring)), name);
+    assert.ok(!everything(events).includes(PASS), name);
+    assert.match(s.app.runs.get(sent.body.runId)!.flags, /text_tool_calls/u, name);
+    const called = s.app.conversations.messages(id).flatMap(m => (m.message.role === 'assistant' ? m.message.toolCalls ?? [] : [])).map(call => call.name);
+    assert.ok(called.includes('browser_type'), `${name}: ${called.join()}`);
+    assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS), name);
+  }
+});
+
 test('P7: 印の無い返事は、今までどおり 1 つずつ流す（欠けも並べ替えも無い）', async t => {
   const { s, events } = await streamApp(t);
   const id = uuid(73);
@@ -746,4 +789,33 @@ test('P7（Windows の本物のプロセス）: 裏のコマンドが起こし�
   const stopped = await r.call('browser_type', { tab: 't1', ref: insideRef, password: PASS });
   assert.equal(stopped.output.isError, true, stopped.output.content);
   assert.equal(first.page.acts.length, 1, '止めたあとは入れない');
+});
+
+// 符号化の仕方が違う URL（審査・確かめ役が挙げた形）: ブラウザの URL（%20 と ! ( ) * がそのまま・' は %27）、PHP urlencode・Python quote_plus（+ と %21 %28 %29 %2A %27）、ページの JS の足し算（P@ss%20word・a/b%20c!d）
+const URL_CASES: Array<[string, string, string]> = [
+  ["a b!c(d)e*f'g", 'a%20b!c(d)e*f%27g', 'b!c'],
+  ["a b!c(d)e*f'g", 'a+b%21c%28d%29e%2Af%27g', 'b%21c'],
+  ['P@ss word', 'P@ss%20word', 'ss%20word'],
+  ['a/b c!d', 'a/b%20c!d', 'b%20c'],
+];
+
+test('P7: 値の URL の形が、ブラウザ・PHP・Python・ページの JS のどの符号化でも、結果の見出し・欄の URL・質問の URL・記録に出ない', async t => {
+  for (const [value, form, fragment] of URL_CASES) {
+    const url = `${DEV}after?q=${form}`;
+    const r = rig(t, own());
+    const base = loginSite(undefined);
+    r.driver.site(DEV, { ...base, rows: (base.rows ?? []).map(row => (row.name === 'Password' ? { ...row, effect: { navigate: url } } : row)) }).site(url, { title: 'After', text: 'After', snapshot: '- heading "After"', rows: [] });
+    await r.open(DEV);
+    const typed = await r.call('browser_type', { ref: 'e2', password: value, submit: true });
+    assert.equal(typed.output.isError, undefined, typed.output.content);
+    assert.match(typed.output.content, /After/u);
+    assert.ok(!typed.output.content.includes(fragment), `${form}: ${typed.output.content}`);
+    const view = r.session.view('p1', () => ({ attended: true }));
+    assert.ok(view && view.url.startsWith(`${DEV}after`) && !view.url.includes(fragment), `${form}: ${view?.url}`);
+    const asked = r.session.tabUrl('c1');
+    assert.ok(asked !== undefined && !asked.includes(fragment), `${form}: ${asked}`);
+    const rows = r.db.prepare('SELECT input, output_preview FROM tool_calls').all() as Array<{ input: string; output_preview: string }>;
+    for (const row of rows) assert.ok(!row.input.includes(fragment) && !row.output_preview.includes(fragment), `${form}: ${everything(row)}`);
+    for (const event of r.events) assert.ok(!everything(event).includes(fragment), `${form}: ${everything(event)}`);
+  }
 });

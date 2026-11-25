@@ -127,12 +127,6 @@ const TYPED_KEEP = 16;
 // これより短い値は覚えない（1 文字の値を伏せると、e12 のような番号や本文の 1 がすべて壊れる）。呼び出しの行・フックの password は、短くても伏せる
 const TYPED_MIN = 4;
 
-// 値が URL に載る形。そのまま・encodeURIComponent・GET のフォームの形（空白が +、!'()~ も %）・空白が %20 のまま !'()* まで % にした形（Python・PHP の rawurlencode と同じ）と、16 進の小文字
-function typedForms(value: string): string[] {
-  const form = new URLSearchParams([['', value]]).toString().slice(1);
-  const percent = [encodeURIComponent(value), form, form.replace(/\+/gu, '%20'), encodeURIComponent(value).replace(/[!'()*]/gu, mark => `%${mark.charCodeAt(0).toString(16).toUpperCase()}`)];
-  return [...new Set([value, ...percent, ...percent.map(known => known.replace(/%[0-9A-F]{2}/gu, hex => hex.toLowerCase()))])];
-}
 const FAILURES_BEFORE_PAUSE = 3;
 const PAUSE_MS = 10 * 60_000;
 const VIEWPORT = { width: 1280, height: 800 };
@@ -242,9 +236,9 @@ export class BrowserSession {
   secrets(): readonly string[] { return this.#d.secrets?.() ?? []; }
   // この会話で入れた暗証番号・認証コード（P7）。ページがその値をあとで出しても（本文・表の名前・URL・入力欄の値）、その会話のどの出力でも伏せる。会話ごと・上限つき（古いものから捨てる）。会話を消すと忘れる
   readonly #typed = new Map<string, string[]>();
-  // 鍵（設定の鍵・環境の鍵）に、その会話で入れた値を足した、伏せる値の一覧。URL に入った形（typedForms）も足す
+  // 鍵（設定の鍵・環境の鍵）に、その会話で入れた値を足した、伏せる値の一覧。URL に入った形（%XX・空白が + など）は、伏せる側（redactExact）が同じ値として扱う
   secretsFor(conversationId: string): readonly string[] {
-    const typed = (this.#typed.get(conversationId) ?? []).flatMap(typedForms);
+    const typed = this.#typed.get(conversationId) ?? [];
     return typed.length === 0 ? this.secrets() : [...this.secrets(), ...typed];
   }
   rememberTyped(conversationId: string, value: string): void {
@@ -261,7 +255,7 @@ export class BrowserSession {
     const found = id === undefined ? mine.sort((a, b) => b.used - a.used)[0] : mine.find(tab => tab.id === id);
     // 質問の記録（承認待ちの断り）にも書かれる URL なので、この会話で入れた値は伏せる
     const url = found?.page.url();
-    return url === undefined ? undefined : redactExact(url, (this.#typed.get(conversationId) ?? []).flatMap(typedForms));
+    return url === undefined ? undefined : redactExact(url, this.#typed.get(conversationId) ?? []);
   }
   // この会話のタブの種類（無ければ undefined）。browser_open の事前の判定が、tab の種類違いをブラウザを起動せずに見分ける
   tabKind(conversationId: string, id: string): BrowserTabKind | undefined {

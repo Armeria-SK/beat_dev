@@ -52,7 +52,7 @@ import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_T
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
-import { extractToolCalls, looksLikeTextToolCall, textToolCallStart } from './toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall, streamEnd } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, ToolSpec, Usage } from './types.ts';
 import { estimateMessageTokens, estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
@@ -1590,8 +1590,7 @@ export class ChatEngine {
             if (event.type === 'text') {
               text += event.delta;
               // 本文に書かれたツール呼び出しの印（<tool_call> など）が見えたら、そこから先は流さない。引数（試しの暗証番号など）が、画面への知らせ・再接続の写し・書きかけの履歴に残らないように（拾うのは返事が終わってから）
-              const start = toolNames.size ? textToolCallStart(text) : -1;
-              const end = start === -1 ? text.length : Math.max(start, streamed);
+              const end = toolNames.size ? streamEnd(text, streamed) : text.length;
               if (end > streamed) { d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: text.slice(streamed, end) }); streamed = end; }
             }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
