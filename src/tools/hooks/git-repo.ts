@@ -2,7 +2,7 @@
 // 設定の項目がすべて「ふつうの設定」の一覧に入っていなければ、そのリポジトリでの git はすべて今回だけ（設定でコードを動かせるため）。
 
 import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
 import { isRemotePath } from './remote-path.ts';
 
@@ -159,6 +159,22 @@ function linkOnWay(base: string, target: string): boolean {
   }
   return false;
 }
+// 書かれたままの指し方 raw（resolve で畳む前）の中で、リンクのすぐあとに .. が来るか。POSIX の OS は .. をリンクの先の 1 つ上として解くが、resolve は先に畳むので、見る場所と git が使う場所がずれる
+function dotDotAfterLink(base: string, raw: string): boolean {
+  if (!/(?:^|[\\/])\.\.(?:[\\/]|$)/u.test(raw)) return false;
+  const root = isAbsolute(raw) ? parse(raw).root : '';
+  let current = root === '' ? resolve(base) : root;
+  for (const part of raw.slice(root.length).split(/[\\/]/u)) {
+    if (part === '' || part === '.') continue;
+    if (part !== '..') { current = join(current, part); continue; }
+    try { if (lstatSync(current).isSymbolicLink()) return true; } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return true;
+    }
+    current = dirname(current);
+  }
+  return false;
+}
 interface Found { gitDir: string; commonDir: string; broken?: boolean }
 
 const MAX_ADMIN_FILE = 4096;
@@ -212,7 +228,7 @@ function examine(p: string): Examined {
   const commondir = adminFile(p, 'commondir');
   if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
   const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
-  if (isRemotePath(commonDir) || (commondir !== undefined && linkOnWay(p, commonDir))) return { state: 'broken' };
+  if (isRemotePath(commonDir) || (commondir !== undefined && (linkOnWay(p, commonDir) || dotDotAfterLink(p, commondir)))) return { state: 'broken' };
   const objects = kindOf(join(commonDir, 'objects'));
   const refs = kindOf(join(commonDir, 'refs'));
   if (objects === 'dir' && refs === 'dir') return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
@@ -231,7 +247,7 @@ function viaGitFile(file: string): Found {
     const place = text.slice(8).replace(/[\r\n]+$/u, '');
     if (place === '' || /[\r\n\0]/u.test(place)) return broken;
     const target = isAbsolute(place) ? place : resolve(dirname(file), place);
-    if (isRemotePath(target) || linkOnWay(dirname(file), target)) return { gitDir: target, commonDir: target, broken: true };
+    if (isRemotePath(target) || linkOnWay(dirname(file), target) || dotDotAfterLink(dirname(file), place)) return { gitDir: target, commonDir: target, broken: true };
     const e = examine(target);
     return e.state === 'ok' ? { gitDir: target, commonDir: e.commonDir } : { gitDir: target, commonDir: target, broken: true };
   } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }
@@ -345,7 +361,7 @@ function alternatesUnsafe(objectsDir: string, seen = new Set<string>(), budget =
     if (line === '' || line.startsWith('#')) continue;
     if (--budget.lines < 0 || line.startsWith('"') || line.includes('\0') || isRemotePath(line)) return true;
     const target = isAbsolute(line) ? line : resolve(objectsDir, line);
-    if (isRemotePath(target) || linkOnWay(objectsDir, target) || alternatesUnsafe(target, seen, budget, depth + 1)) return true;
+    if (isRemotePath(target) || linkOnWay(objectsDir, target) || dotDotAfterLink(objectsDir, line) || alternatesUnsafe(target, seen, budget, depth + 1)) return true;
   }
   return false;
 }

@@ -11,7 +11,8 @@ export const PROTECT_FILES_OFFERED = 'hooks.protect-files.offered';
 export const DEFAULT_PROTECT_FILES: BuiltinHookConfig = { matcher: '.*', builtin: 'protect-files', always: ['.github/workflows/**'] };
 
 const WINDOWS = process.platform === 'win32';
-const fold = (p: string) => (WINDOWS ? p.toLowerCase() : p);
+const fold = (p: string) => p.toLowerCase();
+const inside = (root: string, target: string): boolean => isInside(fold(root), fold(target));
 const GLOB_CHAR = /[*?]/u;
 const WALK_LIMIT = 20_000;
 
@@ -67,8 +68,8 @@ function relSegs(base: string, target: string): string[] {
 
 function hits(rule: Rule, target: string, dir: boolean): boolean {
   return rule.bases.some(base => {
-    if (isInside(target, base)) return true;
-    if (!isInside(base, target)) return false;
+    if (inside(target, base)) return true;
+    if (!inside(base, target)) return false;
     return rule.rest.length === 0 || matchSegs(rule.rest, relSegs(base, target), dir);
   });
 }
@@ -144,7 +145,7 @@ export function runProtectFiles(hook: BuiltinHookConfig, payload: HookPayload, l
     const real = resolved.path;
     const dir = entry.dir === true || /[\\/]$/u.test(entry.path) || isDirectory(real);
     const targets = [...new Set([given, lexical, real])];
-    const shown = fold(real) === fold(given) ? entry.path : guardText(language, 'hook.protected_real', { path: entry.path, real });
+    const shown = (WINDOWS ? fold(real) === fold(given) : real === given) ? entry.path : guardText(language, 'hook.protected_real', { path: entry.path, real });
     if (!resolved.sure) { reasons.push(guardText(language, 'hook.protected_unsure', { path: entry.path })); continue; }
     if (rules.some(rule => targets.some(target => hits(rule, target, dir)))) { reasons.push(shown); continue; }
     let st;
