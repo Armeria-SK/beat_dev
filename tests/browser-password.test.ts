@@ -740,6 +740,45 @@ test('P7: password の引数の説明は、目立つ値（8 文字以上・ペ�
   assert.match(description, /not a word or number shown on the page/u);
 });
 
+test('P7: browser_act の password（説明文と 1 手ごとの欄の説明）も、目立つ値を選ぶよう案内する', () => {
+  assert.match(browserAct.description, /give a test value as "password" instead of "text"\. Pick a distinctive value of 8 or more characters that is not a word or number shown on the page/u);
+  const steps = (browserAct.input.properties as Record<string, { items?: { anyOf?: Array<{ properties?: Record<string, { description?: string }> }> } }>).steps;
+  const typeStep = steps?.items?.anyOf?.find(step => step.properties?.password !== undefined);
+  assert.match(typeStep?.properties?.password?.description ?? '', /8 or more characters.*not a word or number shown on the page/u);
+});
+
+// JSON の書き方で繰り返した値（\uXXXX・\/）も、保存される返事に残さない。16 進は大文字でも小文字でも
+const BS = String.fromCharCode(92);
+const ESCAPED_COPIES: Array<[string, string, string]> = [
+  ['at sign as a unicode escape', 'P@ss-Leak-77', `P${BS}u0040ss-Leak-77`],
+  ['slash as a backslash slash', 'a/b-Leak-88', `a${BS}/b-Leak-88`],
+  ['tilde as an uppercase and a lowercase unicode escape', 'Zq~Leak-99', `Zq${BS}u007ELeak-99 Zq${BS}u007eLeak-99`],
+  ['slash as a unicode escape', 'c/d-Leak-66', `c${BS}u002fd-Leak-66`],
+];
+
+test('P7: 値を JSON の書き方（\\uXXXX・\\/）で繰り返した本文があっても、保存される返事・履歴の API に残さない', async t => {
+  for (const [name, value, copy] of ESCAPED_COPIES) {
+    const { s, events } = await streamApp(t);
+    const id = uuid(120 + ESCAPED_COPIES.findIndex(([known]) => known === name));
+    const reply = `<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"${value}"}}</tool_call> JSON で書くと: {"password":"${copy}"}`;
+    s.adapter().scripts = [async function* () {
+      yield { type: 'text', delta: reply };
+      yield { type: 'done', stop: 'end_turn' as StopReason };
+    }, finish];
+    s.app.conversations.create({ id, title: '会話' });
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
+    assert.equal(sent.status, 202, JSON.stringify(sent.body));
+    await settled(s.app, sent.body.runId);
+    const saved = s.app.conversations.messages(id);
+    const said = saved.filter(m => m.role === 'assistant').map(m => `${m.text}\n${m.message.role === 'assistant' ? m.message.content : ''}`).join('\n');
+    assert.ok(said.includes('JSON で書くと'), `${name}: ${said}`);
+    const tail = value.slice(value.indexOf('Leak'));
+    assert.ok(!said.includes(tail), `${name}: ${said}`);
+    assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(tail), name);
+    assert.ok(!everything(events).includes(tail), name);
+  }
+});
+
 test('P7: 返事の途中で印が見えたあとは、本文を見直さない（続きがどれだけ長くても、見直しの回数は増えない）', async t => {
   const { s } = await streamApp(t);
   const id = uuid(99);

@@ -399,3 +399,52 @@ test('伏せ字: JSON の文字列の中の \\" は閉じの引用符でない�
   const raw = '{"ref":"e2","password":"Pa\\"ss-9876"';
   assert.ok(!JSON.stringify(redactJsonValue(raw)).includes('ss-9876'), '読めない引数の元の文（call.raw）');
 });
+
+test('伏せ字: 値がバックスラッシュで終わる引用符つきの代入（Windows のパス）でも、同じ行・次の行のあとの名前・旗の値を残さない', () => {
+  const BS = String.fromCharCode(92);
+  const NL = String.fromCharCode(10);
+  const cases: Array<[string, string, string]> = [
+    [`--password-file="C:${BS}pw${BS}" --token="tok_ABCDEFGHIJ123"`, '--password-file=[REDACTED] --token=[REDACTED]', '旗の形の代入が続く'],
+    [`$env:PASSWORD_FILE="C:${BS}creds${BS}"; $env:API_TOKEN="Zx9q8w7e6r5tAbC"`, '$env:PASSWORD_FILE=[REDACTED]; $env:API_TOKEN=[REDACTED]', 'PowerShell の環境変数'],
+    [`password="abc${BS}" token="def1234567"`, 'password=[REDACTED] token=[REDACTED]', '空白で続く'],
+    [`secret: "C:${BS}dir${BS}", api_key: "AKIAQWERTYUIOPAS"`, 'secret: [REDACTED], api_key: [REDACTED]', 'YAML 風'],
+    [`PASSWORD="C:${BS}a${BS}" SECRET="Zq12345678" TOKEN="Tk98765432"`, 'PASSWORD=[REDACTED] SECRET=[REDACTED] TOKEN=[REDACTED]', '3 つ並ぶ'],
+    [`password: "abc${BS}"${NL}token: "def1234567"`, `password: [REDACTED]${NL}token: [REDACTED]`, '次の行'],
+    [`password="abc${BS}"token":"x1234567890"`, 'password=[REDACTED]token":[REDACTED]', '次の名前が引用符の直前から始まり、: は範囲の外'],
+    [`password="C:${BS}pw${BS}" --token "tok7654321ABC"`, 'password=[REDACTED] --token [REDACTED]', '次が旗'],
+    [`password="C:${BS}pw${BS}" mysql -h x -p"Secret99999"`, 'password=[REDACTED] mysql -h x -p[REDACTED]', '次が mysql の -p'],
+    [`password="C:${BS}pw${BS}" curl -u "admin:Secret77777" http://x`, 'password=[REDACTED] curl -u "admin:[REDACTED]" http://x', '次が -u のユーザー:パスワード'],
+    [`{"password":"C:${BS}pw${BS}","token":"tok_ABCDEFGHIJ123"}`, '{"password":[REDACTED],"token":[REDACTED]}', '壊れた JSON でも次の値は残さない'],
+    [`password="Pa${BS}"ss-9876" token="def1234567"`, 'password=[REDACTED] token=[REDACTED]', '値の中の引用符は今までの直しどおり閉じとみなさない'],
+  ];
+  for (const [input, expected, name] of cases) assert.equal(redactSecrets(input), expected, name);
+});
+
+test('伏せ字: バックスラッシュで終わる値のあとに秘密でない名前の代入だけが続くときは、次の引用符まで伏せる（記録した伏せすぎ。値は残さない）', () => {
+  const BS = String.fromCharCode(92);
+  assert.equal(redactSecrets(`password="abc${BS}" name="x"`), 'password=[REDACTED]x"');
+});
+
+test('伏せ字: 振り返りに渡す道具の呼び出しは、password が配列でも丸ごと伏せる（redactJsonValue を通す）', () => {
+  const stored = [{ id: 1, role: 'assistant', text: '入れます', message: { role: 'assistant', toolCalls: [{ name: 'browser_type', arguments: { ref: 'e2', password: ['aaaa-1111', 'bbbb-2222'] } }] } }] as any;
+  const transcript = reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }, undefined, 'skill').transcript;
+  assert.ok(transcript.includes('browser_type'), transcript);
+  assert.ok(!transcript.includes('aaaa-1111') && !transcript.includes('bbbb-2222'), transcript);
+});
+
+test('伏せ字（exact）: 要素の番号が 5 桁（e14819）でも、4 文字以下の数字の値は番号の中を伏せない。e の前に語の字があれば伏せる', () => {
+  assert.equal(redactSecrets('e14819 e14820 e14821 e14822', ['4821']), 'e14819 e14820 e14821 e14822');
+  assert.equal(redactSecrets('e4821 / 4821 / x4821 / e 4821 / ee4821 / a4821', ['4821']), 'e4821 / [REDACTED] / x[REDACTED] / e [REDACTED] / ee[REDACTED] / a[REDACTED]');
+  assert.equal(redactSecrets('e1234567', ['4567']), 'e1234567', 'e のあとの数字が 3 桁のあとの位置は伏せない');
+  assert.equal(redactSecrets('e123456789', ['6789']), 'e123456789', 'e のあとの数字が 5 桁のあとの位置は伏せない（上限）');
+  assert.equal(redactSecrets('e1234567890 and 7890', ['7890']), 'e123456[REDACTED] and [REDACTED]', 'e のあとの数字が 6 桁以上のあとの位置は伏せる');
+});
+
+test('伏せ字（exact）: JSON の書き方（\\uXXXX は 16 進の大文字・小文字どちらでも、\\/ も）で書かれた値も伏せる。英数字だけの値は今までどおり', () => {
+  const BS = String.fromCharCode(92);
+  assert.equal(redactSecrets(`x P${BS}u0040ss-Leak-77 y`, ['P@ss-Leak-77']), 'x [REDACTED] y');
+  assert.equal(redactSecrets(`x Zq${BS}u007ELeak-99 Zq${BS}u007eLeak-99 y`, ['Zq~Leak-99']), 'x [REDACTED] [REDACTED] y');
+  assert.equal(redactSecrets(`x a${BS}/b-Leak-88 a/b-Leak-88 a${BS}u002Fb-Leak-88 y`, ['a/b-Leak-88']), 'x [REDACTED] [REDACTED] [REDACTED] y');
+  assert.equal(redactSecrets(`x a${BS}u0062 y`, ['abc12345']), `x a${BS}u0062 y`, '別の値は伏せない');
+  assert.equal(redactSecrets(`x P${BS}u0041ss-Leak-77`, ['PAss-Leak-77']), `x P${BS}u0041ss-Leak-77`, '英数字を \\u で書いた形は、今までどおり伏せない（記録した穴）');
+});

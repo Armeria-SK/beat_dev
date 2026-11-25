@@ -219,28 +219,30 @@ function isBase64Url(code: number): boolean { return isWord(code) || code === 45
 
 const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/gu;
 
-// URL に入った値の符号化は、ブラウザ・フォームの送信・PHP・Python・ページの JS で違う。記号などの 1 文字ずつが、そのままか %XX（16 進は大文字でも小文字でも）で書かれ、
+// URL に入った値の符号化は、ブラウザ・フォームの送信・PHP・Python・ページの JS で違う。記号などの 1 文字ずつが、そのままか %XX か JSON の \uXXXX（16 進は大文字でも小文字でも。/ は \/ も）で書かれ、
 // 空白が %20 か + で書かれても、同じ値として伏せる。英数字と - _ . は、どの符号化もそのまま書くので、そのまま比べる
 const PLAIN_CHAR = /^[A-Za-z0-9._-]$/u;
 const hexDigit = (digit: string): string => (/[a-f]/iu.test(digit) ? `[${digit.toUpperCase()}${digit.toLowerCase()}]` : digit);
+const hexUnit = (unit: number): string => [...unit.toString(16).padStart(4, '0')].map(hexDigit).join('');
 function tolerantChar(char: string): string {
   const literal = char.replace(REGEX_SPECIAL, '\\$&');
   if (PLAIN_CHAR.test(char)) return literal;
   const encoded = [...new TextEncoder().encode(char)].map(byte => `%${[...byte.toString(16).padStart(2, '0')].map(hexDigit).join('')}`).join('');
-  return `(?:${literal}|${encoded})`;
+  const escaped = Array.from({ length: char.length }, (_, i) => `\\\\u${hexUnit(char.charCodeAt(i))}`).join('') + (char === '/' ? '|\\\\/' : '');
+  return `(?:${literal}|${encoded}|${escaped})`;
 }
 const SPACE_RUN = '(?:\\s|\\+|%20|%09|%0[Aa]|%0[Dd])+';
 
 // 鍵ごとの組み立て済みの正規表現。呼ぶたびに作り直すと、長い値を何本も持つとき（入れた値の覚えは 1 会話 16 本まで）1 回の出力ごとに数秒かかる。古いものから捨てる
 const PATTERNS = new Map<string, RegExp>();
 const PATTERNS_MAX = 1024;
-// 4 文字以下の数字だけの値は、要素の番号（e1234 など。ブラウザの出力に出る）の数字の中を伏せない（番号を壊すと、次に指す先が分からなくなる）
+// 4 文字以下の数字だけの値は、要素の番号（e1234・e14821 など。ブラウザの出力に出る）の数字の中を伏せない（番号を壊すと、次に指す先が分からなくなる。並びから値も読める）。e のあとに数字が 5 桁までのあとの位置を見る
 const REF_SHAPED = /^\d{1,4}$/u;
 function exactPattern(form: string): RegExp {
   const known = PATTERNS.get(form);
   if (known !== undefined) return known;
   const body = form.split(/\s+/u).map(part => [...part].map(tolerantChar).join('')).join(SPACE_RUN);
-  const made = new RegExp(REF_SHAPED.test(form) ? `(?<!\\be)${body}` : body, 'gu');
+  const made = new RegExp(REF_SHAPED.test(form) ? `(?<!\\be\\d{0,5})${body}` : body, 'gu');
   if (PATTERNS.size >= PATTERNS_MAX) PATTERNS.delete(PATTERNS.keys().next().value as string);
   PATTERNS.set(form, made);
   return made;
@@ -292,6 +294,21 @@ function redactFlagValues(input: string): string {
   return parts.join('');
 }
 
+// 値の引用符の中を読み進めて次の名前の頭まで飲み込むと、その名前（や旗）の値が伏せられずに残る。ここは「飲み込んだ範囲の中で始まる秘密の名前・旗・-u・mysql の -p があるか」を見る。名前の終わりは範囲の外にはみ出してよい
+const HEAD_LOOKAHEAD = 256;
+function holdsSensitiveHead(input: string, from: number, to: number): boolean {
+  const near = input.slice(from, to + HEAD_LOOKAHEAD);
+  const span = to - from;
+  for (const heads of [new RegExp(ASSIGNMENT_HEAD.source, 'g'), new RegExp(FLAG_HEAD.source, 'g')]) {
+    for (let match = heads.exec(near); match !== null && match.index < span; match = heads.exec(near)) if (isSensitiveName(match[1]!)) return true;
+  }
+  for (const later of [USER_FLAG, MYSQL_PASSWORD]) {
+    const match = new RegExp(later.source, 'g').exec(near);
+    if (match !== null && match.index < span) return true;
+  }
+  return false;
+}
+
 function redactAssignments(input: string): string {
   const head = new RegExp(ASSIGNMENT_HEAD.source, ASSIGNMENT_HEAD.flags);
   const value = new RegExp(ASSIGNMENT_VALUE.source, ASSIGNMENT_VALUE.flags);
@@ -310,6 +327,10 @@ function redactAssignments(input: string): string {
     }
     value.lastIndex = valueStart;
     let end = value.test(input) ? value.lastIndex : -1;
+    if (end >= 0 && input[valueStart] === '"') {
+      const plain = input.indexOf('"', valueStart + 1) + 1;
+      if (plain > 0 && plain < end && holdsSensitiveHead(input, plain, end)) end = plain;
+    }
     if (COOKIE_NAME.test(match[1]!)) {
       cookie.lastIndex = valueStart;
       const line = cookie.test(input) ? cookie.lastIndex : -1;
