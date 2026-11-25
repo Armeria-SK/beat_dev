@@ -543,3 +543,35 @@ test('v3 P2 再審査: ファイルの中の、オブジェクトの形の port 
     assert.ok(!found.strong.includes('.env') && found.weak.includes('.env'), `${file}: ${JSON.stringify(found)}`);
   }
 });
+
+// 2026-11-26 shell-judge A1: PowerShell takes any prefix of -File (-f, -fi, -fil), and on Windows also / in front. A form beat did not know ran the script without showing it
+test('A1 PowerShell の -File の綴り違い（-f・-fi・-fil・-FILE・/File・/f・--file）も、code.powershell の所見が x.ps1 を見せるファイルに付ける。ほかの旗は拾わない', t => {
+  const f = fixture(t);
+  const put = join(f.ws, 'put.ps1');
+  for (const program of ['powershell', 'pwsh', 'powershell.exe']) {
+    for (const flag of ['-File', '-f', '-fi', '-fil', '-FILE', '/File', '/f', '--file']) {
+      for (const [shell, verdict] of [['bash', f.bash(`${program} ${flag} put.ps1`)], ['powershell', f.ps(`${program} ${flag} put.ps1`)]] as const) {
+        assert.ok(verdict.reasonKeys.includes('code.powershell'), `${shell}: ${program} ${flag}: ${verdict.reasonKeys.join(',')}`);
+        assert.deepEqual(verdict.scripts, [put], `${shell}: ${program} ${flag}`);
+      }
+    }
+  }
+  for (const flag of ['-fo', '-filex', '-fileX', '-ff', '-NoProfile', '-Command', '-c']) {
+    // -Command・-c の put.ps1 はコマンドの文字で -File の引数ではない。code.powershell の所見に見せるファイルを付けないことを、7 つ全部で確かめる
+    const found = segments(`powershell ${flag} put.ps1`).flatMap(seg => codeFindings(seg, { cwd: f.ws, language: 'en', selfHosts: [] })).filter(x => x.key === 'code.powershell');
+    assert.equal(found.length, 1, `${flag}: one code.powershell finding`);
+    assert.deepEqual(found[0]!.scripts, [], `${flag} is not -File`);
+  }
+});
+
+// 2026-11-26 shell-judge A3: env names that change what a known tool does (a Python venv, the OpenSSL config, ripgrep, curl and wget config)
+test('A3 道具の動きを変える env 名（VIRTUAL_ENV・OPENSSL_CONF・RIPGREP_CONFIG_PATH・CURL_HOME・WGETRC）の代入は code.env の所見になる。ほかの名前は今のまま', t => {
+  const f = fixture(t);
+  const keys = (command: string, shell: 'bash' | 'powershell'): string[] => (shell === 'bash' ? f.bash(command) : f.ps(command)).reasonKeys;
+  for (const name of ['VIRTUAL_ENV', 'OPENSSL_CONF', 'RIPGREP_CONFIG_PATH', 'CURL_HOME', 'WGETRC', 'virtual_env', 'Curl_Home']) {
+    assert.ok(keys(`${name}=./x curl https://example.com/`, 'bash').includes('code.env'), `bash prefix: ${name}`);
+    assert.ok(keys(`export ${name}=./x`, 'bash').includes('code.env'), `bash export: ${name}`);
+    assert.ok(keys(`$env:${name}='./x'`, 'powershell').includes('code.env'), `powershell: ${name}`);
+  }
+  for (const command of ['NODE_ENV=test npm -v', 'VIRTUAL_ENV_PROMPT=x ls', 'MY_CURL_HOME=x ls', 'WGETRC_EXTRA=x ls']) assert.ok(!keys(command, 'bash').includes('code.env'), command);
+});

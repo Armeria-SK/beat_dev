@@ -22,7 +22,8 @@ import { browserOpen } from '../src/tools/builtin/browser.ts';
 import { webDownload } from '../src/tools/builtin/download.ts';
 import { imageView } from '../src/tools/builtin/image.ts';
 import { webFetch, webSearch } from '../src/tools/builtin/web.ts';
-import { REASON_ORDER } from '../src/tools/hooks/decision-order.ts';
+import { productEnvOk } from '../src/tools/hooks/allowlist-core.ts';
+import { CODE_ENV, REASON_ORDER } from '../src/tools/hooks/decision-order.ts';
 import { gitDirLinkFree } from '../src/tools/hooks/product-run.ts';
 import { isInside } from '../src/tools/hooks/scope.ts';
 import { DEFAULT_PROTECT_FILES } from '../src/tools/hooks/protect-files.ts';
@@ -1495,4 +1496,15 @@ test('P3（5-J2 を反転）: 会話が前に外を読んでいても、今の�
   assert.equal(madeTainted.decidedBy, 'builtin', madeTainted.output.content);
   assert.equal(r.judge.calls.length, 0);
   assert.deepEqual(judgeRows(r), []);
+});
+
+// 2026-11-26 shell-judge A3: the five env names that change what a known tool reads at start are in CODE_ENV, so the list's env pass-through and code-guard both stop on them
+test('A3 CODE_ENV に VIRTUAL_ENV・OPENSSL_CONF・RIPGREP_CONFIG_PATH・CURL_HOME・WGETRC がある（大文字小文字を問わない）。名前の一部だけ・設定だけの値の名前は含めない。一覧の env 通しも断る', () => {
+  for (const name of ['VIRTUAL_ENV', 'OPENSSL_CONF', 'RIPGREP_CONFIG_PATH', 'CURL_HOME', 'WGETRC', 'virtual_env', 'openssl_conf', 'Ripgrep_Config_Path', 'curl_home', 'wgetrc']) assert.ok(CODE_ENV.test(name), name);
+  for (const name of ['NODE_ENV', 'VIRTUAL_ENV_PROMPT', 'MY_WGETRC', 'OPENSSL_CONF_DIR', 'CURL_HOME_X', 'RIPGREP_CONFIG', 'PORT', 'NODE_OPTIONS_X']) assert.ok(!CODE_ENV.test(name), name);
+  for (const name of ['NODE_OPTIONS', 'PATH', 'GIT_SSH_COMMAND']) assert.ok(CODE_ENV.test(name), `${name} is still there`);
+  const word = (text: string) => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' as const });
+  const allReads = () => true;
+  for (const name of ['VIRTUAL_ENV', 'OPENSSL_CONF', 'RIPGREP_CONFIG_PATH', 'CURL_HOME', 'WGETRC']) assert.equal(productEnvOk(name, word('x'), allReads), false, `${name} is not passed through as a product env`);
+  assert.equal(productEnvOk('MY_APP_DB', word('x'), allReads), true, 'a name the product code reads is still passed through');
 });

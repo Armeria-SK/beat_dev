@@ -12,7 +12,7 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
 import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
-import { isInterpreter, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { isInterpreter, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
@@ -190,7 +190,7 @@ const gitRead = (st: StatementFacts): boolean => {
   return false;
 };
 
-const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => /^-f(?:ile)?$/iu.test(w.text));
+const pwshFile = (st: StatementFacts): boolean => /^(?:pwsh|powershell)(?:[.]exe)?$/iu.test(st.program) && st.words.slice(1).some(w => PWSH_FILE_FLAG.test(w.text));
 const runsCode = (st: StatementFacts): boolean => isInterpreter(st.program.toLowerCase().replace(/\.exe$/u, '')) || st.code.length > 0 || pwshFile(st);
 
 // 見せるファイルは、コマンドが始まる前の中身。最後のコードの実行より前の文が、書かないと分かっているもの（読むだけ・cd・見せる実行そのもの）でなければ持ち主
@@ -231,7 +231,7 @@ function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   const program = st.program.toLowerCase().replace(/\.exe$/u, '');
   let words = st.words.slice(1);
   if (program === 'pwsh' || program === 'powershell') {
-    const at = words.findIndex(w => /^-f(?:ile)?$/iu.test(w.text));
+    const at = words.findIndex(w => PWSH_FILE_FLAG.test(w.text));
     if (at < 0) return false;
     words = words.slice(at + 1);
   } else if (!PLAIN_RUNNERS.test(program)) return false;
@@ -252,12 +252,23 @@ function isRunner(st: StatementFacts): boolean {
   if (program === 'npx') return true;
   if (program === 'bun') return words[0] === 'test' || words[0] === 'run' || words[0] === 'x';
   if (RUNNER_PROGRAMS.has(program)) return true;
+  // powershell・pwsh は、--test や -m があっても試験の道具ではない（下の node・python 向けの見分けに通さない）
+  if (program === 'pwsh' || program === 'powershell') return false;
   if (!runsCode(st)) return false;
   const target = words.findIndex(w => !w.startsWith('-'));
   const before = target < 0 ? words : words.slice(0, target);
   if (before.includes('--test')) return true;
   const m = words.indexOf('-m');
   return m >= 0 && (target < 0 || m < target) && MODULE_RUNNERS.has(words[m + 1] ?? '');
+}
+
+// runsCode にも isRunner にも数えられない実行: bun の <ファイルか名前>（bun test・run・x は道具。旗だけの bun --version は動かさない）と、source・.（PowerShell の . ./x.ps1 も。ファイルのコードをその場で動かす）。
+// 数えないと、道具と同じ文（npx tsx run.ts; bun evil.ts）が「道具だけ」になり、evil.ts が判定役に届かない。
+// 数えても 1 つだけの文は今までどおり持ち主（filesScope の最後で plainFileRun に渡さない。bun は PLAIN_RUNNERS にいるが、今までここへ届かず持ち主だった。判定役に回すのは緩めることになる）
+function looseRun(st: StatementFacts): boolean {
+  const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
+  if (program === 'source' || program === '.' || st.shapes.includes('dot_source')) return true;
+  return program === 'bun' && !isRunner(st) && st.words.slice(1).some(w => !w.text.startsWith('-'));
 }
 
 type FilesScope = { kind: 'files' } | { kind: 'command' } | { kind: 'owner'; why: string };
@@ -277,7 +288,7 @@ export function filesScope(sts: readonly StatementFacts[], keys: readonly string
       if (st.inner === null) unknown = true;
       const inside = walk([...(st.inner ?? []), ...(st.unknownInner ?? [])]);
       if (listedPlain(st)) continue;
-      if (isRunner(st) || runsCode(st) || inside) { runs.push(st); any = true; }
+      if (isRunner(st) || runsCode(st) || looseRun(st) || inside) { runs.push(st); any = true; }
     }
     return any;
   };
@@ -288,7 +299,7 @@ export function filesScope(sts: readonly StatementFacts[], keys: readonly string
   if (runs.length > 1) return { kind: 'owner', why: 'more than one code run, or a run inside a wrapper' };
   const [only] = runs;
   if (only!.code.length > 0) return { kind: 'files' };
-  return plainFileRun(only!, root) ? { kind: 'files' } : { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
+  return !looseRun(only!) && plainFileRun(only!, root) ? { kind: 'files' } : { kind: 'owner', why: only!.words.map(w => w.text).join(' ') || only!.program };
 }
 
 function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>): string | undefined {

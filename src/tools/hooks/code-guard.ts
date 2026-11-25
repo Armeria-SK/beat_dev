@@ -34,6 +34,9 @@ const INTERPRETER = new RegExp(`^(?:${[
 ].join('|')})$`, 'u');
 export const isInterpreter = (cmd: string): boolean => INTERPRETER.test(cmd);
 const POWERSHELL = /^(?:pwsh|powershell)$/u;
+// PowerShell の -File。語の頭の一部（-f・-fi・-fil）でも、頭が / や -- の綴りでも受ける。Windows PowerShell で -f・-fi・-fil・-FILE・/File・/f が動くことは確かめた（--file は pwsh 7 の綴りで、Windows PowerShell は受けない。shell-facts.ts の powershellCode も同じ綴りを -File と読む）。
+// 判定役に見せるファイルの選び方（shell.ts）も同じ式で -File を見つける
+export const PWSH_FILE_FLAG = /^(?:-|--|\/)(?:f|fi|fil|file)$/iu;
 const INFO_FLAG = /^(?:--version|-v|-V|--help|-h|-\?|-version|\/\?|--info|-info)$/u;
 const CODE_EXT = /\.(?:ps1|psm1|psd1|bat|cmd|sh|bash|zsh|py|pyw|js|mjs|cjs|ts|mts|cts|jsx|tsx|vbs|vbe|wsf|jar|rb|pl|php|lua|rkt|r|jl|groovy|kts|scala)$/iu;
 
@@ -342,7 +345,7 @@ function spawnFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   if (SPAWNERS.has(seg.cmd)) return [finding(lang, 'code.spawn', { cmd: seg.cmd }, false)];
   if (POWERSHELL.test(seg.cmd)) {
     if (infoOnly(seg.args)) return [];
-    const at = seg.args.findIndex(a => /^-(?:f|file)$/iu.test(a));
+    const at = seg.args.findIndex(a => PWSH_FILE_FLAG.test(a));
     return [finding(lang, 'code.powershell', { cmd: seg.cmd }, false, at >= 0 && seg.args[at + 1] ? resolveAll([seg.args[at + 1]!], ctx) : [])];
   }
   if (LAUNCHERS.has(seg.cmd) || (seg.cmd === 'certutil' && seg.args.some(a => /^-urlcache$/iu.test(a)))) return [finding(lang, 'code.launcher', { cmd: seg.cmd }, false)];
