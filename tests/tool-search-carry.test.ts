@@ -3,8 +3,10 @@ import { mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
+import type { ModelConfig } from '../src/config/schema.ts';
 import { eraseConversation } from '../src/db/erase.ts';
 import { usualTools } from '../src/engine/chat.ts';
+import { contextAvailable, maxOutputFor } from '../src/engine/context-budget.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { estimateRequest } from '../src/engine/tokens.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
@@ -107,10 +109,12 @@ test('TE-2 先読みの口 preload: 登録にある後回しの道具だけを�
 });
 
 // browser-rethink P1（持ち主の決め Q2 = 案 A）: 製品の中の実行は、よく読み込む道具を 1 回目の呼び出しから並べ、実行の途中で並びを変えない
-// fixed-prompt-trim S1: ブラウザの道具の先読みは、使えるいちばん小さいモデルの使える量が 90,000 以上のときだけ（128k のモデル = 約 123,000、64k のモデル = 約 61,000）。先読みを確かめる試験は 128k のモデルで動かす
+// fixed-prompt-trim S1: ブラウザの道具の先読みは、使えるいちばん小さいモデルの使える量が 85,000 以上のときだけ（131,072 のモデル = 約 123,000、128,000 と宣言して返事の上限が自動のモデル = 89,600、96k 級 = 約 68,800、64k のモデル = 約 61,000）。先読みを確かめる試験は 131,072 のモデルで動かす
 const BROWSER = builtinTools().filter(t => isBrowserTool(t.name)).map(t => t.name);
 const USUAL = [...BROWSER, 'pending_withdraw', 'deviation_add', 'image_view'];
 const WIDE = { contextLength: 131_072 };
+// 128,000 と宣言して返事の上限を決めていないモデル（使える量 = floor(128,000 × 0.95) − 32,000 = 89,600。持ち主の手元の 128k 級）
+const declared128k = (id: string, over: Partial<ModelConfig> = {}): ModelConfig => ({ id, provider: 'fake', model: `${id}-name`, contextLength: 128_000, vision: false, ...over });
 const browserOn = (c: { tools: { browser: { enabled: boolean } } }) => { c.tools.browser.enabled = true; };
 const listedIn = (req: ModelRequest, name: string) => new RegExp(`^- ${name}:`, 'mu').test(req.system.dynamic);
 
@@ -214,7 +218,7 @@ test('P1 製品の外の会話・ブラウザが切り・計画モードでは�
   has(names, ['pending_withdraw', 'image_view'], 'browser off keeps the others');
 });
 
-test('P1 64k のモデルだけ（使える量 90,000 未満）: 製品の中の会話・タスクの 1 回目にブラウザの道具は並ばず、「読み込める道具」の一覧にある。pending_withdraw・（タスクで）deviation_add・（画像を読めるなら）image_view は並ぶ。記録にもブラウザは書かない', async t => {
+test('P1 64k のモデルだけ（使える量 85,000 未満）: 製品の中の会話・タスクの 1 回目にブラウザの道具は並ばず、「読み込める道具」の一覧にある。pending_withdraw・（タスクで）deviation_add・（画像を読めるなら）image_view は並ぶ。記録にもブラウザは書かない', async t => {
   const s = await inProduct(t, { models: [fakeModel('m1', { vision: true })], configure: browserOn });
   s.adapter().scripts = [reply('ok')];
   await s.send(uuid(1), { text: 'check it', projectId: s.shop.id, permissionMode: 'auto' });
@@ -235,19 +239,53 @@ test('P1 64k のモデルだけ（使える量 90,000 未満）: 製品の中の
   assert.deepEqual(s.app.kv.getJson(`loaded-tools:${conversation}`), ['pending_withdraw', 'deviation_add', 'image_view'], 'タスクの記録にもブラウザは入らない');
 });
 
-test('P1 ブラウザの先読みは、会話と裏方で使えるいちばん小さいモデルで決める: 128k のモデルで始めても、裏方に 64k のモデルがあれば先読みしない（128k のモデルだけなら先読みする）', async t => {
-  const mixed = await inProduct(t, { models: [fakeModel('big', WIDE), fakeModel('small')], configure: c => { browserOn(c); c.routing.chat = ['big']; c.routing.background = ['small']; } });
-  mixed.adapter().scripts = [reply('ok')];
-  await mixed.send(uuid(1), { text: 'x', projectId: mixed.shop.id, permissionMode: 'auto', modelId: 'big' });
-  const req = mixed.calls().at(-1)!;
-  assert.equal(req.model.id, 'big', '前提: 128k のモデルで呼んだ');
-  lacks(mixed.names(req), BROWSER, 'a 128k model with a 64k backup');
-  assert.ok(listedIn(req, 'browser_open'), 'the list of loadable tools keeps it');
+test('P1 ブラウザの先読みは、会話と裏方で使えるいちばん小さいモデルで決める: 128k のモデルで始めても、裏方の経路や会話の予備に 64k のモデルがあれば先読みしない（128k のモデルだけなら先読みする）', async t => {
+  for (const [label, chat, background] of [['64k on the background route', ['big'], ['small']], ['64k as the chat backup', ['big', 'small'], ['big']]] as const) {
+    const mixed = await inProduct(t, { models: [fakeModel('big', WIDE), fakeModel('small')], configure: c => { browserOn(c); c.routing.chat = [...chat]; c.routing.background = [...background]; } });
+    mixed.adapter().scripts = [reply('ok')];
+    await mixed.send(uuid(1), { text: 'x', projectId: mixed.shop.id, permissionMode: 'auto', modelId: 'big' });
+    const req = mixed.calls().at(-1)!;
+    assert.equal(req.model.id, 'big', `${label}: 前提: 128k のモデルで呼んだ`);
+    lacks(mixed.names(req), BROWSER, `a 128k model with ${label}`);
+    assert.ok(listedIn(req, 'browser_open'), `${label}: the list of loadable tools keeps it`);
+  }
 
   const alone = await inProduct(t, { models: [fakeModel('big', WIDE)], configure: browserOn });
   alone.adapter().scripts = [reply('ok')];
   await alone.send(uuid(1), { text: 'x', projectId: alone.shop.id, permissionMode: 'auto' });
   has(alone.names(alone.calls().at(-1)!), BROWSER, 'the 128k model alone');
+});
+
+test('P1 会話をどの経路にも無いモデルに固定したときは、そのモデル自身の使える量も数える: 経路は 128k のモデルだけでも、固定した 64k のモデルにはブラウザを先読みしない。使用量も同じ並びで数える', async t => {
+  const s = await inProduct(t, { models: [fakeModel('big', WIDE), fakeModel('small')], configure: c => { browserOn(c); c.routing.chat = ['big']; c.routing.background = []; } });
+  s.adapter().scripts = [reply('planned')];
+  await s.send(uuid(1), { text: 'plan', projectId: s.shop.id, permissionMode: 'plan', modelId: 'small' });
+  await s.json(`/api/conversations/${uuid(1)}`, 'PATCH', { permissionMode: 'auto' });
+  const usage = s.app.engine.contextUsage(uuid(1), 'small');
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'x', projectId: s.shop.id, permissionMode: 'auto', modelId: 'small' });
+  const pinned = s.calls().at(-1)!;
+  assert.equal(pinned.model.id, 'small', '前提: 経路に無い 64k のモデルで呼んだ');
+  lacks(s.names(pinned), BROWSER, 'pinned to a 64k model outside the routes');
+  assert.ok(listedIn(pinned, 'browser_open'), 'the list of loadable tools keeps it');
+  const real = estimateRequest(`${pinned.system.frozen}\n${pinned.system.dynamic}`, pinned.messages.slice(0, -1), pinned.tools, 1, pinned.system.tail).tokens;
+  assert.ok(usage.ok && Math.abs(usage.tokens - real) < 64, `contextUsage ${usage.ok && usage.tokens} vs the real first request ${real}`);
+
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(2), { text: 'x', projectId: s.shop.id, permissionMode: 'auto', modelId: 'big' });
+  has(s.names(s.calls().at(-1)!), BROWSER, 'the routed 128k model');
+});
+
+test('P1 128,000 と宣言して返事の上限が自動のモデル（使える量 89,600）でも、製品の中の会話・タスクにブラウザの道具を先読みする', async t => {
+  const model = declared128k('m1', { vision: true });
+  assert.equal(contextAvailable(128_000, maxOutputFor(model, 128_000)), 89_600, '前提: 使える量');
+  const s = await inProduct(t, { models: [model], configure: browserOn });
+  s.adapter().scripts = [reply('ok')];
+  await s.send(uuid(1), { text: 'check it', projectId: s.shop.id, permissionMode: 'auto' });
+  has(s.names(s.calls().at(-1)!), [...BROWSER, 'pending_withdraw', 'image_view'], 'chat on a 128,000 model');
+  s.adapter().scripts = [reply('ok')];
+  await s.runTask();
+  has(s.names(s.calls().at(-1)!), [...BROWSER, 'pending_withdraw', 'deviation_add', 'image_view'], 'task on a 128,000 model');
 });
 
 test('P1 64k のモデルでブラウザが要るときは、tool_search 1 回で組ごと読まれ、同じ会話の次の実行には持ち越す（今までの持ち越しのまま）', async t => {
@@ -266,10 +304,10 @@ test('P1 64k のモデルでブラウザが要るときは、tool_search 1 回�
   has(s.names(s.calls().at(-1)!), BROWSER, 'the next run of the same conversation (carried)');
 });
 
-test('P1 usualTools: ブラウザの先読みの線は使える量 90,000（以上で先読み、未満と分からないときは先読みしない）。小さい 3 つは線に関わらず先読み', () => {
+test('P1 usualTools: ブラウザの先読みの線は使える量 85,000（以上で先読み、未満と分からないときは先読みしない。128,000 と宣言したモデル = 89,600 は先読み、96k 級 = 68,812 は先読みしない）。小さい 3 つは線に関わらず先読み', () => {
   const tools = builtinTools();
   const small = ['pending_withdraw', 'deviation_add', 'image_view'];
-  for (const [available, preloaded] of [[90_000, true], [92_518, true], [217_036, true], [89_999, false], [61_235, false], [45_875, false], [0, false], [undefined, false]] as const) {
+  for (const [available, preloaded] of [[85_000, true], [89_600, true], [92_518, true], [217_036, true], [84_999, false], [68_812, false], [61_235, false], [45_875, false], [0, false], [undefined, false]] as const) {
     assert.deepEqual(usualTools(tools, true, 'auto', { vision: true }, available), [...(preloaded ? BROWSER : []), ...small], `available ${available}`);
   }
   assert.deepEqual(usualTools(tools, true, 'auto', { vision: false }, 61_235), ['pending_withdraw', 'deviation_add'], 'no vision, no image_view');

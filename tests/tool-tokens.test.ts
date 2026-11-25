@@ -123,7 +123,7 @@ test('TE-7 固定の部分の線: 既定・全部オン・skills 200 個のど�
   }
 });
 
-// 製品の中のタスクの最初の要求（browser-rethink P1 の先読み。使える量が 90,000 以上のモデルだけブラウザの道具が入る = fixed-prompt-trim S1。measure の task の行は製品の外のタスク）
+// 製品の中のタスクの最初の要求（browser-rethink P1 の先読み。使える量が 85,000 以上のモデルだけブラウザの道具が入る = fixed-prompt-trim S1。measure の task の行は製品の外のタスク）
 async function productTaskRequest(t: Parameters<typeof startApp>[0], vision: boolean, contextLength = MEASURE_MODEL.contextLength!) {
   const products = realpathSync.native(tempDir(t as never));
   const s = await startApp(t, { models: [{ ...MEASURE_MODEL, provider: 'fake', vision, contextLength }], projectFolderExempt: [products], tools: builtinTools(), configure: allOn });
@@ -150,15 +150,16 @@ test('TE-7 固定の部分の線: 製品の中のタスク（全部オン・skil
   }
 });
 
-test('TE-7 固定の部分の線: 128k のモデルの製品の中のタスク（全部オン・目いっぱい）は、ブラウザの道具を先読みしたうえで、そのモデルの使える量の 35% 以内', async t => {
-  const contextLength = 131_072;
-  const available = contextAvailable(contextLength, maxOutputFor(MEASURE_MODEL, contextLength));
-  for (const vision of [false, true]) {
-    const { names, request } = await productTaskRequest(t, vision, contextLength);
-    assert.ok(names.includes('browser_open') && names.includes('deviation_add'), `前提: 先読みの道具が入っている (vision ${vision})`);
-    assert.equal(names.includes('image_view'), vision, `image_view (vision ${vision})`);
-    const percent = (request / available) * 100;
-    assert.ok(percent <= FIXED_LINE_PERCENT, `128k product task (vision ${vision}): ${percent.toFixed(1)}% of ${available} (${request} tokens)`);
+test('TE-7 固定の部分の線: 128k 級のモデル（131,072 と 128,000 の宣言。返事の上限は自動）の製品の中のタスク（全部オン・目いっぱい）は、ブラウザの道具を先読みしたうえで、そのモデルの使える量の 35% 以内', async t => {
+  for (const contextLength of [131_072, 128_000]) {
+    const available = contextAvailable(contextLength, maxOutputFor(MEASURE_MODEL, contextLength));
+    for (const vision of [false, true]) {
+      const { names, request } = await productTaskRequest(t, vision, contextLength);
+      assert.ok(names.includes('browser_open') && names.includes('deviation_add'), `前提: 先読みの道具が入っている (${contextLength}, vision ${vision})`);
+      assert.equal(names.includes('image_view'), vision, `image_view (${contextLength}, vision ${vision})`);
+      const percent = (request / available) * 100;
+      assert.ok(percent <= FIXED_LINE_PERCENT, `${contextLength} product task (vision ${vision}): ${percent.toFixed(1)}% of ${available} (${request} tokens)`);
+    }
   }
 });
 

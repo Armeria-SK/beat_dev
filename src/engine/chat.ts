@@ -276,8 +276,8 @@ export type ContextUsageOutcome =
   | (Extract<SendOutcome, { ok: false }> & { errorParams?: MessageParams });
 
 // 製品の中の実行（計画モードを除く）が頭で先読みする道具の名前（browser-rethink P1）。何も書かない（先読み・使用量・mesh-probe の見積もりが同じ答えを使う）
-// ブラウザの道具は、使えるいちばん小さいモデルの使える量（smallestAvailable）がこの値以上のときだけ先読みする（それより小さい・分からないときは tool_search で読む。fixed-prompt-trim S1）
-const BROWSER_PRELOAD_MIN_AVAILABLE = 90_000;
+// ブラウザの道具は、会話と裏方で使えるいちばん小さいモデルと、この実行のモデル自身の、使える量の小さい方（smallestAvailable）がこの値以上のときだけ先読みする（それより小さい・分からないときは tool_search で読む。fixed-prompt-trim S1）
+const BROWSER_PRELOAD_MIN_AVAILABLE = 85_000;
 export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: PermissionMode, model: Pick<ModelConfig, 'vision'>, smallestAvailable: number | undefined): string[] {
   if (!inProduct || mode === 'plan') return [];
   const preloadBrowser = smallestAvailable !== undefined && smallestAvailable >= BROWSER_PRELOAD_MIN_AVAILABLE;
@@ -2029,7 +2029,10 @@ export class ChatEngine {
   }
 
   #usualTools(project: ToolContext['project'], mode: PermissionMode, model: ModelConfig): string[] {
-    return usualTools(this.#d.tools?.registry.list() ?? [], project?.root !== undefined, mode, model, this.#smallestAvailable());
+    const { capacity, maxOutput } = this.#d.status.limits(model);
+    const smallest = this.#smallestAvailable();
+    const own = capacity > 0 ? contextAvailable(capacity, maxOutput) : undefined;
+    return usualTools(this.#d.tools?.registry.list() ?? [], project?.root !== undefined, mode, model, smallest === undefined || own === undefined ? undefined : Math.min(smallest, own));
   }
 
   #defers(kind: RunKind, forbid: ReadonlySet<string> | undefined, started: AppConfig | undefined): boolean {
