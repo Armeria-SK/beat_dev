@@ -148,9 +148,10 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
           return (
             <Fragment key={project.id}>
               <div className="bt-side bt-side--product">
-                <a className={`bt-side__ov${home ? ' is-active' : ''}${row.waiting > 0 ? ' has-waiting' : ''}`} href={routeHash({ view: 'product', id: project.id })}
-                  aria-label={row.waiting > 0 ? t('ui.product.overviewWaiting', project.name) : t('ui.product.overviewOf', project.name)} title={t('ui.nav.overview')} aria-current={home ? 'page' : undefined}><Icon name="grid" /></a>
-                <a className="bt-side__name" href={row.nameHref}>{project.name}</a>
+                <a className={`bt-side__home${home ? ' is-active' : ''}${row.waiting > 0 ? ' has-waiting' : ''}`} href={routeHash({ view: 'product', id: project.id })}
+                  aria-label={row.waiting > 0 ? t('ui.product.overviewWaiting', project.name) : t('ui.product.overviewOf', project.name)} title={t('ui.nav.overview')} aria-current={home ? 'page' : undefined}>
+                  <span className="bt-side__ov"><Icon name="grid" /></span><span className="bt-side__name">{project.name}</span>
+                </a>
                 {project.folder_missing && <span className="bt-meta ui-side-missing">{t('ui.product.folderMissing')}</span>}
                 <CountBadge n={row.waiting} label={t('ui.count.waiting', row.waiting)} />
               </div>

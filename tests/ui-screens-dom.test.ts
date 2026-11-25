@@ -6,6 +6,7 @@ import type { Acceptance, Conversation, Project } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { PLAN_EDITS, planDrafts, planStays } from '../web/src/ui/plan.ts';
+import type { Route } from '../web/src/ui/routes.ts';
 import { clearUnsaved, hasUnsavedEdits, leaveAsks, SCREEN_EDITS } from '../web/src/ui/unsaved.ts';
 
 interface PlanProps { productId: string; conversationId?: string; revision: string; isGit: boolean }
@@ -258,4 +259,72 @@ test('ui/Sidebar（DOM）: 検索の失敗は「0 件」と分けて Could not l
   await update(() => new Promise(resolve => setTimeout(resolve, 300)));
   await settle();
   assert.equal(status.textContent, 'No matches', '0 件は失敗と分ける');
+});
+
+const sideProject = (id: string, name: string, over: Partial<Project> = {}): Project => ({
+  id, name, root: `C:\\work\\${id}`, check_command: null, scout_mode: 'off', remotes: [], archived_at: null, created_at: 0, updated_at: 0,
+  is_git: false, folder_missing: false, waiting: { proposals: 0, questions: 0, pending: 0 }, running: 0, last_activity_at: null, ...over,
+});
+const SHOP = sideProject('p1aaaa', 'Shop', { created_at: 1, waiting: { proposals: 1, questions: 1, pending: 0 } });
+const BLOG = sideProject('p2bbbb', 'Blog', { created_at: 2, folder_missing: true });
+const SHOP_CHAT: Conversation = { id: 'c1aaaa', title: 'Fix the cart', created_at: 0, last_message_at: 5, project_id: SHOP.id };
+
+const sidebarOf = (route: Route) => createElement(Sidebar, {
+  state: 'idle', route, foot: { kind: 'idle' }, kanban: 0, questions: 0, pending: 0, sessionPending: new Map(), drafts: 0, unread: 0,
+  conversations: [SHOP_CHAT], conversationsMore: {}, projects: [SHOP, BLOG], running: new Set(), setupPending: false, onSetup: () => undefined,
+});
+const productRows = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.bt-side--product')];
+
+test('ui/Sidebar（DOM）: 製品の行のリンクはひとつで、マークと名前が同じリンクの中。行き先は製品の画面。選んでいる・待ちの印と読み上げの名前はそのリンクにある', async () => {
+  const { container, root } = await render(sidebarOf({ view: 'new' }));
+  const [shop, blog] = productRows(container);
+  assert.ok(shop && blog, '製品 2 つの行');
+  for (const [row, product] of [[shop, SHOP], [blog, BLOG]] as const) {
+    const links = row.querySelectorAll('a');
+    assert.equal(links.length, 1, `${product.name}: 行のリンクはひとつ`);
+    const link = links[0]!;
+    assert.equal(link.getAttribute('href'), `#/p/${product.id}`);
+    assert.ok(link.querySelector('svg.bt-icon'), `${product.name}: マークはリンクの中`);
+    assert.equal(link.textContent, product.name, `${product.name}: 名前はリンクの中（見える文字は名前だけ）`);
+    assert.equal(container.querySelectorAll(`a[href="#/p/${product.id}"]`).length, 1, `${product.name}: 製品の画面へのリンクはほかに無い`);
+  }
+  const shopLink = shop.querySelector('a')!;
+  const blogLink = blog.querySelector('a')!;
+  assert.ok(shopLink.classList.contains('has-waiting'), '待ちがある製品のリンクに待ちの印');
+  assert.ok(!blogLink.classList.contains('has-waiting'));
+  assert.equal(shopLink.getAttribute('aria-label'), 'Overview of Shop, something is waiting');
+  assert.equal(blogLink.getAttribute('aria-label'), 'Overview of Blog');
+  assert.ok(shopLink.getAttribute('aria-label')!.includes(shopLink.textContent!), '読み上げの名前に見える名前が入っている');
+  assert.ok(shop.querySelector('.bt-count'), '待ちの数はそのまま出る');
+  assert.equal(blog.querySelector('.ui-side-missing')?.textContent, en['ui.product.folderMissing'], 'folder missing の札はそのまま出る');
+  for (const link of [shopLink, blogLink]) assert.ok(!link.classList.contains('is-active') && !link.hasAttribute('aria-current'), '製品の画面でなければ選んでいる印は無い');
+
+  await update(() => root.render(sidebarOf({ view: 'product', id: SHOP.id })));
+  assert.ok(shopLink.classList.contains('is-active'), '製品の画面を開いているときは、そのリンクが選んでいる印');
+  assert.equal(shopLink.getAttribute('aria-current'), 'page');
+  assert.ok(!blogLink.classList.contains('is-active') && !blogLink.hasAttribute('aria-current'), 'ほかの製品には付けない');
+
+  for (const route of [{ view: 'productNew', id: SHOP.id }, { view: 'chat', id: SHOP_CHAT.id }] as const) {
+    await update(() => root.render(sidebarOf(route)));
+    assert.ok(!shopLink.classList.contains('is-active') && !shopLink.hasAttribute('aria-current'), `${route.view}: 製品の画面ではないので選んでいる印は無い`);
+  }
+});
+
+test('ui/Sidebar（DOM）: 製品の行のマークを押しても名前を押しても製品の画面（#/p/<id>）が開く。会話の行と New session の行き先は今までどおり', async () => {
+  const { container } = await render(sidebarOf({ view: 'new' }));
+  const [shop, blog] = productRows(container);
+  assert.ok(shop && blog);
+  const open = async (target: Element | null) => { window.location.hash = ''; await click(target); return window.location.hash; };
+  assert.equal(await open(shop.querySelector('.bt-side__name')), `#/p/${SHOP.id}`, '名前（会話がある製品）');
+  assert.equal(await open(shop.querySelector('svg.bt-icon')), `#/p/${SHOP.id}`, 'マーク');
+  assert.equal(await open(blog.querySelector('.bt-side__name')), `#/p/${BLOG.id}`, '名前（会話が無い製品）');
+  assert.equal(await open(blog.querySelector('svg.bt-icon')), `#/p/${BLOG.id}`, 'マーク（会話が無い製品）');
+
+  const chat = container.querySelector('a[href="#/c/c1aaaa"]');
+  assert.equal(chat?.textContent, SHOP_CHAT.title, '製品の会話の行はそのまま並ぶ');
+  assert.equal(await open(chat), '#/c/c1aaaa');
+  const fresh = [...container.querySelectorAll(`a[href="#/p/${SHOP.id}/new"]`)];
+  assert.equal(fresh.length, 1, 'この製品の New session の行はそのまま');
+  assert.ok(fresh[0]!.textContent!.includes(en['ui.session.new']));
+  assert.equal(await open(fresh[0]!), `#/p/${SHOP.id}/new`);
 });
