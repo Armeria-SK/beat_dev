@@ -142,10 +142,11 @@ export function outputTail(text: string, mark: Mark = same => same): string {
   return marked.length > OUTPUT_TAIL ? marked.slice(-OUTPUT_TAIL) : marked;
 }
 
-// Marks every held value before the cut and the control-character strip, for the same reason as outputTail
+// Marks every held value before the cut, for the same reason as outputTail. It marks twice around the control-character strip: before it, so a value that
+// itself holds a line break (a multi-line key) is still found; after it, so a value split by an invisible character (U+200B) that the strip joins back is marked too
 export function cleanReason(text: string | undefined, mark: Mark = same => same): string | null {
   if (text === undefined) return null;
-  const cleaned = mark(text).replace(CONTROL, '').trim().slice(0, REASON_MAX);
+  const cleaned = mark(mark(text).replace(CONTROL, '')).trim().slice(0, REASON_MAX);
   return cleaned || null;
 }
 

@@ -15,7 +15,7 @@ type Secrets = (() => readonly string[]) | undefined;
 const MAX_TEXT = 20_000;
 
 // 投げられたもの（Error・文字列・素の object・prototype の無い object・stack が文字でない Error）を、投げずに 1 つの文にする。
-// stack: Error の stack をそのまま使った（複数行のまま出す）。配列は 100 件まで。文字列の長さでは inspect に切らせない: 切ると、鍵が切れ目にまたがったとき伏せる前に頭だけ残るため（長さの上限は伏せたあとにかける）
+// stack: Error の stack をそのまま使った（複数行のまま出す）。配列は 100 件まで（Node の既定値と同じ。固定しているだけ）。文字列の長さでは inspect に切らせない: 切ると、鍵が切れ目にまたがったとき伏せる前に頭だけ残るため（長さの上限は伏せたあとにかける）
 function describe(reason: unknown): { text: string; stack: boolean } {
   try {
     if (reason instanceof Error) {
@@ -26,7 +26,10 @@ function describe(reason: unknown): { text: string; stack: boolean } {
   } catch { return { text: '(a value that could not be printed)', stack: false }; }
 }
 
-const oneLine = (text: string): string => text.replace(/\s*[\r\n\p{Zl}\p{Zp}]\s*/gu, ' ');
+// 改行をふくむ空白の列（前後の空白ごと）を空白 1 つにする。受け口は同期で動くので、列の長さに対して 1 回なめるだけの形にする
+// （`\s*[\r\n]\s*` の形は、改行の無い長い空白の列で 2 次の時間になった）
+const LINE_BREAK = /[\r\n\p{Zl}\p{Zp}]/u;
+const oneLine = (text: string): string => text.replace(/\s+/gu, run => (LINE_BREAK.test(run) ? ' ' : run));
 
 // 伏せたあとの文を MAX_TEXT 字（付ける一言も入れて）までにする。伏せる前に切ると、切れ目の鍵の頭が残る
 function capped(text: string): string {

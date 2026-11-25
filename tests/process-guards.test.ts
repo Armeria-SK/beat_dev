@@ -369,7 +369,29 @@ test('B5: Error でない文は 1 行にする（数字の多い配列・文字�
   assert.match(r.lines[3]!, /\n\s+at /u, 'Error の stack は直さない');
 });
 
-test('B5: 配列は 100 件までで切り、残りの件数が出る', () => {
+// 記録の受け口は同期で動く。改行の無い長い空白の列で、1 行にする処理が時間を食わない（2 次の時間にならない）こと
+test('B5: 改行の無い長い空白の列（20 万字）や、空白と改行がまざった長い列でも、受け口は 1 秒かからず返り、1 行になる', () => {
+  const r = rig();
+  const cases: unknown[] = [
+    `a${' '.repeat(200_000)}b`,
+    `a${' \t'.repeat(100_000)}b`,
+    { text: `a${' '.repeat(200_000)}b` },
+    `a${' '.repeat(100_000)}\n${' '.repeat(100_000)}b`,
+  ];
+  for (const reason of cases) {
+    const started = performance.now();
+    r.proc.emit('unhandledRejection', reason);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `受け口が ${Math.round(elapsed)} ms かかった`);
+  }
+  assert.equal(r.lines.length, cases.length);
+  for (const line of r.lines) assert.ok(!line.includes('\n'));
+  assert.equal(textOf(r.lines[3]!), `a b`, '改行をはさんだ空白の列は空白 1 つ');
+  assert.match(r.lines[0]!, /a {1000,}b|more characters\)$/u, '改行の無い空白の列はそのまま（切れていれば末尾に一言）');
+});
+
+// 配列の「100 件まで」は Node の inspect の既定値と同じ（記録の側で 100 に固定しているだけ）。ここでは 1 行になることと、残りの件数が出ることを見る
+test('B5: 数字の配列が 500 件あっても 1 行で、残りの件数が出る', () => {
   const r = rig();
   r.proc.emit('unhandledRejection', { list: Array.from({ length: 500 }, (_, i) => i) });
   assert.match(r.lines[0]!, /\.\.\. 400 more items/u);

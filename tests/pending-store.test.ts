@@ -469,3 +469,36 @@ test('B2: 前と今の文がちがう行・確かめられない側が 1 つだ�
   assert.match(d!.now, /9 bytes/u);
   assert.equal(compareSnapshot({ git: null, paths: [file] }, { git: null, paths: [{ ...file }] }).length, 0, '変わっていない確かめられる行は出ない');
 });
+
+// BL-pending-judge B1 (fix-back): cleanReason は制御・書式の文字を消す。消す前に印にするだけだと、U+200B などで割った鍵が、印を素通りして消したあとに元の鍵に戻る
+test('B1: 理由の中の預かった鍵が U+200B（書式の文字）で割られていても、reject_reason は印になる。消す前の印と、消したあとの印の両方が要る', async t => {
+  const s = setup(t);
+  const store = heldStore(s);
+  const zwsp = String.fromCharCode(0x200b);
+  const nul = String.fromCharCode(0);
+  const cases = [
+    `${HELD_VALUE.slice(0, 9)}${zwsp}${HELD_VALUE.slice(9)}`,
+    `${HELD_VALUE.slice(0, 5)}${nul}${HELD_VALUE.slice(5, 14)}${zwsp}${zwsp}${HELD_VALUE.slice(14)}`,
+    HELD_VALUE,
+  ];
+  for (const text of cases) {
+    const row = await parkOn(store, s.dir);
+    store.closeStale(row.id, `moved while ${text} was set`);
+    const saved = store.row(row.id)!;
+    assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env SEARCH_API_KEY] was set', JSON.stringify(text));
+    assert.ok(!saved.reject_reason!.includes(HELD_VALUE.slice(0, 8)), '鍵の頭が残らない');
+  }
+});
+
+test('B1: 預かった鍵が改行を含む値（複数行の鍵）でも、理由の中では印になる（制御文字を消したあとだけで印にすると、改行が消えて見つからない）', async t => {
+  const s = setup(t);
+  const lf = String.fromCharCode(10);
+  const multi = ['-----BEGIN-EXAMPLE-KEY-----', 'abcDEF123456abcDEF', '-----END-EXAMPLE-KEY-----'].join(lf);
+  const store = new PendingStore(s.db, { tools: new ToolRegistry().register(shellRun), dataDir: s.dir, now: () => 1_000_000, held: () => [{ source: 'env PRIVATE_KEY', value: multi }] });
+  const row = await parkOn(store, s.dir);
+  store.closeStale(row.id, `moved while ${multi} was set`);
+  const saved = store.row(row.id)!;
+  assert.equal(saved.reject_reason, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set');
+  assert.equal(saved.output_preview, 'moved while [BEAT-SECRET: env PRIVATE_KEY] was set');
+  assert.ok(!dump(saved).includes('abcDEF123456abcDEF'));
+});
