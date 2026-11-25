@@ -593,3 +593,13 @@ test('S3 PHP の関数名の大文字小文字・Perl の qx・Ruby の %x・pyt
   ]);
   expectKinds(f.kindOf, 'powershell', 'send', [`php -r 'SYSTEM("id");'`, `python -mhttp.server`]);
 });
+
+// 2026-11-26 shell-rest 差し戻し: python の値を取らない旗 -P（先頭にパスを足さない）・-R（ハッシュの乱数化）を -m の前にくっつけても、-m の名前を読む
+test('S3 python の -Pm・-Rm・-PRm のように値を取らない旗をくっつけた -m も読む。-m の名前が普通の道具のものは今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `python -Pm http.server`, `python -Rm http.server`, `python -PRm http.server`, `python3 -IPm http.server 8000`, `python -Pmhttp.server`, `python -Pm twine upload dist/x`, `python -Rmtwine upload dist/x`,
+    `python -P -m http.server`, `python -pm http.server`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [`python -Pm pytest`, `python -Rm pytest`, `python -PRm unittest`, `python -Pm twine check dist/x`, `python -P script.py`]);
+});

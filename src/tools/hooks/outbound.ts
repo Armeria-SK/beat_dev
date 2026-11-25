@@ -177,7 +177,7 @@ function ghSends(words: readonly FactWord[]): Hit | undefined {
 }
 
 // python の -m <名前>（小文字にした名前の一覧）。-m 名前・-m名前（くっつけた形）・値を取らない旗をくっつけた -Bm 名前・-Bm名前 も読む
-const PYTHON_MODULE_FLAG = /^-[bdehioqsuvx]*m(.*)$/iu;
+const PYTHON_MODULE_FLAG = /^-[bdehiopqrsuvx]*m(.*)$/iu;
 function pythonModules(words: StatementFacts['words']): string[] {
   const names: string[] = [];
   for (let i = 1; i < words.length; i++) {

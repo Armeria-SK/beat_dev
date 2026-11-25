@@ -217,3 +217,38 @@ test('S6 ホストとポートの括弧の組み合わせが 512 を超えて全
   ];
   assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
 });
+
+// 2026-11-26 shell-rest 差し戻し: 展開の括弧の中に隠れた : や @、スキームだけで決まる既定ポート、2 回目の確かめが 1 回目の仕事量を食わないこと
+test('S6 展開の括弧の中に隠れた : や @ でホストとポートが決まる書き方も、全部は確かめきれないなら断る。全部確かめ終えたものと JSON は今のまま', () => {
+  const reached = [
+    'curl "127.0.0.1{:4,:5}[0-9][0-9][0-9]/api/pending"', 'curl 127.0.0.1{:4,:5}{0..9}{0..9}{0..9}/api/pending', 'wget 127.0.0.1{:4,:5}{0..9}{0..9}{0..9}',
+    'curl "localhost{:}[0-9][0-9][0-9][0-9]"', 'curl "http://example.com:{x@127.0.0.1:4,y}[0-9][0-9][0-9]/"',
+    'curl "{127.0.0.1:4,x}[0-9][0-9][0-9]"', 'curl --url="127.0.0.1{:4,:5}[0-9][0-9][0-9]"', 'curl "https://u:{p@127.0.0.1:4,q}[0-9][0-9][0-9]/"',
+    'curl "http://example.com:{x@127.0.0.1:4777,y}/"',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined), []);
+  const objects = Array.from({ length: 12 }, (_, i) => `{"id":${i},"v":${i * 2}}`).join(',');
+  const free = [
+    'curl "http://example.com:{a,b}[0-9][0-9][0-9]/"', 'curl "http://example.com:{80,81}[0-9][0-9][0-9]/x"', 'curl "http://example.com:{x@127.0.0.1:4,y}1/"', 'curl "127.0.0.1{:4,:5}1"',
+    `curl -d '[${objects}]' http://example.com/api`, `curl -d "[${objects.replaceAll('"', '\\"')}]" http://example.com/api`, `echo '{"a":{"b":1,"c":2},"d":{"e":3,"f":4}}'`,
+    `curl -d'[${objects}]' http://example.com/api`, `curl --data-raw='[${objects}]' http://example.com/api`,
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
+});
+
+test('S6 beat に着くのがスキームの既定ポート（http なら 80）だけのときも、ホストの括弧を展開して確かめる', () => {
+  const viaDefault = { port: 4777, origins: ['http://localhost'] };
+  const tails = '/{a,b}'.repeat(9);
+  assert.deepEqual([`curl 'http://{x,l}{x,o}calhost${tails}'`, `curl --url='http://{x,l}{x,o}calhost${tails}'`].filter(command => selfTarget(command, viaDefault) === undefined), []);
+  const free = [`curl 'http://{x,y}{x,o}calhost${tails}'`, `curl 'https://{x,l}{x,o}calhost${tails}'`, `curl 'http://{x,l}{x,o}calhosts${tails}'`];
+  assert.deepEqual(free.filter(command => selfTarget(command, viaDefault) !== undefined), []);
+});
+
+test('S6 全部は確かめきれない語が先にあっても、あとの語の 1 回目の確かめの仕事量は減らない', () => {
+  const nums = Array.from({ length: 400 }, (_, i) => i + 1).join(',');
+  const swell = Array.from({ length: 39 }, (_, i) => `a${i}`).join(',');
+  const heavy = `curl example.com:{${nums}}{${nums}}`;
+  // 前の語の「ホスト:ポート」の 2 回目の確かめに仕事量を食われると、あとの語の 1 回目が仕事量不足で途中になる。あとの語が 2 回目の確かめで拾えない形（先頭が x/ の先）でも断る
+  const reached = [`${heavy} 127.0.0.1{${swell},:}4777/${'p'.repeat(3300)}`, `${heavy} x/127.0.0.1{${swell},:}4777/${'p'.repeat(3300)}`];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined).map(command => command.slice(-40)), []);
+});
