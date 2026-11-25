@@ -1008,15 +1008,16 @@ const mergeIntoMain = (s: Setup, branch: string): void => {
   gitIn(s.product, 'stash', 'pop');
 };
 // removeWorktree が行の path を空にしたあと（ブランチを消す直前の最初の #set）で 1 回だけ、持ち主の作業を差し込む
-const interleave = (s: Setup, id: string, action: () => void): Worktrees => {
+const interleave = (s: Setup, id: string, action: () => void, log?: (line: string) => void): Worktrees => {
   let armed = true;
   const now = (): number => {
     if (armed && (s.db.prepare('SELECT path FROM worktrees WHERE id = ?').get(id) as { path: string | null } | undefined)?.path === null) { armed = false; action(); }
     return Date.now();
   };
-  return new Worktrees({ db: s.db, paths: { data: s.data }, config: () => s.config, projects: s.projects, now });
+  return new Worktrees({ db: s.db, paths: { data: s.data }, config: () => s.config, projects: s.projects, now, ...(log ? { log } : {}) });
 };
-const branchConfig = (s: Setup): string => spawnSync('git', ['config', '--get-regexp', '^branch\.'], { cwd: s.product, encoding: 'utf8', env: GIT_ENV }).stdout.trim();
+// 設定の並びは直した前後で変わりうる（外した項目は節の終わりに戻る）ので、行を並べ替えて比べる
+const branchConfig = (s: Setup): string => spawnSync('git', ['config', '--get-regexp', '^branch\.'], { cwd: s.product, encoding: 'utf8', env: GIT_ENV }).stdout.trim().split('\n').sort().join('\n');
 
 test('worktree C2: upstream を付けた取り込み済みのブランチ（git の branch -d が断る形）も消え、行は merged になり、ブランチの設定の節も消える', { skip: !gitAvailable }, async t => {
   const s = setup(t);
@@ -1097,6 +1098,12 @@ test('worktree C2: 別の作業コピーが rebase の途中で使っている�
   mergeIntoMain(s, row.branch);
   gitIn(s.product, 'branch', 'stale', row.base);
   gitIn(s.product, 'branch', '--set-upstream-to=stale', row.branch);
+  // 節の中のほかの項目と、2 つ目の merge の値も、失敗したあとは元のとおりに残る（外すのは remote・merge だけ）
+  gitIn(s.product, 'branch', 'stale2', row.base);
+  gitIn(s.product, 'config', '--add', `branch.${row.branch}.merge`, 'refs/heads/stale2');
+  gitIn(s.product, 'config', `branch.${row.branch}.rebase`, 'true');
+  gitIn(s.product, 'config', `branch.${row.branch}.vscode-merge-base`, 'origin/main'); // description など beat が git を動かさない項目は使えない（git-repo.ts の許す一覧にある項目だけ）
+  assert.equal(branchConfig(s).split('\n').length, 5, '試験の前提: remote・merge が 2 つ・rebase・vscode-merge-base');
   assert.equal(await s.wt.isMerged(row.id), true);
   // beat の作業コピーを片づけ、ブランチだけ残す。持ち主はそのブランチで別の作業コピーを開き、rebase の途中で止めている
   assert.deepEqual(await s.wt.removeWorktree(row.id, { keepBranch: true }), { ok: true, branchKept: true });
@@ -1123,4 +1130,29 @@ test('worktree C2: 取り込み済みと確かめたあと、消す直前に本�
   assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
   assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), tip, '取り込まれていなくなったブランチは消さない');
   assert.equal(branchConfig(s), before, 'upstream の設定は元のまま');
+});
+
+test('worktree C2: 外した upstream の設定を戻せなかったときは、ブランチ名と戻せなかった項目の名前だけの [WARN] を残す（値は書かない）', { skip: !gitAvailable }, async t => {
+  const s = setup(t);
+  const { row, tip } = await finished(s);
+  mergeIntoMain(s, row.branch);
+  // remote の名前と merge の値が、ログに出てはいけない目印になるようにする
+  gitIn(s.product, 'remote', 'add', 'secret-remote-name', 'https://example.invalid/x.git');
+  gitIn(s.product, 'update-ref', 'refs/remotes/secret-remote-name/secret-merge-name', row.base);
+  gitIn(s.product, 'config', `branch.${row.branch}.remote`, 'secret-remote-name');
+  gitIn(s.product, 'config', `branch.${row.branch}.merge`, 'refs/heads/secret-merge-name');
+  assert.equal(await s.wt.isMerged(row.id), true);
+  const lines: string[] = [];
+  const lock = join(s.product, '.git', 'config.lock');
+  // 消す直前に、別の git が設定を書き換えている（config.lock を握っている）ので、外すのも戻すのも失敗する
+  const wt = interleave(s, row.id, () => { writeFileSync(lock, ''); }, line => lines.push(line));
+  assert.deepEqual(await wt.removeWorktree(row.id, { keepBranch: false }), { ok: false, reason: 'failed' });
+  assert.equal(gitIn(s.product, 'rev-parse', `refs/heads/${row.branch}`), tip);
+  const warns = lines.filter(line => line.startsWith('[WARN]') && line.includes(row.branch));
+  assert.equal(warns.length, 1, lines.join('\n'));
+  assert.match(warns[0]!, /remote/u);
+  assert.match(warns[0]!, /merge/u);
+  assert.ok(!lines.join('\n').includes('secret-remote-name') && !lines.join('\n').includes('secret-merge-name'), '設定の値はログに出さない');
+  unlinkSync(lock);
+  assert.ok(branchConfig(s).includes('secret-remote-name'), '設定が書き換えられなかったので元のまま残っている');
 });

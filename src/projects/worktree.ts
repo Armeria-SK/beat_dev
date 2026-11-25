@@ -711,17 +711,22 @@ export class Worktrees {
             if (deleted || !merged) return deleted;
             // 取り込み済みと beat が確かめたのに branch -d が断られた: 持ち主が upstream を付けたブランチは、git が本体の今のブランチでなく upstream と比べて断る（毎回 removing のまま残る）。
             // upstream が付いていて、先端が読んだ tip のままのときだけ、upstream の設定を外して git にもう一度 branch -d をさせる（別の作業コピーが使っている・本体の今のブランチに取り込まれていない、は git がここで改めて断る）。
-            // それでも断られたら、外した設定を元の値に戻す
-            const config = async (key: string) => (await git([...NO_MAINTENANCE, 'config', '--get', `branch.${row.branch}.${key}`]))?.toString('utf8').trim() || undefined;
-            const upstream = { merge: await config('merge'), remote: await config('remote') };
-            if (!upstream.merge) return deleted;
+            // それでも断られたら、外した設定を元の値に戻す（remote・merge は値が複数のこともあるので全部）。戻せなければ、値は書かずに [WARN] を残す
+            const saved = async (key: string) => ((await git([...NO_MAINTENANCE, 'config', '--get-all', `branch.${row.branch}.${key}`]))?.toString('utf8') ?? '').split('\n').map(v => v.replace(/\r$/u, '')).filter(Boolean);
+            const upstream = { remote: await saved('remote'), merge: await saved('merge') };
+            if (!upstream.merge.length) return deleted;
             const current = (await git([...NO_MAINTENANCE, 'rev-parse', '--verify', '-q', `refs/heads/${row.branch}^{commit}`]))?.toString('utf8').trim();
             if (current !== tip) return null;
             const unset = await git([...NO_MAINTENANCE, 'branch', '--unset-upstream', '--', row.branch]);
             const again = unset ? await git([...NO_MAINTENANCE, 'branch', '-d', '--', row.branch]) : null;
             if (again) return again;
-            if (upstream.remote) await git([...NO_MAINTENANCE, 'config', `branch.${row.branch}.remote`, upstream.remote]);
-            await git([...NO_MAINTENANCE, 'config', `branch.${row.branch}.merge`, upstream.merge]);
+            const lost: string[] = [];
+            for (const key of ['remote', 'merge'] as const) {
+              for (const [i, value] of upstream[key].entries()) {
+                if (!(await git([...NO_MAINTENANCE, 'config', i === 0 ? '--replace-all' : '--add', `branch.${row.branch}.${key}`, value])) && !lost.includes(key)) lost.push(key);
+              }
+            }
+            if (lost.length) this.#d.log?.(`[WARN] beat could not write back the ${lost.join(' and ')} setting of the git branch ${row.branch} after failing to delete it; check "git config --get-regexp branch.${row.branch}" (values are not logged)`);
             return null;
           });
           if (!gone) return { ok: false, reason: 'failed' };
