@@ -19,6 +19,7 @@ export const taskJa = {
   'error.not_cancelled': "取り消されていないので、戻せません",
   'error.no_cancel_record': "取り消す前の状態の記録が無いので、戻せません（\"Run again\" を使ってください）",
   'error.sibling_open': "同じ予定のほかの回がまだ動いているので、戻せません",
+  'error.build_open': "この製品の別の Build がまだ動いています。先にそれを終えるか取り消してください",
   'error.not_template': "これは繰り返しのタスクではないので、変える繰り返しの設定がありません",
   'error.template_when': "繰り返しのタスクは繰り返しの設定の時刻に始まるので、\"when\" は付けられません（代わりに \"repeat\" を変えてください）",
   'error.not_deletable': "消せるのは、繰り返しのタスクか、一度も動いていない時刻指定のタスクだけです（これは取り消してください）",

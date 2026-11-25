@@ -18,6 +18,7 @@ const en = {
   'error.not_cancelled': 'It is not cancelled, so it cannot be restored',
   'error.no_cancel_record': 'There is no record of its state before it was cancelled, so it cannot be restored (use "Run again")',
   'error.sibling_open': 'Another run of the same schedule is still active, so this cannot be restored',
+  'error.build_open': 'Another Build for this product is still open. Finish or cancel it first',
   'error.not_template': 'This is not a repeating task, so it has no repeat setting to change',
   'error.template_when': 'A repeating task starts at the times its repeat setting gives, so "when" cannot be set on it (change "repeat" instead)',
   'error.not_deletable': 'Only a repeating task, or a timed task that has never run, can be deleted (cancel this one instead)',

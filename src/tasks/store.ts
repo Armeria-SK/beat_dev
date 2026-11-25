@@ -497,6 +497,7 @@ export class TaskStore {
       if (!from) throw new TaskError('error.no_cancel_record');
       // 繰り返しの実行は、同じ予定の別の実行が動いているあいだは戻さない（重ねて動かさない。#spawnChild と同じ決まり）
       if (task.parent_id && this.hasOpenRun(task.parent_id)) throw new TaskError('error.sibling_open');
+      this.#refuseSecondBuild(task);
       const now = this.#now();
       let runAt = task.run_at;
       let status: TaskStatus = from;
@@ -514,6 +515,13 @@ export class TaskStore {
     return this.#changed(id);
   }
 
+  // Build（製品の受け入れの項目を作るタスク。持ち主の直しは数えない）を動かし直すとき、同じ製品で別の Build が開いていれば断る（Build が 2 つ動かないように。startBuild と同じ決まり）
+  #refuseSecondBuild(task: Task): void {
+    if (task.project_id === null || task.acceptance_items === null || task.spawned_by !== null) return;
+    if (this.#db.prepare('SELECT 1 FROM task_events WHERE task_id = ? AND kind = ? LIMIT 1').get(task.id, OWNER_FIX)) return;
+    if (this.openBuild(task.project_id, task.id) !== null) throw new TaskError('error.build_open');
+  }
+
   // 同じ予定から作られた実行で、まだ終わっていない（実行待ち・実行中・返事待ち）ものがあるか
   hasOpenRun(parentId: string): boolean {
     return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(parentId));
@@ -527,8 +535,9 @@ export class TaskStore {
     return this.openBuild(projectId) !== null;
   }
 
-  openBuild(projectId: string): string | null {
-    const row = this.#db.prepare("SELECT id FROM tasks t WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status IN ('ready', 'running', 'waiting') AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = ?) ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId, OWNER_FIX) as { id: string } | undefined;
+  // except: この id のタスクは数えない（そのタスク自身を動かし直せるかを見るとき）
+  openBuild(projectId: string, except?: string): string | null {
+    const row = this.#db.prepare("SELECT id FROM tasks t WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status IN ('ready', 'running', 'waiting') AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = ?) AND t.id IS NOT ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(projectId, OWNER_FIX, except ?? null) as { id: string } | undefined;
     return row?.id ?? null;
   }
 
@@ -745,6 +754,7 @@ export class TaskStore {
     if (isTemplate && nextRun === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
     const unapproved = this.#unapprovedTemplate(task);
     if (unapproved && actor !== 'user') throw new TaskError('error.needs_approval');
+    this.#refuseSecondBuild(task);
     transaction(this.#db, () => {
       if (unapproved && task.status === 'cancelled') this.#adopt(task);
       this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, check_state = NULL, updated_at = ? WHERE id = ?`)
