@@ -3,7 +3,7 @@ export type SkillTarget = { kind: 'skill' | 'draft'; name: string };
 
 export type Route =
   | { view: 'new' }
-  | { view: 'chat'; id: string }
+  | { view: 'chat'; id: string; messageId?: number }
   | { view: 'overview' } | { view: 'kanban' } | { view: 'schedule' } | { view: 'notifications' }
   | { view: 'memory'; productId?: string } | { view: 'archived' }
   | { view: 'task'; id: string }
@@ -27,14 +27,16 @@ const LEGACY: Record<string, Route> = {
 
 export const PRODUCT_ID = /^[A-Za-z0-9_-]{6,64}$/u;
 
+const MESSAGE_ID = /^[1-9]\d{0,14}$/u;
+
 function decode(part: string): string {
   try { return decodeURIComponent(part); } catch { return part; }
 }
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/u, '').split(/[?#]/u)[0]!.split('/');
-  const [head = '', a, b] = parts;
-  if (head === 'c' && a) return { view: 'chat', id: decode(a) };
+  const [head = '', a, b, c] = parts;
+  if (head === 'c' && a) return b === 'm' && c !== undefined && MESSAGE_ID.test(c) ? { view: 'chat', id: decode(a), messageId: Number(c) } : { view: 'chat', id: decode(a) };
   if (head === 'tasks' && a) return { view: 'task', id: decode(a) };
   if (head === 'p') {
     if (!a || !PRODUCT_ID.test(a)) return HOME;
@@ -57,7 +59,7 @@ export function parseRoute(hash: string): Route {
 export function routeHash(route: Route): string {
   switch (route.view) {
     case 'new': return '#/';
-    case 'chat': return `#/c/${encodeURIComponent(route.id)}`;
+    case 'chat': return `#/c/${encodeURIComponent(route.id)}${route.messageId ? `/m/${route.messageId}` : ''}`;
     case 'task': return `#/tasks/${encodeURIComponent(route.id)}`;
     case 'product': return `#/p/${route.id}`;
     case 'productNew': return `#/p/${route.id}/new`;
@@ -112,6 +114,8 @@ export function settingsCloser(env: CloseEnv): { fire: () => void; reset: () => 
 }
 
 export const isConversation = (route: Route): boolean => route.view === 'new' || route.view === 'chat';
+
+export const messageTarget = (route: Route, id: string): number | null => (route.view === 'chat' && route.id === id && route.messageId !== undefined ? route.messageId : null);
 
 export function routeProductId(route: Route): string | null {
   return route.view === 'product' || route.view === 'productNew' || route.view === 'productSettings' ? route.id : null;

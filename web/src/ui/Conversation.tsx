@@ -24,7 +24,7 @@ import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { notePath } from './memory-notes.ts';
-import { routeHash } from './routes.ts';
+import { messageTarget, parseRoute, routeHash } from './routes.ts';
 import { SessionMenu } from './SessionMenu.tsx';
 import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem, type ToolItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
@@ -292,6 +292,22 @@ function revealPending(id: number): void {
   requestAnimationFrame(look);
 }
 
+const messageNumber = (key: string): number | undefined => {
+  const found = /^m-(\d+)$/u.exec(key);
+  return found ? Number(found[1]) : undefined;
+};
+
+function messageRow(root: HTMLElement | null, target: number, last: number): HTMLElement | null {
+  if (!root || target > last) return null;
+  let row: HTMLElement | null = null;
+  let at = 0;
+  for (const el of root.querySelectorAll<HTMLElement>('[data-msg]')) {
+    const n = Number(el.dataset['msg']);
+    if (n <= target && n > at) { row = el; at = n; }
+  }
+  return row;
+}
+
 export function Conversation({ id, listTitle, aiName, product, draft, notices, liveChecklist, revision, disconnected, onReconnect, onClearNotices, onInterrupt, panes, waits, buildLive }: ConversationProps) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -366,6 +382,28 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   });
+
+  const [jump, setJump] = useState<number | null>(() => (id ? messageTarget(parseRoute(location.hash), id) : null));
+  const jumped = useRef<string | null>(null);
+  useEffect(() => {
+    if (!id) return undefined;
+    const onHash = () => {
+      const target = messageTarget(parseRoute(location.hash), id);
+      if (target === null) jumped.current = null;
+      else if (location.hash !== jumped.current) setJump(target);
+    };
+    addEventListener('hashchange', onHash);
+    return () => removeEventListener('hashchange', onHash);
+  }, [id]);
+  useLayoutEffect(() => {
+    if (jump === null || loaded === null) return;
+    jumped.current = location.hash;
+    setJump(null);
+    const row = messageRow(scroller.current, jump, messages.at(-1)?.id ?? 0);
+    if (!row) return;
+    stick.current = false;
+    row.scrollIntoView({ block: 'center' });
+  }, [jump, loaded]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -474,7 +512,8 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   };
 
   const lastError = notices.filter((n): n is Extract<RunNotice, { kind: 'error' }> => n.kind === 'error').at(-1);
-  const newestError = lastError && !draft && messages.every(m => lastError.after === undefined || m.id <= lastError.after || m.role === 'user') ? lastError : undefined;
+  const stoppedSince = lastError !== undefined && notices.slice(notices.lastIndexOf(lastError) + 1).some(n => n.kind === 'stopped');
+  const newestError = lastError && !draft && !stoppedSince && messages.every(m => lastError.after === undefined || m.id <= lastError.after || m.role === 'user') ? lastError : undefined;
 
   const retry = async () => {
     if (!id) return;
@@ -523,7 +562,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       case 'owner': {
         const stamp = messageStamp(item.at, renderedAt);
         return (
-          <div key={item.key} className={`bt-msg bt-msg--owner ui-owner${rise(item.key) ? ' bt-rise' : ''}`}>
+          <div key={item.key} data-msg={messageNumber(item.key)} className={`bt-msg bt-msg--owner ui-owner${rise(item.key) ? ' bt-rise' : ''}`}>
             {item.text}
             {item.attachments.length > 0 && <span className="bt-meta ui-owner__files">{t('ui.attached', item.attachments.join(', '))}</span>}
             {stamp && <time className="bt-meta ui-msg__meta" dateTime={new Date(item.at).toISOString()} title={stamp.title}>{stamp.text}</time>}
@@ -533,7 +572,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       case 'reply': {
         const stamp = item.stamped ? messageStamp(item.at, renderedAt) : null;
         return (
-          <div key={item.key} className={`bt-msg ui-reply${rise(item.key) ? ' bt-rise' : ''}`}>
+          <div key={item.key} data-msg={messageNumber(item.key)} className={`bt-msg ui-reply${rise(item.key) ? ' bt-rise' : ''}`}>
             <Markdown text={item.text} />
             {(stamp || item.copyText !== null) && (
               <div className="ui-reply__foot">
