@@ -78,14 +78,20 @@ export function readKept(dir: string, projectId: string, hash: string): Buffer |
   } catch { return null; }
 }
 
+// 製品の中の相対パスを名前ごとに分ける。製品の外（'..' そのもの、'..' + 区切り、別のドライブ）と空は null。
+// 区切りは Windows ではバックスラッシュと /、Windows でない所では / だけ（そこではバックスラッシュは名前の一部）。'..foo' のような名前は親の指定ではない
+export function relParts(rel: string, windows = process.platform === 'win32'): string[] | null {
+  if (!rel || isAbsolute(rel)) return null;
+  const parts = rel.split(windows ? /[\\/]/u : '/');
+  return parts[0] === '..' ? null : parts;
+}
+
 export function productRel(root: string, abs: string): string | null {
   try {
     const real = realpathSync.native(root);
     const full = lstatOf(abs) ? realpathSync.native(abs) : join(realpathSync.native(dirname(abs)), basename(abs));
-    const rel = relative(real, full);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
-    const parts = rel.split(/[\\/]/u);
-    return parts.some(part => part.toLowerCase() === '.git') ? null : parts.join('/');
+    const parts = relParts(relative(real, full));
+    return !parts || parts.some(part => part.toLowerCase() === '.git') ? null : parts.join('/');
   } catch { return null; }
 }
 
