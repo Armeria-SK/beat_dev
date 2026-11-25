@@ -137,7 +137,8 @@ test('L184 対照（審査の指摘）: リンク・ジャンクションをま�
   mkdirSync(join(base, 'sib'));
   const refused = ['cd self/../sib && npm test', 'cd self/../sib && git status', 'cd self; cd ../sib; npm test', 'cd self && rm self && cd .. && npm test', 'cd self; npm test; cd ..; cd ..; npm test'];
   for (const command of refused) assert.ok(refusal(command)?.key !== undefined, command);
-  assert.ok(refusal('cd web/../missing && npm test')?.key !== undefined, '名前のあとの .. （リンクが無くても読まない）');
+  // シェルの最初のフォルダが作業コピーの中の web のとき、ひとつ上の self（根へのジャンクション）を消して .. へ戻ると、bash は実体の親（コピーの外）へ移る
+  assert.ok(refusal('cd ../self && rm self && cd .. && npm test', 'bash', 'web')?.key !== undefined, '兄弟のフォルダのリンク（web から ../self）');  assert.ok(refusal('cd web/../missing && npm test')?.key !== undefined, '名前のあとの .. （リンクが無くても読まない）');
   assert.ok(refusal('cd ../missing && npm test', 'bash', 'web')?.key !== undefined, '先頭の .. でも、行き先が無ければ読まない');
   assert.equal(refusal('cd web && npm test && cd ..')?.key, undefined, '同じ形で中のフォルダなら通る');
   assert.equal(refusal('cd ../web && npm test && cd ..', 'bash', 'web')?.key, undefined, '先頭の .. で、行き先がある中のフォルダなら通る');

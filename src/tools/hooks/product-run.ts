@@ -25,7 +25,7 @@ const AWS_KEY = /(?:^|[^A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/u;
 const COMMIT_SECRET = /(?:^|\/)(?:[^/]*(?:secret|credential)[^/]*|[^/]+\.env)$/iu;
 const SOURCE_NAME = /(?:^|\/)[^/:]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|cs|vue|svelte|css|md)$/iu;
 // 名前がその言葉だけ（secrets.md・docs/credentials.md・secret.py）のファイルは、拡張子にかかわらず止める。長い名前の一部（credentials-helper.ts）だけが外れる
-const EXACT_WORD = /(?:^|\/)(?:secrets?|credentials?)\.[^/]+$/iu;
+const EXACT_WORD = /(?:^|\/)\.?(?:secrets?|credentials?)\.[^/]+$/iu;
 const commitSecret = (name: string): boolean => COMMIT_SECRET.test(name) && (EXACT_WORD.test(name) || !SOURCE_NAME.test(name));
 const MESSAGE_FLAGS = new Set(['-m', '--message']);
 

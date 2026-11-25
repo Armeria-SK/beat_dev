@@ -184,7 +184,7 @@ const NOT_FLAT = /[(){}`]|[|][|&]|(?<![|&>])[|&](?![|&>])|(?:^|[\s;&|])(?:for|wh
 const CD_CAP = 16;
 const isDirectory = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
-// 最初のフォルダから dir までの途中に、リンク・ジャンクションがあるか（リンクの先は文字だけでは決まらない）
+// 作業コピーの根から dir までの途中に、リンク・ジャンクションがあるか（リンクの先は文字だけでは決まらない）。根は、シェルの最初のフォルダより上でもよい
 function throughLink(base: string, dir: string): boolean {
   const rel = relative(base, dir);
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return false;
@@ -205,7 +205,7 @@ function cdTarget(st: StatementFacts): string | undefined {
 }
 
 // 文ごとの、その文が動きうるフォルダ（そこまでにいられたすべてのフォルダ）。追跡できなければ undefined
-export function followDirs(statements: readonly StatementFacts[], place: Pick<WorktreeGitPlace, 'cwd' | 'command'>): ReadonlyMap<StatementFacts, readonly string[]> | undefined {
+export function followDirs(statements: readonly StatementFacts[], place: Pick<WorktreeGitPlace, 'worktree' | 'cwd' | 'command'>): ReadonlyMap<StatementFacts, readonly string[]> | undefined {
   if (place.command === undefined || NOT_FLAT.test(place.command)) return undefined;
   // パイプの途中の cd は子のシェルで動き、そのあとの文のフォルダは変わらない（|& も）。読まない
   if (statements.some(st => st.piped === true || st.inner !== undefined || st.unknownInner !== undefined || st.programDynamic || st.programOdd || st.codeDynamic || definesCommand(st))) return undefined;
@@ -236,7 +236,7 @@ export function followDirs(statements: readonly StatementFacts[], place: Pick<Wo
       const named = parts.findIndex(part => part !== '.' && part !== '..');
       if (named >= 0 && parts.slice(named).includes('..')) return undefined;
       const goes = now.map(from => resolve(from, target));
-      if (goes.some(to => throughLink(place.cwd, to) || (parts.includes('..') && !isDirectory(to)))) return undefined;
+      if (goes.some(to => throughLink(place.worktree, to) || (parts.includes('..') && !isDirectory(to)))) return undefined;
       const uncertain = changed || goes.some(to => !isDirectory(to));
       const next = new Set<string>();
       for (const from of now) {
