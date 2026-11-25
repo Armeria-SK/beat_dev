@@ -262,7 +262,7 @@ test('6-2: よその会話の番号は読めず止められない。数の上限
   s.adapter().scripts = [call('shell_output', { id: mine }), call('shell_stop', { id: mine }), reply('ok')];
   await s.send(uuid(2), { text: 'peek', permissionMode: 'auto' });
   const [read, stop] = s.results();
-  const gone = `There is no background command ${mine} in this conversation. Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart`;
+  const gone = `There is no background command ${mine} in this conversation. Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart\nThis conversation has no background commands.`;
   assert.equal(read, gone);
   assert.equal(stop, gone);
   assert.equal(stateOf(s, mine), 'running', 'still running');
@@ -279,6 +279,36 @@ test('6-2: よその会話の番号は読めず止められない。数の上限
   assert.match(total, /^Not started: beat already runs 8 background commands in total \(8 of them in other conversations or products\)/mu, total);
   assert.doesNotMatch(total, /Running in this conversation:|bg-\d/u, total);
   assert.equal(s.app.background.list({ conversationId: uuid(3) }).length, 0);
+});
+
+test('6-2: 無い番号を読もうとしたら、この会話に今ある番号の一覧を返事に付ける（無ければ「無い」と言う）。よその会話の番号は出さない', async t => {
+  const s = await setup(t);
+  const shop = await s.product('shop');
+  s.adapter().scripts = [reply('ok'), reply('ok')];
+  for (const n of [1, 2]) await s.send(uuid(n), { text: 'hi', projectId: shop.id });
+  const elsewhere = startedId(direct(s, { conversationId: uuid(1), projectId: shop.id }, shop.dir));
+  s.adapter().scripts = [call('shell_output', { id: 'bg-99' }), reply('ok')];
+  await s.send(uuid(2), { text: 'look', permissionMode: 'auto' });
+  const none = s.results().at(-1)!;
+  assert.match(none, /^There is no background command bg-99 in this conversation\./u, none);
+  assert.match(none, /\nThis conversation has no background commands\.$/u, none);
+  assert.doesNotMatch(none, new RegExp(`^- ${elsewhere}:`, 'mu'), 'よその会話の番号は出さない');
+  assert.doesNotMatch(none, /node tick/u);
+
+  const first = startedId(direct(s, { conversationId: uuid(2), projectId: shop.id }, shop.dir));
+  const second = startedId(direct(s, { conversationId: uuid(2), projectId: shop.id }, shop.dir, 'quick.js'));
+  s.adapter().scripts = [call('shell_output', { id: 'bg-99' }), call('shell_stop', { id: 'bg-98' }), reply('ok')];
+  await s.send(uuid(2), { text: 'look again', permissionMode: 'auto' });
+  const [read, stop] = s.results().slice(-2);
+  for (const [answer, id] of [[read!, 'bg-99'], [stop!, 'bg-98']] as const) {
+    assert.match(answer, new RegExp(`^There is no background command ${id} in this conversation\\.`, 'u'), answer);
+    assert.match(answer, /\nThe background commands of this conversation \(use one of these ids\):\n/u, answer);
+    assert.match(answer, new RegExp(`^- ${first}: node tick\\.js$`, 'mu'), answer);
+    assert.match(answer, new RegExp(`^- ${second}: node quick\\.js$`, 'mu'), answer);
+    assert.doesNotMatch(answer, new RegExp(`^- ${elsewhere}:`, 'mu'), 'よその会話の番号は出さない');
+    assert.equal(answer.split('\n').filter(line => line.startsWith('- ')).length, 2, 'この会話の 2 つだけ');
+    assert.doesNotMatch(answer, /no background commands\./u);
+  }
 });
 
 test('6-2: 止まる時: shell_stop・会話をしまう・タスクが終わる（done / failed / cancelled）・製品をしまう・App を閉じる', async t => {

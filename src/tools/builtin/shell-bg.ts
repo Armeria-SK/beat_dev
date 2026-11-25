@@ -58,7 +58,13 @@ export function backgroundSection(views: readonly JobView[], language: Language)
 }
 
 const unavailable = (ctx: ToolContext): ToolOutput => ({ content: toolText(languageOf(ctx.config), 'shell.bg_unavailable'), isError: true });
-const unknown = (id: string, ctx: ToolContext): ToolOutput => ({ content: toolText(languageOf(ctx.config), 'bg.unknown', { id }), isError: true });
+// 無い番号には、この会話に今ある番号（よその会話のは出さない）を添える。モデルが無い番号を何度も読み直さないように
+const unknown = (id: string, ctx: ToolContext): ToolOutput => {
+  const language = languageOf(ctx.config);
+  const mine = ctx.services?.background?.list({ conversationId: ctx.conversationId }) ?? [];
+  const known = mine.length ? toolText(language, 'bg.known_list', { list: jobLines(mine, language) }) : toolText(language, 'bg.known_none');
+  return { content: `${toolText(language, 'bg.unknown', { id })}\n${known}`, isError: true };
+};
 const marked = (read: JobRead): Partial<ToolOutput> => (read.fetched ? { fetched: true } : {});
 
 const ID = Type.String({ minLength: 1, maxLength: 32, description: 'The id that shell_run returned for the background command, such as bg-3' });

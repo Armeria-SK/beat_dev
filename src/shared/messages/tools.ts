@@ -103,6 +103,8 @@ const en = {
   'shell.bg_mine': 'Running in this conversation:',
   'summary.shell_stop': 'Stop a background command',
   'bg.unknown': 'There is no background command {id} in this conversation. Commands started before beat last restarted have ended, and numbers start again from bg-1 after a restart',
+  'bg.known_none': 'This conversation has no background commands.',
+  'bg.known_list': 'The background commands of this conversation (use one of these ids):\n{list}',
   'bg.state_running': 'running',
   'bg.state_exited': 'ended with exit code {code}',
   'bg.state_stopped_model': 'stopped with shell_stop',
