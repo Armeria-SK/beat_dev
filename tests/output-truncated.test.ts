@@ -348,6 +348,63 @@ test('B 継ぎ目: 続きを頼まないとき（上限まで頼んだあと）�
   assert.equal(result.ok && result.text, 'one two three four fiv');
 });
 
+// E2: 続きを頼むときに切り戻した最後の語（cutTail）は、続きの呼び出しが失敗・停止しても、保存した返事から消えない
+const storedText = (s: { app: App }): string => s.app.conversations.messages('c1').map(m => m.message).filter(m => m.role === 'assistant').map(m => m.content).join('');
+const savedAssistant = (s: { events: RunEvent[] }): number => s.events.filter(e => e.type === 'message.saved' && e.role === 'assistant').length;
+
+test('B 継ぎ目 E2: 続きの呼び出しが失敗しても、切り戻した最後の語は保存した返事に残り、画面にも出る（hello wor の wor）', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('hello wor'), fail(new Error('boom')));
+  const { result } = await s.run('Write');
+  assert.equal(result.ok, false);
+  assert.equal(storedText(s), 'hello wor');
+  assert.equal(savedAssistant(s), s.app.conversations.messages('c1').filter(m => m.message.role === 'assistant').length, '保存した返事の数だけ message.saved が出る');
+});
+
+test('B 継ぎ目 E2: 続きの呼び出しが書いた文を捨てて失敗したときも、切り戻した語を足すのは 1 回だけ（二重にならない）', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('hello wor'), fail(new Error('boom'), 'wor ld'));
+  const { result } = await s.run('Write');
+  assert.equal(result.ok, false);
+  assert.equal(s.events.filter(e => e.type === 'warning' && e.code === 'partial_discarded').length, 1, '前提: 続きが書いた文は捨てる');
+  assert.equal(storedText(s), 'hello wor');
+});
+
+test('B 継ぎ目 E2: 続きの呼び出しを何も書かずに止めたら、切り戻した語が止めた印つきで残る', async t => {
+  const s = await setup(t);
+  let runId = '';
+  const stopped: Script = async function* (req) { s.app.engine.stop(runId); throw req.signal.reason ?? new Error('aborted'); };
+  s.adapter().scripts.push(cutText('hello wor'), stopped);
+  const outcome = s.app.engine.send('c1', 'Write');
+  assert.ok(outcome.ok);
+  runId = outcome.runId;
+  const result = await s.app.engine.wait(outcome.runId)!;
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.errorKind, 'cancelled');
+  assert.equal(storedText(s), `hello wor\n\n${engineText('en', 'message.stopped_partway')}`);
+});
+
+test('B 継ぎ目 E2: 続きの呼び出しが書いてから止められたら、その文が残り、切り戻した語は足さない（モデルは切った語から書き直すため）', async t => {
+  const s = await setup(t);
+  let runId = '';
+  const writeThenStop: Script = async function* (req) { yield { type: 'text', delta: 'wor ld' }; s.app.engine.stop(runId); throw req.signal.reason ?? new Error('aborted'); };
+  s.adapter().scripts.push(cutText('hello wor'), writeThenStop);
+  const outcome = s.app.engine.send('c1', 'Write');
+  assert.ok(outcome.ok);
+  runId = outcome.runId;
+  await s.app.engine.wait(outcome.runId)!;
+  assert.equal(storedText(s), `hello wor ld\n\n${engineText('en', 'message.stopped_partway')}`);
+});
+
+test('B 継ぎ目 E2: 続きが道具の呼び出しで成功し、そのあと別の呼び出しが失敗したときは、古い切り戻した語を足さない', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(cutText('hello wor'), listCall, fail(new Error('boom')));
+  const { result } = await s.run('Write');
+  assert.equal(result.ok, false);
+  // 続き（道具の呼び出し）は成功して次へ進んだので、切り戻した語はもう持ち越さない。あとの失敗で、前の語を今の返事の後ろに足さない
+  assert.equal(storedText(s), 'hello ');
+});
+
 test('B 空の続き: 続きを頼んだ返事が空（end_turn）なら、黙って成功にせず切れたとして返し、知らせを出す', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(cutText('The forest behind me the'), reply(''));
@@ -444,7 +501,8 @@ test('F1: 上げた上限は、同じ実行の次の組み立ての「使える�
 test('F1: 上げる上限は、いまのやり取りと合わせてコンテキストの 95% に入りきる量まで', async t => {
   const s = await setup(t, big(40_000));
   s.adapter().scripts.push(thinkingOnly, reply('おわり'));
-  await s.run('abcdefg '.repeat(8_800));
+  // 道具の仕様が増えた今の system と合わせて入る大きさ（8,800 では送る前に engine.fit.overflow: 28,077 > 28,000 で、呼び出しが 0 回になる）
+  await s.run('abcdefg '.repeat(8_000));
   const calls = s.adapter().calls;
   assert.equal(calls.length, 2);
   const second = calls[1]!;

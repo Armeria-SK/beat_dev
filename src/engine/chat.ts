@@ -83,6 +83,9 @@ const MODEL_SILENT_MS = 60_000;
 // 標準の fetch（undici）が、返事の頭・本文が来ないまま 300 秒で切るときの理由（classifyFetchError が connect.code にする）
 const SILENT_FETCH_TIMEOUTS: ReadonlySet<string> = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 const RESUME_WORD_MAX = 40;
+// 自動承認の判定役の呼び出しの出力の上限。考えを文で書くモデルは、答え（最後の行の JSON）の前に切れていた。切れたときだけ、同じ枠のまま 1 回、JUDGE_OUTPUT_RAISED まで上げて呼び直す（どちらもモデルの上限までで、それ以上は上げない）
+const JUDGE_OUTPUT_TOKENS = 1024;
+const JUDGE_OUTPUT_RAISED = 4096;
 
 export function resumePoint(text: string): string {
   const at = text.search(/\s\S*$/u);
@@ -1088,6 +1091,8 @@ export class ChatEngine {
     let continuations = 0;
     const cutTexts: string[] = [];
     let cutTail = '';
+    // 続きを頼むとき切り戻した最後の語のうち、まだ保存した返事に戻っていない分。次の呼び出しが終わる（成功して返事が来る）まで持ち、そのあいだに呼び出しが失敗・停止したら返事に戻す
+    let owedTail = '';
     let warnedToolCut = false;
     let lastEstimate = 0;
     let lastRoute: Route = chain[0]!;
@@ -1247,10 +1252,16 @@ export class ChatEngine {
       }
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject });
       if (!call.ok) {
-        if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial, flags);
+        // 続きを頼んだ呼び出しが失敗・停止したときは、切り戻した最後の語を失わない。止められる前に続きが文を書いていれば、その文が残る（モデルは切った語から書き直すので足さない）
+        if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial.trim() ? call.partial : owedTail, flags);
         if (call.usage) addUsage(call.usage);
+        if (owedTail) {
+          const tail = d.conversations.append(conversationId, { role: 'assistant', content: owedTail }, runId);
+          d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: tail.id, role: 'assistant' });
+        }
         return finishFail(call.failure);
       }
+      owedTail = '';
       index = call.index;
       lastRoute = chain[index]!;
       lastEstimate = call.estimate;
@@ -1286,6 +1297,7 @@ export class ChatEngine {
       if (room) {
         const kept = resumePoint(call.text);
         cutTail = call.text.slice(kept.length);
+        owedTail = cutTail;
         call.text = kept;
       }
       if (empty) call.text = cutTail;
@@ -1462,18 +1474,31 @@ export class ChatEngine {
       call?.queued();
       release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal, true);
       call?.started();
-      let text = '';
-      let usage: Usage = {};
-      for await (const event of adapter.stream({
-        model, system: { frozen: prompt.system, dynamic: '', tail: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, d.status.limits(model).maxOutput), signal,
-      })) {
-        if (event.type === 'text') text += event.delta;
-        else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, usage); }
-        else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
-        else if (event.type === 'done' && event.refused) throw new JudgeRefused();
+      const maxOutput = d.status.limits(model).maxOutput;
+      let limit = Math.min(JUDGE_OUTPUT_TOKENS, maxOutput);
+      const raised = Math.min(JUDGE_OUTPUT_RAISED, maxOutput);
+      // 返事が出力の上限で切れたら、切れた返事の文字は捨て、上限を上げられるときだけ、同じ枠のまま（答えの時計の中で）1 回だけ呼び直す。使うのは呼び直しの返事だけで、それも切れたら TruncatedReply（呼ぶ側は読めない返事として確かめる側に倒す）。
+      // 使用量は、呼び直しの分も足して知らせる
+      const spent: Usage = {};
+      for (;;) {
+        let text = '';
+        let usage: Usage = {};
+        let cut = false;
+        for await (const event of adapter.stream({
+          model, system: { frozen: prompt.system, dynamic: '', tail: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: limit, signal,
+        })) {
+          if (event.type === 'text') text += event.delta;
+          else if (event.type === 'usage') { usage = { ...usage, ...event.usage }; call?.used?.(model.id, addUsageTo({ ...spent }, usage)); }
+          else if (event.type === 'done' && event.stop === 'max_tokens') { cut = true; break; }
+          else if (event.type === 'done' && event.refused) throw new JudgeRefused();
+        }
+        addUsageTo(spent, usage);
+        // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
+        if (!cut) return { text: redactExact(text, d.registry.secrets()), model: model.id, usage: spent };
+        if (limit >= raised) throw new TruncatedReply();
+        signal.throwIfAborted();
+        limit = raised;
       }
-      // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
-      return { text: redactExact(text, d.registry.secrets()), model: model.id, usage };
     } finally { release?.(); }
   }
 
@@ -2270,7 +2295,8 @@ export class ChatEngine {
     const rootKey = root && project ? d.projects?.get(project.id)?.root_key : undefined;
     return buildSnapshot(d.paths, {
       ...(d.botMemory && d.memory && !scout ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
-      ...(d.skills ? { skills: d.skills.index(language, skillsIndexBudget(this.#smallestAvailable())) } : {}),
+      // scout は考える実行と直す実行の両方で真。どちらにも skill_view は渡らないので、開けないスキルの名前は見せない
+      ...(d.skills && !scout ? { skills: d.skills.index(language, skillsIndexBudget(this.#smallestAvailable())) } : {}),
       ...(product ? { persona: false, instructions: root && rootKey ? instructionsSection(readInstructions(root, instructionsBudget(this.#smallestAvailable()), log, rootKey)) : undefined } : {}),
     }, language);
   }
