@@ -2,9 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { api, type Conversation, type JudgedCounts, type Project, type ReviewJob, type RunRow, type ToolCallRow } from '../../api.ts';
 import { formatDateTime, formatNumber, startOfDay, useT } from '../../i18n/index.ts';
 import { changeLabel, decidedByLabel, decisionLabel, runDetail, runKindLabel } from '../../runlog-meta.ts';
+import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import {
-  durationText, filterLog, judgedLine, LOG_FILTERS, logFooter, logRows, tokensText, type LogFilter, type LogResult, type LogRow, type LogTotals,
+  durationText, filterLog, judgedLine, LOG_FILTERS, logFooter, logRows, rowDuration, tokensText, type LogFilter, type LogResult, type LogRow, type LogTotals,
 } from '../library.ts';
 import { EmptyState, Notice, Pill, type PillTone } from '../parts.tsx';
 import { inFilter, optionLabel, settleFilter } from '../product-meta.ts';
@@ -13,7 +14,7 @@ import { routeHash, type RunsTab } from '../routes.ts';
 import { maskTarget } from '../tool-row.ts';
 
 type T = ReturnType<typeof useT>;
-interface Loaded { runs: RunRow[]; calls: ToolCallRow[]; jobs: ReviewJob[]; totals: LogTotals; judged: JudgedCounts; judgeOff: boolean }
+interface Loaded { product: ProductFilter; runs: RunRow[]; calls: ToolCallRow[]; jobs: ReviewJob[]; totals: LogTotals; judged: JudgedCounts; judgeOff: boolean }
 
 const FILTER_KEY = { all: 'ui.runs.all', run: 'ui.runs.run', tool: 'ui.runs.tool', review: 'ui.runs.review' } as const satisfies Record<LogFilter, string>;
 const KIND_KEY = { run: 'ui.runs.run', tool: 'ui.runs.tool', review: 'ui.runs.review' } as const;
@@ -82,7 +83,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
     try {
       const [runs, calls, jobs] = await Promise.all([api.runs(200, project), api.toolCalls(project), api.reviews(project)]);
       if (!loads.current.isCurrent(ticket)) return;
-      setData({ runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total }, judged: runs.judged, judgeOff: runs.judgeOff === true });
+      setData({ product, runs: runs.runs, calls: calls.toolCalls, jobs: jobs.jobs, totals: { run: runs.total, tool: calls.total, review: jobs.total }, judged: runs.judged, judgeOff: runs.judgeOff === true });
       setFailed(false);
     } catch {
       if (loads.current.isCurrent(ticket)) setFailed(true);
@@ -103,8 +104,10 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
   }) : []), [data, product, titles, t]);
   const shown = useMemo(() => filterLog(rows, filter), [rows, filter]);
   const today = startOfDay(Date.now());
-  const footer = data ? logFooter(rows, filter, data.totals, today) : null;
-  const judged = data ? judgedLine(data.judged) ?? (data.judgeOff ? { allowed: 0, parked: 0, notRun: 0 } : null) : null;
+  const settled = data !== null && data.product === product;
+  const footer = data && settled ? logFooter(rows, filter, data.totals, today) : null;
+  const judged = data && settled ? judgedLine(data.judged) ?? (data.judgeOff ? { allowed: 0, parked: 0, notRun: 0 } : null) : null;
+  const now = useNow(1000, shown.some(row => row.durationMs === null && row.result === 'running' && row.startedAt !== null));
   const pick = (next: LogFilter) => { setOpen(null); location.hash = routeHash({ view: 'runs', ...(TAB_OF[next] ? { tab: TAB_OF[next] } : {}) }); };
 
   return (
@@ -145,7 +148,7 @@ export function Runs({ tab, revision, conversations, projects }: { tab?: RunsTab
                       <td>{t(KIND_KEY[row.kind])}</td>
                       <td className="bt-table__what" title={row.what}>{row.what}</td>
                       <td>{row.model ?? '—'}</td>
-                      <td className="bt-table__num">{durationText(row.durationMs)}</td>
+                      <td className="bt-table__num">{durationText(rowDuration(row, now))}</td>
                       <td className="bt-table__num">{tokensText(row.tokens)}</td>
                       <td><Pill tone={RESULT_TONE[row.result]}>{t(RESULT_KEY[row.result])}</Pill></td>
                     </tr>

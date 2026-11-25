@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type Probe, type Profile } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { setupModelConfig } from '../onboarding.ts';
+import { dropListed, keyEnvOf, plannedProviderId, setupModelConfig } from '../onboarding.ts';
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
-import { deepEqual } from '../settings/merge.ts';
+import { applyEdits, deepEqual, diffConfig } from '../settings/merge.ts';
+import type { Config } from '../settings/model.ts';
 import type { AgentState } from './agent-state.ts';
 import {
-  agentInput, canContinue, connectProblem, emptyConnect, escapeAction, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, OPENAI_URL, PROVIDERS, REACHABLE, styleInput, STYLES,
-  type ConnectForm, type ProviderChoice, type StyleId,
+  agentInput, canContinue, connectProblem, emptyConnect, escapeAction, listPlan, modelFormOf, nameInput, ONBOARD_STEPS, PROVIDERS, REACHABLE, styleInput, STYLES,
+  type ConnectForm, type StyleId,
 } from './onboarding-steps.ts';
 import { Avatar, Button, Pill } from './parts.tsx';
 import { Widen } from './settings/controls.tsx';
@@ -25,13 +26,6 @@ const STYLE_TEXT = {
   calm: ['ui.ob.style.calm', 'ui.ob.style.calm.example'], friendly: ['ui.ob.style.friendly', 'ui.ob.style.friendly.example'],
   direct: ['ui.ob.style.direct', 'ui.ob.style.direct.example'], none: ['ui.ob.style.none', 'ui.ob.style.none.example'],
 } as const;
-
-function existingProvider(config: Json, choice: ProviderChoice): Json | undefined {
-  const providers = (config.providers ?? []) as Json[];
-  if (choice === 'anthropic') return providers.find(p => p.kind === 'anthropic');
-  if (choice === 'openai') return providers.find(p => p.kind === 'openai_compatible' && typeof p.baseUrl === 'string' && p.baseUrl.startsWith(OPENAI_URL));
-  return undefined;
-}
 
 export interface OnboardingProps { profile: Profile | null; replay: boolean; start: number; onProfile: () => void; onDone: () => void; onSkip: () => void }
 
@@ -56,6 +50,28 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const listed = useRef(new Set<string>());
+  const keyed = useRef(new Set<string>());
+
+  async function saveTidy(latest: Config, next: Config) {
+    if (deepEqual(next, latest)) return;
+    const edits = diffConfig(latest, next);
+    const merged = async (): Promise<Config> => {
+      const { config, conflicts } = applyEdits((await api.settings()).config, edits);
+      if (conflicts.length > 0) throw new Error('settings changed elsewhere');
+      return config;
+    };
+    let target = await merged();
+    const gone = (latest.providers as Json[]).filter(p => !(target.providers as Json[]).some(q => q.id === p.id));
+    const stillRead = (p: Json): boolean => { const env = keyEnvOf(p); return env !== undefined && (target.providers as Json[]).some(q => keyEnvOf(q) === env); };
+    const owed = gone.filter(p => keyed.current.has(p.id) && !stillRead(p));
+    if (owed.length > 0) {
+      for (const p of owed) await api.deleteProviderKey(p.id).catch(() => undefined);
+      target = await merged();
+    }
+    await api.saveSettings(target);
+    for (const p of gone) { listed.current.delete(p.id); keyed.current.delete(p.id); }
+  }
 
   useEffect(() => { box.current?.querySelector<HTMLElement>('.bt-onboard__step.is-current input, .bt-onboard__step.is-current button, [data-next]')?.focus(); }, [index]);
   useEffect(() => {
@@ -63,14 +79,19 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     let live = true;
     void Promise.all([api.settings(), api.models()]).then(([s, m]) => {
       if (!live) return;
-      const provider = existingProvider(s.config, form.provider);
-      if (provider) api.providerKey(provider.id as string).then(k => { if (live) setKeySet(k.set); }).catch(() => undefined);
+      const planned = form.provider === 'custom' ? null : plannedProviderId(s.config, modelFormOf(form), modelId);
+      if (planned) api.providerKey(planned).then(k => { if (live) setKeySet(k.set); }).catch(() => undefined);
       else setKeySet(false);
       const ok = m.models.find(x => x.probe && REACHABLE.has(x.probe.status));
       setExisting(ok ? (ok.label || ok.id) : null);
     }).catch(() => undefined);
     return () => { live = false; };
   }, [step, form.provider]);
+
+  useEffect(() => () => {
+    if (listed.current.size === 0) return;
+    void api.settings().then(s => saveTidy(s.config, dropListed(s.config, listed.current, null))).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const onEscape = (e: globalThis.KeyboardEvent) => {
@@ -116,10 +137,11 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
       const provider = (built.config.providers as Json[]).find(p => p.id === providerId);
       const items = [...accessWidening(latest, built.config), ...(form.key.trim() && provider ? keyEntryAccess(provider) : [])];
       if (items.length > 0 && accessKey(items) !== confirmed) { setWiden({ items, key: accessKey(items) }); return; }
-      if (!deepEqual(built.config, latest)) await api.saveSettings(built.config);
+      await saveTidy(latest, dropListed(built.config, listed.current, providerId));
       setModelId(built.modelId);
       if (form.key.trim()) {
         await api.setProviderKey(providerId, form.key.trim());
+        keyed.current.add(providerId);
         setForm(old => ({ ...old, key: '' }));
         setKeySet(true);
       }
@@ -136,12 +158,14 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     setBusy(true); setError(null); setWiden(null); setListNote(null);
     try {
       const latest = (await api.settings()).config;
-      const built = listPlan(latest, form);
+      const built = listPlan(latest, form, modelId);
       const items = built.items;
       if (items.length > 0 && accessKey(items) !== confirmed) { setWiden({ items, key: accessKey(items), list: true }); return; }
-      if (!deepEqual(built.config, latest)) await api.saveSettings(built.config);
+      await saveTidy(latest, dropListed(built.config, listed.current, built.providerId));
+      if (!(latest.providers as Json[]).some(p => p.id === built.providerId)) listed.current.add(built.providerId);
       if (form.key.trim()) {
         await api.setProviderKey(built.providerId, form.key.trim());
+        keyed.current.add(built.providerId);
         setForm(old => ({ ...old, key: '' }));
         setKeySet(true);
       }
