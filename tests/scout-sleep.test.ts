@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
-import type { ModelRequest } from '../src/providers/types.ts';
+import { ProviderError, type ModelRequest } from '../src/providers/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { ledgerPath } from '../src/scout/ledger.ts';
@@ -19,7 +19,7 @@ import type { Task } from '../src/tasks/store.ts';
 import { Worker } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { isScoutState } from '../web/src/ui/scout.ts';
-import { FakeAdapter, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, fail, reply, type Script, tempDir, testConfig } from './helpers.ts';
 import { MIN, toolCall } from './helpers/task-app.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -795,4 +795,108 @@ test('Think now: it waits while a chat reply holds the scout\'s own provider, ev
   await s.app.engine.wait(sent.runId);
   s.adapter().scripts.push(reply('Thought.'));
   assert.equal(await s.app.worker.tick(), 'ran', 'once the reply is finished, the asked scout runs');
+});
+
+// ── K1・K2: 考え直しは時刻でなく経過の行の id で比べる。失敗した考え直しは、次の回でやり直す ──
+
+test('scout sleep: a Reject recorded while the clock was ahead does not keep the scout rethinking after the clock goes back (K1: compared by row id, not by time)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const open = propose(s, 'Add tests');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+  // 時計が 1 時間進んでいるあいだに持ち主が Reject を押し、そのあと時計が戻った
+  s.clock.now += 60 * MIN;
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not now, the shop has no users yet');
+  s.clock.now -= 60 * MIN;
+  s.adapter().scripts.push(reply('Thought again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'the Reject gives one run');
+  assert.match(prompts(s).at(-1)!, /the shop has no users yet/u);
+  s.adapter().scripts.push(reply('one too many'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle', 'the same Reject does not give a second run');
+  assert.equal(s.scoutRows().length, 2);
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+  s.later(60);
+  assert.equal(await s.app.worker.tick(), 'idle', 'still asleep once the clock catches up with the Reject');
+  assert.equal(s.scoutRows().length, 2);
+});
+
+test('scout sleep: state saved before the row-id marks existed (no seenEvent, no event) still rethinks once on a Reject, by time (K1 fallback)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const open = propose(s, 'Add tests');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  const stateKey = `scout:product:${s.projectId}`;
+  const sleepKey = `scout:sleep:${s.projectId}`;
+  const state = s.app.kv.getJson<Record<string, unknown>>(stateKey)!;
+  const sleep = s.app.kv.getJson<Record<string, unknown>>(sleepKey)!;
+  assert.equal(typeof state.seenEvent, 'number', 'the new state carries the mark');
+  assert.equal(typeof sleep.event, 'number', 'the new sleep carries the mark');
+  delete state.seenEvent;
+  delete sleep.event;
+  s.app.kv.setJson(stateKey, state);
+  s.app.kv.setJson(sleepKey, sleep);
+  s.later();
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not this one');
+  s.adapter().scripts.push(reply('Thought again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'the Reject gives one run');
+  assert.match(prompts(s).at(-1)!, /Not this one/u);
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle', 'then it sleeps again');
+  assert.equal(s.scoutRows().length, 2);
+});
+
+test('scout sleep: when the run a Reject gave ends in a failure, the next patrol rethinks again instead of sleeping again (K2)', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(...checkBoth);
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const open = propose(s, 'Add tests');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not this one');
+  s.adapter().scripts.push(fail(new ProviderError('provider_error', 'broken', { retryable: false })));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.scoutRows().at(-1)!.status, 'failed', 'the run the Reject gave failed');
+  s.adapter().scripts.push(reply('Thought again.'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'nobody has thought over the Reject yet: it runs again instead of sleeping');
+  assert.equal(s.scoutRows().at(-1)!.status, 'done');
+  assert.match(prompts(s).at(-1)!, /Not this one/u);
+  s.adapter().scripts.push(reply('one too many'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle', 'once a run that finished has read the Reject, it sleeps again');
+  assert.equal(s.scoutRows().length, 3);
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'done');
+});
+
+test('scout sleep: a failed run for a Reject on a product asleep as "not growing" also rethinks again after the wait, and does not count towards "not growing" (K2)', async t => {
+  const s = await setup(t);
+  const open = propose(s, 'Add tests');
+  for (let i = 0; i < 3; i += 1) s.adapter().scripts.push(reply(`nothing ${i}`));
+  for (let i = 0; i < 3; i += 1) { assert.equal(await s.app.worker.tick(), 'ran'); s.later(); }
+  assert.equal(await s.app.worker.tick(), 'idle');
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
+  s.later();
+  s.app.tasks.finish(open.id, 'cancelled', 'Cancelled from the screen', 'user', undefined, 'Not this one');
+  s.adapter().scripts.push(fail(new ProviderError('provider_error', 'broken', { retryable: false })), reply('Thought again.'), reply('one too many'));
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.scoutRows().at(-1)!.status, 'failed');
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'ran', 'it rethinks again after the wait');
+  assert.equal(s.scoutRows().at(-1)!.status, 'done');
+  assert.match(prompts(s).at(-1)!, /Not this one/u);
+  s.later();
+  assert.equal(await s.app.worker.tick(), 'idle', 'after the Reject has been read it sleeps as stuck again');
+  assert.equal(s.scoutRows().length, 5);
+  assert.equal(readSleep(s.app.kv, s.projectId)?.reason, 'stuck');
 });

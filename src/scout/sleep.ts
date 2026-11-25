@@ -7,7 +7,8 @@ export type SleepReason = 'done' | 'deepened' | 'stuck';
 
 export interface Marks { head: string | null; plan: string; kanban: string; tree: string }
 
-export interface ScoutSleep extends Marks { reason: SleepReason; at: number }
+// event: 休んだときの task_events の一番大きい id（持ち主の Reject を時計でなく行の id で比べる。前の版で保存した休みには無い）
+export interface ScoutSleep extends Marks { reason: SleepReason; at: number; event?: number }
 
 export const SCOUT_FLAT_RUNS = 3;
 
@@ -21,6 +22,7 @@ export function readSleep(kv: KV, projectId: string): ScoutSleep | undefined {
   return {
     reason: raw.reason as SleepReason, at: typeof raw.at === 'number' ? raw.at : 0,
     head: typeof raw.head === 'string' ? raw.head : null, plan: typeof raw.plan === 'string' ? raw.plan : '', kanban: typeof raw.kanban === 'string' ? raw.kanban : '', tree: typeof raw.tree === 'string' ? raw.tree : '',
+    ...(typeof raw.event === 'number' ? { event: raw.event } : {}),
   };
 }
 
@@ -36,10 +38,18 @@ export function kanbanMark(db: DatabaseSync, projectId: string): string {
   return digest(rows.map(row => `${row.id}:${row.status}:${row.c}`));
 }
 
-// 持ち主が since より後に提案を Reject したか（Q-79-1: 休んでいても 1 回考え直す。理由は次の材料に入る）
-export function ownerRejectedSince(db: DatabaseSync, projectId: string, since: number): boolean {
+// いまの task_events の一番大きい id（無ければ 0）。持ち主の Reject を「この id より後か」で比べるための印（時計が戻っても狂わない）
+export function lastEventId(db: DatabaseSync): number {
+  return (db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM task_events').get() as { id: number }).id;
+}
+
+// 持ち主が since より後に提案を Reject したか（Q-79-1: 休んでいても 1 回考え直す。理由は次の材料に入る）。
+// eventId があれば行の id で比べる（時計が戻っても、戻る前に記録した Reject が「いつまでも新しい」ままにならない）。
+// 無ければ（前の版で保存した状態）時刻 at で比べる
+export function ownerRejectedSince(db: DatabaseSync, projectId: string, since: { eventId?: number | undefined; at: number }): boolean {
+  const byId = typeof since.eventId === 'number';
   return db.prepare(`SELECT 1 FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE t.project_id = ? AND t.proposal IS NOT NULL AND t.status = 'cancelled'
-    AND e.kind = 'cancelled' AND e.actor = 'user' AND e.created_at > ? LIMIT 1`).get(projectId, since) !== undefined;
+    AND e.kind = 'cancelled' AND e.actor = 'user' AND ${byId ? 'e.id' : 'e.created_at'} > ? LIMIT 1`).get(projectId, byId ? since.eventId! : since.at) !== undefined;
 }
 
 // 計画書の印: その製品の計画書（会話ごと）の控えのハッシュ。考える実行は計画書を書けない（plan_write は許す一覧の外）

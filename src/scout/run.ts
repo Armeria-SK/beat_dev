@@ -19,7 +19,8 @@ export const CREDIT_ERROR = /credit balance|billing|insufficient_quota/iu;
 const CLOUD_KEY = 'scout:cloud-runs';
 const HOUR = 3_600_000;
 
-export interface ScoutState { last?: number; fails: number; until?: number; note?: string; head?: string; stale?: number; examined?: number; left?: number; flat?: number; deep?: boolean; changedAt?: number }
+// seenEvent: 考える実行がふつうに終わったときの、その実行の始めの task_events の一番大きい id（持ち主の Reject を読んだ印。前の版で保存した状態には無い）
+export interface ScoutState { last?: number; fails: number; until?: number; note?: string; head?: string; stale?: number; examined?: number; left?: number; flat?: number; deep?: boolean; changedAt?: number; seenEvent?: number }
 
 
 const stateKey = (projectId: string): string => `scout:product:${projectId}`;
