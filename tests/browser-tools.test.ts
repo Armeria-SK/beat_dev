@@ -644,14 +644,14 @@ test('browser_find: 無効なら事前の判定で拒否し、タブが無けれ
   assert.deepEqual(browserFind.summarize!({ query: 'Save' }, 'en'), { title: r.text('summary.browser_find'), body: 'Save' });
 });
 
-test('browser_find: 文は頭から 1,000,000 字までを探し、その先を探していないことを知らせる', async t => {
+test('browser_find: 文は頭から 1,000,000 字まで（切れたときは、その 1,024 字手前より前の行まで）を探し、その先を探していないことを知らせる', async t => {
   const r = rig(t);
   r.driver.site('https://example.com/huge', { title: 'Huge', text: `needle head\n${'line\n'.repeat(200_010)}needle tail` });
   await run(browserOpen, { url: 'https://example.com/huge' }, r.ctx());
   const started = Date.now();
   const inside = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
   assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
-  assert.deepEqual(inside, [r.text('browser.section_found_text'), 'needle head', 'line', r.text('browser.find_text_limited', { chars: 12 + 5 * Math.floor((FIND_READ_CHARS - 12) / 5) })]);
+  assert.deepEqual(inside, [r.text('browser.section_found_text'), 'needle head', 'line', r.text('browser.find_text_limited', { chars: 12 + 5 * Math.floor((FIND_READ_CHARS - 1024 - 12) / 5) })]);
 });
 
 test('browser_find: 移動のあとの最初の読みが検索だけのとき、次に押した結果は差分でなく表の形で返る（変わっていない要素を「増えた」と言わない）。読んだあとのページでは差分のまま', async t => {
@@ -689,7 +689,7 @@ test('browser_find: 長い行は、比べる形で長さが変わる文字が前
   assert.equal(context.lines[0], `${'y'.repeat(300)}…`, '一致の無い前後の行は頭から');
 });
 
-test('browser_find: 一致はあるが収まらないときは「一致なし」と言わない。改行の無い長い文も、上限の手前まで探す', async t => {
+test('browser_find: 一致はあるが収まらないときは「一致なし」と言わない。上限を超える改行の無い文は探さず、「一致なし」とも言わない', async t => {
   const r = rig(t);
   r.driver.site('https://example.com/tight', { title: 'T', text: 't', ...buttons(['Save one', 'Save two']) });
   await run(browserOpen, { url: 'https://example.com/tight' }, r.ctx());
@@ -698,10 +698,7 @@ test('browser_find: 一致はあるが収まらないときは「一致なし」
   r.driver.site('https://example.com/flat', { title: 'F', text: `needle ${'word '.repeat(200_100)}` });
   await run(browserOpen, { url: 'https://example.com/flat', tab: 't1' }, r.ctx());
   const flat = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
-  assert.equal(flat.length, 3, flat.join('\n').slice(0, 300));
-  assert.ok(flat[1]!.startsWith('needle word word'), flat[1]!.slice(0, 40));
-  const searched = Number(/first (\d+) characters/u.exec(flat[2]!)?.[1]);
-  assert.ok(searched > FIND_READ_CHARS - 2000 && searched < FIND_READ_CHARS, flat[2]);
+  assert.deepEqual(flat, [r.text('browser.section_found_text'), r.text('browser.find_text_limited', { chars: 0 })]);
   r.driver.site('https://example.com/solid', { title: 'S', text: 'x'.repeat(FIND_READ_CHARS + 100) });
   await run(browserOpen, { url: 'https://example.com/solid', tab: 't1' }, r.ctx());
   const solid = inFrame((await run(browserFind, { query: 'needle', where: 'text' }, r.ctx())).content);
@@ -716,4 +713,38 @@ test('browser_find: 鍵の形でない、一覧にだけある秘密も、伏せ
   assert.deepEqual(inFrame(probe.content), [r.text('browser.section_found_elements'), r.text('browser.find_no_elements'), r.text('browser.section_found_text'), r.text('browser.find_no_text')]);
   const seen = await run(browserFind, { query: 'note' }, r.ctx());
   assert.ok(seen.content.includes('note [REDACTED] end') && !seen.content.includes(PLAIN), seen.content);
+});
+
+test('browser_find: 読む上限で切れた文は、秘密の途中で切らない（改行の無い文は探さない。行のある文は、分けて伏せても同じになる位置まで戻る）', async t => {
+  const r = rig(t);
+  // 改行の無い文: 上限の 1,024 字手前が、秘密の言葉のあいだに来る
+  const at = FIND_READ_CHARS - 1024 - 'zanzibar plain '.length;
+  const flat = `${'x '.repeat(Math.floor(at / 2)).padStart(at, 'y')}${PLAIN} ${'z '.repeat(2100)}`;
+  assert.ok(flat.length >= FIND_READ_CHARS + 3000 && !flat.includes('\n'));
+  r.driver.site('https://example.com/flat-secret', { title: 'F', text: flat });
+  await run(browserOpen, { url: 'https://example.com/flat-secret' }, r.ctx());
+  for (const query of ['zanzibar', 'plain']) {
+    const out = await run(browserFind, { query, where: 'text' }, r.ctx());
+    assert.ok(!/zanzibar|plain|value 42/u.test(out.content), `${query}: ${out.content.slice(-300)}`);
+    assert.deepEqual(inFrame(out.content), [r.text('browser.section_found_text'), r.text('browser.find_text_limited', { chars: 0 })]);
+  }
+  // 行のある文: 秘密が 2 行にまたがり、読んだ範囲の最後の改行がそのあいだにある
+  const lined = `${'line\n'.repeat(198_000)}note zanzibar plain\nvalue 42 ${'z'.repeat(20_000)}`;
+  r.driver.site('https://example.com/lined-secret', { title: 'L', text: lined });
+  await run(browserOpen, { url: 'https://example.com/lined-secret', tab: 't1' }, r.ctx());
+  for (const query of ['zanzibar', 'note']) {
+    const out = await run(browserFind, { query, where: 'text' }, r.ctx());
+    assert.ok(!/zanzibar|plain|value 42/u.test(out.content), `${query}: ${out.content.slice(-300)}`);
+    assert.match(out.content, /Only the first \d+ characters/u);
+  }
+});
+
+test('browser_find: 長い行が何か所も一致しても、行を切る手間は行ごとに 1 回', () => {
+  const rows = Array.from({ length: 10 }, (_, i) => `${'ａ'.repeat(98_000)} needle${i}`).join('\n');
+  const started = Date.now();
+  const found = findText(rows, 'needle', 10, 150, () => true);
+  const took = Date.now() - started;
+  assert.equal(found.places, 10);
+  assert.ok(found.lines.every(line => line.includes('needle')));
+  assert.ok(took < 1500, `${took} ms`);
 });

@@ -400,12 +400,19 @@ export function findText(text: string, query: string, maxPlaces: number, lineCha
   const rows = text.split(/\r?\n/u).map(row => row.trim()).filter(row => row !== '');
   const hits = new Set<number>();
   if (needle !== '') rows.forEach((row, i) => { if (foldText(row).includes(needle)) hits.add(i); });
+  // 行を切るのは行ごとに 1 回（長い行では手間がかかる）
+  const clipped = new Map<number, string>();
+  const clip = (i: number): string => {
+    let line = clipped.get(i);
+    if (line === undefined) { line = clipLine(rows[i]!, hits.has(i) ? needle : undefined, lineChars); clipped.set(i, line); }
+    return line;
+  };
   const render = (kept: ReadonlySet<number>): string[] => {
     const lines: string[] = [];
     let last: number | undefined;
     for (const i of [...kept].sort((a, b) => a - b)) {
       if (last !== undefined && i !== last + 1) lines.push('…');
-      lines.push(clipLine(rows[i]!, hits.has(i) ? needle : undefined, lineChars));
+      lines.push(clip(i));
       last = i;
     }
     return lines;
