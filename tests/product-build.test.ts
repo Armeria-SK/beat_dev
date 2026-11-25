@@ -131,10 +131,11 @@ test('3-2-s 要件の聞き取りの文: Windows の改行（CRLF）のファイ
 });
 
 // self-fix S5: 要件の聞き取りの文（requirements*.md）は線いっぱいなので、計画の大きさの決まりは道具 plan_write の説明に置く
-test('self-fix S5 計画の大きさ: plan_write の説明が、件数と時間・量の見込みを言わせ、大きいとき（10 件より多い・「全部」）は ask_owner で分け方を聞いて最初の 1 回分だけ計画させる。説明は短い英語のまま、計画モードで AI に届く', async t => {
-  const rules = [/count the items/iu, /rough time and volume/iu, /over 10 items/iu, /said all of it/iu, /ask with ask_owner how to split it/iu, /first batch/iu];
+test('self-fix S5 計画の大きさ: plan_write の説明が、書く前に件数を持ち主に言わせ、大きいとき（10 件より多い・「全部」）は分け方を聞いて最初の 1 回分をすすめさせる。時間・量の見込みは書かせず、ask_owner の名前も出さない。説明は短い英語のまま、計画モードで AI に届く', async t => {
+  const rules = [/before writing, tell the owner how many items/iu, /if over 10, or the owner said all of it/iu, /ask the owner how to split it/iu, /recommending the first batch/iu];
   for (const rule of rules) assert.match(planWrite.description, rule);
-  assert.ok(estimateTextTokens(planWrite.description) <= 190, String(estimateTextTokens(planWrite.description)));
+  assert.doesNotMatch(planWrite.description, /time and volume|ask_owner|only the first/iu, '見込みの数字は書かせない（根拠のデータが無い）。道具が止められていても読める。最初の 1 回分は「すすめる」だけで、決めつけない');
+  assert.ok(estimateTextTokens(planWrite.description) <= 170, String(estimateTextTokens(planWrite.description)));
   assert.doesNotMatch(planWrite.description, /[^\x09\x0A\x20-\x7E]/u, 'モデル向けの文は ASCII の英語');
   const s = await setup(t);
   const shop = await s.product('shop');

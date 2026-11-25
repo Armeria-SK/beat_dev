@@ -10,7 +10,7 @@ const fail = (error: unknown, ctx: ToolContext): ToolOutput =>
 
 export const planWrite: ToolDef<{ content: string; language?: string }> = {
   name: 'plan_write',
-  description: 'Write the plan of this conversation for this product (Markdown; it replaces the whole plan; other conversations keep their own plans). Write it in the owner-facing documents language (if none is set, the language the owner writes in). When you quote the owner, copy their words exactly; never translate or paraphrase them. The owner reads and edits the plan in the Plan pane. Pass its language tag (ja, en, zh...) the first time. Count the items the work covers and state the count with a rough time and volume in the plan. If it is large (over 10 items, or the owner said all of it), first ask with ask_owner how to split it and plan only the first batch.',
+  description: 'Write the plan of this conversation for this product (Markdown; it replaces the whole plan; other conversations keep their own plans). Write it in the owner-facing documents language (if none is set, the language the owner writes in). When you quote the owner, copy their words exactly; never translate or paraphrase them. The owner reads and edits the plan in the Plan pane. Pass its language tag (ja, en, zh...) the first time. Before writing, tell the owner how many items the work covers. If over 10, or the owner said all of it, ask the owner how to split it, recommending the first batch.',
   input: Type.Object({ content: Type.String({ minLength: 1 }), language: Type.Optional(Type.String()) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat'],
