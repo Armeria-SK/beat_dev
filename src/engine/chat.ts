@@ -52,7 +52,7 @@ import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_T
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
-import { extractToolCalls, looksLikeTextToolCall, sensitiveArgValues, streamEnd } from './toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall, streamEnd } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, ToolSpec, Usage } from './types.ts';
 import { estimateMessageTokens, estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
@@ -1691,8 +1691,6 @@ export class ChatEngine {
             if (!p.flags.includes('text_tool_calls')) p.flags.push('text_tool_calls');
           }
         }
-        // 呼び出しとして取り除かれなかった本文（繰り返した呼び出し・壊れた呼び出し・知らない道具・あとの説明）に、呼び出しの秘密の引数（入れた暗証番号など）と同じ値が残っていたら、保存の前に伏せる
-        if (toolCalls.length) text = redactExact(text, sensitiveArgValues(toolCalls), false, true);
         // 送り返した考える部分の量は見積もりでしかない（API の数え方と合うとは限らない）ので、その呼び出しでは切り捨ての疑いも補正の学習もしない
         if (!replay) this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
         if (effort && !p.flags.includes(`effort:${effort}`)) p.flags.push(`effort:${effort}`);

@@ -5,7 +5,7 @@ import { KV } from '../db/kv.ts';
 import type { Task, TaskEvent } from '../tasks/store.ts';
 import { estimateTextTokens, prefixLength } from '../engine/tokens.ts';
 import { prefix, type Memory } from './store.ts';
-import { redactJsonValue, redactSecrets } from '../shared/redaction.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import type { ProductMemory } from './files.ts';
 import { ATTACHMENT_OPEN, ATTACHMENT_PLACEHOLDER, LEGACY_ATTACHMENT_FRAMES, ownWords } from '../uploads/store.ts';
 import { storeText } from '../shared/messages/stores.ts';
@@ -295,7 +295,7 @@ const indented = (text: string): string => text.replace(LINE_BREAK, '\n  ');
 function calledText(m: WindowMessage, language: Language, secrets: readonly string[]): string {
   const calls = m.role === 'assistant' ? m.message.toolCalls ?? [] : [];
   if (!calls.length) return '';
-  return REVIEW_TEXT[language].called(calls.map(c => `${oneLine(c.name)} ${oneLine(clip(redactSecrets(JSON.stringify(redactJsonValue(c.arguments ?? {})), secrets), 200, language))}`).join('; '));
+  return REVIEW_TEXT[language].called(calls.map(c => `${oneLine(c.name)} ${oneLine(clip(redactSecrets(JSON.stringify(c.arguments ?? {}), secrets), 200, language))}`).join('; '));
 }
 
 function transcriptLine(m: WindowMessage, language: Language, kind: ReviewKind, secrets: readonly string[]): string | undefined {

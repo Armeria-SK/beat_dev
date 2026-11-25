@@ -249,37 +249,9 @@ function isBase64Url(code: number): boolean { return isWord(code) || code === 45
 
 const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/gu;
 
-// URL に入った値の符号化は、ブラウザ・フォームの送信・PHP・Python・ページの JS で違う。記号などの 1 文字ずつが、そのままか %XX か JSON の \uXXXX（16 進は大文字でも小文字でも。/ は \/ も）で書かれ、
-// 空白が %20・+・JSON の \u0020 などで書かれても、同じ値として伏せる。英数字と - _ . は、どの符号化もそのまま書くので、そのまま比べる
-const PLAIN_CHAR = /^[A-Za-z0-9._-]$/u;
-const hexDigit = (digit: string): string => (/[a-f]/iu.test(digit) ? `[${digit.toUpperCase()}${digit.toLowerCase()}]` : digit);
-const hexUnit = (unit: number): string => [...unit.toString(16).padStart(4, '0')].map(hexDigit).join('');
-function tolerantChar(char: string): string {
-  const literal = char.replace(REGEX_SPECIAL, '\\$&');
-  if (PLAIN_CHAR.test(char)) return literal;
-  const encoded = [...new TextEncoder().encode(char)].map(byte => `%${[...byte.toString(16).padStart(2, '0')].map(hexDigit).join('')}`).join('');
-  const escaped = Array.from({ length: char.length }, (_, i) => `\\\\u${hexUnit(char.charCodeAt(i))}`).join('') + (char === '/' ? '|\\\\/' : '');
-  return `(?:${literal}|${encoded}|${escaped})`;
-}
-const SPACE_RUN = '(?:\\s|\\+|%20|%09|%0[Aa]|%0[Dd]|\\\\u0020|\\\\u0009|\\\\u000[Aa]|\\\\u000[Dd])+';
-
-// 鍵ごとの組み立て済みの正規表現。呼ぶたびに作り直すと、長い値を何本も持つとき（入れた値の覚えは 1 会話 16 本まで）1 回の出力ごとに数秒かかる。古いものから捨てる
-const PATTERNS = new Map<string, RegExp>();
-const PATTERNS_MAX = 1024;
-function exactPattern(form: string): RegExp {
-  const known = PATTERNS.get(form);
-  if (known !== undefined) return known;
-  const body = form.split(/\s+/u).map(part => [...part].map(tolerantChar).join('')).join(SPACE_RUN);
-  const made = new RegExp(body, 'gu');
-  if (PATTERNS.size >= PATTERNS_MAX) PATTERNS.delete(PATTERNS.keys().next().value as string);
-  PATTERNS.set(form, made);
-  return made;
-}
-
 // 鍵そのものを伏せる。鍵の途中の空白は、2 つ以上・改行・タブなど並びが変わっていても同じ鍵として伏せる（相手が空白をそろえて返しても残さない）。
-// JSON の文字列の中の書き方（\ と " のエスケープ）と、URL に入った書き方（tolerantChar）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）。
-// literal のときは書いてある文字そのままだけを伏せる（他の段より前に走らせても、他の段が値の終わりを探すのに使う文字を食わない）。符号化した写しを伏せる側は最後に走らせる
-export function redactExact(input: string, exactSecrets: readonly string[], keepLines = false, literal = false): string {
+// JSON の文字列の中の書き方（\ と " のエスケープ）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）
+export function redactExact(input: string, exactSecrets: readonly string[], keepLines = false): string {
   const forms = new Set<string>();
   for (const secret of exactSecrets) {
     if (secret.trim().length === 0) continue;
@@ -288,15 +260,15 @@ export function redactExact(input: string, exactSecrets: readonly string[], keep
   }
   let redacted = input;
   for (const form of [...forms].sort((a, b) => b.length - a.length)) {
-    const pattern = literal ? new RegExp(form.split(/\s+/u).map(part => part.replace(REGEX_SPECIAL, '\\$&')).join('\\s+'), 'gu') : exactPattern(form);
-    redacted = redacted.replace(pattern, matched => masked(matched, keepLines));
+    const pattern = form.split(/\s+/u).map(part => part.replace(REGEX_SPECIAL, '\\$&')).join('\\s+');
+    redacted = redacted.replace(new RegExp(pattern, 'gu'), matched => masked(matched, keepLines));
   }
   return redacted;
 }
 
 export function redactSecrets(input: string, exactSecrets: readonly string[] = [], options: { keepLines?: boolean } = {}): string {
   const keepLines = options.keepLines === true;
-  let redacted = redactExact(input, exactSecrets, keepLines, true);
+  let redacted = redactExact(input, exactSecrets, keepLines);
   redacted = sanitizeShapes(redacted, keepLines).text;
   redacted = redacted.replace(URL_USERINFO_PASSWORD, '$1[REDACTED]@');
   redacted = redacted.replace(URL_USERINFO_TOKEN, '$1[REDACTED]@');
@@ -305,7 +277,7 @@ export function redactSecrets(input: string, exactSecrets: readonly string[] = [
   redacted = redactFlagValues(redactAssignments(redacted));
   redacted = redacted.replace(USER_FLAG, (match, head: string, user: string, password: string) =>
     /^\d+$/u.test(user) && /^\d+$/u.test(password) ? match : `${head}[REDACTED]`);
-  return redactExact(maskGlued(redacted.replace(MYSQL_PASSWORD, '$1[REDACTED]'), keepLines).text.replace(URL_USERINFO_PASSWORD_WIDE, '$1[REDACTED]@'), exactSecrets, keepLines);
+  return maskGlued(redacted.replace(MYSQL_PASSWORD, '$1[REDACTED]'), keepLines).text.replace(URL_USERINFO_PASSWORD_WIDE, '$1[REDACTED]@');
 }
 
 function redactFlagValues(input: string): string {

@@ -12,15 +12,14 @@ import { resolvePaths } from '../src/paths.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { QuestionStore } from '../src/questions/store.ts';
 import { guardText } from '../src/shared/messages/guard.ts';
-import { redactSecrets } from '../src/shared/redaction.ts';
 import { toolText } from '../src/shared/messages/tools.ts';
 import { TaskStore } from '../src/tasks/store.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
-import { actPreview, browserActCheck, fieldKind } from '../src/tools/browser/checks.ts';
+import { actPreview, fieldKind } from '../src/tools/browser/checks.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
 import { BackgroundJobs } from '../src/tools/shell/background.ts';
 import { scrubEnv } from '../src/tools/shell/runner.ts';
-import { BROWSER_TOOLS, browserAct, browserFind, browserOpen, browserRead, browserType } from '../src/tools/builtin/browser.ts';
+import { BROWSER_TOOLS, browserAct, browserOpen, browserType } from '../src/tools/builtin/browser.ts';
 import { refusedKeysOf } from '../src/tools/hooks/decision-order.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -31,8 +30,8 @@ import { tempDir, testConfig, withLoad, type Script } from './helpers.ts';
 import { FakeBrowserDriver, type FakePage, type FakeSite } from './helpers/fake-browser.ts';
 
 // browser-rethink P7: 暗証番号の欄。beat が自分で起動して、いま動いている開発サーバーのページの password・認証コードの欄にだけ、password の引数で試しの値を入れてよい。
-// カードの欄はどこでも断る。値は道具の行・記録・履歴・結果の文・あとの出力のどこにも出さず、判定役にも Pending にも持ち主のフックにも渡さない（断る）。
-// 試しの値だけを使う（本物の鍵・パスワードは使わない）
+// カードの欄はどこでも断る。値は結果の文・要約・承認の札に出さず、判定役にも Pending にも持ち主のフックにも渡さない（断る）。道具の行・記録・履歴では、password の欄が名前で伏せられる（main の redactJsonValue）。
+// 入れた値そのものは、あとのページの出力・返事の本文などでは伏せない（持ち主の決め: 試しの値だけを使い、自分で起動したローカルの開発サーバーだけに入れる）
 
 const WINDOWS = process.platform === 'win32';
 const LISTED = 'https://example.com/login';
@@ -388,53 +387,6 @@ test('P7: tool.call の知らせ・tool_calls の記録・tool.result・結果�
   assert.ok(!everything(batchHook).includes(PASS) && everything(batchHook).includes('admin'), everything(batchHook));
 });
 
-test('P7: 入れたあとの出力（差分・触れるものの表・本文・探す）に、入れた値が出ない。ページが値を出しても伏せる（タブをまたいでも、会話のあいだ）', async t => {
-  const r = rig(t, own());
-  await r.open(DEV);
-  const typed = await r.call('browser_type', { ref: 'e2', password: PASS, submit: true });
-  assert.equal(typed.output.isError, undefined, typed.output.content);
-  assert.match(typed.output.content, /Admin/u, '押したあとの画面は返っている');
-  assert.ok(typed.output.content.includes('[REDACTED]'), typed.output.content);
-  assert.ok(!typed.output.content.includes(PASS), typed.output.content);
-  for (const mode of ['elements', 'text'] as const) {
-    const read = await browserRead.execute({ mode }, r.ctx);
-    assert.ok(!read.content.includes(PASS), `${mode}: ${read.content}`);
-    assert.ok(read.content.includes('[REDACTED]'), `${mode}: ${read.content}`);
-  }
-  const found = await browserFind.execute({ query: 'Secret echo' } as never, r.ctx);
-  assert.ok(!found.content.includes(PASS), found.content);
-  // 同じ会話の別のタブ・あとのページでも伏せる
-  r.driver.site('https://example.com/other', { title: 'Other', text: `Other ${PASS}`, snapshot: `- link "Mine ${PASS}"`, rows: [{ role: 'link', name: `Mine ${PASS}` }] });
-  const other = await browserOpen.execute({ url: 'https://example.com/other' }, r.ctx);
-  assert.ok(!other.content.includes(PASS), other.content);
-  assert.ok(r.session.secretsFor('c1').includes(PASS));
-  assert.ok(!r.session.secretsFor('c2').includes(PASS), 'ほかの会話では覚えない');
-});
-
-test('P7: browser_act の step で入れたあとの差分・あとの step の出力にも、入れた値が出ない', async t => {
-  const r = rig(t, own());
-  await r.open(DEV);
-  const outcome = await r.call('browser_act', { steps: [{ type: 'e2', password: PASS, submit: true }] });
-  assert.equal(outcome.output.isError, undefined, outcome.output.content);
-  assert.ok(!outcome.output.content.includes(PASS), outcome.output.content);
-  assert.ok(outcome.output.content.includes('[REDACTED]'), outcome.output.content);
-  const read = await browserRead.execute({ mode: 'text' }, r.ctx);
-  assert.ok(!read.content.includes(PASS), read.content);
-});
-
-test('P7: 覚えた値は会話ごと・上限つき（古いものから捨てる）。会話を消すと忘れる。URL の形でも伏せる', async t => {
-  const r = rig(t, own());
-  r.session.rememberTyped('c1', 'a b&c');
-  assert.ok(r.session.secretsFor('c1').includes('a b&c'));
-  assert.equal(redactSecrets('x?q=a%20b%26c&y=a+b%26c', r.session.secretsFor('c1')), 'x?q=[REDACTED]&y=[REDACTED]', 'URL に入った形も');
-  r.session.rememberTyped('c1', '   ');
-  for (let i = 0; i < 40; i += 1) r.session.rememberTyped('c1', `pass-${i}-xxxxxxxx`);
-  const kept = r.session.secretsFor('c1').filter(s => s.startsWith('pass-'));
-  assert.ok(kept.length <= 32 && kept.includes('pass-39-xxxxxxxx') && !kept.includes('pass-0-xxxxxxxx'), `${kept.length}`);
-  await r.session.closeConversation(['c1']);
-  assert.deepEqual(r.session.secretsFor('c1').filter(s => s.startsWith('pass-') || s === 'a b&c'), []);
-});
-
 // ── 欄の種類の見分け ──
 
 test('P7: fieldKind: 暗証番号（type=password・current-password・new-password・one-time-code・名前）とカード（cc-*・名前）を分け、両方に当たればカード', () => {
@@ -497,112 +449,6 @@ test('P7: 会話の AI が password を渡した呼び出し（断られても�
   const stored = s.app.conversations.messages(id).flatMap(m => (m.message.role === 'assistant' ? m.message.toolCalls ?? [] : []));
   assert.ok(stored.some(call => everything(call.arguments).includes(PASS)), '会話には引数をそのまま保存する（モデルに戻す分）');
   assert.ok(!s.logs.some(line => line.includes(PASS)), 'ログにも出ない');
-});
-
-// ── 審査の指摘（P7 の差し戻し）: URL の形・本文のツール呼び出し・欄の URL と題名・承認の札・短い値 ──
-
-// GET のフォームの送り先は、+（空白）と %21（!）の形で値を URL に載せる。名前は伏せる名前の一覧に無い q
-const VALUE = 'Pass/w0rd! x';
-const FORM = 'Pass%2Fw0rd%21+x';
-const AFTER = `${DEV}after?q=${FORM}`;
-const afterLogin = (): FakeSite => {
-  const base = loginSite(undefined);
-  return { ...base, rows: (base.rows ?? []).map(row => (row.name === 'Password' ? { ...row, effect: { navigate: AFTER } } : row)) };
-};
-const afterPage: FakeSite = { title: `Welcome ${VALUE}`, text: 'Welcome', snapshot: ['- heading "Welcome"', `- link "Profile ${VALUE}"`].join('\n'), rows: [{ role: 'link', name: `Profile ${VALUE}` }] };
-
-test('P7: 値の URL の形（フォームの + と %21・大文字小文字の違う 16 進・%20）も伏せる。値を 1 つ覚えれば、どの形でも', async t => {
-  const r = rig(t, own());
-  r.session.rememberTyped('c1', 'Passw0rd! x');
-  const secrets = r.session.secretsFor('c1');
-  const form = new URLSearchParams([['', 'Passw0rd! x']]).toString().slice(1);
-  assert.equal(form, 'Passw0rd%21+x');
-  for (const shown of [form, encodeURIComponent('Passw0rd! x'), 'Passw0rd%21%20x', 'Passw0rd! x']) {
-    const out = redactSecrets(`http://localhost:5173/after?q=${shown}`, secrets);
-    assert.ok(!out.includes('Passw0rd'), `${shown} -> ${out}`);
-  }
-  r.session.rememberTyped('c1', VALUE);
-  for (const shown of [FORM, 'Pass%2fw0rd%21+x', 'Pass%2Fw0rd%21%20x', 'Pass%2fw0rd%21%20x', encodeURIComponent(VALUE)]) {
-    const out = redactSecrets(`http://localhost:5173/after?q=${shown}`, r.session.secretsFor('c1'));
-    assert.ok(!out.includes('w0rd'), `${shown} -> ${out}`);
-  }
-});
-
-test('P7: GET のフォームの送り先 URL に載った値（+ や %21 の形）が、結果の見出し・差分・出来事・記録に出ない', async t => {
-  const r = rig(t, own());
-  r.driver.site(DEV, afterLogin()).site(AFTER, afterPage);
-  await r.open(DEV);
-  const typed = await r.call('browser_type', { ref: 'e2', password: VALUE, submit: true });
-  assert.equal(typed.output.isError, undefined, typed.output.content);
-  assert.match(typed.output.content, /Welcome/u, '送ったあとの画面は返っている');
-  assert.ok(!typed.output.content.includes('w0rd') && !typed.output.content.includes('Pass%2'), typed.output.content);
-  const batch = await r.call('browser_act', { steps: [{ type: 'e2', password: VALUE, submit: true }], then: 'none' });
-  assert.ok(!batch.output.content.includes('w0rd'), batch.output.content);
-  for (const event of r.events.filter(e => e.type === 'tool.result' || e.type === 'tool.call')) assert.ok(!everything(event).includes('w0rd'), everything(event));
-  const rows = r.db.prepare('SELECT input, output_preview FROM tool_calls').all() as Array<{ input: string; output_preview: string }>;
-  for (const row of rows) assert.ok(!row.input.includes('w0rd') && !row.output_preview.includes('w0rd'), everything(row));
-});
-
-test('P7: ブラウザの欄（ミラー）に出す URL と題名も、入れた値を伏せる', async t => {
-  const r = rig(t, own());
-  r.driver.site(DEV, afterLogin()).site(AFTER, afterPage);
-  await r.open(DEV);
-  const typed = await r.call('browser_type', { ref: 'e2', password: VALUE, submit: true });
-  const link = /\b(e\d+)\b[^\n]*link/u.exec(typed.output.content)?.[1];
-  assert.ok(link !== undefined, typed.output.content);
-  await r.call('browser_click', { ref: link });
-  const view = r.session.view('p1', () => ({ attended: true }));
-  assert.ok(view, '欄に出せるタブがある');
-  assert.ok(view.url.startsWith(`${DEV}after`), view.url);
-  assert.ok(view.title.startsWith('Welcome'), view.title);
-  assert.equal(view.action.kind, 'click');
-  assert.ok(view.action.target.startsWith('Profile'), view.action.target);
-  assert.ok(!view.url.includes('w0rd') && !view.title.includes('w0rd') && !view.action.target.includes('w0rd'), everything(view));
-});
-
-test('P7: 質問の記録（断った送信）に書かれる、開いているページの URL も、入れた値を伏せる', async t => {
-  const r = rig(t, own());
-  r.driver.site(DEV, afterLogin()).site(AFTER, afterPage);
-  await r.open(DEV);
-  assert.equal(r.session.tabUrl('c1'), DEV, '入れる前はそのまま（対照）');
-  await r.call('browser_type', { ref: 'e2', password: VALUE, submit: true });
-  const url = r.session.tabUrl('c1');
-  assert.ok(url !== undefined && url.startsWith(`${DEV}after`), url);
-  assert.ok(!url.includes('w0rd'), url);
-});
-
-test('P7: 入れた値を名前・URL に含むページの承認の札（preview）も、値を伏せる。札を出すのは暗証番号でない呼び出しだけ', async t => {
-  const r = rig(t, own());
-  const url = `${LISTED}?q=${PASS}`;
-  r.driver.site(url, { title: 'Shop', text: 'Shop', snapshot: `- button "Send ${PASS}"`, rows: [{ role: 'button', name: `Send ${PASS}`, submits: true }] });
-  await r.open(url);
-  const control = await browserActCheck('click', { ref: 'e1' }, r.ctx);
-  assert.equal(control.decision, 'ask', JSON.stringify(control));
-  assert.ok(everything(control.preview).includes(PASS), '値を覚える前は、そのまま出る（対照）');
-  r.session.rememberTyped('c1', PASS);
-  const check = await browserActCheck('click', { ref: 'e1' }, r.ctx);
-  assert.equal(check.decision, 'ask');
-  assert.ok(check.preview?.[0]?.text.includes('Send'), '札には名前が出る');
-  // 札に出す中身だけ（承認のあとに比べる指紋 bind は札に出ず、中身は beat の中の比べ物なので、ここでは見ない）
-  assert.ok(!everything(check.preview).includes(PASS), everything(check.preview));
-});
-
-test('P7: 4 文字より短い値は、あとの出力の伏せ用に覚えない（1 を入れても e12 のような番号は壊れない）。4 文字以上は伏せる。呼び出しの行は今までどおり伏せる', async t => {
-  const r = rig(t, own());
-  for (const short of ['1', '12', '123', '  12  ']) r.session.rememberTyped('c1', short);
-  assert.deepEqual(r.session.secretsFor('c1'), []);
-  r.session.rememberTyped('c1', '1234');
-  assert.ok(r.session.secretsFor('c1').includes('1234'));
-  const quiet = rig(t, own());
-  await quiet.open(DEV);
-  const typed = await quiet.call('browser_type', { ref: 'e3', password: '1' });
-  assert.equal(typed.output.isError, undefined, typed.output.content);
-  const elements = await browserRead.execute({ mode: 'elements' }, quiet.ctx);
-  assert.match(elements.content, /\be1\b/u, elements.content);
-  assert.match(elements.content, /\be7\b/u, elements.content);
-  assert.ok(!elements.content.includes('[REDACTED]'), elements.content);
-  const called = quiet.events.filter(e => e.type === 'tool.call');
-  assert.ok(called.every(event => event.type === 'tool.call' && event.input.includes('[REDACTED]')), '呼び出しの行の password は 1 文字でも伏せる');
 });
 
 // 本文に書かれたツール呼び出し（<tool_call>）: 引数は、印のあとに来る。印が見えたら、そこから先は画面への知らせにも再接続の写しにも書きかけの履歴にも流さない
@@ -695,107 +541,13 @@ test('P7: 本文のツール呼び出しの形が、引数が先・args・間に
   }
 });
 
-// 拾って動かした呼び出しの外に残る本文（別の書き方で繰り返した呼び出し・壊れた呼び出し・知らない道具の呼び出し・あとの説明）に値が書かれていても、保存される返事（履歴の API）に残さない
-const TAG_CALL = `<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"${PASS}"}}</tool_call>`;
-const FENCED_CALL = `${FENCE}json\n{"name":"browser_type","arguments":{"ref":"e2","password":"${PASS}"}}\n${FENCE}`;
-const KEPT_SHAPES: Array<[string, string]> = [
-  ['the same call repeated in a fence', `ログインします。\n${TAG_CALL}\n念のため同じ呼び出し:\n${FENCED_CALL}`],
-  ['a fenced explanation, then the call', `手順:\n${FENCED_CALL}\n${TAG_CALL}`],
-  ['a second call with broken JSON', `${TAG_CALL}\n<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"${PASS}"</tool_call>`],
-  ['a call naming an unknown tool, then the real one', `<tool_call>{"name":"no_such_tool","arguments":{"password":"${PASS}"}}</tool_call>\n${TAG_CALL}`],
-  ['narration after the call', `${TAG_CALL}\n入力しました（${PASS}）。`],
-];
-
-test('P7: 拾った呼び出しの外に残る本文（繰り返した呼び出し・壊れた呼び出し・知らない道具・あとの説明）に値があっても、保存される返事・履歴の API に残さない。呼び出しは今までどおり拾う', async t => {
-  for (const [name, reply] of KEPT_SHAPES) {
-    const { s, events } = await streamApp(t);
-    const id = uuid(90 + KEPT_SHAPES.findIndex(([known]) => known === name));
-    const probes: string[] = [];
-    s.adapter().scripts = [async function* () {
-      for (let at = 0; at < reply.length; at += 9) {
-        yield { type: 'text', delta: reply.slice(at, at + 9) };
-        probes.push(`${s.app.bus.drafts().map(draft => draft.text).join('|')}\n${await (await s.api(`/api/conversations/${id}/messages`)).text()}`);
-      }
-      yield { type: 'done', stop: 'end_turn' as StopReason };
-    }, finish];
-    s.app.conversations.create({ id, title: '会話' });
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
-    assert.equal(sent.status, 202, JSON.stringify(sent.body));
-    await settled(s.app, sent.body.runId);
-    const head = PASS.slice(0, 6);
-    for (const probe of probes) assert.ok(!probe.includes(head), `${name}: ${probe}`);
-    const saved = s.app.conversations.messages(id);
-    const said = saved.filter(m => m.role === 'assistant').map(m => `${m.text}\n${m.message.role === 'assistant' ? m.message.content : ''}`).join('\n');
-    assert.ok(said.length > 0 && !said.includes(head), `${name}: ${said}`);
-    assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(head), name);
-    assert.ok(!everything(events).includes(head), name);
-    const called = saved.flatMap(m => (m.message.role === 'assistant' ? m.message.toolCalls ?? [] : [])).map(call => call.name);
-    assert.ok(called.includes('browser_type'), `${name}: ${called.join()}`);
-  }
-});
-
-test('P7: password の引数の説明は、目立つ値（8 文字以上・ページに出ている語や数でないもの）を選ぶよう案内する', () => {
-  const description = (browserType.input.properties as Record<string, { description?: string }>).password?.description ?? '';
-  assert.match(description, /8 or more characters/u);
-  assert.match(description, /not a word or number shown on the page/u);
-});
-
-type StepSchema = { properties?: Record<string, { description?: string; maxLength?: number }> };
-const typeStepSchema = (): StepSchema | undefined => {
-  const steps = (browserAct.input.properties as Record<string, { items?: { anyOf?: StepSchema[] } }>).steps;
-  return steps?.items?.anyOf?.find(step => step.properties?.password !== undefined);
-};
-
-test('P7: browser_act の password も、説明文（1 回だけ）で目立つ値を選ぶよう案内する。手ごとの欄の説明には同じ文を重ねない', () => {
-  assert.match(browserAct.description, /give a test value as "password" instead of "text"\. Pick a distinctive value of 8 or more characters that is not a word or number shown on the page/u);
-  assert.equal(browserAct.description.split('Pick a distinctive value').length, 2, '説明文の中でも 1 回だけ');
-  assert.equal(typeStepSchema()?.properties?.password?.description, undefined);
-});
-
-test('P7: password は 128 文字まで（スキーマ 2 か所・実行前の確かめ）。ふつうの text は 2000 文字のまま。長い値は照合の手間を爆発させるので入れさせない', async t => {
-  const typeProps = browserType.input.properties as Record<string, { maxLength?: number }>;
-  assert.equal(typeProps.password?.maxLength, 128, 'browser_type');
-  assert.equal(typeStepSchema()?.properties?.password?.maxLength, 128, 'browser_act の手');
-  assert.equal(typeProps.text?.maxLength, 2000);
-  assert.equal(typeStepSchema()?.properties?.text?.maxLength, 2000);
-  const r = rig(t, own());
-  const { page } = await r.open(DEV);
-  const fits = 'Qw9-'.repeat(32);
-  assert.equal(fits.length, 128);
-  assert.equal((await preCheck(browserType, { ref: 'e2', password: fits }, r.ctx)).decision, 'allow', '128 文字は通る');
-  const over = `${fits}y`;
-  const check = await preCheck(browserType, { ref: 'e2', password: over }, r.ctx);
-  assert.equal(check.decision, 'deny', '129 文字は実行前の確かめで断る（スキーマを通らずに来ても）');
-  assert.ok(check.reasons[0]!.includes(gt('browser.act.too_long', { max: 128 })), check.reasons[0]);
-  const viaAct = await browserActCheck('type', { ref: 'e2', password: over }, r.ctx);
-  assert.equal(viaAct.decision, 'deny', 'browser_act の手の確かめも同じ');
-  assert.ok(viaAct.reasons[0]!.includes(gt('browser.act.too_long', { max: 128 })), viaAct.reasons[0]);
-  const text = await preCheck(browserType, { ref: 'e7', text: 'x'.repeat(2000) }, r.ctx);
-  assert.equal(text.decision, 'allow', 'text は 2000 文字まで');
-  for (const [name, input] of [['browser_type', { ref: 'e2', password: over }], ['browser_act', { steps: [{ type: 'e2', password: over }], then: 'none' }]] as const) {
-    const outcome = await r.call(name, input);
-    assert.equal(outcome.output.isError, true, `${name}: ${outcome.output.content}`);
-    assert.ok(!outcome.output.content.includes(over), name);
-  }
-  assert.deepEqual(page.acts, [], '長い値は欄に入れない');
-});
-
-test('P7: 保存される返事の本文は、書いてあるとおりの値だけ伏せる。符号化した写しの手前の文字は食わない（食うと、あとの要約が別の秘密を伏せられなくなる）', async t => {
-  const { s } = await streamApp(t);
-  const id = uuid(120);
-  const link = 'https://h/?q=1%26x%3Dpas%26token%3DS10%26y%3D2';
-  const reply = `<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"pas&"}}</tool_call> 見た: ${link} 打った値は pas& です`;
-  s.adapter().scripts = [async function* () {
-    yield { type: 'text', delta: reply };
-    yield { type: 'done', stop: 'end_turn' as StopReason };
-  }, finish];
-  s.app.conversations.create({ id, title: '会話' });
-  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
-  assert.equal(sent.status, 202, JSON.stringify(sent.body));
-  await settled(s.app, sent.body.runId);
-  const said = s.app.conversations.messages(id).filter(m => m.role === 'assistant').map(m => `${m.text}\n${m.message.role === 'assistant' ? m.message.content : ''}`).join('\n');
-  assert.ok(said.includes(`見た: ${link} 打った値は [REDACTED] です`), said);
-  assert.ok(!redactSecrets(said).includes('S10'), 'あとの要約（redactSecrets）が S10 を伏せられる');
+test('P7: password の説明は、試しの値だけを入れると案内し、値が隠れるとは約束しない。上限は text と同じ（browser_type・browser_act）', () => {
+  const props = browserType.input.properties as Record<string, { description?: string; maxLength?: number }>;
+  assert.match(props.password?.description ?? '', /throwaway/u);
+  assert.equal(props.password?.maxLength, props.text?.maxLength);
+  assert.match(browserType.description, /throwaway password/u);
+  assert.match(browserAct.description, /throwaway test value as "password"/u);
+  for (const text of [props.password?.description ?? '', browserType.description, browserAct.description]) assert.doesNotMatch(text, /is hidden|will be hidden|distinctive|wherever the value/u);
 });
 
 test('P7: 返事の途中で印が見えたあとは、本文を見直さない（続きがどれだけ長くても、見直しの回数は増えない）', async t => {
@@ -922,31 +674,3 @@ test('P7（Windows の本物のプロセス）: 裏のコマンドが起こし�
   assert.equal(first.page.acts.length, 1, '止めたあとは入れない');
 });
 
-// 符号化の仕方が違う URL（審査・確かめ役が挙げた形）: ブラウザの URL（%20 と ! ( ) * がそのまま・' は %27）、PHP urlencode・Python quote_plus（+ と %21 %28 %29 %2A %27）、ページの JS の足し算（P@ss%20word・a/b%20c!d）
-const URL_CASES: Array<[string, string, string]> = [
-  ["a b!c(d)e*f'g", 'a%20b!c(d)e*f%27g', 'b!c'],
-  ["a b!c(d)e*f'g", 'a+b%21c%28d%29e%2Af%27g', 'b%21c'],
-  ['P@ss word', 'P@ss%20word', 'ss%20word'],
-  ['a/b c!d', 'a/b%20c!d', 'b%20c'],
-];
-
-test('P7: 値の URL の形が、ブラウザ・PHP・Python・ページの JS のどの符号化でも、結果の見出し・欄の URL・質問の URL・記録に出ない', async t => {
-  for (const [value, form, fragment] of URL_CASES) {
-    const url = `${DEV}after?q=${form}`;
-    const r = rig(t, own());
-    const base = loginSite(undefined);
-    r.driver.site(DEV, { ...base, rows: (base.rows ?? []).map(row => (row.name === 'Password' ? { ...row, effect: { navigate: url } } : row)) }).site(url, { title: 'After', text: 'After', snapshot: '- heading "After"', rows: [] });
-    await r.open(DEV);
-    const typed = await r.call('browser_type', { ref: 'e2', password: value, submit: true });
-    assert.equal(typed.output.isError, undefined, typed.output.content);
-    assert.match(typed.output.content, /After/u);
-    assert.ok(!typed.output.content.includes(fragment), `${form}: ${typed.output.content}`);
-    const view = r.session.view('p1', () => ({ attended: true }));
-    assert.ok(view && view.url.startsWith(`${DEV}after`) && !view.url.includes(fragment), `${form}: ${view?.url}`);
-    const asked = r.session.tabUrl('c1');
-    assert.ok(asked !== undefined && !asked.includes(fragment), `${form}: ${asked}`);
-    const rows = r.db.prepare('SELECT input, output_preview FROM tool_calls').all() as Array<{ input: string; output_preview: string }>;
-    for (const row of rows) assert.ok(!row.input.includes(fragment) && !row.output_preview.includes(fragment), `${form}: ${everything(row)}`);
-    for (const event of r.events) assert.ok(!everything(event).includes(fragment), `${form}: ${everything(event)}`);
-  }
-});
