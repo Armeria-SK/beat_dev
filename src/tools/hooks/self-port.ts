@@ -26,6 +26,10 @@ const MAX_DEPTH = 6;
 const WORK_BUDGET = 300_000;
 const AUTHORITY_BUDGET = 20_000;
 const AUTHORITY_POOL = 200_000;
+// 引用符で囲んだ 1 つの語（bash -c "curl 127.0.0.1:4[0-9]…"）には空白・; | & ( ) < > で分かれる語が入っているので、2 回目の確かめはその語ごとにする
+const TOKEN_SPLIT = /[\s;&|()<>]+/u;
+// 文字列をシェルがもう一度読む書き方: eval・source・. （コマンドの位置）・シェルの名前（bash・sh・zsh・dash・ksh・csh・tcsh・fish・busybox・pwsh・powershell・cmd）
+const REPARSE = /(?<![\w.$-])(?:eval|source|(?:ba|z|da|k|c|tc|fi)?sh|busybox|pwsh|powershell|cmd)(?:\.exe)?(?![\w.-])|(?:^|[;&|(\n])\s*\.\s/iu;
 const PREFIX = /^(?:-{1,2}[A-Za-z][\w-]*=)?([a-z][a-z0-9+.-]*:\/{1,3})?/iu;
 const HOST_TEXT = new RegExp(String.raw`^(?:${HOST_CHAR}|[:[\]])*$`, 'u');
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
@@ -246,14 +250,21 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   const literal = literalTarget(plain, ports, hosts);
   if (literal !== undefined) return literal;
   const grouped = new Map<string, boolean>();
+  const jsons = new Set<string>();
   for (const [quoted] of text.matchAll(SHELL_WORD)) {
     const word = quoted.replace(/["'`]/gu, '');
     if (!/[{}[\]]/u.test(word)) continue;
     if (word.includes('://') && /[{}[\]]/u.test(word.replace(BRACKETED, group => (isIP(group.slice(1, -1)) === 6 ? '' : group)))) {
       for (const match of word.matchAll(PORT)) if (ports.has(Number(match[1]))) return word;
     }
-    grouped.set(word, (grouped.get(word) ?? true) && jsonPayload(quoted));
+    const json = jsonPayload(quoted);
+    if (json) jsons.add(quoted);
+    grouped.set(word, (grouped.get(word) ?? true) && json);
   }
+  // 縮めた JSON の本文を 2 回目の確かめから外すのは、その文字列をシェルが読み直さないときだけ。eval・シェルの -c・シェルへの pipe などがあると、
+  // JSON の { } と , が括弧の展開に読まれて "http":"//127.0.0.1":"4777/…" が http://127.0.0.1:4777/… になる。JSON の外の部分に読み直す書き方があれば外さない
+  const reparses = jsons.size > 0 && REPARSE.test([...jsons].reduce((rest, json) => rest.split(json).join(' '), text));
+  const exempt = (word: string): boolean => grouped.get(word) === true && !reparses;
   const budget: Budget = { left: 0, cut: false };
   let spare = WORK_BUDGET;
   let waiting = grouped.size;
@@ -269,15 +280,18 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
       if (literalTarget(form, ports, hosts) !== undefined) return word;
     }
     spare += Math.max(0, budget.left);
-    if (budget.cut && !grouped.get(word)) unfinished.push(word);
+    if (budget.cut && !exempt(word)) unfinished.push(word);
   }
-  // 2 回目の確かめは 1 回目が全部終わってから、専用の仕事量で行う（1 回目の語ごとの仕事量を減らさない）
+  // 2 回目の確かめは 1 回目が全部終わってから、専用の仕事量で行う（1 回目の語ごとの仕事量を減らさない）。引用符の文の中の語（curl 127.0.0.1:…）も、分けた語ごとに確かめる
   let pool = AUTHORITY_POOL;
   for (const word of unfinished) {
-    const own: Budget = { left: Math.min(AUTHORITY_BUDGET, pool), cut: false };
-    pool -= own.left;
-    if (authorityHit(word, ports, hosts, own)) return word;
-    pool += Math.max(0, own.left);
+    for (const token of word.split(TOKEN_SPLIT)) {
+      if (!/[{}[\]]/u.test(token)) continue;
+      const own: Budget = { left: Math.min(AUTHORITY_BUDGET, pool), cut: false };
+      pool -= own.left;
+      if (authorityHit(token, ports, hosts, own)) return word;
+      pool += Math.max(0, own.left);
+    }
   }
   for (const match of plain.matchAll(PORT)) {
     if (!ports.has(Number(match[1]))) continue;

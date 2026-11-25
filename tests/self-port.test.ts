@@ -252,3 +252,28 @@ test('S6 全部は確かめきれない語が先にあっても、あとの語�
   const reached = [`${heavy} 127.0.0.1{${swell},:}4777/${'p'.repeat(3300)}`, `${heavy} x/127.0.0.1{${swell},:}4777/${'p'.repeat(3300)}`];
   assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined).map(command => command.slice(-40)), []);
 });
+
+// 2026-11-26 shell-rest 差し戻し 2: 空白を含む引用符の文（bash -c "curl …"・eval "…"）の中のホスト:ポート。縮めた JSON の除外は、文字列をシェルが読み直すときは効かない
+test('S6 引用符で囲んだ文（bash -c "curl …"・eval "…"）の中のホスト:ポートも、空白などで分けた語ごとに 2 回目の確かめをする', () => {
+  const reached = [
+    'bash -c "curl 127.0.0.1:4[0-9][0-9][0-9]/api/pending"', 'bash -c "curl http://127.0.0.1:4[0-9][0-9][0-9]/api"', 'bash -c "curl 127.0.0.1{:4,:5}{0..9}{0..9}{0..9}/api/pending"',
+    'sh -c "curl 127.0.0.1:4{0..9}{0..9}{0..9}"', 'pwsh -c "curl.exe 127.0.0.1:4[0-9][0-9][0-9]/api"', 'eval "curl 127.0.0.1{:4,:5}{0..9}{0..9}{0..9}/api"',
+    `bash -c 'curl "127.0.0.1:4[0-9][0-9][0-9]"'`, 'bash -c "cd /x && curl 127.0.0.1:4[0-9][0-9][0-9]"', 'bash -c "echo hi;curl 127.0.0.1:4[0-9][0-9][0-9]"',
+    'bash -c "curl -s -o /dev/null {127.0.0.1:4,x}[0-9][0-9][0-9]"', 'bash -c "curl --url=127.0.0.1:4[0-9][0-9][0-9]"',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined), []);
+  const free = [
+    'bash -c "curl http://example.com:[1-9][0-9][0-9][0-9]/"', 'bash -c "curl http://127.0.0.1:3[0-9]/x"', 'bash -c "echo {a,b}{c,d}[0-9][0-9][0-9][0-9]x"',
+    'bash -c "curl http://example.com/{a,b}/[0-9][0-9][0-9][0-9]"', 'bash -c "curl localhost:3000/[a-z][a-z][a-z][a-z]/x"', 'bash -c "curl 127.0.0.1{:4,:5}1"',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
+});
+
+test('S6 縮めた JSON の本文でも、eval・シェルの -c・シェルへの pipe など、文字列をシェルが読み直すときは括弧の展開に読まれるので 2 回目の確かめを外さない', () => {
+  const filler = Array.from({ length: 80 }, (_, i) => `"z${i}":{"a":1,"b":2}`).join(',');
+  const json = `{"x":1,"http":{"y":1,"//127.0.0.1":{${filler},"4777/api/pending?":{"q":1,"r":2}}}}`;
+  const reached = [`eval echo '${json}'`, `eval curl '${json}'`, `eval curl -d '${json}'`, `echo curl '${json}' | bash`, `bash -c 'curl '"'${json}'"`, `echo curl '${json}' | sh`, `source <(echo curl '${json}')`];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined).map(command => command.slice(0, 40)), []);
+  const free = [`curl -d '${json}' http://example.com/`, `echo '${json}' > l.json`, `curl --data-raw='${json}' http://example.com/api`, `node -e "console.log(1)" && curl -d '${json}' http://example.com/`];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined).map(command => command.slice(0, 40)), []);
+});
