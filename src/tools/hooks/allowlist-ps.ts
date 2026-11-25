@@ -318,6 +318,8 @@ export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) 
   if (isCmdExe(name)) { cmdExeArgs(words.slice(1), st, acc, deny); return; }
   if (isConhost(name)) {
     const rest = words.slice(1);
+    const splat = rest.find(w => w.kind === 'splat');
+    if (splat) { deny(splat); return; }
     rest.forEach((w, i) => {
       if (!w.dynamic && /^(?:-|\/[A-Za-z?]$)/u.test(w.text)) return;
       if (!(w.dynamic || isCmdExe(w.text) || cmdTarget(w.text) || cmdTarget(w.text.replace(/[ .]+$/u, '') || w.text))) return;

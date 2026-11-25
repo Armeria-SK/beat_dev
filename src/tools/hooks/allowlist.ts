@@ -136,7 +136,11 @@ function psCdShape(st: Statement, acc: Acc, ctx: MatchCtx): void {
 interface LinkForm { detail: string; operands: Word[]; deep?: Word[] }
 
 const ELEVATORS: ReadonlySet<string> = new Set(['gsudo']);
-const commandBase = (w: Word): string => (w.dynamic || w.kind !== 'plain' ? '' : (w.text.split(/[\\/]/u).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, ''));
+const commandBase = (w: Word): string => (w.dynamic || w.kind !== 'plain' ? '' : (w.text.split(/[\\/]/u).pop() ?? '').replace(/[ .]+$/u, '').toLowerCase().replace(/\.(?:exe|cmd|bat|ps1|com)$/u, ''));
+const longOption = (text: string, name: string, min: number): boolean => {
+  const head = text.split('=', 1)[0]!;
+  return head.length >= min && name.startsWith(head);
+};
 
 function operandsOf(args: readonly Word[]): Word[] {
   const out: Word[] = [];
@@ -145,7 +149,7 @@ function operandsOf(args: readonly Word[]): Word[] {
     if (w.kind !== 'plain') continue;
     if (ended || w.dynamic || !w.text.startsWith('-') || w.text === '-') { out.push(w); continue; }
     if (w.text === '--') { ended = true; continue; }
-    const attached = /^--target-directory=(.+)$/su.exec(w.text) ?? /^-[A-Za-z]*?t(.+)$/su.exec(w.text);
+    const attached = /^--[^=]+=(.+)$/su.exec(w.text) ?? /^-[A-Za-z]*?t(.+)$/su.exec(w.text);
     if (attached) out.push({ ...w, text: attached[1]! });
   }
   return out;
@@ -175,8 +179,8 @@ function linkFormOf(key: string, words: readonly Word[], ps: boolean): LinkForm 
     const flag = args.find(w => !w.dynamic && ((w.text.length >= 3 && '--link'.startsWith(w.text)) || (w.text.length >= 4 && '--symbolic-link'.startsWith(w.text)) || /^-[A-Za-z]*[ls]/u.test(w.text)))?.text;
     if (flag === undefined) return undefined;
     const operands = operandsOf(args);
-    const tree = args.some(w => !w.dynamic && (w.text === '--recursive' || w.text === '--archive' || (/^-[A-Za-z]*[rRa]/u.test(w.text) && !w.text.startsWith('--'))));
-    const targeted = args.some(w => !w.dynamic && (w.text.startsWith('--target-directory') || (/^-[A-Za-z]*t/u.test(w.text) && !w.text.startsWith('--'))));
+    const tree = args.some(w => !w.dynamic && (longOption(w.text, '--recursive', 5) || longOption(w.text, '--archive', 4) || (/^-[A-Za-z]*[rRa]/u.test(w.text) && !w.text.startsWith('--'))));
+    const targeted = args.some(w => !w.dynamic && (longOption(w.text, '--target-directory', 3) || (/^-[A-Za-z]*t/u.test(w.text) && !w.text.startsWith('--'))));
     return { detail: flag, operands, deep: tree ? (targeted ? operands : operands.slice(0, -1)) : [] };
   }
   return undefined;
