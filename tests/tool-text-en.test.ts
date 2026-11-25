@@ -75,12 +75,14 @@ test('ツールの結果と承認の文: 英語で書く', async t => {
   assert.equal(await out('file_edit', { path: 'a.md', old: 'zzz', new: 'y' }), 'The text to replace was not found. Check the current content with file_read');
   assert.equal(await out('file_edit', { path: 'a.md', old: 'o', new: 'y' }), 'The text to replace appears in 2 places. Narrow it to one place with the surrounding text, or set all=true');
   assert.equal(await out('file_edit', { path: 'a.md', old: 'three', new: '3' }), 'Replaced 1 occurrence(s): a.md');
-  assert.equal(await out('file_write', { path: 'a.md', content: 'new', mode: 'append' }), 'Appended: a.md (12 characters; +1 -1 lines)');
+  assert.equal(await out('file_write', { path: 'a.md', content: 'new', mode: 'append' }), 'Appended: a.md (3 characters; +1 -1 lines)');
   assert.equal(await out('file_write', { path: 'a.md', content: 'new' }), 'Overwritten: a.md (3 characters; +1 -3 lines)');
   assert.equal(await out('file_list', {}), `${s.ctx.workspace}/\na.md`);
   mkdirSync(join(s.paths.workspace, 'empty'));
   assert.equal(await out('file_list', { path: 'empty' }), 'empty/ is empty');
   assert.equal(await out('file_write', { path: 'big.txt', content: 'a'.repeat(20_000) }), 'Created: big.txt (20,000 characters; +1 -0 lines)');
+  assert.equal(await out('file_write', { path: 'grow.txt', content: 'a'.repeat(20_000) }), 'Created: grow.txt (20,000 characters; +1 -0 lines)');
+  assert.equal(await out('file_write', { path: 'grow.txt', content: '\nz\n', mode: 'append' }), 'Appended: grow.txt (3 characters; +1 -0 lines)', '追記の報告の文字数は、書き足した分であって、ファイル全体ではない');
   assert.equal((await out('file_read', { path: 'big.txt' })).slice(15_600), '\n\n[Line 1 of 1 is 20,000 characters long, so only its first 15,600 characters were returned]');
   assert.equal(await out('file_write', { path: 'long-lines.txt', content: `${'b'.repeat(20_000)}\nnext` }), 'Created: long-lines.txt (20,005 characters; +2 -0 lines)');
   assert.equal((await out('file_read', { path: 'long-lines.txt' })).slice(15_600), '\n\n[Line 1 of 2 is 20,000 characters long, so only its first 15,600 characters were returned. Read the following lines with offset=2]');
