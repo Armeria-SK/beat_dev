@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
@@ -34,11 +34,14 @@ const shown = (abs: string, ctx: ToolContext) => {
   return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replaceAll('\\', '/') : abs;
 };
 
+// 調べる 1 つぶんの印（フォルダの一覧の Dirent から要るものだけ。path にファイルを渡されたときは、そのファイル 1 つぶんを同じ形で作る）
+type Entry = Pick<Dirent, 'name' | 'isFile' | 'isDirectory' | 'isSymbolicLink'>;
+
 const PathArg = Type.String({ minLength: 1, maxLength: 1024, description: 'A path relative to the working folder, or an absolute path inside an allowed folder' });
 
 export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; case_sensitive?: boolean; max_results?: number }> = {
   name: 'file_search',
-  description: 'Find files inside the allowed folders. name is a wildcard for the file name (e.g. *.md); text is text contained in the file (plain text, not a regular expression). If both are given, files that match both. If path is omitted, the working folder. Secret files are not searched. The insides of node_modules, .git and the like are searched only when path names that folder.',
+  description: 'Find files inside the allowed folders. name is a wildcard for the file or folder name (e.g. *.md); a folder that matches is listed with a trailing / and only when text is not given; text is text contained in the file (plain text, not a regular expression). If both are given, files that match both. path is a folder, or one file to search inside only that file; if path is omitted, the working folder. Secret files are not searched. The insides of node_modules, .git and the like are searched only when path names that folder.',
   input: Type.Object({
     path: Type.Optional(PathArg),
     name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
@@ -53,7 +56,9 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     const { abs } = checkFilePath(input.path ?? '.', 'read', ctx);
     const language = languageOf(ctx.config);
     if (!input.name && !input.text) return { content: toolText(language, 'search.need_query'), isError: true };
-    if (!statSync(abs, { throwIfNoEntry: false })?.isDirectory()) return { content: toolText(language, 'file.no_dir', { path: shown(abs, ctx) }), isError: true };
+    const target = statSync(abs, { throwIfNoEntry: false });
+    if (!target || (!target.isDirectory() && !target.isFile())) return { content: toolText(language, 'file.no_dir', { path: shown(abs, ctx) }), isError: true };
+    const single: Entry | undefined = target.isFile() ? { name: basename(abs), isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false } : undefined;
     const maxResults = input.max_results ?? 50;
     const caseFold = !input.case_sensitive;
     const nameMatches: string[] = [];
@@ -64,13 +69,15 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     let scanned = 0;
     let bytesRead = 0;
     let partial = false;
-    const queue = [abs];
+    const nameOk = (name: string): boolean => !input.name || wildcard(caseFold ? name.toLowerCase() : name, caseFold ? input.name.toLowerCase() : input.name);
+    const queue = [single ? dirname(abs) : abs];
     outer: while (queue.length) {
       if (nameMatches.length + textMatches.length >= maxResults) break;
       const dir = queue.shift()!;
       if (ctx.signal.aborted) break;
-      let items;
-      try { items = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      let items: Entry[];
+      if (single) items = [single];
+      else { try { items = readdirSync(dir, { withFileTypes: true }); } catch { continue; } }
       items.sort((a, b) => a.name.localeCompare(b.name));
       for (const entry of items) {
         if (ctx.signal.aborted) break;
@@ -85,16 +92,16 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
           if (ctx.signal.aborted) break outer;
         }
         if (entry.isDirectory()) {
+          if (!input.text && nameOk(entry.name)) {
+            nameMatches.push(`${shown(full, ctx)}/`);
+            if (isUnderDownloads(full, ctx.home ?? ctx.workspace)) fetched = true;
+          }
           if (HEAVY_DIRS.has(entry.name)) { heavy.add(entry.name); continue; }
           queue.push(full);
           continue;
         }
         if (!entry.isFile()) continue;
-        if (input.name) {
-          const n = caseFold ? entry.name.toLowerCase() : entry.name;
-          const p = caseFold ? input.name.toLowerCase() : input.name;
-          if (!wildcard(n, p)) continue;
-        }
+        if (!nameOk(entry.name)) continue;
         const rel = shown(full, ctx);
         if (!input.text) {
           nameMatches.push(rel);
