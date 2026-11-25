@@ -43,19 +43,13 @@ const KEYLIKE = 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
 const en = (key: Parameters<typeof toolText>[1], params?: Parameters<typeof toolText>[2]): string => toolText('en', key, params);
 const gt = (key: Parameters<typeof guardText>[1], params?: Parameters<typeof guardText>[2]): string => guardText('en', key, params);
 
-// 入れたあとの画面（入れた値を、本文・要素の名前・入力欄の値として出す）
-const ADMIN: FakeSite = {
-  title: 'Admin', text: `Admin\nSigned in\nSecret echo: ${PASS}`,
-  snapshot: ['- heading "Admin"', `- textbox "Password": ${PASS}`, '- button "Log out"', `- link "Profile ${PASS}"`].join('\n'),
-  rows: [{ role: 'textbox', name: 'Password', type: 'password' }, { role: 'button', name: 'Log out' }, { role: 'link', name: `Profile ${PASS}` }],
-};
-// e1 Search / e2 Password（type=password。Enter つきで入れると ADMIN になる）/ e3 Code（one-time-code）/ e4 Card number（cc-number）/ e5 PIN（type=password と cc-csc の両方）/ e6 Sign in / e7 Name
-const loginSite = (after: FakeSite | undefined = ADMIN): FakeSite => ({
+// e1 Search / e2 Password（type=password）/ e3 Code（one-time-code）/ e4 Card number（cc-number）/ e5 PIN（type=password と cc-csc の両方）/ e6 Sign in / e7 Name
+const loginSite = (): FakeSite => ({
   title: 'Login', text: 'Login\nEnter the admin password',
   snapshot: ['- textbox "Search"', '- textbox "Password"', '- textbox "Code"', '- textbox "Card number"', '- textbox "PIN"', '- button "Sign in"', '- textbox "Name"'].join('\n'),
   rows: [
     { role: 'textbox', name: 'Search' },
-    { role: 'textbox', name: 'Password', type: 'password', ...(after ? { effect: { mutate: after } } : {}) },
+    { role: 'textbox', name: 'Password', type: 'password' },
     { role: 'textbox', name: 'Code', autocomplete: 'one-time-code' },
     { role: 'textbox', name: 'Card number', autocomplete: 'cc-number' },
     { role: 'textbox', name: 'PIN', type: 'password', autocomplete: 'cc-csc' },
@@ -77,7 +71,6 @@ interface RigOptions {
   // 本物の裏のコマンドの入れ物（Windows の本物のプロセスの試験）
   background?: BackgroundJobs;
   mutate?: (c: AppConfig) => void;
-  secrets?: string[];
 }
 
 function rig(t: TestContext, options: RigOptions = {}) {
@@ -89,7 +82,7 @@ function rig(t: TestContext, options: RigOptions = {}) {
   options.mutate?.(config);
   const parsed = parseConfig(config);
   const driver = new FakeBrowserDriver().site(LISTED, loginSite()).site(DEV, loginSite()).site(OTHER_LOOP, loginSite());
-  const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => options.secrets ?? [], canShowWindow: () => true });
+  const session = new BrowserSession({ driver, config: () => parsed, paths: { browserProfile: 'C:\\data\\browser-profile' }, secrets: () => [], canShowWindow: () => true });
   t.after(() => session.close());
   const db = openDatabase(':memory:', MIGRATIONS);
   const approvals = new ApprovalBroker(db);
@@ -102,10 +95,9 @@ function rig(t: TestContext, options: RigOptions = {}) {
   const policy = buildPolicy(parsed, paths);
   const kind = options.kind ?? 'chat';
   const owned = options.owned ?? new Set<number>();
-  const asked: Array<{ owner: unknown; port: number }> = [];
   const background = options.background ?? {
     printedPorts: () => new Set(options.printed ?? []),
-    ownsPort: async (owner: unknown, port: number) => { asked.push({ owner, port }); return owned.has(port); },
+    ownsPort: async (_owner: unknown, port: number) => owned.has(port),
     stoppedPort: (_owner: unknown, port: number) => (options.stopped?.includes(port) ? { port, jobId: 'bg-9' } : undefined),
   };
   const ctx = {
@@ -137,7 +129,7 @@ function rig(t: TestContext, options: RigOptions = {}) {
     return { page: pages().find(page => page.url() === url)!, content: out.content };
   };
   const fills = (): Array<[string, string | undefined]> => pages().flatMap(page => page.acts.filter(a => a.kind === 'fill').map((a): [string, string | undefined] => [a.name, a.text]));
-  return { ctx, call, counts, open, pages, fills, driver, session, db, pending, events, asked, owned, task };
+  return { ctx, call, counts, open, pages, fills, driver, session, db, pending, events, owned, task };
 }
 
 const own = (extra: Partial<RigOptions> = {}): RigOptions => ({ printed: [5173], owned: new Set([5173]), ...extra });
@@ -451,161 +443,16 @@ test('P7: 会話の AI が password を渡した呼び出し（断られても�
   assert.ok(!s.logs.some(line => line.includes(PASS)), 'ログにも出ない');
 });
 
-// 本文に書かれたツール呼び出し（<tool_call>）: 引数は、印のあとに来る。印が見えたら、そこから先は画面への知らせにも再接続の写しにも書きかけの履歴にも流さない
-const STREAM_CHUNKS = ['試します。<tool_', 'call>{"name":"browser_type","argu', 'ments":{"ref":"e2","pass', `word":"${PASS}"}}</tool_`, 'call>'];
-// 引数の欄の名前か、値の頭が 1 つでも出たら漏れ
-const leaks = (text: string): boolean => text.includes('password') || text.includes(PASS.slice(0, 6));
-
-async function streamApp(t: TestContext) {
-  const s = await startApp(t, {
-    models: [fakeModel('m1')], browserDriver: new FakeBrowserDriver().site(LISTED, loginSite()),
-    configure: c => { c.tools.browser.enabled = true; c.tools.browser.sites = ['example.com']; c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 }; c.memory.review = false; },
-  });
-  const events: RunEvent[] = [];
-  s.app.bus.subscribe(e => events.push(e.event));
-  return { s, events };
-}
-
-test('P7: 本文に書かれたツール呼び出しの引数は、text.delta・再接続の写し（drafts）・履歴の API の書きかけに流さない。印の前の本文は今までどおり流す。保存される返事と呼び出しは変わらない', async t => {
-  const { s, events } = await streamApp(t);
-  const id = uuid(72);
-  const probes: string[] = [];
-  const streamed: Script = async function* () {
-    for (const part of STREAM_CHUNKS) {
-      yield { type: 'text', delta: part };
-      probes.push(`${s.app.bus.drafts().map(draft => draft.text).join('|')}\n${await (await s.api(`/api/conversations/${id}/messages`)).text()}`);
-    }
-    yield { type: 'done', stop: 'end_turn' as StopReason };
-  };
-  s.adapter().scripts = [streamed, finish];
-  s.app.conversations.create({ id, title: '会話' });
-  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
-  assert.equal(sent.status, 202, JSON.stringify(sent.body));
-  await settled(s.app, sent.body.runId);
-  assert.equal(probes.length, STREAM_CHUNKS.length);
-  assert.ok(probes[0]!.includes('試します。'), `印の前の本文は流れる: ${probes[0]}`);
-  for (const probe of probes) assert.ok(!leaks(probe), probe);
-  const deltas = events.filter(e => e.type === 'text.delta');
-  const shown = deltas.map(e => (e.type === 'text.delta' ? e.text : '')).join('');
-  assert.ok(shown.startsWith('試します。') && !leaks(shown), shown);
-  assert.ok(!everything(events).includes(PASS), 'どの出来事にも出ない');
-  const ring = (s.app.bus.since(0) ?? []).filter(e => e.event.type === 'text.delta');
-  assert.ok(ring.length >= 1 && !leaks(everything(ring)), '再接続の写し（バッファ）の本文にも出ない');
-  assert.match(s.app.runs.get(sent.body.runId)!.flags, /text_tool_calls/u);
-  const saved = s.app.conversations.messages(id);
-  assert.equal(saved.find(m => m.role === 'assistant')!.text, '試します。', '保存される返事は印の前の本文');
-  assert.ok(saved.some(m => m.message.role === 'assistant' && (m.message.toolCalls ?? []).some(call => call.name === 'browser_type')), '本文の呼び出しは拾われる');
-  assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS));
-});
-
-// 引数を先に書く・args という欄・名前と arguments のあいだに別の欄・1 つの囲みの配列、のあとに普通の呼び出しが続く返事（審査・確かめ役が挙げた形）。
-// 引数を 1 文字でも流した呼び出しは実行しない: 流す前に止まる（流れない）ので、呼び出しは今までどおり拾って実行してよい
-const FENCE = '```';
-const READ_BLOCK = '{"name":"browser_read","arguments":{}}';
-const withSecondCall = (body: string): string => `まず\n${FENCE}json\n${body}\n${FENCE}\n次に\n${FENCE}json\n${READ_BLOCK}\n${FENCE}`;
-const REPLY_SHAPES: Array<[string, string]> = [
-  ['arguments before name', withSecondCall(`{"arguments":{"ref":"e2","password":"${PASS}"},"name":"browser_type"}`)],
-  ['args key', withSecondCall(`{"name":"browser_type","args":{"ref":"e2","password":"${PASS}"}}`)],
-  ['extra key between name and arguments', withSecondCall(`{"name":"browser_type","id":"c1","arguments":{"ref":"e2","password":"${PASS}"}}`)],
-  ['one fence holding an array', `${FENCE}json\n[{"arguments":{"ref":"e2","password":"${PASS}"},"name":"browser_type"},${READ_BLOCK}]\n${FENCE}`],
-];
-
-test('P7: 本文のツール呼び出しの形が、引数が先・args・間に別の欄・配列でも、引数は text.delta・再接続の写し・履歴の書きかけに流れない。呼び出しは今までどおり拾う', async t => {
-  for (const [name, reply] of REPLY_SHAPES) {
-    const { s, events } = await streamApp(t);
-    const id = uuid(80 + REPLY_SHAPES.findIndex(([known]) => known === name));
-    const probes: string[] = [];
-    s.adapter().scripts = [async function* () {
-      for (let at = 0; at < reply.length; at += 9) {
-        yield { type: 'text', delta: reply.slice(at, at + 9) };
-        probes.push(`${s.app.bus.drafts().map(draft => draft.text).join('|')}\n${await (await s.api(`/api/conversations/${id}/messages`)).text()}`);
-      }
-      yield { type: 'done', stop: 'end_turn' as StopReason };
-    }, finish];
-    s.app.conversations.create({ id, title: '会話' });
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
-    assert.equal(sent.status, 202, JSON.stringify(sent.body));
-    await settled(s.app, sent.body.runId);
-    assert.ok(probes.length >= 5, name);
-    for (const probe of probes) assert.ok(!leaks(probe), `${name}: ${probe}`);
-    const shown = events.filter(e => e.type === 'text.delta').map(e => (e.type === 'text.delta' ? e.text : '')).join('');
-    assert.ok(shown.startsWith('まず') || shown.startsWith(FENCE) || shown === '', `${name}: ${shown}`);
-    assert.ok(!leaks(shown), `${name}: ${shown}`);
-    const ring = (s.app.bus.since(0) ?? []).filter(e => e.event.type === 'text.delta');
-    assert.ok(ring.length >= 1 && !leaks(everything(ring)), name);
-    assert.ok(!everything(events).includes(PASS), name);
-    assert.match(s.app.runs.get(sent.body.runId)!.flags, /text_tool_calls/u, name);
-    const called = s.app.conversations.messages(id).flatMap(m => (m.message.role === 'assistant' ? m.message.toolCalls ?? [] : [])).map(call => call.name);
-    assert.ok(called.includes('browser_type'), `${name}: ${called.join()}`);
-    assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS), name);
-  }
-});
-
-test('P7: password の説明は、試しの値だけを入れると案内し、値が隠れるとは約束しない。上限は text と同じ（browser_type・browser_act）', () => {
+test('P7: password の説明は、試しの値だけを入れると案内し、値が隠れるとは約束しない。上限は text と同じ（browser_type・browser_act）。説明は 1 か所（道具の説明）だけ', () => {
   const props = browserType.input.properties as Record<string, { description?: string; maxLength?: number }>;
-  assert.match(props.password?.description ?? '', /throwaway/u);
   assert.equal(props.password?.maxLength, props.text?.maxLength);
-  assert.match(browserType.description, /throwaway password/u);
-  assert.match(browserAct.description, /throwaway test value as "password"/u);
-  for (const text of [props.password?.description ?? '', browserType.description, browserAct.description]) assert.doesNotMatch(text, /is hidden|will be hidden|distinctive|wherever the value/u);
-});
-
-test('P7: 返事の途中で印が見えたあとは、本文を見直さない（続きがどれだけ長くても、見直しの回数は増えない）', async t => {
-  const { s } = await streamApp(t);
-  const id = uuid(99);
-  const head = '前置き。';
-  const call = '<tool_call>{"name":"browser_read","arguments":{}}</tool_call>';
-  const tail = 'x'.repeat(2000);
-  let scans = 0;
-  const realExec = RegExp.prototype.exec;
-  RegExp.prototype.exec = function (this: RegExp, subject: string): RegExpExecArray | null {
-    if (this.source.includes('arguments|parameters|args')) scans += 1;
-    return realExec.call(this, subject);
-  } as typeof RegExp.prototype.exec;
-  try {
-    s.adapter().scripts = [async function* () {
-      yield { type: 'text', delta: head };
-      yield { type: 'text', delta: call };
-      for (let at = 0; at < tail.length; at += 4) yield { type: 'text', delta: tail.slice(at, at + 4) };
-      yield { type: 'done', stop: 'end_turn' as StopReason };
-    }, finish];
-    s.app.conversations.create({ id, title: '会話' });
-    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: '読んで' });
-    assert.equal(sent.status, 202, JSON.stringify(sent.body));
-    await settled(s.app, sent.body.runId);
-  } finally { RegExp.prototype.exec = realExec; }
-  assert.ok(scans > 0 && scans <= 3, `印が見えたあとの続き 500 回では見直さない: ${scans}`);
-  assert.equal(s.app.conversations.messages(id).find(m => m.role === 'assistant')!.text, head + tail, '保存される返事は変わらない');
-});
-
-test('P7: 印の無い返事は、今までどおり 1 つずつ流す（欠けも並べ替えも無い）', async t => {
-  const { s, events } = await streamApp(t);
-  const id = uuid(73);
-  const parts = ['やあ、', '今日は', '<b>', ' 晴れ'];
-  s.adapter().scripts = [async function* () { for (const part of parts) yield { type: 'text', delta: part }; yield { type: 'done', stop: 'end_turn' as StopReason }; }];
-  s.app.conversations.create({ id, title: '会話' });
-  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'こんにちは' });
-  await settled(s.app, sent.body.runId);
-  assert.deepEqual(events.filter(e => e.type === 'text.delta').map(e => (e.type === 'text.delta' ? e.text : '')), parts);
-});
-
-test('P7: 本文のツール呼び出しの途中で止めても、止めた返事（途中まで）に引数が残らない', async t => {
-  const { s, events } = await streamApp(t);
-  const id = uuid(74);
-  s.adapter().scripts = [async function* () {
-    for (const part of STREAM_CHUNKS.slice(0, 4)) yield { type: 'text', delta: part };
-    s.app.engine.stop(s.app.engine.activeRuns()[0]!.runId);
-    throw new Error('aborted');
-  }];
-  s.app.conversations.create({ id, title: '会話' });
-  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
-  await settled(s.app, sent.body.runId);
-  const saved = s.app.conversations.messages(id).filter(m => m.role === 'assistant');
-  assert.equal(saved.length, 1, '止めた返事は保存される');
-  assert.ok(saved[0]!.text.startsWith('試します。'), saved[0]!.text);
-  assert.ok(!leaks(saved[0]!.text) && !everything(saved).includes(PASS), everything(saved));
-  assert.ok(!everything(events).includes(PASS));
-  assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(PASS));
+  assert.equal(props.password?.description, undefined);
+  assert.ok(browserType.description.includes('takes a throwaway test value as password, not text (not hidden in later output)'), browserType.description);
+  const actSchema = JSON.stringify(browserAct.input);
+  const passwordAt = actSchema.indexOf('"password":');
+  assert.ok(passwordAt >= 0 && actSchema.slice(passwordAt, actSchema.indexOf('}', passwordAt)).includes(`"maxLength":${props.text?.maxLength}`), 'browser_act の type の step にも password（上限は text と同じ）');
+  for (const text of [browserType.description, browserAct.description]) assert.doesNotMatch(text, /is hidden|will be hidden|distinctive|wherever the value/u);
+  assert.ok(!browserAct.description.includes('throwaway'), 'browser_act の説明に同じ規則を重ねて書かない');
 });
 
 // ── 本物のプロセス（Windows）: ジョブの中で動くサーバーには入れ、ジョブの外のサーバーは、ポートが出力に出ていても断る ──

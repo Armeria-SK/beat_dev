@@ -37,29 +37,6 @@ export function extractToolCalls(text: string, toolNames: ReadonlySet<string>): 
   return { calls, text: rest.replace(/\n{3,}/gu, '\n\n').trim() };
 }
 
-const TEXT_TOOL_CALL = /<tool_call>|\[TOOL_CALLS\]|"name"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters)"/u;
-
 export function looksLikeTextToolCall(text: string): boolean {
-  return TEXT_TOOL_CALL.test(text);
-}
-
-// 画面へ流すのをやめる印は、拾う印（TEXT_TOOL_CALL）に、引数の欄の名前とコロン（arguments・parameters・args、\u で書いた欄の名前も）を足したもの。
-// 拾う側は、欄の順・名前の位置を問わず、この 3 つの欄のどれかの値を引数にする。だから引数の値は必ずこの印より後ろにあり、引数が先・間に別の欄・args の形でも、値を流す前に止まる。
-// 流した文字は取り消せないので、引数を流した呼び出しを実行することは無い。エスケープで書いた欄の名前は、小文字の英字とエスケープだけでできていて、全部の字を書いても 60 字（10 字 × 6）を超えないので、その形だけ見る（長い本文を毎回なめ直さない）
-const ARGUMENT_KEY = /"(?:arguments|parameters|args)"\s*:|"[a-z]{0,59}\\u[0-9a-fA-F]{4}(?:[a-z]|\\u[0-9a-fA-F]{4}){0,59}"\s*:/u;
-const STREAM_HOLD = new RegExp(`${TEXT_TOOL_CALL.source}|${ARGUMENT_KEY.source}`, 'u');
-
-// 本文に書かれたツール呼び出しの始まりの位置（無ければ -1）。引数（試しの暗証番号など）は、必ず始まりの印より後ろに来る。ここより後ろは、画面への知らせにも書きかけの履歴にも流さない
-export function textToolCallStart(text: string): number {
-  const found = STREAM_HOLD.exec(text);
-  if (found === null) return -1;
-  if (!found[0].startsWith('"name"')) return found.index;
-  const brace = text.lastIndexOf('{', found.index);
-  return brace === -1 ? found.index : brace;
-}
-
-// 画面へ流してよい長さ（text は返事のここまで、streamed はいままで流した長さ）。印が見えたら、そこから先は流さない（流した分は戻らない）
-export function streamEnd(text: string, streamed: number): number {
-  const start = textToolCallStart(text);
-  return start === -1 ? text.length : Math.max(start, streamed);
+  return /<tool_call>|\[TOOL_CALLS\]|"name"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters)"/u.test(text);
 }

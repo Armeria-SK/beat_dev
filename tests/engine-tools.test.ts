@@ -207,6 +207,40 @@ test('本文に書かれたツール呼び出し（<tool_call>）も拾って実
   assert.equal(s.app.conversations.messages('c1')[1]!.text, '作ります');
 });
 
+// 本文に "args"・"arguments"・"parameters" の欄が書かれていても（MCP の設定の例など）、道具が使える会話でも本文は止めず欠けずに流す。止めたときの途中までも丸ごと残す
+const MCP_REPLY = '設定はこうです。{"mcpServers":{"fs":{"command":"npx","args":["-y","server-filesystem"],"parameters":{},"arguments":[]}}} 以上です。';
+const inPieces = (text: string, size = 8): string[] => Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size));
+const shownText = (events: RunEvent[]): string => events.map(e => (e.type === 'text.delta' ? e.text : '')).join('');
+
+test('返事の本文に args・arguments・parameters の欄が書かれていても、本文は欠けずに流れ、そのまま保存される', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(async function* () { for (const part of inPieces(MCP_REPLY)) yield { type: 'text', delta: part }; yield { type: 'done', stop: 'end_turn' as StopReason }; });
+  const { done } = await s.send('設定の例を教えて');
+  assert.ok((await done).ok);
+  assert.equal(shownText(s.events), MCP_REPLY);
+  assert.equal(s.app.conversations.messages('c1').at(-1)!.text, MCP_REPLY);
+});
+
+test('返事の本文に args の欄が書かれたあとで止めても、流した分が丸ごと残る', async t => {
+  const s = await setup(t);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  s.adapter().scripts.push(async function* (req) {
+    for (const part of inPieces(MCP_REPLY)) yield { type: 'text', delta: part };
+    await gate;
+    req.signal.throwIfAborted();
+    yield { type: 'done', stop: 'end_turn' as StopReason };
+  });
+  const { runId, done } = await s.send('設定の例を教えて');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(shownText(s.events), MCP_REPLY);
+  assert.ok(s.app.engine.stop(runId));
+  release();
+  await done;
+  const saved = s.app.conversations.messages('c1').at(-1)!.text;
+  assert.ok(saved.startsWith(MCP_REPLY), saved);
+});
+
 test('引数の形が3回続けて正しくなければ止める', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(toolCall('file_write', {}), toolCall('file_write', {}), toolCall('file_write', {}), reply('届かない'));

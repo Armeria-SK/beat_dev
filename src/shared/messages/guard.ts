@@ -272,7 +272,6 @@ const en = {
   'browser.act.password_own_only': 'A password or verification code is typed only on a page of a dev server that this run started with a background command and that is listening now (http://localhost:<port>). It is refused on this page (a port that was only printed or named is not enough). Logging in on other pages is for the owner to do',
   'browser.act.password_key_like': 'The value given as a password looks like a real API key or token, so it is not typed. Use a test value made for the app under development',
   'browser.act.text_or_password': 'Give exactly one of text and password (password is for a password or verification code field)',
-  'browser.act.preview_password': 'A password or verification code (a test value) is typed',
   'browser.no_grant': 'The browser cannot be used in this run (a run that reads the web for ideas, or a review)',
   'browser.loopback.not_product': 'Only a run that belongs to a product can open this PC\'s own addresses (http://localhost, 127.0.0.1, [::1]). Open the product\'s dev server from that product\'s chat or task',
   'browser.loopback.https': 'https on this PC (https://localhost…) cannot be opened. Start the dev server with plain http and open http://localhost:<port>',

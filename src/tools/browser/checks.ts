@@ -287,13 +287,8 @@ export function actPreview(kind: 'click' | 'type', input: ActInput, found: Extra
     guardText(language, 'browser.act.preview_target', { role: found.item.role, name: shownName(found.item.name), note: guardText(language, 'browser.act.page_name') }),
   ];
   if (kind === 'type') {
-    if (input.password !== undefined) {
-      // 暗証番号は値も字数も札に出さない（札を出す前に断る呼び出しだが、出る形になっても値は載せない）
-      lines.push(guardText(language, 'browser.act.preview_password'));
-    } else {
-      const text = input.text ?? '';
-      lines.push(guardText(language, 'browser.act.preview_text', { count: [...text].length }), text);
-    }
+    const text = input.text ?? '';
+    lines.push(guardText(language, 'browser.act.preview_text', { count: [...text].length }), text);
     lines.push(guardText(language, input.submit === true ? 'browser.act.preview_submit' : 'browser.act.preview_no_submit'));
   }
   // 札を出したときのページ・タブ・要素。承認のあとに同じ判定をもう一度走らせて、これが変わっていたら実行しない（別のページ・別の要素に押さない）
