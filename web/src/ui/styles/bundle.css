@@ -372,7 +372,6 @@
 .bt-mini > .bt-dot { align-self: flex-start; margin-top: 6px; }
 .bt-mini--more { border-color: transparent; background: transparent; color: var(--ink-mute); font: 400 12px/18px var(--font-mono); }
 .bt-tag { flex: none; font: 400 11px/16px var(--font-mono); color: var(--ink-mute); white-space: nowrap; }
-.bt-side--session > .bt-icon { width: 12px; height: 12px; margin: 0 -3px; }
 .bt-side--overview { color: var(--ink); }
 .bt-sidebar__head { display: flex; align-items: center; gap: var(--space-2); height: 40px; flex: none; padding: 0 var(--space-2); }
 .bt-wordmark { flex: 1; font: 400 26px/1 var(--font-display); letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }

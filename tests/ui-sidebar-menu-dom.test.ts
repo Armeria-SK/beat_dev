@@ -90,7 +90,7 @@ function watchToasts(): { seen: FeedbackItem[]; stop: () => void } {
   return { seen, stop: subscribe(item => { seen.push(item); }) };
 }
 
-test('ui/Sidebar（DOM）: 会話の行ごとに「…」ボタンがある。リンクの外（隣）にあり、読み上げの名前に題が入り、閉じている間は aria-expanded=false。製品の行・New session の行には付かない', async () => {
+test('ui/Sidebar（DOM）: 会話の行ごとに「…」ボタンがある。リンクの外（隣）にあり、読み上げの名前に題が入り、閉じている間は aria-expanded=false。製品の行には付かない（製品の行の + はリンク）', async () => {
   const { container } = await render(sidebarOf({ view: 'new' }));
   for (const chat of [SHOP_CHAT, LOOSE_CHAT]) {
     const link = container.querySelector<HTMLAnchorElement>(`a[href="#/c/${chat.id}"]`)!;
@@ -106,8 +106,9 @@ test('ui/Sidebar（DOM）: 会話の行ごとに「…」ボタンがある。�
   }
   assert.equal(container.querySelectorAll('button[aria-haspopup="menu"]').length, 2, '会話の行の数だけ');
   assert.ok(menuOf(container) === null, '開くまでメニューは無い');
-  const fresh = container.querySelector(`a[href="#/p/${SHOP.id}/new"]`)!.closest('.bt-side');
-  assert.equal(fresh?.querySelector('button'), null, 'New session の行にはボタンが無い');
+  const productRow = container.querySelector(`a[href="#/p/${SHOP.id}/new"]`)!.closest('.bt-side--product');
+  assert.ok(productRow, '製品の行の + がある');
+  assert.equal(productRow.querySelector('button'), null, '製品の行にはボタンが無い（+ はリンク）');
 });
 
 test('ui/Sidebar（DOM）: 「…」を押すと Archive と Delete のメニューが開き、先頭に焦点が入る。矢印・Home・End で動き、Escape で閉じて焦点は「…」に戻る', async () => {

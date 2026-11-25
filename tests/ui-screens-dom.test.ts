@@ -280,16 +280,16 @@ test('ui/Sidebar（DOM）: 製品の行のリンクはひとつで、マーク�
   const [shop, blog] = productRows(container);
   assert.ok(shop && blog, '製品 2 つの行');
   for (const [row, product] of [[shop, SHOP], [blog, BLOG]] as const) {
-    const links = row.querySelectorAll('a');
-    assert.equal(links.length, 1, `${product.name}: 行のリンクはひとつ`);
+    const links = row.querySelectorAll('a:not(.ui-side-add)');
+    assert.equal(links.length, 1, `${product.name}: マークと名前のリンクはひとつ（+ の入口は別。tests/bl-sidebar-plus-dom.test.ts）`);
     const link = links[0]!;
     assert.equal(link.getAttribute('href'), `#/p/${product.id}`);
     assert.ok(link.querySelector('svg.bt-icon'), `${product.name}: マークはリンクの中`);
     assert.equal(link.textContent, product.name, `${product.name}: 名前はリンクの中（見える文字は名前だけ）`);
     assert.equal(container.querySelectorAll(`a[href="#/p/${product.id}"]`).length, 1, `${product.name}: 製品の画面へのリンクはほかに無い`);
   }
-  const shopLink = shop.querySelector('a')!;
-  const blogLink = blog.querySelector('a')!;
+  const shopLink = shop.querySelector('a.bt-side__home')!;
+  const blogLink = blog.querySelector('a.bt-side__home')!;
   assert.ok(shopLink.classList.contains('has-waiting'), '待ちがある製品のリンクに待ちの印');
   assert.ok(!blogLink.classList.contains('has-waiting'));
   assert.equal(shopLink.getAttribute('aria-label'), 'Overview of Shop, something is waiting');
@@ -310,7 +310,7 @@ test('ui/Sidebar（DOM）: 製品の行のリンクはひとつで、マーク�
   }
 });
 
-test('ui/Sidebar（DOM）: 製品の行のマークを押しても名前を押しても製品の画面（#/p/<id>）が開く。会話の行と New session の行き先は今までどおり', async () => {
+test('ui/Sidebar（DOM）: 製品の行のマークを押しても名前を押しても製品の画面（#/p/<id>）が開く。会話の行の行き先は今までどおり。新しい会話の入口は製品の行の +（New session の行は無い）', async () => {
   const { container } = await render(sidebarOf({ view: 'new' }));
   const [shop, blog] = productRows(container);
   assert.ok(shop && blog);
@@ -324,7 +324,8 @@ test('ui/Sidebar（DOM）: 製品の行のマークを押しても名前を押�
   assert.equal(chat?.textContent, SHOP_CHAT.title, '製品の会話の行はそのまま並ぶ');
   assert.equal(await open(chat), '#/c/c1aaaa');
   const fresh = [...container.querySelectorAll(`a[href="#/p/${SHOP.id}/new"]`)];
-  assert.equal(fresh.length, 1, 'この製品の New session の行はそのまま');
-  assert.ok(fresh[0]!.textContent!.includes(en['ui.session.new']));
+  assert.equal(fresh.length, 1, 'この製品の新しい会話への入口は、製品の行の + ひとつだけ（New session の行は無い）');
+  assert.equal(fresh[0]!.getAttribute('aria-label'), en['ui.session.newIn'](SHOP.name));
+  assert.ok(fresh[0]!.closest('.bt-side--product'), '入口は製品の行の中にある');
   assert.equal(await open(fresh[0]!), `#/p/${SHOP.id}/new`);
 });
