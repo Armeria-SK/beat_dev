@@ -87,3 +87,6 @@ export function parseRawConfig(text: string): Config | null {
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed as Config : null;
   } catch { return null; }
 }
+
+export const hookCommandLabel = (command: readonly string[]): string =>
+  command.map(arg => (arg === '' || /[\s"]/u.test(arg) ? `"${arg.replace(/"/gu, '\\"')}"` : arg)).join(' ');

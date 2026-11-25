@@ -122,8 +122,10 @@ export interface LogRow {
   what: string;
   model: string | null;
   durationMs: number | null;
+  startedAt: number | null;
   tokens: number | null;
   result: LogResult;
+  coveredBy?: string;
   run?: RunRow;
   call?: ToolCallRow;
   job?: ReviewJob;
@@ -159,42 +161,47 @@ export interface LogInput {
   fixLabel?: (branch: string) => string;
 }
 
+const runTokens = (run: RunRow): number | null => (run.input_tokens === null && run.output_tokens === null ? null : (run.input_tokens ?? 0) + (run.output_tokens ?? 0));
+
 export function logRows({ runs, calls, jobs, runLabel, titleOf, fixLabel }: LogInput): LogRow[] {
-  const models = new Map(runs.map(run => [run.id, run.model_id]));
+  const byId = new Map(runs.map(run => [run.id, run]));
+  const reviewOf = new Map(jobs.flatMap(job => (job.run_id ? [[job.run_id, `review:${job.id}`] as const] : [])));
   const rows: LogRow[] = [];
   for (const run of runs) {
     const title = run.conversation_id ? titleOf(run.conversation_id) : null;
-    const tokens = run.input_tokens === null && run.output_tokens === null ? null : (run.input_tokens ?? 0) + (run.output_tokens ?? 0);
+    const coveredBy = reviewOf.get(run.id);
     rows.push({
       key: `run:${run.id}`, kind: 'run', at: run.started_at, what: run.fix_branch && fixLabel ? fixLabel(run.fix_branch) : title ? `${runLabel(run.kind)} · ${title}` : runLabel(run.kind),
-      model: run.model_id, durationMs: run.duration_ms, tokens, result: runResult(run), run,
+      model: run.model_id, durationMs: run.duration_ms, startedAt: run.started_at, tokens: runTokens(run), result: runResult(run), run, ...(coveredBy ? { coveredBy } : {}),
     });
   }
   for (const call of calls) {
     const target = toolRow(call.tool, call.input, null).target;
     rows.push({
       key: `tool:${call.id}`, kind: 'tool', at: call.created_at, what: target ? `${call.tool} · ${target}` : call.tool,
-      model: null, durationMs: call.duration_ms, tokens: null, result: callResult(call), call,
+      model: null, durationMs: call.duration_ms, startedAt: call.created_at, tokens: null, result: callResult(call), call,
     });
   }
   for (const job of jobs) {
     const note = job.note ? maskTarget(job.note).replace(/\s+/gu, ' ').trim() : '';
+    const run = job.run_id ? byId.get(job.run_id) : undefined;
     rows.push({
       key: `review:${job.id}`, kind: 'review', at: job.created_at, what: note ? `${job.triggerLabel} · ${note}` : job.triggerLabel,
-      model: job.run_id ? models.get(job.run_id) ?? null : null,
-      durationMs: job.finished_at !== null && job.status !== 'pending' ? job.finished_at - job.created_at : null, tokens: null, result: jobResult(job.status), job,
+      model: run?.model_id ?? null,
+      durationMs: job.finished_at !== null && job.status !== 'pending' ? job.finished_at - job.created_at : null, startedAt: run?.started_at ?? null, tokens: run ? runTokens(run) : null, result: jobResult(job.status), job,
     });
   }
   return rows.sort((a, b) => b.at - a.at || (a.key < b.key ? 1 : -1));
 }
 
-export const filterLog = (rows: readonly LogRow[], filter: LogFilter): LogRow[] => (filter === 'all' ? [...rows] : rows.filter(row => row.kind === filter));
+export const filterLog = (rows: readonly LogRow[], filter: LogFilter): LogRow[] => (filter === 'all' ? rows.filter(row => row.coveredBy === undefined) : rows.filter(row => row.kind === filter));
 
 export interface LogTotals { run: number; tool: number; review: number }
 
 export function logFooter(rows: readonly LogRow[], filter: LogFilter, totals: LogTotals, dayStart: number): { shown: number; total: number } {
   const shown = filterLog(rows, filter).filter(row => row.at >= dayStart).length;
-  const total = filter === 'all' ? totals.run + totals.tool + totals.review : totals[filter];
+  const hidden = filter === 'all' ? rows.filter(row => row.coveredBy !== undefined && row.at >= dayStart).length : 0;
+  const total = filter === 'all' ? totals.run + totals.tool + totals.review - hidden : totals[filter];
   return { shown, total: Math.max(total, shown) };
 }
 
@@ -216,3 +223,6 @@ export const archivedNothing = (items: readonly unknown[] | null, loadedFor: str
 export function archivedLine(conversation: Pick<Conversation, 'message_count' | 'archived_at'>): { messages: number | null; archivedAt: number | null } {
   return { messages: typeof conversation.message_count === 'number' ? conversation.message_count : null, archivedAt: conversation.archived_at ?? null };
 }
+
+export const rowDuration = (row: LogRow, now: number): number | null =>
+  row.durationMs ?? (row.result === 'running' && row.startedAt !== null ? Math.max(0, now - row.startedAt) : null);

@@ -1,3 +1,4 @@
+import { deepEqual } from './settings/merge.ts';
 import type { Config } from './settings/model.ts';
 import { newAnthropicProvider, uniqueId } from './settings/model.ts';
 
@@ -30,34 +31,43 @@ type Entry = Record<string, unknown> & { id: string };
 
 const defaultProvider = (config: Config): Entry => newAnthropicProvider(config) as Entry;
 
+function reusableSlots(providers: readonly Entry[], models: readonly Entry[], baseUrl: string, existing: Entry | undefined): { own: number; spare: number } {
+  const own = existing ? providers.findIndex(p => p.id === existing.provider && p.kind === 'openai_compatible') : -1;
+  const spare = own >= 0 ? -1 : providers.findIndex(p => p.kind === 'openai_compatible' && p.baseUrl === baseUrl && !models.some(m => m.provider === p.id));
+  return { own, spare };
+}
+
+function placeProvider(config: Config, providers: Entry[], models: readonly Entry[], form: ModelForm, existing: Entry | undefined): string {
+  if (form.source === 'openai') {
+    const fields = {
+      kind: 'openai_compatible', baseUrl: form.baseUrl.trim(), server: form.server, maxParallel: 1, timeoutMs: 600_000,
+      ...(form.apiKeyEnv.trim() ? { apiKeyEnv: form.apiKeyEnv.trim() } : {}),
+    };
+    const { own, spare } = reusableSlots(providers, models, fields.baseUrl, existing);
+    if (own >= 0) {
+      const old = providers[own]!;
+      providers[own] = { id: old.id, ...(old.baseUrl === fields.baseUrl && typeof old.apiKeyEnv === 'string' ? { apiKeyEnv: old.apiKeyEnv } : {}), ...fields };
+      return old.id;
+    }
+    if (spare >= 0) { providers[spare] = { ...providers[spare]!, ...fields }; return providers[spare]!.id; }
+    const id = uniqueId('local', providers.map(p => p.id));
+    providers.push({ id, ...fields });
+    return id;
+  }
+  const found = providers.find(p => p.kind === form.source);
+  if (found) return found.id;
+  const made = defaultProvider({ ...config, providers });
+  providers.push(made);
+  return made.id;
+}
+
 // 入力を設定に反映する。同じモデルをもう一度確かめるとき（modelId）は、その項目を直す。
 // 順番（チャット・裏方）が両方空なら、設定のモデル全部と足したモデルを入れる。すでに順番があれば、足したモデルを最後に足す。
 export function setupModelConfig(config: Config, form: ModelForm, modelId: string | null): { config: Config; modelId: string } {
   const providers = [...(config.providers as Entry[])];
   const models = [...(config.models as Entry[])];
   const existing = modelId ? models.find(m => m.id === modelId) : undefined;
-
-  let providerId: string;
-  if (form.source === 'openai') {
-    const fields = {
-      kind: 'openai_compatible', baseUrl: form.baseUrl.trim(), server: form.server, maxParallel: 1, timeoutMs: 600_000,
-      ...(form.apiKeyEnv.trim() ? { apiKeyEnv: form.apiKeyEnv.trim() } : {}),
-    };
-    const own = existing ? providers.findIndex(p => p.id === existing.provider && p.kind === 'openai_compatible') : -1;
-    const spare = own >= 0 ? -1 : providers.findIndex(p => p.kind === 'openai_compatible' && p.baseUrl === fields.baseUrl && !models.some(m => m.provider === p.id));
-    if (own >= 0) {
-      const old = providers[own]!;
-      providerId = old.id;
-      providers[own] = { id: providerId, ...(old.baseUrl === fields.baseUrl && typeof old.apiKeyEnv === 'string' ? { apiKeyEnv: old.apiKeyEnv } : {}), ...fields };
-    }
-    else if (spare >= 0) { providerId = providers[spare]!.id; providers[spare] = { ...providers[spare]!, ...fields }; }
-    else { providerId = uniqueId('local', providers.map(p => p.id)); providers.push({ id: providerId, ...fields }); }
-  } else {
-    const kind = form.source;
-    const found = providers.find(p => p.kind === kind);
-    if (found) providerId = found.id;
-    else { const made = defaultProvider({ ...config, providers }); providerId = made.id; providers.push(made); }
-  }
+  const providerId = placeProvider(config, providers, models, form, existing);
 
   const length = Number(form.contextLength);
   const model = {
@@ -77,15 +87,26 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
   return { config: { ...config, providers, models, routing: next }, modelId: model.id };
 }
 
-export function setupProviderConfig(config: Config, form: ModelForm): { config: Config; providerId: string } {
+export function setupProviderConfig(config: Config, form: ModelForm, modelId: string | null = null): { config: Config; providerId: string } {
+  const providers = [...(config.providers as Entry[])];
+  const models = config.models as Entry[];
+  const providerId = placeProvider(config, providers, models, form, modelId ? models.find(m => m.id === modelId) : undefined);
+  return deepEqual(providers, config.providers) ? { config, providerId } : { config: { ...config, providers }, providerId };
+}
+
+export function plannedProviderId(config: Config, form: ModelForm, modelId: string | null): string | null {
   const providers = config.providers as Entry[];
-  const url = form.baseUrl.trim();
-  const found = form.source === 'openai' ? providers.find(p => p.kind === 'openai_compatible' && p.baseUrl === url) : providers.find(p => p.kind === form.source);
-  if (found) return { config, providerId: found.id };
-  const made: Entry = form.source === 'openai'
-    ? { id: uniqueId('local', providers.map(p => p.id)), kind: 'openai_compatible', baseUrl: url, server: form.server, maxParallel: 1, timeoutMs: 600_000 }
-    : defaultProvider(config);
-  return { config: { ...config, providers: [...providers, made] }, providerId: made.id };
+  if (form.source !== 'openai') return providers.find(p => p.kind === form.source)?.id ?? null;
+  const models = config.models as Entry[];
+  const { own, spare } = reusableSlots(providers, models, form.baseUrl.trim(), modelId ? models.find(m => m.id === modelId) : undefined);
+  return providers[own >= 0 ? own : spare]?.id ?? null;
+}
+
+export function dropListed(config: Config, ids: ReadonlySet<string>, keep: string | null): Config {
+  const models = config.models as Entry[];
+  const providers = config.providers as Entry[];
+  const kept = providers.filter(p => !ids.has(p.id) || p.id === keep || models.some(m => m.provider === p.id));
+  return kept.length === providers.length ? config : { ...config, providers: kept };
 }
 
 const SEEN_KEY = 'beat.onboardingSeen';

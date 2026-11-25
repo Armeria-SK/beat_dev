@@ -7,7 +7,7 @@ import { applyFailure, applyStep } from '../../settings/server-apply.ts';
 import { addRoot, foldersFromConfig, removeRoot, setRootMode, type RootMode } from '../../skills-meta.ts';
 import { Button } from '../parts.tsx';
 import { RowConfirm } from '../RowConfirm.tsx';
-import { editListItem } from './commit.ts';
+import { editListItem, hookCommandLabel } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, Seg, Switch, useSet } from './controls.tsx';
 
 type Json = Record<string, any>;
@@ -69,7 +69,7 @@ function setHooks(config: Config, stage: Stage, hooks: Hook[]): Config {
 
 function HookRow({ stage, index, hook }: { stage: Stage; index: number; hook: Hook }) {
   const t = useT();
-  const name = hook.builtin !== undefined ? t('ui.set.hooks.protect') : hook.command.join(' ');
+  const name = hook.builtin !== undefined ? t('ui.set.hooks.protect') : hookCommandLabel(hook.command);
   const ctx = useSet();
   const [open, setOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -156,7 +156,7 @@ export function HooksPanel() {
         return (
           <Group key={stage} title={t(stage === 'preToolUse' ? 'ui.set.hooks.pre' : 'ui.set.hooks.post')}>
             {hooks.length === 0 && <p className="bt-meta">{t('ui.set.hooks.none')}</p>}
-            {hooks.map((hook, i) => <HookRow key={`${i}:${hook.matcher}:${hook.builtin ?? hook.command.join(' ')}`} stage={stage} index={i} hook={hook} />)}
+            {hooks.map((hook, i) => <HookRow key={`${i}:${hook.matcher}:${hook.builtin ?? hookCommandLabel(hook.command)}`} stage={stage} index={i} hook={hook} />)}
             <Row k={`hooks:add:${stage}`} title={t('ui.set.hooks.add')} desc={t(stage === 'preToolUse' ? 'ui.set.hooks.preDesc' : 'ui.set.hooks.postDesc')}
               below={adding === stage && <AddHook stage={stage} onDone={() => setAdding(null)} />}>
               {adding !== stage && <Button small onClick={() => setAdding(stage)}>{t('ui.set.hooks.addShort')}</Button>}
