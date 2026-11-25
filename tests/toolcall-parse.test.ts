@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { extractToolCalls, looksLikeTextToolCall, streamEnd, textToolCallStart } from '../src/engine/toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall, sensitiveArgValues, streamEnd, textToolCallStart } from '../src/engine/toolcall-parse.ts';
+import type { ToolCall } from '../src/engine/types.ts';
 
 const names = new Set(['file_write', 'shell_run']);
 
@@ -92,4 +93,21 @@ test('引数の欄の名前が無い返事（ふつうの文・コードの囲�
   for (const reply of ['普通の返事です。\n```ts\nconst a = 1;\n```\nおわり', '例: {"name": "beat", "age": 1}', '```json\n{"title":"x","items":[1,2,3]}\n```\n', 'a "name" b : c', `例: {"Caf${BS}u00e9": 1}`, `{"${'a'.repeat(70)}${BS}u0041": 1}`, `{"x": "${escaped('arguments')}"}`]) {
     for (const size of [1, 5, reply.length]) assert.equal(streamed(reply, splitEvery(reply, size)), reply);
   }
+});
+
+const callOf = (args: unknown): ToolCall => ({ id: 'c1', name: 'browser_act', arguments: args });
+
+test('sensitiveArgValues: 秘密の名前の欄の文字列（入れ子・配列の中も）だけ集める。短い値・秘密でない欄・文字列でない値は集めない。同じ値は 1 つ', () => {
+  assert.deepEqual(sensitiveArgValues([callOf({ ref: 'e2', password: SECRET })]), [SECRET]);
+  assert.deepEqual(sensitiveArgValues([callOf({ steps: [{ kind: 'type', ref: 'e1', password: SECRET }, { kind: 'type', ref: 'e2', text: 'plain text' }, { kind: 'type', password: 'abc' }] })]), [SECRET]);
+  assert.deepEqual(sensitiveArgValues([callOf({ options: { api_key: 'sk-test-12345' } })]), ['sk-test-12345']);
+  assert.deepEqual(sensitiveArgValues([callOf({ password: ['aaaa-1', 'bbbb-2'] })]), ['aaaa-1', 'bbbb-2'], '秘密の欄の下の文字列は、入れ子でも全部');
+  assert.deepEqual(sensitiveArgValues([callOf({ password: 12345678, token_type: 'bearer-long', text: 'plain text' })]), [], '数・秘密でない欄は集めない');
+  assert.deepEqual(sensitiveArgValues([callOf({ password: 'abcd' }), callOf({ password: ' abc ' }), callOf({ password: 'abcd' })]), ['abcd'], '4 文字以上（前後の空白を除く）だけ。同じ値は 1 つ');
+  assert.deepEqual(sensitiveArgValues([callOf(undefined), callOf('password'), callOf(null)]), []);
+  let deep: unknown = { password: SECRET };
+  for (let i = 0; i < 5; i += 1) deep = { next: deep };
+  assert.deepEqual(sensitiveArgValues([callOf(deep)]), [SECRET], '浅い入れ子の中は集める');
+  for (let i = 0; i < 40; i += 1) deep = { next: deep };
+  assert.deepEqual(sensitiveArgValues([callOf(deep)]), [], '深すぎる入れ子はたどらない（落ちない）');
 });

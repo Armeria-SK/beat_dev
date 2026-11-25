@@ -14,7 +14,7 @@ const URL_LONG_SECRET_MIN = 16;
 const URL_PARAM_SEPARATOR = /(?:[?&#;]|\\u0026)$/;
 const PRIVATE_KEY_MARKER = /-----(BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----/g;
 const ASSIGNMENT_HEAD = /(?<![A-Za-z0-9_-])[0-9-]*["']?([A-Za-z_][A-Za-z0-9_-]*)(?:\\*["'])?\s*[:=][ \t]*(?:\r?\n[ \t]+)?/g;
-const ASSIGNMENT_VALUE = /\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
+const ASSIGNMENT_VALUE = /(?<!\\)"(?:[^"\\\r\n]|\\[^\r\n])*"|\\*"[^"\r\n]*"|\\*'[^'\r\n]*'|[^\s,;}\r\n]+/y;
 const AUTH_SCHEME = /^(?:Basic|Bearer|Digest|Negotiate|NTLM|Token)$/i;
 const AUTH_SCHEME_VALUE = /[ \t]+[^\s,;}"'\\]+/y;
 const COOKIE_NAME = /cookies?$/i;
@@ -231,6 +231,21 @@ function tolerantChar(char: string): string {
 }
 const SPACE_RUN = '(?:\\s|\\+|%20|%09|%0[Aa]|%0[Dd])+';
 
+// 鍵ごとの組み立て済みの正規表現。呼ぶたびに作り直すと、長い値を何本も持つとき（入れた値の覚えは 1 会話 16 本まで）1 回の出力ごとに数秒かかる。古いものから捨てる
+const PATTERNS = new Map<string, RegExp>();
+const PATTERNS_MAX = 1024;
+// 4 文字以下の数字だけの値は、要素の番号（e1234 など。ブラウザの出力に出る）の数字の中を伏せない（番号を壊すと、次に指す先が分からなくなる）
+const REF_SHAPED = /^\d{1,4}$/u;
+function exactPattern(form: string): RegExp {
+  const known = PATTERNS.get(form);
+  if (known !== undefined) return known;
+  const body = form.split(/\s+/u).map(part => [...part].map(tolerantChar).join('')).join(SPACE_RUN);
+  const made = new RegExp(REF_SHAPED.test(form) ? `(?<!\\be)${body}` : body, 'gu');
+  if (PATTERNS.size >= PATTERNS_MAX) PATTERNS.delete(PATTERNS.keys().next().value as string);
+  PATTERNS.set(form, made);
+  return made;
+}
+
 // 鍵そのものを伏せる。鍵の途中の空白は、2 つ以上・改行・タブなど並びが変わっていても同じ鍵として伏せる（相手が空白をそろえて返しても残さない）。
 // JSON の文字列の中の書き方（\ と " のエスケープ）と、URL に入った書き方（tolerantChar）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）
 export function redactExact(input: string, exactSecrets: readonly string[], keepLines = false): string {
@@ -242,8 +257,7 @@ export function redactExact(input: string, exactSecrets: readonly string[], keep
   }
   let redacted = input;
   for (const form of [...forms].sort((a, b) => b.length - a.length)) {
-    const pattern = form.split(/\s+/u).map(part => [...part].map(tolerantChar).join('')).join(SPACE_RUN);
-    redacted = redacted.replace(new RegExp(pattern, 'gu'), matched => masked(matched, keepLines));
+    redacted = redacted.replace(exactPattern(form), matched => masked(matched, keepLines));
   }
   return redacted;
 }

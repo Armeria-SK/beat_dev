@@ -52,7 +52,7 @@ import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_T
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
 import type { ModelStatus } from './status.ts';
-import { extractToolCalls, looksLikeTextToolCall, streamEnd } from './toolcall-parse.ts';
+import { extractToolCalls, looksLikeTextToolCall, sensitiveArgValues, streamEnd } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ThinkingBlock, ThinkingRecord, ToolCall, ToolSpec, Usage } from './types.ts';
 import { estimateMessageTokens, estimateRequest, estimateTextTokens, prefixLength } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
@@ -1563,6 +1563,7 @@ export class ChatEngine {
         let text = '';
         // text のうち、画面に流した長さ
         let streamed = 0;
+        let held = false;
         let usage: Usage = {};
         let stop: StopReason = 'other';
         const toolCalls: ToolCall[] = [];
@@ -1590,8 +1591,12 @@ export class ChatEngine {
             if (event.type === 'text') {
               text += event.delta;
               // 本文に書かれたツール呼び出しの印（<tool_call> など）が見えたら、そこから先は流さない。引数（試しの暗証番号など）が、画面への知らせ・再接続の写し・書きかけの履歴に残らないように（拾うのは返事が終わってから）
-              const end = toolNames.size ? streamEnd(text, streamed) : text.length;
-              if (end > streamed) { d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: text.slice(streamed, end) }); streamed = end; }
+              // 一度止めたら、あとは何も流れないので、続きを見直さない（長い返事で毎回頭から読み直さない）
+              if (!held) {
+                const end = toolNames.size ? streamEnd(text, streamed) : text.length;
+                if (end > streamed) { d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: text.slice(streamed, end) }); streamed = end; }
+                held = end < text.length;
+              }
             }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
             else if (event.type === 'tool_call') toolCalls.push(event.call);
@@ -1659,6 +1664,8 @@ export class ChatEngine {
             if (!p.flags.includes('text_tool_calls')) p.flags.push('text_tool_calls');
           }
         }
+        // 呼び出しとして取り除かれなかった本文（繰り返した呼び出し・壊れた呼び出し・知らない道具・あとの説明）に、呼び出しの秘密の引数（入れた暗証番号など）と同じ値が残っていたら、保存の前に伏せる
+        if (toolCalls.length) text = redactExact(text, sensitiveArgValues(toolCalls));
         // 送り返した考える部分の量は見積もりでしかない（API の数え方と合うとは限らない）ので、その呼び出しでは切り捨ての疑いも補正の学習もしない
         if (!replay) this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
         if (effort && !p.flags.includes(`effort:${effort}`)) p.flags.push(`effort:${effort}`);

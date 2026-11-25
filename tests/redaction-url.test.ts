@@ -4,7 +4,7 @@ import { Type } from '@sinclair/typebox';
 import type { RunEvent, ToolCall } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { REVIEW_WINDOW_CHARS, reviewWindow } from '../src/memory/review.ts';
-import { isSensitiveEnvName, redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
+import { isSensitiveEnvName, redactExact, redactJsonValue, redactSecrets } from '../src/shared/redaction.ts';
 import { scrubEnv } from '../src/tools/shell/runner.ts';
 import { toolRow } from '../web/src/ui/tool-row.ts';
 import type { ToolDef } from '../src/tools/types.ts';
@@ -350,4 +350,52 @@ test('伏せ字（exact）: 符号化の幅を広げても、ほかの文字・�
   assert.equal(redactSecrets(`x ${S1} y %41%42 ${S1.toLowerCase()}`, [S1]), 'x [REDACTED] y %41%42 ' + S1.toLowerCase(), '英数字だけの値は、そのままの形だけ（大文字小文字も区別する）');
   assert.equal(redactSecrets('{"k":"a\\"b c"}', ['a"b c']), '{"k":"[REDACTED]"}', 'JSON の書き方も今までどおり');
   assert.equal(redactSecrets('a\n  b', ['a b']), '[REDACTED]', '空白の並びが違っても伏せる（今までどおり）');
+});
+
+test('伏せ字（exact）: 同じ鍵の組み立ては使い回す（呼ぶたびに正規表現を作り直さない）。古いものから捨てて数を守り、捨てたあとも同じに伏せる', () => {
+  const Original = globalThis.RegExp;
+  let made = 0;
+  globalThis.RegExp = new Proxy(Original, { construct(target, args, newTarget) { made += 1; return Reflect.construct(target, args, newTarget); } });
+  try {
+    const secrets = ['first-secret!x', "second secret 'y'", 'third%secret+z'];
+    const input = `a ${secrets[0]} b ${secrets[1]} c ${secrets[2]}`;
+    const first = redactExact(input, secrets);
+    assert.equal(first, 'a [REDACTED] b [REDACTED] c [REDACTED]');
+    const built = made;
+    assert.ok(built >= secrets.length, `1 回目は組み立てる: ${built}`);
+    for (let i = 0; i < 5; i += 1) assert.equal(redactExact(input, secrets), first);
+    assert.equal(made, built, '2 回目からは作り直さない');
+    for (let i = 0; i < 1100; i += 1) redactExact('x', [`filler-${i}-abcd`]);
+    const before = made;
+    assert.equal(redactExact(input, secrets), first, '捨てられたあとも同じに伏せる');
+    assert.ok(made > before, '上限（1024）を超えた分は古いものから捨てるので、最初の鍵は作り直す');
+    const again = made;
+    redactExact(input, secrets);
+    assert.equal(made, again, '作り直したあとはまた使い回す');
+  } finally { globalThis.RegExp = Original; }
+});
+
+test('伏せ字（exact）: 4 文字以下の数字だけの値は、要素の番号（e1234）の中を伏せない。ほかの場所・長い数字・数字以外の値は今までどおり', () => {
+  assert.equal(redactSecrets('ref e1234 / [e1234] / x1234 / 1234 / port:1234 / ee1234', ['1234']), 'ref e1234 / [e1234] / x[REDACTED] / [REDACTED] / port:[REDACTED] / ee[REDACTED]');
+  assert.equal(redactSecrets('e123456 and 123456', ['123456']), 'e[REDACTED] and [REDACTED]', '5 文字以上は要素の番号にならないので、そのまま伏せる');
+  assert.equal(redactSecrets('e1234 and e1234', ['e1234']), '[REDACTED] and [REDACTED]', '値そのものが e で始まるときは伏せる');
+  assert.equal(redactSecrets('ref e12ab and 12ab', ['12ab']), 'ref e[REDACTED] and [REDACTED]', '数字だけでない値は、e の後ろでも伏せる');
+});
+
+test('伏せ字: 振り返りに渡す道具の呼び出し（reviewWindow の skill）は、値に " が入っていても password を丸ごと伏せる', () => {
+  const stored = [{ id: 1, role: 'assistant', text: '入れます', message: { role: 'assistant', toolCalls: [{ name: 'browser_type', arguments: { ref: 'e2', password: 'Pa"ss-9876' } }] } }] as any;
+  const transcript = reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }, undefined, 'skill').transcript;
+  assert.ok(transcript.includes('browser_type'), transcript);
+  assert.ok(!transcript.includes('ss-9876') && !transcript.includes('Pa"'), transcript);
+});
+
+test('伏せ字: JSON の文字列の中の \\" は閉じの引用符でない（読めない引数の元の文・ログの JSON でも、値の後ろ半分を残さない）。引用符が閉じていなければ今までどおり', () => {
+  assert.equal(redactSecrets('{"password":"Pa\\"ss-9876","ref":"e2"}'), '{"password":[REDACTED],"ref":"e2"}');
+  assert.equal(redactSecrets('{"api_key":"sk\\"-abc","next":"v"}'), '{"api_key":[REDACTED],"next":"v"}');
+  assert.equal(redactSecrets('token="a\\"b" other="c"'), 'token=[REDACTED] other="c"');
+  assert.equal(redactSecrets('{"command":"x --password \\"abc\\" y"}'), '{"command":"x --password [REDACTED] y"}', '二重に包んだ形は今までどおり');
+  assert.equal(redactSecrets('password="abc\n"x"'), 'password=[REDACTED]\n"x"', '行をまたいで読まない');
+  assert.equal(redactSecrets('{"password":"Pa\\\\"}, "next":"v"'), '{"password":[REDACTED]}, "next":"v"', '値の終わりの \\\\ は引用符を守らない');
+  const raw = '{"ref":"e2","password":"Pa\\"ss-9876"';
+  assert.ok(!JSON.stringify(redactJsonValue(raw)).includes('ss-9876'), '読めない引数の元の文（call.raw）');
 });

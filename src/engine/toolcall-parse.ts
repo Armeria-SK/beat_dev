@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isSensitiveName } from '../shared/redaction.ts';
 import type { ToolCall } from './types.ts';
 
 export function extractToolCalls(text: string, toolNames: ReadonlySet<string>): { calls: ToolCall[]; text: string } {
@@ -62,4 +63,23 @@ export function textToolCallStart(text: string): number {
 export function streamEnd(text: string, streamed: number): number {
   const start = textToolCallStart(text);
   return start === -1 ? text.length : Math.max(start, streamed);
+}
+
+const SENSITIVE_VALUE_MIN = 4;
+const SENSITIVE_VALUE_DEPTH = 20;
+
+// 拾った呼び出しの引数のうち、秘密の名前の欄（password など。その下の入れ子・配列も）の文字列。呼び出しとして取り除かれなかった本文（繰り返した呼び出し・壊れた呼び出し・説明）に同じ値が残るので、保存の前に伏せるのに使う。
+// 4 文字より短い値は集めない（本文の 1 文字まで壊れる）
+export function sensitiveArgValues(calls: readonly ToolCall[]): string[] {
+  const found = new Set<string>();
+  const walk = (value: unknown, depth: number, inherited: boolean): void => {
+    if (depth > SENSITIVE_VALUE_DEPTH || value === null || typeof value !== 'object') return;
+    for (const [key, item] of Object.entries(value)) {
+      const sensitive = inherited || isSensitiveName(key);
+      if (typeof item === 'string') { if (sensitive && item.trim().length >= SENSITIVE_VALUE_MIN) found.add(item); }
+      else walk(item, depth + 1, sensitive);
+    }
+  };
+  for (const call of calls) walk(call.arguments, 0, false);
+  return [...found];
 }

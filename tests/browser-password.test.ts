@@ -695,6 +695,79 @@ test('P7: 本文のツール呼び出しの形が、引数が先・args・間に
   }
 });
 
+// 拾って動かした呼び出しの外に残る本文（別の書き方で繰り返した呼び出し・壊れた呼び出し・知らない道具の呼び出し・あとの説明）に値が書かれていても、保存される返事（履歴の API）に残さない
+const TAG_CALL = `<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"${PASS}"}}</tool_call>`;
+const FENCED_CALL = `${FENCE}json\n{"name":"browser_type","arguments":{"ref":"e2","password":"${PASS}"}}\n${FENCE}`;
+const KEPT_SHAPES: Array<[string, string]> = [
+  ['the same call repeated in a fence', `ログインします。\n${TAG_CALL}\n念のため同じ呼び出し:\n${FENCED_CALL}`],
+  ['a fenced explanation, then the call', `手順:\n${FENCED_CALL}\n${TAG_CALL}`],
+  ['a second call with broken JSON', `${TAG_CALL}\n<tool_call>{"name":"browser_type","arguments":{"ref":"e2","password":"${PASS}"</tool_call>`],
+  ['a call naming an unknown tool, then the real one', `<tool_call>{"name":"no_such_tool","arguments":{"password":"${PASS}"}}</tool_call>\n${TAG_CALL}`],
+  ['narration after the call', `${TAG_CALL}\n入力しました（${PASS}）。`],
+];
+
+test('P7: 拾った呼び出しの外に残る本文（繰り返した呼び出し・壊れた呼び出し・知らない道具・あとの説明）に値があっても、保存される返事・履歴の API に残さない。呼び出しは今までどおり拾う', async t => {
+  for (const [name, reply] of KEPT_SHAPES) {
+    const { s, events } = await streamApp(t);
+    const id = uuid(90 + KEPT_SHAPES.findIndex(([known]) => known === name));
+    const probes: string[] = [];
+    s.adapter().scripts = [async function* () {
+      for (let at = 0; at < reply.length; at += 9) {
+        yield { type: 'text', delta: reply.slice(at, at + 9) };
+        probes.push(`${s.app.bus.drafts().map(draft => draft.text).join('|')}\n${await (await s.api(`/api/conversations/${id}/messages`)).text()}`);
+      }
+      yield { type: 'done', stop: 'end_turn' as StopReason };
+    }, finish];
+    s.app.conversations.create({ id, title: '会話' });
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'ログインして' });
+    assert.equal(sent.status, 202, JSON.stringify(sent.body));
+    await settled(s.app, sent.body.runId);
+    const head = PASS.slice(0, 6);
+    for (const probe of probes) assert.ok(!probe.includes(head), `${name}: ${probe}`);
+    const saved = s.app.conversations.messages(id);
+    const said = saved.filter(m => m.role === 'assistant').map(m => `${m.text}\n${m.message.role === 'assistant' ? m.message.content : ''}`).join('\n');
+    assert.ok(said.length > 0 && !said.includes(head), `${name}: ${said}`);
+    assert.ok(!(await (await s.api(`/api/conversations/${id}/messages`)).text()).includes(head), name);
+    assert.ok(!everything(events).includes(head), name);
+    const called = saved.flatMap(m => (m.message.role === 'assistant' ? m.message.toolCalls ?? [] : [])).map(call => call.name);
+    assert.ok(called.includes('browser_type'), `${name}: ${called.join()}`);
+  }
+});
+
+test('P7: password の引数の説明は、目立つ値（8 文字以上・ページに出ている語や数でないもの）を選ぶよう案内する', () => {
+  const description = (browserType.input.properties as Record<string, { description?: string }>).password?.description ?? '';
+  assert.match(description, /8 or more characters/u);
+  assert.match(description, /not a word or number shown on the page/u);
+});
+
+test('P7: 返事の途中で印が見えたあとは、本文を見直さない（続きがどれだけ長くても、見直しの回数は増えない）', async t => {
+  const { s } = await streamApp(t);
+  const id = uuid(99);
+  const head = '前置き。';
+  const call = '<tool_call>{"name":"browser_read","arguments":{}}</tool_call>';
+  const tail = 'x'.repeat(2000);
+  let scans = 0;
+  const realExec = RegExp.prototype.exec;
+  RegExp.prototype.exec = function (this: RegExp, subject: string): RegExpExecArray | null {
+    if (this.source.includes('arguments|parameters|args')) scans += 1;
+    return realExec.call(this, subject);
+  } as typeof RegExp.prototype.exec;
+  try {
+    s.adapter().scripts = [async function* () {
+      yield { type: 'text', delta: head };
+      yield { type: 'text', delta: call };
+      for (let at = 0; at < tail.length; at += 4) yield { type: 'text', delta: tail.slice(at, at + 4) };
+      yield { type: 'done', stop: 'end_turn' as StopReason };
+    }, finish];
+    s.app.conversations.create({ id, title: '会話' });
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: '読んで' });
+    assert.equal(sent.status, 202, JSON.stringify(sent.body));
+    await settled(s.app, sent.body.runId);
+  } finally { RegExp.prototype.exec = realExec; }
+  assert.ok(scans > 0 && scans <= 3, `印が見えたあとの続き 500 回では見直さない: ${scans}`);
+  assert.equal(s.app.conversations.messages(id).find(m => m.role === 'assistant')!.text, head + tail, '保存される返事は変わらない');
+});
+
 test('P7: 印の無い返事は、今までどおり 1 つずつ流す（欠けも並べ替えも無い）', async t => {
   const { s, events } = await streamApp(t);
   const id = uuid(73);

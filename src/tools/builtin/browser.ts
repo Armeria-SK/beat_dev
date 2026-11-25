@@ -753,7 +753,7 @@ export const browserType: ToolDef<{ tab?: string; ref: string; text?: string; pa
     tab: Type.Optional(TAB_ID),
     ref: REF,
     text: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX })),
-    password: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX, description: 'A test password or verification code for a password field of the dev server this run started (never a real one). Use this instead of text' })),
+    password: Type.Optional(Type.String({ maxLength: TYPE_TEXT_MAX, description: 'A test password or verification code for a password field of the dev server this run started (never a real one). Use this instead of text. Pick a distinctive value of 8 or more characters that is not a word or number shown on the page: wherever the value appears in later browser output, it is hidden' })),
     submit: Type.Optional(Type.Boolean()),
   }, { additionalProperties: false }),
   effect: 'network',
