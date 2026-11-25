@@ -119,6 +119,7 @@ export const EXPLAIN_KEYS = [
   'tool.web_download',
   'tool.browser_open',
   'tool.browser_read',
+  'tool.browser_find',
   'tool.browser_screenshot',
   'tool.browser_close',
   'tool.browser_click',

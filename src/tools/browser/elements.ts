@@ -5,6 +5,7 @@
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import type { Language } from '../../config/schema.ts';
 import { toolText } from '../../shared/messages/tools.ts';
+import { redactSecrets } from '../../shared/redaction.ts';
 import { pageUrl as publicPageUrl } from '../web/public-page.ts';
 import { BrowserFailure } from './driver.ts';
 import { sentText } from './sent.ts';
@@ -94,10 +95,13 @@ export interface RefBook {
   // seen: 最後に見せる形（show / diff）で読んだときの要素（印 → 役割と名前）。押す前の取り直し（check）では変えない
   readonly view: Map<string, string>;
   readonly seen: Map<string, string>;
+  // いまの URL・文書で、見せる形（show / diff）の読みを 1 回でもしたか。していなければ差分の元が無い
+  // （移動のあとの最初の読みが検索だけのとき）ので、次の差分は表の形で返す
+  based: boolean;
 }
 
 export function newRefBook(counter: RefCounter = { next: 1 }): RefBook {
-  return { counter, url: undefined, document: undefined, records: new Map(), retired: new Set(), shown: new Set(), view: new Map(), seen: new Map() };
+  return { counter, url: undefined, document: undefined, records: new Map(), retired: new Set(), shown: new Set(), view: new Map(), seen: new Map(), based: false };
 }
 
 const KEY = /^([a-z]+)(?: "((?:[^"\\]|\\.)*)")?((?: \[[^\]]*\])*)$/u;
@@ -249,6 +253,7 @@ function retireAll(book: RefBook): void {
   book.records.clear();
   book.view.clear();
   book.seen.clear();
+  book.based = false;
 }
 
 function parseLines(snapshot: string, url: string): { lines: Line[]; entries: Entry[]; end: number[] } {
@@ -343,11 +348,90 @@ function scalar(raw: string): string {
 // diff: 押したあとの差分（P3b）。新しい番号は増えた要素（見せた番号の印でも、前に見せる形で読んだ要素でもないもの）にだけ振る。
 //   見せた番号の要素で中身が変わったものは使えなくして dead で返す（新しい番号は、次に見せる形で読んだときに振る）。
 //   URL か文書が変わった・差分の行が maxLines を超えるときは、show（tableLimit 件まで）と同じ表の形に落とす。
+// find: 検索（P4）。名前が query を含む要素（role があればその役割だけ）を、先頭から limit 件まで見せる（300 件より後ろの要素も探す）。
+//   番号の決まりは show と同じ（同じ要素・同じ中身なら同じ番号、違えば新しい番号）。差分の元（seen / view）は変えない（ページ全部を見せる読みではない）
 // fits には番号を振る前の要素を渡す（行の形は呼ぶ側が作って測る）
 export type Numbering =
   | { kind: 'show'; fits?: ((item: ListedElement) => boolean) | undefined; limit?: number | undefined }
   | { kind: 'check' }
+  | { kind: 'find'; query: string; role?: string | undefined; limit: number; fits?: ((item: ListedElement) => boolean) | undefined; secrets?: readonly string[] | undefined }
   | { kind: 'diff'; fits?: ((item: ListedElement) => boolean) | undefined; maxLines: number; tableLimit: number; secrets?: readonly string[] | undefined };
+
+// 検索で比べる形（P4）: 全角半角・合成の違いをそろえ（NFKC）、大小を区別せず、空白の並びは 1 つに
+export const foldText = (text: string): string => flatText(text.normalize('NFKC')).toLowerCase();
+
+// 要素の名前が検索の文を含むか。名前は伏せてから比べる（伏せた秘密の中身を、検索で当てさせない）
+function nameMatches(name: string, needle: string, secrets: readonly string[]): boolean {
+  return needle !== '' && foldText(redactSecrets(flatText(name), secrets)).includes(needle);
+}
+
+export interface FoundText {
+  // 見せる行（一致した行と前後 1 行。離れた所のあいだは「…」の行）
+  lines: string[];
+  // 見せた一致の数と、ページの文の一致の数
+  places: number;
+  total: number;
+}
+
+// 長い行は lineChars 字だけにする（切った側に「…」）。needle があれば一致のあたり、無ければ頭から。
+// 一致の場所は元の行の上で探す: 比べる形にすると一致が入る、いちばん短い頭の長さ（比べる形の位置は、形が伸び縮みする行では元の行の位置とずれる）
+function clipLine(row: string, needle: string | undefined, lineChars: number): string {
+  if (row.length <= lineChars) return row;
+  const chars = [...row];
+  if (chars.length <= lineChars) return row;
+  let end = 0;
+  if (needle !== undefined) {
+    let low = 1;
+    let high = chars.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (foldText(chars.slice(0, mid).join('')).includes(needle)) high = mid; else low = mid + 1;
+    }
+    end = low;
+  }
+  const from = Math.max(0, Math.min(end - Math.floor(lineChars * 2 / 3), chars.length - lineChars));
+  return `${from > 0 ? '…' : ''}${chars.slice(from, from + lineChars).join('')}${from + lineChars < chars.length ? '…' : ''}`;
+}
+
+// ページの文（伏せたあとのもの）から、query を含む行を前後 1 行つきで、先頭から maxPlaces か所まで。空の行は数えない。
+// room: その行の並びを見せられるか（呼ぶ側が送る形で測る）。収まらなくなった所で止める
+export function findText(text: string, query: string, maxPlaces: number, lineChars: number, room: (lines: readonly string[]) => boolean): FoundText {
+  const needle = foldText(query);
+  const rows = text.split(/\r?\n/u).map(row => row.trim()).filter(row => row !== '');
+  const hits = new Set<number>();
+  if (needle !== '') rows.forEach((row, i) => { if (foldText(row).includes(needle)) hits.add(i); });
+  // 行を切るのは行ごとに 1 回（長い行では手間がかかる）
+  const clipped = new Map<number, string>();
+  const clip = (i: number): string => {
+    let line = clipped.get(i);
+    if (line === undefined) { line = clipLine(rows[i]!, hits.has(i) ? needle : undefined, lineChars); clipped.set(i, line); }
+    return line;
+  };
+  const render = (kept: ReadonlySet<number>): string[] => {
+    const lines: string[] = [];
+    let last: number | undefined;
+    for (const i of [...kept].sort((a, b) => a - b)) {
+      if (last !== undefined && i !== last + 1) lines.push('…');
+      lines.push(clip(i));
+      last = i;
+    }
+    return lines;
+  };
+  let kept = new Set<number>();
+  let lines: string[] = [];
+  let places = 0;
+  for (const i of hits) {
+    if (places >= maxPlaces) break;
+    const next = new Set(kept);
+    for (const k of [i - 1, i, i + 1]) if (k >= 0 && k < rows.length) next.add(k);
+    const shownLines = render(next);
+    if (!room(shownLines)) break;
+    kept = next;
+    lines = shownLines;
+    places += 1;
+  }
+  return { lines, places, total: hits.size };
+}
 
 // 差分の行（増えた要素だけ）
 export function diffLine(item: ListedElement, secrets: readonly string[] = []): string {
@@ -375,7 +459,8 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   const keyOf = (e: Entry): string => `${e.role}\u0000${e.name}`;
   // diff: 差分で新しい番号を振ってよいのは、見せた番号の印でもなく、前に見せる形で読んだときにも無かった要素だけ
   const viewed = new Set(book.view.values());
-  const fresh = numbering.kind === 'diff' && !navigated ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
+  const unbased = navigated || !book.based;
+  const fresh = numbering.kind === 'diff' && !unbased ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
   // 番号を振るのは、押したあとのページで役割・名前が 1 つだけの要素だけ（同じ名前の組の要素は、並べ替え・作り直しで別の行の要素になりうる）
   // 同じかどうかは、モデルに見える形（伏せて 100 字で切った名前）で数える（伏せると同じに見える 2 つにも番号を振らない）
   const secrets = numbering.kind === 'diff' ? numbering.secrets ?? [] : [];
@@ -384,8 +469,11 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   if (fresh.length > 0) for (const e of entries) named.set(seenAs(e), (named.get(seenAs(e)) ?? 0) + 1);
   const wanted = fresh.filter(e => named.get(seenAs(e)) === 1);
   const tableLimit = numbering.kind === 'show' ? numbering.limit ?? MAX_ELEMENTS : numbering.kind === 'diff' ? numbering.tableLimit : 0;
-  let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (navigated ? 'show' : 'diff') : numbering.kind;
-  let candidates = new Set(form === 'show' ? usable.slice(0, tableLimit) : wanted);
+  let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (unbased ? 'show' : 'diff') : numbering.kind === 'find' ? 'show' : numbering.kind;
+  const needle = numbering.kind === 'find' ? foldText(numbering.query) : '';
+  const found = numbering.kind === 'find' ? usable.filter(e => (numbering.role === undefined || e.role === numbering.role) && nameMatches(e.name, needle, numbering.secrets ?? [])) : undefined;
+  let candidates = new Set(found ?? (form === 'show' ? usable.slice(0, tableLimit) : wanted));
+  const itemLimit = numbering.kind === 'find' ? numbering.limit : Infinity;
   const groups = new Map<string, Entry[]>();
   for (const e of entries) {
     const key = keyOf(e);
@@ -435,7 +523,7 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
     if (open && candidates.has(e)) {
       const ref = kept ? record!.ref : `e${book.counter.next}`;
       const item: ListedElement = { ref, role: e.role, name: e.name, pwRef, frameUrl: undefined, href: e.href, states: e.states };
-      if (fits(item)) {
+      if (items.length < itemLimit && fits(item)) {
         if (!kept) {
           if (record !== undefined) retire(book, record.ref);
           if (book.counter.next > REF_MAX) throw new BrowserFailure('ref_limit', 'browser.refs_exhausted', { max: REF_MAX });
@@ -459,8 +547,11 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
     if (!alive.has(pwRef)) { retire(book, record.ref); book.records.delete(pwRef); }
   }
   if (form === 'check') return { url, items, omitted: Math.max(0, usable.length - items.length) };
+  // 検索: 見せた一致だけの表（omitted は見せなかった一致の数）。差分の元は変えない
+  if (numbering.kind === 'find') return { url, items, omitted: skipped };
   // 見せる形で読んだ要素を、次の差分の元として覚える
   book.seen.clear();
+  book.based = true;
   for (const e of usable) book.seen.set(e.pwRef!, keyOf(e));
   // 使えなくなった見せた番号は元から外す。差分の形では、使えなくなったもの（dead）として知らせる（表の形では、表そのものが新しい元になる）
   const dead: Array<{ ref: string; present: boolean }> = [];

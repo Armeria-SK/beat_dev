@@ -14,7 +14,7 @@ import { rereadTab } from '../src/tools/browser/checks.ts';
 import { BrowserFailure, LAUNCH_TIMEOUT_MS, PlaywrightDriver, playwrightOptions, seedPreferences, systemLocale, type ElementTarget, type LaunchOptions, type PageHandle } from '../src/tools/browser/driver.ts';
 import { startEgressProxy } from '../src/tools/browser/egress-proxy.ts';
 import { BrowserSession } from '../src/tools/browser/session.ts';
-import { browserClick, browserOpen } from '../src/tools/builtin/browser.ts';
+import { browserClick, browserFind, browserOpen } from '../src/tools/builtin/browser.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { testConfig } from './helpers.ts';
 
@@ -450,6 +450,22 @@ test('P3a: slot・aria-owns で表の並びと DOM の順が違う画面でも�
     assert.equal(out.isError, undefined, out.content);
     assert.equal(await r.title(), 'clicked dom-second', `${path}: 表で 1 つ目に見えた要素を押す（DOM の順の 1 つ目ではない）`);
   }
+});
+
+test('P4: 350 個のボタンのページで、表に出ない 300 件より後ろの要素を browser_find で見つけ、その番号で押せる。文は前後 1 行つき', options, async t => {
+  const many = Array.from({ length: 350 }, (_, i) => `<p>note ${i + 1}</p><button data-id="item-${i + 1}">Ｉｔｅｍ ${i + 1}</button>`).join('');
+  const r = await refRig(t, { '/many': many });
+  const content = await r.open('/many');
+  assert.doesNotMatch(content, /"Ｉｔｅｍ 345"/u, '前提: 300 件より後ろは表に出ない');
+  const found = await browserFind.execute({ query: 'item 345' }, r.ctx);
+  assert.equal(found.isError, undefined, found.content);
+  const ref = /^(e\d+) button "Ｉｔｅｍ 345"$/mu.exec(found.content)?.[1];
+  assert.ok(ref, found.content);
+  const text = await browserFind.execute({ query: 'NOTE 200', where: 'text' }, r.ctx);
+  assert.match(text.content, /Ｉｔｅｍ 199\nnote 200\nＩｔｅｍ 200/u, text.content);
+  const out = await browserClick.execute({ ref }, r.ctx);
+  assert.equal(out.isError, undefined, out.content);
+  assert.equal(await r.title(), 'clicked item-345');
 });
 
 test('P3a: 読んだあと・押す前に、ページの中で行の文だけが入れ替わる（要素はそのまま）と、押さない', options, async t => {

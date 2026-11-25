@@ -210,6 +210,7 @@ export const en = {
   'tool.web_download': 'Download a file into downloads/',
   'tool.browser_open': 'Open a page in the browser (off by default; turn it on in Settings)',
   'tool.browser_read': 'Read the open page text and a list of elements',
+  'tool.browser_find': 'Search the open page for elements by name and for text (it only reads)',
   'tool.browser_screenshot': 'Take a screenshot of the open page (only for models that can see images)',
   'tool.browser_close': 'Close a browser tab (all tabs of this conversation when none is given)',
   'tool.browser_click': 'Click an element on the browser page (on listed sites and addresses you wrote it clicks without asking, elsewhere it is checked first; submitting a form always waits in Pending for your OK, and in tasks it is refused)',

@@ -149,7 +149,7 @@ test('番号を振るのは見せる 300 個だけ。超えた数を数え、後
   assert.equal(book.counter.next, 301, '見せない 50 個には番号を振らない');
   const text = formatElements(table, 'en');
   assert.equal(text.split('\n').length, 301);
-  assert.match(text, /\(50 more elements are omitted\)/u);
+  assert.match(text, /\(50 more elements are omitted\./u);
   assert.ok(!text.includes('e301 '));
 });
 

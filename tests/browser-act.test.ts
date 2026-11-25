@@ -654,7 +654,7 @@ test('P3a: 長いページでも、道具の結果は上限（16,000 文字）�
   assert.match(content, /Continue with offset=/u, '文は残りを offset で読ませる');
   const shown = [...content.matchAll(/^(e\d+) button /gmu)].map(m => m[1]!);
   assert.ok(shown.length > 10 && shown.length < 150, `${shown.length}`);
-  assert.match(content, new RegExp(`\\(${150 - shown.length} more elements are omitted\\)`, 'u'));
+  assert.match(content, new RegExp(`\\(${150 - shown.length} more elements are omitted\\.`, 'u'));
   const unseen = `e${Number(shown[shown.length - 1]!.slice(1)) + 1}`;
   const refused = await r.call('browser_click', { ref: unseen });
   assert.equal(refused.decision, 'deny', '見せていない番号は押せない');
