@@ -273,13 +273,19 @@ const RUNNER_PROGRAMS = new Set([...DEV_RUNNERS, 'npm', 'yarn', 'pnpm', 'pnpx'])
 // x・bunx（部品を取ってきて動かす）だけは、先頭が @ の「@スコープ/名前」と、末尾の @版（cowsay@1.5.0）を部品名として外す。bun run @evil.ts の @ は例外にしない
 const FILE_LIKE_TARGET = /^(?:.*[/\\]|[.~]|.*\.[A-Za-z0-9]+$)/u;
 const PACKAGE_NAME = /^@[^/\\@]+\/[^/\\@]+$/u;
+const packageIsFile = (text: string): boolean => {
+  const name = text.replace(/(?<=.)@[^/\\@]*$/u, '');
+  return !PACKAGE_NAME.test(name) && FILE_LIKE_TARGET.test(name);
+};
 function bunRunsFile(st: StatementFacts, from: number, package_: boolean): boolean {
-  const target = st.words.slice(from).find(w => !w.text.startsWith('-'));
+  const words = st.words.slice(from);
+  const at = words.findIndex(w => !w.text.startsWith('-'));
+  // x・bunx の部品を旗でくっつけて渡す書き方（--package=./evil.tgz・-p=…）は、先の語（tsc）でなく旗の値が取ってくる部品。値が動的・ワイルドカード・ファイルらしいなら実行
+  if (package_ && words.slice(0, at < 0 ? words.length : at).some(w => { const value = /^(?:--package|-p)=(.*)$/su.exec(w.text)?.[1]; return value !== undefined && (w.dynamic || w.glob || packageIsFile(value)); })) return true;
+  const target = words[at];
   if (target === undefined) return false;
   if (target.dynamic || target.glob) return true;
-  if (!package_) return FILE_LIKE_TARGET.test(target.text);
-  const name = target.text.replace(/(?<=.)@[^/\\@]*$/u, '');
-  return !PACKAGE_NAME.test(name) && FILE_LIKE_TARGET.test(name);
+  return package_ ? packageIsFile(target.text) : FILE_LIKE_TARGET.test(target.text);
 }
 
 // 試験の道具・パッケージの道具（--test・-m pytest|unittest は、実行の先より前にあるときだけ）

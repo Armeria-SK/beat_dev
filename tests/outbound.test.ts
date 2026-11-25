@@ -603,3 +603,13 @@ test('S3 python の -Pm・-Rm・-PRm のように値を取らない旗をくっ�
   ]);
   expectKinds(f.kindOf, 'bash', undefined, [`python -Pm pytest`, `python -Rm pytest`, `python -PRm unittest`, `python -Pm twine check dist/x`, `python -P script.py`]);
 });
+
+// 2026-11-26 shell-rest 差し戻し 3: python の -m が 2 回書かれているときは、最初の 1 つだけでなく全部の名前を読む（どれが実際に動くか迷う書き方は、送るほうに倒す）
+test('S3 python に -m が 2 つ以上あるときは、どの名前が http.server・twine でも送る。-m の名前が全部ふつうの道具のものは今のまま', { skip: !gitAvailable && 'git が無い' }, t => {
+  const f = fixture(t);
+  expectKinds(f.kindOf, 'bash', 'send', [
+    `python -m pytest -m http.server`, `python -mpytest -mhttp.server`, `python -m pytest -Pm http.server`, `python -m unittest -m twine upload dist/x`, `python3 -Bm pytest -m http.server 8000`,
+    `python -m pytest -m "not slow" -m http.server`,
+  ]);
+  expectKinds(f.kindOf, 'bash', undefined, [`python -m pytest -m "not slow"`, `python -m pytest -m slow -m unit`, `python -mpytest -mslow`, `python -m twine check dist/x -m x`]);
+});

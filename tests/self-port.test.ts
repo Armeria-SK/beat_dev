@@ -277,3 +277,96 @@ test('S6 縮めた JSON の本文でも、eval・シェルの -c・シェルへ�
   const free = [`curl -d '${json}' http://example.com/`, `echo '${json}' > l.json`, `curl --data-raw='${json}' http://example.com/api`, `node -e "console.log(1)" && curl -d '${json}' http://example.com/`];
   assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined).map(command => command.slice(0, 40)), []);
 });
+
+// 2026-11-26 shell-rest 差し戻し 3: ホストが , や = の直後にある語、刻みが大きすぎて並べられない範囲、2 回目の確かめの仕事量の上限、JSON の除外と文字列の読み直し
+test('S6 ホストが , や = の直後にある書き方（PowerShell の配列・変数への代入・here-string）も、括弧を全部は確かめきれないなら断る。手元でないホストは今のまま', () => {
+  const reached = [
+    'Start-Process curl.exe -ArgumentList "-s","127.0.0.1:4[0-9][0-9][0-9]/api/pending" -NoNewWindow -Wait', 'Start-Process curl.exe "-s","127.0.0.1:4[0-9][0-9][0-9]/api/pending"',
+    'Start-Process curl.exe -ArgumentList:"-s","127.0.0.1:4[0-9][0-9][0-9]/api/pending"', 'Start-Process curl.exe -ArgumentList:"127.0.0.1:4[0-9][0-9][0-9]/api/pending"', `start curl.exe -ArgumentList '-s','127.0.0.1:4[0-9][0-9][0-9]/api/pending'`,
+    `saps curl.exe -ArgumentList '-s','127.0.0.1:4[0-9][0-9][0-9]/api/pending'`, `Start-Process -FilePath curl.exe -ArgumentList '-s','http://127.0.0.1:4[0-9][0-9][0-9]/api/pending'`,
+    `Start-Process wget.exe -ArgumentList '-qO-','127.0.0.1:4[0-9][0-9][0-9]/api/pending'`, 'Start-Process curl.exe -ArgumentList "-s","127.0.0.1:{4,5}{0..9}{0..9}{0..9}/api/pending"',
+    `Invoke-Command -ScriptBlock { Start-Process curl.exe -ArgumentList '-s','127.0.0.1:4[0-9][0-9][0-9]/api/pending' }`,
+    'Start-Process curl.exe -ArgumentList "-s","127.0.0.1:{5,4}{8,7}{8,7}{8,7}/api/pending?q={1..64..-1}"',
+    'U=127.0.0.1:{5,4}{8,7}{8,7}{8,7}/{1..64..-1}; curl $U', 'U=127.0.0.1:{5,4}{8,7}{8,7}{8,7}/{1..64..-1}; curl "$U"', 'export U=http://127.0.0.1:{5,4}{8,7}{8,7}{8,7}/{1..64..-1}; curl $U',
+    'U=127.0.0.1:4[0-9][0-9][0-9]/api/pending; curl $U', 'curl -K- <<< "url=127.0.0.1:4[0-9][0-9][0-9]/api/pending"', 'curl --config - <<< "url = http://localhost:4[0-9][0-9][0-9]/api/pending"',
+    'Start-Process curl.exe -ArgumentList "-s","{","127.0.0.1:4[0-9][0-9][0-9]/api/pending"',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined), []);
+  const free = [
+    'Start-Process curl.exe -ArgumentList "-s","http://example.com:[1-9][0-9][0-9][0-9]/"', 'Start-Process curl.exe -ArgumentList "-s","http://example.com/p[0-9][0-9][0-9][0-9]"',
+    'U=example.com:{1..64}{1..64}; curl $U', 'curl -K- <<< "url=http://example.com:[1-9][0-9][0-9][0-9]/"', 'Start-Process curl.exe -ArgumentList "-s","127.0.0.1:3000/p[0-9][0-9][0-9][0-9]"',
+    'Start-Process curl.exe -ArgumentList "-s","-o","a[0-9][0-9][0-9][0-9].html","http://example.com/"',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
+});
+
+test('S6 , や = で分ける前の語もそのまま確かめる（ユーザー情報に , や = があっても、スキームの既定ポートだけで beat に着く書き方を見逃さない）', () => {
+  const viaDefault = { port: 4777, origins: ['http://localhost'] };
+  const tails = '/{a,b}'.repeat(9);
+  const reached = [`curl 'http://u,v@{x,l}{x,o}calhost${tails}'`, `curl 'http://u=v@{x,l}{x,o}calhost${tails}'`, `curl 'http://u,v=w@{x,l}{x,o}calhost${tails}'`];
+  assert.deepEqual(reached.filter(command => selfTarget(command, viaDefault) === undefined), []);
+  assert.deepEqual([`curl 'http://u,v@{x,y}{x,o}calhost${tails}'`].filter(command => selfTarget(command, viaDefault) !== undefined), []);
+});
+
+test('S6 刻みや端が大きすぎて並べられない範囲は、並べずに通さず、手元のホストに付いていれば断る（正の刻みも、負の刻みも、桁の多い端も）。手元でないホスト・ホストの後ろの範囲は今のまま', () => {
+  const reached = [
+    'curl 127.0.0.1:{4777..4777..-9007199254740993}/api/pending', 'curl 127.0.0.1:{4777..99999999999..-99999999999}/api/pending', 'curl http://localhost:{4777..4777..-99999999999999999}/api/pending',
+    'curl 127.0.0.1:{4777..12345678901..-12345678901}/api/pending', 'wget -qO- 127.0.0.1:{4777..4777..-9007199254740993}/api/pending',
+    'curl 127.0.0.1:{4777..4777..9007199254740993}/api/pending', 'curl 127.0.0.1:{4777..99999999999..99999999999}/api/pending', 'curl 127.0.0.1:{0000000000000000000000000000004777..4777}/api/pending',
+    'curl http://127.0.0.1:{4777..4777..-9007199254740993}/', 'Start-Process curl.exe -ArgumentList "-s","127.0.0.1:{4777..4777..-9007199254740993}/api/pending"',
+  ];
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined), []);
+  const free = [
+    'curl http://127.0.0.1:3000/{1..99999999999..-1}', 'curl http://example.com:{4777..4777..-9007199254740993}/', 'echo {4777..4777..-9007199254740993}', 'curl http://127.0.0.1:3000/{1..99999999999}',
+    'curl http://127.0.0.1:3000/{a..z..-9007199254740993}',
+  ];
+  assert.deepEqual(free.filter(command => selfTarget(command, beat) !== undefined), []);
+});
+
+// 2 回目の確かめは、1 つの語に使える仕事量（20,000）と、全部の語で使える仕事量（200,000）に上限がある。上限が効いているかは、あとの語が確かめきれずに断られるかで見る
+test('S6 2 回目の確かめの仕事量: 1 つの語は上限までしか使えず、全部の語の合計にも上限があって、尽きたあとの手元の語は断る', () => {
+  const heavy = (id: number, items: number, width: number): string => `{${Array.from({ length: items }, (_, i) => `${id}${String(i).padStart(3, '0')}`.padEnd(width, '7')).join(',')}}`;
+  const victim = `127.0.0.1:{3000,3001}/${'p'.repeat(400_000)}`;
+  // 1 つの語（20,000 まで）が、あとの語の分の仕事量を食わない
+  const one = `curl example.com:${heavy(1, 400, 250)}/${'p'.repeat(1_000)} ${victim}`;
+  assert.equal(selfTarget(one, beat), undefined);
+  // 語が積み重なって全部の合計（200,000）を使い切ったあとの手元の語は、確かめきれないので断る
+  const many = Array.from({ length: 14 }, (_, i) => `example.com:${heavy(i + 2, 400, 25)}/${'p'.repeat(500)}`).join(' ');
+  assert.notEqual(selfTarget(`curl ${many} ${victim}`, beat), undefined);
+});
+
+test('S6 1 つの語の「ホスト:ポート」が 20,000 の仕事量では広げきれないとき、手元のホストなら断る。広げきれる語・手元でないホストは今のまま', () => {
+  const ports = (last: string): string => `{${[...Array.from({ length: 400 }, (_, i) => `${1000 + i}`.padEnd(30, '0')), last].join(',')}}`;
+  const pad = 'p'.repeat(1_000);
+  assert.notEqual(selfTarget(`curl 127.0.0.1:${ports('4777')}/${pad}`, beat), undefined);
+  assert.equal(selfTarget(`curl example.com:${ports('4777')}/${pad}`, beat), undefined);
+  assert.equal(selfTarget(`curl 127.0.0.1:{3000,3001}/${'p'.repeat(310_000)}`, beat), undefined);
+  assert.notEqual(selfTarget(`curl 127.0.0.1:{4776,4777}/${'p'.repeat(310_000)}`, beat), undefined);
+});
+
+test('S6 同じ語が JSON の引用と JSON でない書き方の両方で出てくるときは、JSON としては除外しない。JSON の中に bash・eval という文字があるだけでは、文字列を読み直すとは数えない', () => {
+  const filler = Array.from({ length: 80 }, (_, i) => `"z${i}":{"a":1,"b":2}`).join(',');
+  const json = `{"x":1,"http":{"y":1,"//127.0.0.1":{${filler},"4777/api/pending?":{"q":1,"r":2}}}}`;
+  assert.notEqual(selfTarget(`curl -d '${json}' http://example.com/; echo ${json}`, beat), undefined);
+  assert.notEqual(selfTarget(`echo ${json}; curl -d '${json}' http://example.com/`, beat), undefined);
+  const shells = json.replace('{"x":1,', '{"x":1,"shell":"bash","run":"eval","cmd":"powershell",');
+  assert.equal(selfTarget(`curl -d '${shells}' http://example.com/`, beat), undefined);
+  assert.equal(selfTarget(`curl -d '${shells}' http://example.com/refresh`, beat), undefined);
+});
+
+test('S6 JSON の外にシェルの名前（rbash・mksh・ksh93・oksh・posh・yash・ash・bash5・bash-5.2・sh5・/bin/bash・$SHELL・env bash）があれば、文字列を読み直すので JSON の除外を外す', () => {
+  const filler = Array.from({ length: 80 }, (_, i) => `"z${i}":{"a":1,"b":2}`).join(',');
+  const json = `{"x":1,"http":{"y":1,"//127.0.0.1":{${filler},"4777/api/pending?":{"q":1,"r":2}}}}`;
+  const names = ['rbash', 'mksh', 'ksh93', 'oksh', 'loksh', 'pdksh', 'lksh', 'posh', 'yash', 'ash', 'bash5', 'zsh5', 'bash-5.2', 'sh5', '/bin/bash', '/usr/bin/env bash', 'dash.exe', '$SHELL', '"${SHELL}"', 'fish', 'csh'];
+  const reached = names.map(name => `echo curl '${json}' | ${name}`);
+  assert.deepEqual(reached.filter(command => selfTarget(command, beat) === undefined).map(command => command.slice(-30)), []);
+  assert.deepEqual(['rbash', 'ksh93'].map(name => `${name} -c 'curl '"'${json}'"`).filter(command => selfTarget(command, beat) === undefined).map(command => command.slice(0, 20)), []);
+});
+
+test('S6 JSON が何万語あっても、シェルの読み直しがあるかの確かめは語の数に 2 乗では増えない', () => {
+  const words = Array.from({ length: 40_000 }, (_, i) => `'{"id":${i},"v":{"a":${i * 2},"b":[1,2]}}'`).join(' ');
+  const started = performance.now();
+  assert.equal(selfTarget(`curl -d ${words} http://example.com/`, beat), undefined);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 5_000, `${Math.round(elapsed)}ms`);
+});

@@ -28,9 +28,12 @@ const AUTHORITY_BUDGET = 20_000;
 const AUTHORITY_POOL = 200_000;
 // 引用符で囲んだ 1 つの語（bash -c "curl 127.0.0.1:4[0-9]…"）には空白・; | & ( ) < > で分かれる語が入っているので、2 回目の確かめはその語ごとにする
 const TOKEN_SPLIT = /[\s;&|()<>]+/u;
-// 文字列をシェルがもう一度読む書き方: eval・source・. （コマンドの位置）・シェルの名前（bash・sh・zsh・dash・ksh・csh・tcsh・fish・busybox・pwsh・powershell・cmd）
-const REPARSE = /(?<![\w.$-])(?:eval|source|(?:ba|z|da|k|c|tc|fi)?sh|busybox|pwsh|powershell|cmd)(?:\.exe)?(?![\w.-])|(?:^|[;&|(\n])\s*\.\s/iu;
-const PREFIX = /^(?:-{1,2}[A-Za-z][\w-]*=)?([a-z][a-z0-9+.-]*:\/{1,3})?/iu;
+// 文字列をシェルがもう一度読む書き方: eval・source・. （コマンドの位置）・シェルの名前。シェルの名前は広く取る: 名前（/ や \ より後ろ）が sh で終わる語（bash・rbash・mksh・ksh93・posh・yash・ash・bash-5.2・sh5・pwsh…）と busybox・powershell・cmd・$SHELL。
+// 広く取りすぎて（push・flush など）読み直しと数えても、縮めた JSON の除外が外れるだけ。:// のある語（URL）は数えない
+const REPARSE_DOT = /(?:^|[;&|(\n])\s*\.\s/u;
+const REPARSE_NAME = /^(?:eval|source|busybox|cmd|powershell|\$\{?shell\}?|[a-z]*sh)[\d.-]*(?:\.exe)?$/iu;
+const REPARSE_SPLIT = /[\s;&|()<>"'`=]+/u;
+const PREFIX = /^(?:-{1,2}[A-Za-z][\w-]*[=:])?([a-z][a-z0-9+.-]*:\/{1,3})?/iu;
 const HOST_TEXT = new RegExp(String.raw`^(?:${HOST_CHAR}|[:[\]])*$`, 'u');
 const DEFAULT_PORT: Record<string, number> = { http: 80, ws: 80, https: 443, wss: 443 };
 
@@ -112,6 +115,8 @@ function expandedForms(word: string, ports: ReadonlySet<number>, budget: Budget,
   for (let match = group.exec(word); match; match = group.exec(word)) {
     const span = match[1] !== undefined ? SEQUENCE.exec(match[1]) : SPAN.exec(match[2]!);
     const items = span ? spanItems(span, ports) : match[1]?.split(',');
+    // 刻みや端が大きすぎて並べられない範囲（{4777..4777..-9007199254740993} は bash では 4777 だけ）は、中身が分からないので、並べきれなかったことにする
+    if (span && !items) budget.cut = true;
     if (!items?.length) { group.lastIndex = match.index + 1; continue; }
     texts.push(word.slice(at, match.index));
     choices.push([...new Set(items)]);
@@ -244,27 +249,61 @@ function authorityHit(word: string, ports: ReadonlySet<number>, hosts: readonly 
   return own.cut && (target.hostGroup || target.hidden || selfHost(target.host, hosts));
 }
 
+// 2 回目の確かめにかける語の分け方。空白・; & | ( ) < > で分けた語（引用符の文の中の語）を、さらに括弧の外の , と = で分ける:
+// PowerShell の配列 "-s","127.0.0.1:…" や代入 U=127.0.0.1:… のホストは , = の直後にある。括弧は閉じて対になったものだけ数える（閉じない { が , = の分けを止めない）。
+// 分ける前の語もそのまま残す（http://user,x@{x,l}ocalhost/… のようにスキームを含む書き方を、これまでどおり確かめる）
+function tokensOf(word: string): string[] {
+  return word.split(TOKEN_SPLIT).flatMap(chunk => {
+    const open: number[] = [];
+    const paired = new Set<number>();
+    for (let i = 0; i < chunk.length; i++) {
+      const ch = chunk[i]!;
+      if (ch === '{' || ch === '[') open.push(i);
+      else if ((ch === '}' || ch === ']') && open.length > 0 && chunk[open[open.length - 1]!] === (ch === '}' ? '{' : '[')) { paired.add(open.pop()!); paired.add(i); }
+    }
+    const pieces: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < chunk.length; i++) {
+      const ch = chunk[i]!;
+      if (paired.has(i)) depth += ch === '{' || ch === '[' ? 1 : -1;
+      else if (depth === 0 && (ch === ',' || ch === '=')) { pieces.push(chunk.slice(start, i)); start = i + 1; }
+    }
+    return pieces.length === 0 ? [chunk] : [chunk, ...pieces, chunk.slice(start)];
+  });
+}
+
+// 文字列をシェルがもう一度読む書き方があるか（JSON の本文を除いた文を見る）
+function readsAgain(rest: string): boolean {
+  return REPARSE_DOT.test(rest) || rest.split(REPARSE_SPLIT).some(token => !token.includes('://') && REPARSE_NAME.test(token.slice(Math.max(token.lastIndexOf('/'), token.lastIndexOf('\\')) + 1)));
+}
+
 export function selfTarget(text: string, server: SelfServer): string | undefined {
   const { ports, hosts } = selfPortsOf(server);
   const plain = text.replace(/["'`]/gu, '');
   const literal = literalTarget(plain, ports, hosts);
   if (literal !== undefined) return literal;
   const grouped = new Map<string, boolean>();
-  const jsons = new Set<string>();
-  for (const [quoted] of text.matchAll(SHELL_WORD)) {
+  // JSON の本文を取り除いた文（語の位置から 1 回で作る。JSON が何万語あっても読む量は文の長さだけ）
+  let rest = '';
+  let tail = 0;
+  let hasJson = false;
+  for (const found of text.matchAll(SHELL_WORD)) {
+    const quoted = found[0];
     const word = quoted.replace(/["'`]/gu, '');
     if (!/[{}[\]]/u.test(word)) continue;
     if (word.includes('://') && /[{}[\]]/u.test(word.replace(BRACKETED, group => (isIP(group.slice(1, -1)) === 6 ? '' : group)))) {
       for (const match of word.matchAll(PORT)) if (ports.has(Number(match[1]))) return word;
     }
     const json = jsonPayload(quoted);
-    if (json) jsons.add(quoted);
+    if (json) { hasJson = true; rest += `${text.slice(tail, found.index)} `; tail = found.index + quoted.length; }
     grouped.set(word, (grouped.get(word) ?? true) && json);
   }
+  rest += text.slice(tail);
   // 縮めた JSON の本文を 2 回目の確かめから外すのは、その文字列をシェルが読み直さないときだけ。eval・シェルの -c・シェルへの pipe などがあると、
   // JSON の { } と , が括弧の展開に読まれて "http":"//127.0.0.1":"4777/…" が http://127.0.0.1:4777/… になる。JSON の外の部分に読み直す書き方があれば外さない
-  const reparses = jsons.size > 0 && REPARSE.test([...jsons].reduce((rest, json) => rest.split(json).join(' '), text));
-  const exempt = (word: string): boolean => grouped.get(word) === true && !reparses;
+  const reads = hasJson && readsAgain(rest);
+  const exempt = (word: string): boolean => grouped.get(word) === true && !reads;
   const budget: Budget = { left: 0, cut: false };
   let spare = WORK_BUDGET;
   let waiting = grouped.size;
@@ -285,7 +324,7 @@ export function selfTarget(text: string, server: SelfServer): string | undefined
   // 2 回目の確かめは 1 回目が全部終わってから、専用の仕事量で行う（1 回目の語ごとの仕事量を減らさない）。引用符の文の中の語（curl 127.0.0.1:…）も、分けた語ごとに確かめる
   let pool = AUTHORITY_POOL;
   for (const word of unfinished) {
-    for (const token of word.split(TOKEN_SPLIT)) {
+    for (const token of tokensOf(word)) {
       if (!/[{}[\]]/u.test(token)) continue;
       const own: Budget = { left: Math.min(AUTHORITY_BUDGET, pool), cut: false };
       pool -= own.left;
