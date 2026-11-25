@@ -1,10 +1,7 @@
 // beat 8-2 D-12: 作業コピー（linked worktree）のタスクで通す git。作業コピーは本体とブランチ・stash・設定・worktree の登録を分け合うので、
 // それを変えない形だけを数え上げて通し、ほかは断る（判定役にも Pending にも回さない）。オプションも数え上げた表にあるものだけ通す。純粋な関数
-import { lstatSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { PUSH_FLAGS, READ as READ_SPECS, WRITE_FLAGS } from './allowlist-git.ts';
-import { isCdHead } from './allowlist-core.ts';
-import { definesCommand } from './outbound.ts';
 import type { StatementFacts } from './shell-facts.ts';
 import { expandPath, isInside, realish } from './scope.ts';
 
@@ -171,87 +168,6 @@ function launchDirs(st: StatementFacts): { words: Array<{ text: string; dynamic:
   return { words: [] };
 }
 
-// cd の追跡（見張りが作業フォルダを 1 つに決められない文のためだけ）。見張りは、前の文が書いたあとの cd・popd のあとで作業フォルダを null にするが、
-// 行き先が書いてあるとおりの相対の名前だけの並び（cd web && … && cd ..・pushd web; …; popd）なら、ありうるフォルダを数え上げて、すべてが作業コピーの中かを見られる。
-// 読めない形（変数・ワイルドカード・引数の旗・ループ・関数・サブシェル・パイプ・|| で飛ばす・& で裏に回す・中身を読めない包み）が 1 つでもあれば追跡せず、今までどおり断る。
-// 前の文が何かを書いたかもしれないあと（npm test のあと）の cd は、.. だけを数える（その文が作ったかもしれないリンクや消したフォルダへ下りる cd は読めない）。
-// リンク・ジャンクションを通る cd、名前のあとの ..（link/../x）、パイプの中の cd も読まない
-const CD_NAMES = new Set(['cd', 'chdir', 'set-location', 'sl']);
-const PUSH_NAMES = new Set(['pushd', 'push-location']);
-const POP_NAMES = new Set(['popd', 'pop-location']);
-const CD_WORD = /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/u;
-const NOT_FLAT = /[(){}`]|[|][|&]|(?<![|&>])[|&](?![|&>])|(?:^|[\s;&|])(?:for|while|until|do|done|if|then|elif|else|fi|case|esac|select|function|coproc|trap|eval|exec|source|time)(?=[\s;&|]|$)/u;
-const CD_CAP = 16;
-const isDirectory = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
-
-// 作業コピーの根から dir までの途中に、リンク・ジャンクションがあるか（リンクの先は文字だけでは決まらない）。根は、シェルの最初のフォルダより上でもよい
-function throughLink(base: string, dir: string): boolean {
-  const rel = relative(base, dir);
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return false;
-  let at = base;
-  for (const part of rel.split(sep)) {
-    at = join(at, part);
-    if (lstatSync(at, { throwIfNoEntry: false })?.isSymbolicLink() === true) return true;
-  }
-  return false;
-}
-
-function cdTarget(st: StatementFacts): string | undefined {
-  const [, word, ...rest] = st.words;
-  if (!word || rest.length > 0 || word.dynamic || word.glob) return undefined;
-  const text = process.platform === 'win32' ? word.text.replaceAll('\\', '/') : word.text;
-  // Windows は名前の終わりの . を落とし、... を .. のように扱いうるので、. と .. 以外の . だけでできた・. で終わる名前は読まない
-  return CD_WORD.test(text) && !text.split('/').some(part => part !== '.' && part !== '..' && part.endsWith('.')) ? text : undefined;
-}
-
-// 文ごとの、その文が動きうるフォルダ（そこまでにいられたすべてのフォルダ）。追跡できなければ undefined
-export function followDirs(statements: readonly StatementFacts[], place: Pick<WorktreeGitPlace, 'worktree' | 'cwd' | 'command'>): ReadonlyMap<StatementFacts, readonly string[]> | undefined {
-  if (place.command === undefined || NOT_FLAT.test(place.command)) return undefined;
-  // パイプの途中の cd は子のシェルで動き、そのあとの文のフォルダは変わらない（|& も）。読まない
-  if (statements.some(st => st.piped === true || st.inner !== undefined || st.unknownInner !== undefined || st.programDynamic || st.programOdd || st.codeDynamic || definesCommand(st))) return undefined;
-  const out = new Map<StatementFacts, readonly string[]>();
-  const visited = new Set<string>([place.cwd]);
-  const stack: Array<string[] | null> = [];
-  let now = [place.cwd];
-  // 前の文がファイルを書いた・消したかもしれない（そのときは、あるフォルダへの cd も失敗しうるので、元のフォルダも残す）
-  let changed = false;
-  for (const st of statements) {
-    out.set(st, [...visited]);
-    const name = (st.words[0]?.text ?? st.program).toLowerCase();
-    const move = CD_NAMES.has(name) ? 'cd' : PUSH_NAMES.has(name) ? 'push' : POP_NAMES.has(name) ? 'pop' : undefined;
-    if (move === undefined) {
-      if (isCdHead(name) || isCdHead(st.program)) return undefined;
-      if (st.program !== '') changed = true;
-      continue;
-    }
-    if (move === 'pop') {
-      const top = stack.pop();
-      if (st.words.length > 1 || !top) return undefined;
-      now = changed ? [...new Set([...top, ...now])] : top;
-    } else {
-      const target = cdTarget(st);
-      if (target === undefined || (changed && !target.split('/').filter(Boolean).every(part => part === '.' || part === '..'))) return undefined;
-      // 名前の部分のあとの .. は、リンクをたどった先の親になりうる（bash は文字で解いた先が無いと、実体の親へ移る）。.. は先頭に並ぶものだけ読む
-      const parts = target.split('/').filter(Boolean);
-      const named = parts.findIndex(part => part !== '.' && part !== '..');
-      if (named >= 0 && parts.slice(named).includes('..')) return undefined;
-      const goes = now.map(from => resolve(from, target));
-      if (goes.some(to => throughLink(place.worktree, to) || (parts.includes('..') && !isDirectory(to)))) return undefined;
-      const uncertain = changed || goes.some(to => !isDirectory(to));
-      const next = new Set<string>();
-      for (const from of now) {
-        next.add(resolve(from, target));
-        if (uncertain) next.add(from);
-      }
-      if (move === 'push') stack.push(uncertain ? null : now);
-      now = [...next];
-    }
-    if (now.length > CD_CAP) return undefined;
-    for (const dir of now) visited.add(dir);
-  }
-  return out;
-}
-
 // 断る文（作業コピーのタスク）と、その理由の鍵。通すなら undefined
 export function worktreeGitRefusal(statements: readonly StatementFacts[], place: WorktreeGitPlace): WorktreeRefusal | undefined {
   const all = flatten(statements);
@@ -263,20 +179,9 @@ export function worktreeGitRefusal(statements: readonly StatementFacts[], place:
     || (() => { const d = launchDirs(st); return d.always === true || d.words.some(w => !w || w.dynamic || !insideDir(place, w.text, st)); })());
   if (opaque) return { key: WT_OPAQUE, cmd: shownOf(opaque) || opaque.program };
   // 作業コピーの外（cd で本体へ移ったあと）か、決められないフォルダで動く文は断る（git の文は gitRefusal が数える）
-  const tracked = followDirs(statements, place);
-  // 見張りが決められなかった文は、見張りの数えたフォルダ（cwds）と追跡した先の両方を見る
-  const dirsAt = (st: StatementFacts): readonly string[] | undefined => {
-    if (st.cwd !== null) return [...(st.cwds ?? []), st.cwd];
-    const followed = tracked?.get(st);
-    return followed === undefined ? undefined : [...(st.cwds ?? []), ...followed];
-  };
-  const away = all.filter(st => {
-    if (st.program === '' || isGitProgram(st.program)) return false;
-    const dirs = dirsAt(st);
-    return dirs === undefined || dirs.some(dir => !insideCopy(place.worktree, dir));
-  });
+  const away = all.filter(st => st.program !== '' && !isGitProgram(st.program) && (st.cwd === null || [...(st.cwds ?? []), st.cwd].some(dir => !insideCopy(place.worktree, dir))));
   if (away.length) {
-    const dirsOf = (st: StatementFacts): readonly string[] => [...(st.cwds ?? []), ...(dirsAt(st) ?? [])];
+    const dirsOf = (st: StatementFacts): string[] => [...(st.cwds ?? []), ...(st.cwd === null ? [] : [st.cwd])];
     const inMain = away.find(st => dirsOf(st).some(dir => mainWrites([dir], place).length > 0));
     if (inMain) return { key: WT_MAIN_PATH, cmd: shownOf(inMain), path: dirsOf(inMain).find(dir => mainWrites([dir], place).length > 0)! };
     return { key: WT_OPAQUE, cmd: shownOf(away[0]!) };
@@ -293,7 +198,7 @@ export function worktreeGitRefusal(statements: readonly StatementFacts[], place:
   const assigns = all.find(st => st.env.some(name => /^(?:env:)?git_/iu.test(name)) || st.words.some(w => GIT_VARIABLE.test(w.text)));
   if (assigns || GIT_VARIABLE.test(command)) return { key: WT_GIT_ENV, cmd: assigns ? shownOf(assigns) || assigns.env.join(' ') : command.slice(0, 200) };
   for (const st of gits) {
-    const refused = gitRefusal(st, place, dirsAt(st));
+    const refused = gitRefusal(st, place);
     if (refused !== undefined) return { key: WT_GIT_SHARED, cmd: refused };
   }
   return undefined;
@@ -305,11 +210,13 @@ const insideDir = (place: Pick<WorktreeGitPlace, 'worktree' | 'cwd'>, text: stri
   return st.cwd !== null && path !== undefined && insideCopy(place.worktree, path);
 };
 
-function gitRefusal(st: StatementFacts, place: WorktreeGitPlace, dirs: readonly string[] | undefined): string | undefined {
+function gitRefusal(st: StatementFacts, place: WorktreeGitPlace): string | undefined {
   const shown = shownOf(st);
   // git-lfs・scalar などは、何を書くか数え上げていない
   if (st.program !== 'git') return shown;
-  if (dirs === undefined || dirs.some(dir => !insideCopy(place.worktree, dir))) return shown;
+  if (st.cwd === null) return shown;
+  const cwds = [...new Set([...(st.cwds ?? []), st.cwd])];
+  if (cwds.some(dir => !insideCopy(place.worktree, dir))) return shown;
   const at = st.gitGlobal.length + 1;
   const globals = st.words.slice(1, at);
   for (let i = 0; i < globals.length; i++) {

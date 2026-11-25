@@ -7,8 +7,8 @@ import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { WT_MAIN_PATH, WT_OPAQUE, worktreeGitRefusal } from '../src/tools/hooks/worktree-git.ts';
 import { tempDir } from './helpers.ts';
 
-// L184: 作業コピーの中で `cd web && … && cd ..`・pushd / popd をしただけの並びを、読めない形（wt.opaque）として断らない。
-// 作業コピーの外へ出る cd・行き先が決まらない cd は、今までどおり断る
+// L184（作業コピーの中で cd して戻る形を断らない）は未着手。ここでは、作業コピーの外へ出る cd・行き先が決まらない cd を、今までどおり断ることを固定する。
+// cd -P / cd -L は見張り（allowlist-tools.ts）が行き先を決めない、という締め直しも固定する
 
 type Shell = 'bash' | 'powershell';
 
@@ -35,7 +35,7 @@ function fixture(t: Parameters<typeof tempDir>[0]) {
 
 const SHELLS: Shell[] = ['bash', 'powershell'];
 
-test('L184: 作業コピーの中だけを動く cd（cd web && … && cd ..）は wt.opaque で断らない', t => {
+test('L184 の目標（未着手: 作業コピーの中で cd して戻る形を断らない。見張りの cd の追跡は、リンク・パイプ・変数・set -P などの抜け道を塞ぎきれず、専用の計画が要る）: cd web && … && cd ..・pushd / popd は wt.opaque で断らない', { todo: 'L184 は専用の計画が要る（見張りが cd のあとの作業フォルダを null にするのを、作業コピーの中だけ追う形に緩める）' }, t => {
   const { refusal, parses } = fixture(t);
   const everyday = [
     'cd web && npm test && cd .. && npm run build',
@@ -61,7 +61,7 @@ test('L184: 作業コピーの中だけを動く cd（cd web && … && cd ..）�
   assert.equal(refusal('cd .. && npm test', 'bash', 'web')?.key, undefined, 'web の中から .. へ出て作業コピーの直下に戻るのも中');
 });
 
-test('L184 対照: 作業コピーの外へ出る cd・行き先を決められない cd・ほかの形は、今までどおり断る', t => {
+test('L184 の周り: 作業コピーの外へ出る cd・行き先を決められない cd・ほかの形は、今までどおり断る', t => {
   const { refusal, parses } = fixture(t);
   const away = [
     'cd .. && cd ..',
@@ -114,52 +114,38 @@ test('L184 対照: 作業コピーの外へ出る cd・行き先を決められ�
   }
 });
 
-test('L184 対照: 作業コピーの外を指す入口（junction・symlink のフォルダ）への cd は、中の名前に見えても断る', t => {
+test('L184 の周り: 作業コピーの外を指す入口（junction・symlink のフォルダ）への cd は、中の名前に見えても断る', t => {
   const { base, ws, refusal } = fixture(t);
   symlinkSync(join(base, 'elsewhere'), join(ws, 'link'), 'junction');
   for (const shell of SHELLS) {
     assert.ok(refusal('cd link && npm test && cd ..', shell)?.key !== undefined, `${shell}: cd link`);
     assert.ok(refusal('pushd link; npm test; popd', shell)?.key !== undefined, `${shell}: pushd link`);
   }
-  assert.equal(refusal('cd web && npm test && cd ..')?.key, undefined, '同じ形で中のフォルダなら通る');
 });
 
-test('L184 対照: 動いたあとに git の別の入口（-C ..・環境の変数）を足す形は、cd を許しても断る', t => {
-  const { refusal } = fixture(t);
-  for (const command of ['cd web && npm test && cd .. && git -C .. status', 'cd web && git -C ../.. status && cd ..', 'cd web && GIT_DIR=../../.git git status && cd ..', 'cd web && git stash && cd ..']) {
-    assert.ok(refusal(command)?.key !== undefined, command);
-  }
-});
-
-test('L184 対照（審査の指摘）: リンク・ジャンクションをまたぐ cd、名前のあとの ..、行き先の無い .. の cd は、文字だけで解けないので断る（bash はリンクの先の親へ移りうる）', t => {
+test('L184 の周り: リンク・ジャンクションをまたぐ cd、名前のあとの ..、行き先の無い .. の cd は、文字だけで解けないので断る（bash はリンクの先の親へ移りうる）', t => {
   const { base, ws, refusal } = fixture(t);
   symlinkSync(ws, join(ws, 'self'), 'junction');
   mkdirSync(join(base, 'sib'));
   const refused = ['cd self/../sib && npm test', 'cd self/../sib && git status', 'cd self; cd ../sib; npm test', 'cd self && rm self && cd .. && npm test', 'cd self; npm test; cd ..; cd ..; npm test'];
   for (const command of refused) assert.ok(refusal(command)?.key !== undefined, command);
   // シェルの最初のフォルダが作業コピーの中の web のとき、ひとつ上の self（根へのジャンクション）を消して .. へ戻ると、bash は実体の親（コピーの外）へ移る
-  assert.ok(refusal('cd ../self && rm self && cd .. && npm test', 'bash', 'web')?.key !== undefined, '兄弟のフォルダのリンク（web から ../self）');  assert.ok(refusal('cd web/../missing && npm test')?.key !== undefined, '名前のあとの .. （リンクが無くても読まない）');
+  assert.ok(refusal('cd ../self && rm self && cd .. && npm test', 'bash', 'web')?.key !== undefined, '兄弟のフォルダのリンク（web から ../self）');
+  assert.ok(refusal('cd web/../missing && npm test')?.key !== undefined, '名前のあとの .. （リンクが無くても読まない）');
   assert.ok(refusal('cd ../missing && npm test', 'bash', 'web')?.key !== undefined, '先頭の .. でも、行き先が無ければ読まない');
-  assert.equal(refusal('cd web && npm test && cd ..')?.key, undefined, '同じ形で中のフォルダなら通る');
-  assert.equal(refusal('cd ../web && npm test && cd ..', 'bash', 'web')?.key, undefined, '先頭の .. で、行き先がある中のフォルダなら通る');
 });
 
-test('L184 対照（審査の指摘）: パイプ（|& も）の中の cd は子のシェルで動くので追わない。見張りの数えたフォルダ（cwds）に外が入っていれば、追跡の結果があっても断る', t => {
-  const { ws, refusal, statementsOf } = fixture(t);
+test('L184 の周り: パイプ（|& も）の中の cd は子のシェルで動くので、そのあとの文も断る', t => {
+  const { refusal } = fixture(t);
   for (const command of ['cd web |& cat; cd ..; npm test', 'cd web |& cat; cd ..; rm -rf x', 'cd web | cat; cd ..; npm test']) assert.ok(refusal(command)?.key !== undefined, command);
-  const command = 'cd web && npm test && cd .. && npm run build';
-  const statements = statementsOf(command);
-  assert.equal(worktreeGitRefusal(statements, { worktree: ws, productRoot: join(ws, '..', 'main'), cwd: ws, command, remotes: () => ['origin'], sharedConfig: () => '' })?.key, undefined, '前提: そのままなら通る');
-  assert.ok(statements.some(st => st.cwd === null), '前提: 見張りが決められない文がある');
-  const widened = statements.map(st => (st.cwd === null ? { ...st, cwds: [...(st.cwds ?? []), join(ws, '..')] } : st));
-  assert.ok(worktreeGitRefusal(widened, { worktree: ws, productRoot: join(ws, '..', 'main'), cwd: ws, command, remotes: () => ['origin'], sharedConfig: () => '' })?.key !== undefined, 'cwds に外のフォルダがあれば断る');
 });
 
-test('L184 対照（審査の指摘）: cd -P / cd -L は、link/.. の .. の解き方が変わるので、行き先を決められないものとして断る', t => {
+test('cd -P / cd -L は、link/.. の .. の解き方が変わるので、見張りは行き先を決められないものとして断る（allowlist-tools.ts の締め直し）', t => {
   const { ws, refusal, statementsOf } = fixture(t);
   symlinkSync(ws, join(ws, 'self'), 'junction');
   for (const command of ['cd -P self/.. && npm test', 'cd -L web && npm test && cd .. && npm run build', 'cd -P web && npm test && cd .. && npm run build']) assert.ok(refusal(command)?.key !== undefined, command);
   const after = statementsOf('cd -P web; npm test');
   assert.equal(after[1]?.cwd, null, 'cd -P のあとの文の作業フォルダは決まらない');
+  assert.equal(statementsOf('cd -L web; npm test')[1]?.cwd, null, 'cd -L のあとの文の作業フォルダも決まらない');
   assert.notEqual(statementsOf('cd web; npm test')[1]?.cwd, null, '旗の無い cd は今までどおり決まる');
 });
