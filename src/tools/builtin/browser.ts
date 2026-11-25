@@ -306,15 +306,13 @@ function cutBack(raw: string, secrets: readonly string[]): string {
   return line > 0 ? raw.slice(0, findBack(raw, redactSecrets(raw, secrets), line, Infinity, secrets)?.q ?? 0) : '';
 }
 
-// 本文を読む（差分の「増えた文」の元）。上限で切れていたら、最後の行（途中で切れた行）を捨てる。読めなければ空
-export async function pageLines(page: BrowserTab['page'], maxChars: number, signal: AbortSignal): Promise<string> {
+// 本文を読む（差分の「増えた文」の元）。上限で切れていたら、伏せても同じ形になる位置まで戻して切る（最後の行を捨てるだけでは、複数行の秘密の 1 行目が残る）。読めなければ空
+export async function pageLines(page: BrowserTab['page'], maxChars: number, secrets: readonly string[], signal: AbortSignal): Promise<string> {
   const text = await until(page.text(maxChars), signal).catch((thrown: unknown) => {
     if (signal.aborted) throw thrown;
     return '';
   });
-  if (text.length < maxChars) return text;
-  const last = text.lastIndexOf('\n');
-  return last < 0 ? '' : text.slice(0, last);
+  return text.length < maxChars ? text : cutBack(text, secrets);
 }
 
 // 押す・入れるのあとの結果: 動作の行（head）+ 外の内容の見出しと枠の中に、触れるものの差分（または移動・大きすぎる差分のときは 80 件の表）と、増えた文。
@@ -341,7 +339,7 @@ async function renderDiff(api: BrowserApi, tab: BrowserTab, language: Language, 
   const page = tab.page;
   const url = page.url();
   const title = await until(page.title(), signal);
-  const afterText = await pageLines(page, api.config.limits.pageChars, signal);
+  const afterText = await pageLines(page, api.config.limits.pageChars, secrets, signal);
   if (signal.aborted) return undefined;
   const header = toolText(language, 'browser.external', { title: oneLine(title, secrets), url: oneLine(url, secrets) });
   const size = (text: string): { chars: number; tokens: number } => ({ chars: text.length + 1, tokens: estimateTextTokens(text) + 1 });
@@ -684,7 +682,7 @@ async function act(kind: 'click' | 'type', input: ActInput, ctx: ToolContext, in
       // 承認のあとの再実行は、結果がそのままモデルに届かないので差分を作らない（番号を「見せた」にしない）
       const replay = info?.approvedOnce === true;
       // 押す前の文（押したあとの差分の「増えた文」の元）。読めなければ空
-      const beforeText = replay ? '' : await pageLines(tab.page, api.config.limits.pageChars, AbortSignal.any([api.signal, AbortSignal.timeout(BEFORE_READ_MS)])).catch((thrown: unknown) => {
+      const beforeText = replay ? '' : await pageLines(tab.page, api.config.limits.pageChars, secrets, AbortSignal.any([api.signal, AbortSignal.timeout(BEFORE_READ_MS)])).catch((thrown: unknown) => {
         if (api.signal.aborted) throw thrown;
         return '';
       });
@@ -833,7 +831,7 @@ export async function actSteps(input: ActStepsInput, ctx: ToolContext, limits: {
       }
       const sameScreen = (shape: string | undefined, url: string): boolean => base !== undefined && shape === base.shape && url === base.url && tab.page.documentId() === base.document;
       // 押す前の文（差分の「増えた文」の元）。読めなければ空
-      const beforeText = then !== 'diff' ? '' : await pageLines(tab.page, api.config.limits.pageChars, AbortSignal.any([api.signal, AbortSignal.timeout(BEFORE_READ_MS)])).catch((thrown: unknown) => {
+      const beforeText = then !== 'diff' ? '' : await pageLines(tab.page, api.config.limits.pageChars, secrets, AbortSignal.any([api.signal, AbortSignal.timeout(BEFORE_READ_MS)])).catch((thrown: unknown) => {
         if (api.signal.aborted) throw thrown;
         return '';
       });
