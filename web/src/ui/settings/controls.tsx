@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import type { ModelView, SettingsView } from '../../api.ts';
 import { useT } from '../../i18n/index.ts';
 import { isComposing } from '../../keys.ts';
@@ -178,6 +178,7 @@ export function Select<V extends string>({ value, options, label, placeholder, d
           style={fit ? { '--ui-menu-room': `${fit.maxHeight}px`, '--ui-menu-width': `${fit.maxWidth}px` } as CSSProperties : undefined}
           onKeyDown={e => {
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+            if (e.key === 'Tab') { close(); return; }
             const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
             const next = menuStep(items.indexOf(document.activeElement as HTMLElement), items.length, e.key);
             if (next !== null) { e.preventDefault(); items[next]?.focus(); }
@@ -225,6 +226,13 @@ export function CommitField({ value, label, mono, short, placeholder, type, disa
   const field = useField(value, ctx.revision, onCommit, resetKey, required ? text => text !== '' : undefined);
   const classes = ['bt-field', mono && 'bt-field--mono', short && 'bt-field--short'].filter(Boolean).join(' ');
   return <input className={classes} type={type ?? 'text'} aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off" disabled={disabled} {...field} />;
+}
+
+// 鍵・秘密の欄。値を持たせた欄は打った文字を value 属性にも写し（画面の HTML・開発者ツールに出る）、この部品は値を欄の中（プロパティ）にだけ持たせる
+export function SecretField({ value, onChange, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' | 'defaultValue' | 'onChange'> & { value: string; onChange: (value: string) => void }) {
+  const field = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => { if (field.current && field.current.value !== value) field.current.value = value; });
+  return <input {...rest} ref={field} type="password" onChange={e => onChange(e.target.value)} />;
 }
 
 export function NumberField({ k, value, label, min, max, optional, placeholder, onCommit }: {

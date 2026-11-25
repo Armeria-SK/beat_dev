@@ -13,7 +13,7 @@ import { configProblem, problem, readJson, requireObject, type Router, sendJson 
 
 // API キーを画面から入れる（段 9f）。鍵は .env にだけ書き、応答・ログ・DB・SSE のどこにも出さない。GET が返すのは「入っているか」と末尾 4 文字だけ。
 // ほかの書き込みと同じ Host・Origin・Sec-Fetch-Site の確かめを通った要求だけが届く。モデルの道具には足さない（会話の確かめを通らない、画面専用）。
-// シェルからこの API を呼ぶ形は、この PC の中のサーバーへの接続（code.loopback）として、毎回、中身を見せて人の承認を求める
+// シェルからこの API を呼ぶ形は、beat 自身への接続として断る（guard.self_port。src/tools/builtin/shell.ts）
 
 // source: 'os' は、鍵が .env ではなく OS の環境変数にある（ここからは消せない）ことを表す。そのときは末尾 4 文字も出さない
 type KeyState = { set: boolean; last4: string | null } | { set: true; source: 'os' };
