@@ -465,9 +465,25 @@ const namesVariableOnly = (st: StatementFacts): boolean =>
   (st.shell === 'powershell' || st.shell === 'pwsh') && st.words.length === 1 && BARE_VARIABLE.test(st.words[0]!.text) && st.shapes.length === 0
   && st.env.length === 0 && st.code.length === 0 && !st.codeDynamic && !st.programOdd && st.inner === undefined && st.unknownInner === undefined;
 
+const quietStatement = (st: StatementFacts): boolean =>
+  st.shapes.length === 0 && st.env.length === 0 && st.reasonKeys.length === 0 && st.urls.length === 0 && st.writes.length === 0 && !st.deletes
+  && st.code.length === 0 && !st.codeDynamic && !st.programDynamic && !st.programOdd && !st.words.some(w => w.dynamic) && st.inner === undefined && st.unknownInner === undefined;
+
+const loopReadsOnly = (before: readonly StatementFacts[]): boolean => {
+  let expressions = 0;
+  for (const st of new Set(flatten(before))) {
+    if (namesVariableOnly(st)) continue;
+    if (st.inner === null) return false;
+    if (st.inner !== undefined) continue;
+    if (!quietStatement(st)) return false;
+    if (st.program === '' && st.words.length === 0 && ++expressions > 1) return false;
+  }
+  return true;
+};
+
 function statementHits(st: StatementFacts, before: readonly StatementFacts[], env: OutboundEnv, nested: boolean): Hit[] {
   const p = st.program;
-  if ((st.programDynamic && !namesVariableOnly(st)) || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
+  if ((st.programDynamic && !(namesVariableOnly(st) && loopReadsOnly(before))) || st.programOdd || (nested && /[\s'"]/u.test(st.words[0]?.text ?? '')) || (p && before.some(definesCommand))) return [hit('send', 'send.unknown_command', { cmd: st.words[0]?.text ?? '' })];
   if (st.inner === null) return [hit('send', 'send.unknown_command', { cmd: p })];
   if (st.inner) return [...walk(st.inner, [...before, st], env, true), ...[statementHit(st, before, env)].filter((h): h is Hit => !!h)];
   if (!p) return [];
