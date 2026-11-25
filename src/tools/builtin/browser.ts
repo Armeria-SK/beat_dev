@@ -10,7 +10,7 @@ import { redactSecrets } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
 import { actPreview, browserActCheck, devServerPage, inspectAct, rereadTab, secretText, stoppedServerText, TYPE_TEXT_MAX, type ActInput, type Inspected } from '../browser/checks.ts';
 import { BrowserFailure, REFUSAL_KEYS, until, type ActionEvents, type ElementTarget } from '../browser/driver.ts';
-import { diffLine, elementLine, formatElements, markShown, type ElementTable, type ListedElement } from '../browser/elements.ts';
+import { diffLine, elementLine, formatElements, groupLine, markShown, type ElementTable, type ListedElement } from '../browser/elements.ts';
 import { allowedLoopbackUrl, browserPageUrl, deniedLoopbackPorts, grantOf, isLoopbackUrl, type BrowserGrant } from '../browser/loopback.ts';
 import type { SubmitPermit } from '../browser/route.ts';
 import type { BrowserApi, BrowserSession, BrowserTab, BrowserTabKind } from '../browser/session.ts';
@@ -145,7 +145,10 @@ async function renderTab(browser: BrowserSession, api: BrowserApi, tab: BrowserT
     tokens -= spent.tokens;
   }
   if (options.mode !== 'elements') {
-    const wanted = raw.slice(options.offset);
+    // 読む上限で切れていたら、最後の空白までにしてから伏せる（上限の切り目にまたがる秘密を、半分だけ送らない）
+    const read = raw.slice(options.offset);
+    const lastSpace = raw.length >= asked ? read.search(/\s\S*$/u) : -1;
+    const wanted = lastSpace > 0 ? read.slice(0, lastSpace) : read;
     const textTitle = toolText(language, 'browser.section_text');
     const moreText = size(toolText(language, 'browser.more_text', { offset: 999_999_999 }));
     const roomChars = Math.max(0, Math.min(pageChars, chars - size(textTitle).chars - moreText.chars));
@@ -274,6 +277,16 @@ async function renderDiff(api: BrowserApi, tab: BrowserTab, language: Language, 
       const line = toolText(language, dead.present ? 'browser.diff_changed' : 'browser.diff_removed', { ref: dead.ref });
       if (size(line).chars > room) { more += 1; continue; }
       room -= size(line).chars;
+      elementLines.push(line);
+    }
+    // 同じ名前の組で増えた要素（番号なし）。残りに収まるだけ、収まらなければ「あと N 件」に数える
+    let roomTokens = tokens - textRoom.tokens - size(elementLines.join('\n')).tokens - moreRoom.tokens - estimateTextTokens('x'.repeat(titleRoom));
+    for (const group of diff.groups) {
+      const line = groupLine(group, language, secrets);
+      const one = size(block(line, secrets));
+      if (one.chars > room || one.tokens > roomTokens) { more += group.count; continue; }
+      room -= one.chars;
+      roomTokens -= one.tokens;
       elementLines.push(line);
     }
   }

@@ -67,8 +67,11 @@ export interface ElementTable {
 // 差分。新しい番号（items）は増えた要素だけ。dead: 見せた番号のうち使えなくなったもの（present: 要素はまだあるが中身が変わった）。
 // 中身が変わった要素には新しい番号を渡さず、読み直させる（同じ印の要素でも、周りの中身が入れ替わると別の意味の要素になりうる）
 export type DiffResult =
-  | { form: 'diff'; dead: ReadonlyArray<{ ref: string; present: boolean }> }
+  | { form: 'diff'; dead: ReadonlyArray<{ ref: string; present: boolean }>; groups: ReadonlyArray<NewGroup> }
   | { form: 'table'; reason: 'navigated' | 'too_big' };
+
+// 差分で増えた、同じ役割・名前の組（押したあとのページに 2 つ以上ある）の要素。番号は振らず、組ごとに 1 行で知らせる
+export interface NewGroup { role: string; name: string; count: number }
 
 // 会話のブラウザに 1 つの続きの数（タブで共通）
 export interface RefCounter { next: number }
@@ -372,7 +375,11 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   const keyOf = (e: Entry): string => `${e.role}\u0000${e.name}`;
   // diff: 差分で新しい番号を振ってよいのは、見せた番号の印でもなく、前に見せる形で読んだときにも無かった要素だけ
   const viewed = new Set(book.view.values());
-  const wanted = numbering.kind === 'diff' && !navigated ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
+  const fresh = numbering.kind === 'diff' && !navigated ? usable.filter(e => !viewed.has(e.pwRef!) && book.seen.get(e.pwRef!) !== keyOf(e)) : [];
+  // 番号を振るのは、押したあとのページで役割・名前が 1 つだけの要素だけ（同じ名前の組の要素は、並べ替え・作り直しで別の行の要素になりうる）
+  const named = new Map<string, number>();
+  for (const e of entries) named.set(keyOf(e), (named.get(keyOf(e)) ?? 0) + 1);
+  const wanted = fresh.filter(e => named.get(keyOf(e)) === 1);
   const tableLimit = numbering.kind === 'show' ? numbering.limit ?? MAX_ELEMENTS : numbering.kind === 'diff' ? numbering.tableLimit : 0;
   let form: 'show' | 'check' | 'diff' = numbering.kind === 'diff' ? (navigated ? 'show' : 'diff') : numbering.kind;
   let candidates = new Set(form === 'show' ? usable.slice(0, tableLimit) : wanted);
@@ -394,11 +401,17 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
   const same = (e: Entry, record: RefRecord | undefined): boolean => record !== undefined && record.role === e.role && record.name === e.name && record.clue === clue.get(e);
   // 差分の行の数（使えなくなった見せた番号 + 増えた要素）が多すぎれば、表の形に落とす（番号を振る前に決める）
   let tableReason: 'navigated' | 'too_big' = 'navigated';
+  const newGroups = new Map<string, NewGroup>();
   if (form === 'diff' && numbering.kind === 'diff') {
     const keptNow = new Set(usable.filter(e => same(e, book.records.get(e.pwRef!))).map(e => e.pwRef!));
     const dead = [...book.view].filter(([ref, pwRef]) => !(keptNow.has(pwRef) && book.records.get(pwRef)?.ref === ref));
     const added = wanted.filter(e => !keptNow.has(e.pwRef!)).length;
-    if (dead.length + added > numbering.maxLines) {
+    for (const e of fresh) {
+      if (named.get(keyOf(e)) === 1 || keptNow.has(e.pwRef!)) continue;
+      const group = newGroups.get(keyOf(e));
+      if (group) group.count += 1; else newGroups.set(keyOf(e), { role: e.role, name: e.name, count: 1 });
+    }
+    if (dead.length + added + newGroups.size > numbering.maxLines) {
       form = 'show';
       tableReason = 'too_big';
       candidates = new Set(usable.slice(0, tableLimit));
@@ -455,7 +468,7 @@ export function readElements(snapshot: string, url: string, book: RefBook = newR
     if (form !== 'diff') continue;
     dead.push({ ref, present: book.seen.has(pwRef) });
   }
-  if (form === 'diff') return { url, items, omitted: skipped, diff: { form: 'diff', dead } };
+  if (form === 'diff') return { url, items, omitted: skipped, diff: { form: 'diff', dead, groups: [...newGroups.values()] } };
   return { url, items, omitted: Math.max(0, usable.length - items.length), ...(numbering.kind === 'diff' ? { diff: { form: 'table', reason: tableReason } } : {}) };
 }
 
@@ -481,6 +494,11 @@ export function shownRef(book: RefBook, ref: string): boolean {
 function shown(name: string, secrets: readonly string[]): string {
   const sent = sentText(flatText(name), secrets, NAME_SHOWN);
   return JSON.stringify(sent.cut ? `${sent.text}…` : sent.text);
+}
+
+// 差分の、番号の無い組の 1 行（名前は elementLine と同じく伏せてから切る）
+export function groupLine(group: NewGroup, language: Language, secrets: readonly string[] = []): string {
+  return toolText(language, 'browser.diff_group', { count: group.count, role: group.role, name: shown(group.name, secrets) });
 }
 
 // 表の 1 行（見せる形）。secrets: 伏せる決まった秘密の一覧（鍵の形はいつも伏せる）

@@ -1052,3 +1052,93 @@ test('P3b: 「あと N 件」は、番号を振れなかった増えた要素と
   assert.ok(visible > 0 && visible < 60, `${visible}`);
   assert.ok(inside.includes(en('browser.diff_more', { count: 60 - visible + (3 - deadLines) })), inside.join('\n'));
 });
+
+// ── P3b の直し、2 回目（再審査 REQUEST_CHANGES → 指揮役の決め A〜C） ──
+
+test('P3b: 例の鍵が 500 字ごとにある長い文を browser_read mode=text で読み進めると、続きの位置が毎回進む', async t => {
+  const r = rig(t, { mutate: c => { c.tools.browser.limits.pageChars = 2000; } });
+  const PROSE = 'https://example.com/prose';
+  const parts: string[] = [];
+  for (let i = 0; parts.join(' ').length < 20_000; i += 1) parts.push(`${'Lorem ipsum dolor sit amet consectetur. '.repeat(11)}Example key: sk-proj-${String(i).padStart(4, '0')}abcdefghijklmnopqrstuvwxyz0123 end.`);
+  r.driver.site(PROSE, { title: 'Prose', text: parts.join(' '), snapshot: '', rows: [] });
+  await browserOpen.execute({ url: PROSE }, r.ctx);
+  const offsets = [0];
+  for (let i = 0; i < 4; i += 1) {
+    const out = await browserRead.execute({ mode: 'text', offset: offsets.at(-1)! }, r.ctx);
+    assert.ok(!out.content.includes('sk-proj'), out.content);
+    const next = /offset=(\d+)/u.exec(out.content);
+    assert.ok(next, out.content.slice(-200));
+    offsets.push(Number(next[1]));
+  }
+  for (let i = 1; i < offsets.length; i += 1) assert.ok(offsets[i]! > offsets[i - 1]! + 1000, offsets.join(' → '));
+});
+
+test('P3b: 押したあとに同じ名前の 2 行が作り直されて入れ替わっても、新しい番号を渡さず「番号なしの組」の 1 行だけ。前の番号は断る', async t => {
+  const r = rig(t);
+  const SORT = 'https://example.com/rebuilt';
+  const rowsOf = (first: string, second: string, ids: [string, string], effect?: FakeEffect): FakeSite => ({
+    title: 'Sort', text: `Sort\n${first}\n${second}`,
+    snapshot: ['- listitem:', `  - text: ${first}`, '  - button "Delete"', '- listitem:', `  - text: ${second}`, '  - button "Delete"', '- button "Newest first"'].join('\n'),
+    rows: [{ id: ids[0], role: 'button', name: 'Delete' }, { id: ids[1], role: 'button', name: 'Delete' }, { role: 'button', name: 'Newest first', ...(effect ? { effect } : {}) }],
+  });
+  r.driver.site(SORT, rowsOf('Order 1', 'Order 2', ['r1', 'r2'], { mutate: rowsOf('Order 2', 'Order 1', ['r3', 'r4']) }));
+  await opened(r, SORT);
+  const outcome = await r.call('browser_click', { ref: 'e3' });
+  const inside = fenced(outcome.output.content);
+  assert.deepEqual(inside.slice(0, 4), [
+    en('browser.section_changes'),
+    en('browser.diff_removed', { ref: 'e1' }),
+    en('browser.diff_removed', { ref: 'e2' }),
+    en('browser.diff_group', { count: 2, role: 'button', name: '"Delete"' }),
+  ], inside.join('\n'));
+  assert.ok(!inside.some(line => line.startsWith('+ ')), inside.join('\n'));
+  for (const ref of ['e1', 'e2', 'e4', 'e5']) assert.equal((await preCheck(r, browserClick, { ref })).decision, 'deny', ref);
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /^e4 button "Delete"$/mu, read.content);
+});
+
+test('P3b: 差分の行が伏せで次の行とつながる（href が「/Bearer」で終わる）と、つながった行の番号は見せたにしない', async t => {
+  const r = rig(t);
+  const base = listSite({});
+  const after: FakeSite = {
+    ...base,
+    snapshot: `${base.snapshot!}\n- link "Auth":\n  - /url: https://example.com/auth/Bearer\n- button "Pay"`,
+    rows: [...base.rows!, { role: 'link', name: 'Auth' }, { role: 'button', name: 'Pay' }],
+  };
+  r.driver.site(LIST, listSite({ mutate: after }));
+  await opened(r, LIST);
+  const outcome = await r.call('browser_click', { ref: 'e4' });
+  const content = outcome.output.content;
+  assert.doesNotMatch(content, /The output was long/u, '道具の流れで切られていない');
+  assert.ok(!fenced(content).includes('+ e6 button "Pay"'), content);
+  assert.match(content, /\[REDACTED\] e6 button "Pay"/u, content);
+  assert.equal((await preCheck(r, browserClick, { ref: 'e6' })).decision, 'deny', 'つながって消えた行の番号は押せない');
+});
+
+test('P3b: browser_read の表でも、伏せで次の行とつながった行の番号は見せたにしない', async t => {
+  const r = rig(t);
+  const AUTH = 'https://example.com/auth';
+  r.driver.site(AUTH, { title: 'Auth', text: 'Auth', snapshot: '- link "Auth":\n  - /url: https://example.com/auth/Bearer\n- button "Pay"', rows: [{ role: 'link', name: 'Auth' }, { role: 'button', name: 'Pay' }] });
+  await browserOpen.execute({ url: AUTH }, r.ctx);
+  const read = await browserRead.execute({ mode: 'elements' }, r.ctx);
+  assert.match(read.content, /\[REDACTED\] button "Pay"/u, read.content);
+  assert.equal((await preCheck(r, browserClick, { ref: 'e2' })).decision, 'deny', read.content);
+});
+
+test('P3b: 伏せで 4,096 字より縮む本文でも、読む上限の切り目にまたがる決まった秘密の頭を送らない', async t => {
+  const r = rig(t, { secrets: [PLAIN], mutate: c => { c.tools.browser.limits.pageChars = 2000; } });
+  const LIMIT = 'https://example.com/limit';
+  const keys = Array.from({ length: 30 }, (_, i) => `sk-proj-${String(i).padStart(4, '0')}${'k'.repeat(190)}`).join(' ');
+  const asked = 2000 + 4096;
+  const pad = 'p '.repeat(Math.ceil((asked - 5 - keys.length - 1) / 2)).slice(0, asked - 5 - keys.length - 1);
+  const text = `${keys} ${pad}${PLAIN} after`;
+  assert.equal(text.indexOf(PLAIN), asked - 5);
+  r.driver.site(LIMIT, { title: 'Limit', text, snapshot: '', rows: [] });
+  await browserOpen.execute({ url: LIMIT }, r.ctx);
+  const out = await browserRead.execute({ mode: 'text' }, r.ctx);
+  assert.ok(!out.content.includes(PLAIN.slice(0, 5)), out.content.slice(-200));
+  const next = /offset=(\d+)/u.exec(out.content);
+  assert.ok(next, out.content.slice(-200));
+  const rest = await browserRead.execute({ mode: 'text', offset: Number(next[1]) }, r.ctx);
+  assert.ok(!rest.content.includes(PLAIN.slice(0, 5)) && rest.content.includes('[REDACTED]') && rest.content.includes('after'), rest.content);
+});
