@@ -232,13 +232,16 @@ export function providerNote(id: string, provider: ProviderConfig, model: ModelC
   return redactSecrets(`${id}: ${provider.kind} ${provider.baseUrl ?? ''} model ${model.model}, maxParallel ${provider.maxParallel}`, secrets);
 }
 
-const USAGE ='Usage: node scripts/judge-probe.ts --config <settings.json> [--models id,id] [--modes a,b,c] [--runs 3] [--max-tokens 400] [--timeout 20000] [--effort <value>] [--out <file.md>] [--gate]';
+// The real judge asks with 1024 output tokens (JUDGE_OUTPUT_TOKENS in src/engine/chat.ts). When a reply is cut it asks once more with 4096 (JUDGE_OUTPUT_RAISED); this probe does not, so a cut here is a cut the real judge may still recover from
+export const DEFAULT_MAX_TOKENS = 1024;
+export const USAGE = `Usage: node scripts/judge-probe.ts --config <settings.json> [--models id,id] [--modes a,b,c] [--runs 3] [--max-tokens ${DEFAULT_MAX_TOKENS}] [--timeout 20000] [--effort <value>] [--out <file.md>] [--gate]
+  --max-tokens is the first output limit of the real judge. When a reply is cut, the real judge asks once more with 4096 (up to the model's own limit); the probe does not ask again, so its cut counts are an upper bound.`;
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       config: { type: 'string' }, models: { type: 'string' }, modes: { type: 'string', default: 'a,b,c' }, runs: { type: 'string', default: '3' },
-      'max-tokens': { type: 'string', default: '400' }, timeout: { type: 'string', default: String(CLASSIFIER_TIMEOUT_MS) }, effort: { type: 'string' }, out: { type: 'string' }, gate: { type: 'boolean', default: false },
+      'max-tokens': { type: 'string', default: String(DEFAULT_MAX_TOKENS) }, timeout: { type: 'string', default: String(CLASSIFIER_TIMEOUT_MS) }, effort: { type: 'string' }, out: { type: 'string' }, gate: { type: 'boolean', default: false },
     },
   });
   if (!values.config) throw new Error(USAGE);

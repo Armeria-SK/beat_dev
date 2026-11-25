@@ -84,8 +84,8 @@ const MODEL_SILENT_MS = 60_000;
 const SILENT_FETCH_TIMEOUTS: ReadonlySet<string> = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 const RESUME_WORD_MAX = 40;
 // 自動承認の判定役の呼び出しの出力の上限。考えを文で書くモデルは、答え（最後の行の JSON）の前に切れていた。切れたときだけ、同じ枠のまま 1 回、JUDGE_OUTPUT_RAISED まで上げて呼び直す（どちらもモデルの上限までで、それ以上は上げない）
-const JUDGE_OUTPUT_TOKENS = 1024;
-const JUDGE_OUTPUT_RAISED = 4096;
+export const JUDGE_OUTPUT_TOKENS = 1024;
+export const JUDGE_OUTPUT_RAISED = 4096;
 
 export function resumePoint(text: string): string {
   const at = text.search(/\s\S*$/u);
@@ -1091,7 +1091,8 @@ export class ChatEngine {
     let continuations = 0;
     const cutTexts: string[] = [];
     let cutTail = '';
-    // 続きを頼むとき切り戻した最後の語のうち、まだ保存した返事に戻っていない分。次の呼び出しが終わる（成功して返事が来る）まで持ち、そのあいだに呼び出しが失敗・停止したら返事に戻す
+    // 続きを頼むとき切り戻した最後の語のうち、まだ保存した返事に戻っていない分。次の呼び出しが終わる（成功して返事が来る）まで持ち、そのあいだに呼び出しが失敗・停止したら返事に戻す。
+    // 会話（chat）の実行では持たない: 戻すと末尾が assistant になり、retry が断られる（再試行のボタンも消える）。会話は続きの一言（user）で終わったままにして、retry が続きの一言から書き直させる（切った語もそのとき戻る）
     let owedTail = '';
     let warnedToolCut = false;
     let lastEstimate = 0;
@@ -1292,12 +1293,13 @@ export class ChatEngine {
         d.bus.publish({ type: 'warning', runId, conversationId, code: 'output_thinking_only', message: engineText(language, 'warn.output_thinking_only') });
         return finishOk('', 'max_tokens');
       }
-      const room = !call.toolCalls.length && call.truncated && continuations < MAX_CONTINUATIONS
+      // 続きが空のときは、もう続きを頼まない（終える）。ここで room を真にすると、次の行で cutTail が空に上書きされ、前の呼び出しから戻した語を失う
+      const room = !empty && !call.toolCalls.length && call.truncated && continuations < MAX_CONTINUATIONS
         && this.#continuationFits({ runId, conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode, project: ctx.project, memoryProject: ctx.memoryProject }, [{ role: 'assistant', content: resumePoint(call.text) }, ask]);
       if (room) {
         const kept = resumePoint(call.text);
         cutTail = call.text.slice(kept.length);
-        owedTail = cutTail;
+        owedTail = kind === 'chat' ? '' : cutTail;
         call.text = kept;
       }
       if (empty) call.text = cutTail;
