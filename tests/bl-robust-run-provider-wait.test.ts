@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { classifyFetchError, longWaitFetch } from '../src/providers/http.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
-import { ProviderError, type ModelRequest, type StreamEvent } from '../src/providers/types.ts';
+import type { ModelRequest, StreamEvent } from '../src/providers/types.ts';
 import { fakeServer, sse } from './helpers.ts';
 
 const model: ModelConfig = { id: 'm', provider: 'p', model: 'test-model', contextLength: 65536, maxOutputTokens: 1024, vision: false };
@@ -89,19 +89,21 @@ test('手元のモデルの待ち: 組み込みの fetch を差し替えない a
   assert.equal(server.requests[1]!.headers['user-agent'], 'node');
 });
 
-test('手元のモデルの待ち: 頭が遅いサーバーは、timeoutMs が短ければ時間切れ（つながらないでなく）、長ければ最後まで読める', async t => {
-  const server = await fakeServer(async (_req, _body, res) => { await sleep(2000); sse(res, [reply]); });
-  t.after(() => server.close());
-  const slow = new OpenAiCompatibleAdapter(compat(`${server.url}/v1`, 1000), {});
-  const started = Date.now();
-  await assert.rejects(collect(slow.stream(request())), (error: unknown) => {
-    assert.ok(error instanceof ProviderError);
-    assert.equal(error.kind, 'timeout');
-    return true;
+// adapter が provider.timeoutMs を longWaitFetch に渡していることを、abort の signal に隠れずに見る口: probe の確認の通信の signal は 10 秒なので、
+// 先に切れるのは provider.timeoutMs の Agent の待ちだけ（stream は signal も timeoutMs なので、どちらで切れたか分からない）
+test('手元のモデルの待ち: adapter は provider.timeoutMs をそのまま待ちの長さにする（probe の通信は、短ければ Agent の待ちで切れ、長ければ待って答えを読む）', async t => {
+  const server = await fakeServer(async (_req, _body, res) => {
+    await sleep(1500);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: model.model, max_model_len: 65536 }] }));
   });
-  assert.ok(Date.now() - started < 1900, `約 1 秒で切れる（${Date.now() - started} ms）`);
+  t.after(() => server.close());
+  const probe = (timeoutMs: number) => new OpenAiCompatibleAdapter(compat(`${server.url}/v1`, timeoutMs), {}).probe(model, 4096);
 
-  const patient = new OpenAiCompatibleAdapter(compat(`${server.url}/v1`, 6000), {});
-  const events = await collect(patient.stream(request()));
-  assert.equal(events.filter(e => e.type === 'text').map(e => (e as { delta: string }).delta).join(''), 'ok');
+  const started = Date.now();
+  const [cut, patient] = await Promise.all([probe(300), probe(6000)]);
+  assert.equal(cut.status, 'unreachable', cut.message);
+  assert.notEqual(patient.status, 'unreachable', patient.message);
+  assert.ok(['ok', 'unknown'].includes(patient.status), patient.status);
+  assert.ok(Date.now() - started < 6000);
 });

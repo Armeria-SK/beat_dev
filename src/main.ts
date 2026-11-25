@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
-import { acquireInstanceLock } from './instance-lock.ts';
+import { acquireInstanceLock, releaseOnExit } from './instance-lock.ts';
 import { enterKillOnCloseJob } from './os/win-job.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
 import { createShutdown, installProcessGuards } from './process-guards.ts';
@@ -26,7 +26,7 @@ async function start(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  process.on('exit', lock.release);
+  releaseOnExit(lock);
   const app = new App({ paths, log });
   const config = app.config();
   // 待ち受けと認証は、起動したときの値（app.bootServer）で決める。起動の準備のあいだに設定ファイルが変わっても、反映は画面の「再起動する」から
