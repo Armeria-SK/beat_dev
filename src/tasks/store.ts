@@ -399,11 +399,14 @@ export class TaskStore {
 
   // 繰り返しの 1 回を持ち主が直したとき、ひな形の頼みと違う題・終わりの条件だけをその回に持たせる（本文は持たせない。RunEdit）。ひな形と同じ文に戻した欄は外す
   #runEdited(run: Task, patch: { title?: string | undefined; doneCriteria?: string | null | undefined }): void {
-    const template = ownerRequestOf(this.get(run.parent_id!)?.owner_request);
-    if (!template) return;
+    const parent = this.get(run.parent_id!);
+    const template = ownerRequestOf(parent?.owner_request);
+    if (!parent || !template) return;
     const before = runEditOf(run.owner_request);
+    // 回の終わりの条件は、ひな形の列（承認した提案では beat が書いた文）の写し。頼みに写した文と違っても、列の文のままなら直したことにしない
+    const same = (a: string | null, b: string | null): boolean => (a ?? '').trim() === (b ?? '').trim();
     const title = patch.title === undefined ? before?.title : patch.title.trim() && patch.title.trim() !== template.title ? patch.title.trim() : undefined;
-    const doneCriteria = patch.doneCriteria === undefined ? before?.doneCriteria : (patch.doneCriteria || null) !== template.doneCriteria ? patch.doneCriteria || null : undefined;
+    const doneCriteria = patch.doneCriteria === undefined ? before?.doneCriteria : !same(patch.doneCriteria, template.doneCriteria) && !same(patch.doneCriteria, parent.done_criteria) ? patch.doneCriteria || null : undefined;
     const edit: RunEdit = { ...(title !== undefined ? { title } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}) };
     const raw = Object.keys(edit).length ? JSON.stringify({ runEdit: edit }) : null;
     if (raw !== run.owner_request) this.#db.prepare('UPDATE tasks SET owner_request = ? WHERE id = ?').run(raw, run.id);

@@ -132,3 +132,27 @@ test('200: ひな形を消して残った回は、直した文を持ち主の頼
   assert.equal(ownerRequestColumn(run.id), null, '残った回は直した文を持ち越さない');
   assert.equal(tasks.ownerRequestText(run.id), undefined, '回そのものは持ち主の頼みを持たない（ブラウザの持ち主の URL の元にならない）');
 });
+
+test('200: 承認した提案（終わりの条件は beat が書いた列の文）の回で、終わりの条件を直さずに保存しても、その文は持ち主が直した文として届かない。直したときだけ届く', t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const tasks = new TaskStore(db);
+  const AI_DONE = 'AI-DONE: cache folder and ~/.npm are deleted';
+  const proposal = tasks.create({ title: 'Clean cache', body: 'proposal body', doneCriteria: AI_DONE, origin: 'self', propose: true, cron: '0 9 * * *', timezone: 'UTC', actor: 'beat' });
+  tasks.approve(proposal.id);
+  const run = tasks.spawnNow(proposal.id)!;
+  assert.equal(run.done_criteria, AI_DONE, '前提: 回は列の終わりの条件を写す');
+  const before = tasks.judgeRequest(run.id);
+  assert.equal(before, 'Clean cache\nproposal body', '前提: 提案の文（beat が書いた）の頼みには終わりの条件が入らない');
+
+  tasks.update(run.id, { doneCriteria: AI_DONE }, 'user');
+  tasks.ownerEdited(run.id, { doneCriteria: AI_DONE });
+  assert.equal(tasks.judgeRequest(run.id), before, '直さずに保存しただけでは、beat の書いた文は持ち主の文として届かない');
+  tasks.update(run.id, { doneCriteria: `${AI_DONE}  ` }, 'user');
+  tasks.ownerEdited(run.id, { doneCriteria: `${AI_DONE}  ` });
+  assert.equal(tasks.judgeRequest(run.id), before, '前後の空白が違うだけでも同じ文');
+
+  tasks.update(run.id, { doneCriteria: 'OWNER-DONE: only logs/ is cleaned' }, 'user');
+  tasks.ownerEdited(run.id, { doneCriteria: 'OWNER-DONE: only logs/ is cleaned' });
+  assert.equal(tasks.judgeRequest(run.id), [before, RUN_EDIT_LABEL, 'OWNER-DONE: only logs/ is cleaned'].join('\n'), '持ち主が書き換えた文は届く（対照）');
+});
