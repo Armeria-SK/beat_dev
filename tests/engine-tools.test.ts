@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Type } from '@sinclair/typebox';
@@ -317,8 +317,11 @@ test('会話は制限なし: 100 回を超えて道具を使い続け、止め�
 
 // ── 段 4-4: 道具の結果の画像（X5 ToolOutput.images）のエンジンの側 ──
 
-const MARK = 'SECRETIMAGEBASE64MARK';
+// 中身は PNG の頭の印 + 目印の文字（置き場へ置くときの見分けは頭の印だけを見る）。MARK は、その base64（messages.parts・画面の応答・出来事に出てはいけない文字列）
+const PNG_BYTES = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from('SECRETIMAGEPIXELS')]);
+const MARK = PNG_BYTES.toString('base64');
 const PNG: ImageRef = { mediaType: 'image/png', data: MARK };
+const BROKEN: ImageRef = { mediaType: 'image/png', data: Buffer.from('not an image').toString('base64') };
 const imageTool = (name: string, run: (ctx: ToolContext) => ToolOutput): ToolDef => ({
   name, description: name, effect: 'read', allowedIn: ['chat', 'task', 'review'],
   input: Type.Object({}, { additionalProperties: false }),
@@ -336,18 +339,73 @@ async function runImages(s: ImageApp, text: string, choice: SendChoice = {}) {
 
 const storedTool = (s: ImageApp) => s.app.conversations.messages(CONVERSATION).filter(m => m.role === 'tool').map(m => m.message as Extract<ChatMessage, { role: 'tool' }>);
 
-test('道具の結果の画像: 保存した道具の結果の発言に images が付き、次のモデル呼び出しの messages に渡る。長くて切られた結果でも残る', async t => {
+test('道具の結果の画像: 画像は uploads のファイルに置き、保存した発言には id だけ残る（base64 は parts に入らない）。次のモデル呼び出しの messages には画像が渡る。長くて切られた結果でも残る', async t => {
   const long = 'あ'.repeat(30_000);
   const s = await startApp(t, { tools: [imageTool('img_ok', () => ({ content: long, images: [PNG] }))] });
   s.adapter().scripts.push(toolCall('img_ok', {}), reply('見ました'));
   await runImages(s, '画像を見て');
   const [saved] = storedTool(s);
-  assert.deepEqual(saved!.images, [PNG], '保存された道具の結果の発言に画像がある');
-  assert.ok(JSON.stringify(s.app.db.prepare("SELECT parts FROM messages WHERE role = 'tool'").all()).includes(MARK), 'messages.parts の JSON に base64 で入る（添付の画像と同じ置き場所）');
+  assert.equal(saved!.images, undefined, '発言に base64 の画像は入らない');
+  assert.equal(saved!.imageIds?.length, 1, '発言には置き場の id が 1 つ残る');
+  const id = saved!.imageIds![0]!;
+  assert.equal(JSON.stringify(s.app.db.prepare('SELECT parts FROM messages').all()).includes(MARK), false, 'messages.parts に base64 が入らない');
+  assert.deepEqual(readFileSync(join(s.paths.uploads, id)), PNG_BYTES, '画像は添付と同じ uploads のフォルダにファイルとして置かれる');
+  assert.equal((s.app.db.prepare('SELECT kind FROM uploads WHERE id = ?').get(id) as { kind: string } | undefined)?.kind, 'image', 'uploads の行も添付と同じ形で付く');
   assert.ok(saved!.content.length < long.length, '長い結果は切られている（切る処理が images を落とさない）');
   const second = s.adapter().calls[1]!.messages.at(-1)!;
   assert.equal(second.role, 'tool');
   assert.deepEqual(second.role === 'tool' ? second.images : undefined, [PNG], '次のモデル呼び出しの messages に画像が渡る');
+  assert.equal(second.role === 'tool' && 'imageIds' in second, false, 'モデルへ渡す発言に id の項目は付かない');
+});
+
+test('道具の結果の画像: 置き場へ置けない画像は、失わないよう base64 のまま発言に残り、モデルにも渡る', async t => {
+  const s = await startApp(t, { tools: [imageTool('img_odd', () => ({ content: '画像を見せます', images: [BROKEN] }))] });
+  s.adapter().scripts.push(toolCall('img_odd', {}), reply('見ました'));
+  await runImages(s, '画像を見て');
+  const [saved] = storedTool(s);
+  assert.deepEqual(saved!.images, [BROKEN]);
+  assert.equal(saved!.imageIds, undefined);
+  const second = s.adapter().calls[1]!.messages.at(-1)!;
+  assert.deepEqual(second.role === 'tool' ? second.images : undefined, [BROKEN]);
+  assert.match(s.logs.join('\n'), /Could not put an image of img_odd/u);
+});
+
+test('道具の結果の画像: 以前の保存（images に base64）の発言も、今までどおりモデルに渡る。置き場のファイルが無くなった画像は渡さず、続けられる', async t => {
+  const s = await startApp(t, { tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))] });
+  const conversations = s.app.conversations;
+  conversations.append(CONVERSATION, { role: 'user', content: '前の質問' });
+  conversations.append(CONVERSATION, { role: 'assistant', content: '', toolCalls: [{ id: 'old1', name: 'img_ok', arguments: {} }] });
+  conversations.append(CONVERSATION, { role: 'tool', toolCallId: 'old1', name: 'img_ok', content: '前の画像', images: [PNG] });
+  conversations.append(CONVERSATION, { role: 'assistant', content: '見ました' });
+  s.adapter().scripts.push(toolCall('img_ok', {}), reply('二枚目も見ました'), reply('ファイルが無くても続く'));
+  await runImages(s, '画像を見て');
+  const tools = (call: number) => s.adapter().calls[call]!.messages.filter(m => m.role === 'tool').map(m => (m.role === 'tool' ? m.images : undefined));
+  assert.deepEqual(tools(1), [[PNG], [PNG]], '以前の base64 の画像と、置き場から戻した画像の両方が渡る');
+  const [, saved] = storedTool(s);
+  rmSync(join(s.paths.uploads, saved!.imageIds![0]!));
+  await runImages(s, 'もう一度');
+  assert.deepEqual(tools(2), [[PNG], undefined], 'ファイルの無い画像だけ渡らない（実行は止まらない）');
+});
+
+test('道具の結果の画像: 会話を消すと、その会話の道具の画像のファイルと uploads の行も消える。ほかの会話の画像は残る', async t => {
+  const s = await startApp(t, { tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))] });
+  const OTHER = 'aaaaaaaa-0000-4000-8000-000000000002';
+  for (const conversation of [CONVERSATION, OTHER]) {
+    s.adapter().scripts.push(toolCall('img_ok', {}), reply('見ました'));
+    const outcome = s.app.engine.send(conversation, '画像を見て');
+    assert.ok(outcome.ok, JSON.stringify(outcome));
+    assert.ok((await s.app.engine.wait(outcome.runId)!).ok);
+  }
+  const idOf = (conversation: string) => (s.app.conversations.messages(conversation).find(m => m.message.role === 'tool')!.message as Extract<ChatMessage, { role: 'tool' }>).imageIds![0]!;
+  const [mine, other] = [idOf(CONVERSATION), idOf(OTHER)];
+  assert.ok(existsSync(join(s.paths.uploads, mine)) && existsSync(join(s.paths.uploads, other)));
+  const erased = await s.json(`/api/conversations/${CONVERSATION}`, 'DELETE');
+  assert.equal(erased.status, 200);
+  assert.equal(erased.body.uploads, 1);
+  assert.equal(existsSync(join(s.paths.uploads, mine)), false, '消した会話の画像のファイルが無い');
+  assert.equal(s.app.db.prepare('SELECT 1 FROM uploads WHERE id = ?').get(mine), undefined, 'uploads の行も無い');
+  assert.ok(existsSync(join(s.paths.uploads, other)), 'ほかの会話の画像は残る');
+  assert.ok(s.app.db.prepare('SELECT 1 FROM uploads WHERE id = ?').get(other));
 });
 
 test('道具の結果の画像: 画像の無い道具の結果の発言は今までと同じ形（images の項目が無い）', async t => {
@@ -374,13 +432,14 @@ test('道具の結果の画像: 出来事・道具の記録・画面の API に�
   s.app.bus.subscribe(e => events.push(e.event));
   s.adapter().scripts.push(toolCall('img_ok', {}), reply('見ました'));
   await runImages(s, '画像を見て');
-  assert.ok(storedTool(s)[0]!.images, '画像は保存されている（これが無いと下の確かめは空振り）');
+  assert.ok(storedTool(s)[0]!.imageIds?.length, '画像は保存されている（これが無いと下の確かめは空振り）');
   assert.ok(events.some(e => e.type === 'tool.result'));
   assert.equal(JSON.stringify(events).includes(MARK), false, '出来事（SSE）に画像が出ない');
   assert.equal(JSON.stringify(s.app.db.prepare('SELECT * FROM tool_calls').all()).includes(MARK), false, 'tool_calls の行（output_preview など）に画像が出ない');
   const listing = await (await s.api(`/api/conversations/${CONVERSATION}/messages`)).text();
   assert.match(listing, /img_ok/u, '道具の結果の発言は一覧に出ている');
   assert.equal(listing.includes(MARK), false, 'GET /api/conversations/:id/messages の応答に画像（base64）が無い');
+  assert.equal(listing.includes('imageIds'), false, '置き場の id も画面の応答に出ない');
   const stored = s.app.conversations.messages(CONVERSATION);
   assert.equal(JSON.stringify(stored.map(m => m.text)).includes(MARK), false, 'text の列（検索の索引・要約・振り返りの材料）に画像が入らない');
   assert.equal(reviewWindow(stored, { maxChars: REVIEW_WINDOW_CHARS }).transcript.includes(MARK), false, '振り返りの記録に画像が入らない');

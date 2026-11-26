@@ -67,7 +67,7 @@ import { compactPrompt, compactRequest, compactSpeaker, compactSystem, composeSu
 import { buildDynamic, buildSnapshot, buildTail, fenceTail, isFencedTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
 import { languageName } from '../projects/build.ts';
-import { ownWords, stripAttachments } from '../uploads/store.ts';
+import { ownWords, stripAttachments, Uploads } from '../uploads/store.ts';
 import type { RunJob } from '../os/run-job.ts';
 
 export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
@@ -106,11 +106,12 @@ function withThinkingFor(message: ChatMessage, target?: { provider: string; mode
 // 見積もりに数える system の文（固定・実行のあいだ同じ部分）。tail は、発言に付けた分を発言として、まだ付けていない次の分を #assemble の pending として数える
 const systemText = (system: ModelRequest['system']): string => `${system.frozen}\n${system.dynamic}`;
 
-function forModel(message: ChatMessage): ChatMessage {
-  if (message.role !== 'tool' || !message.gate) return message;
-  const copy = { ...message };
-  delete copy.gate;
-  return copy;
+// 保存した発言をモデルに渡す形にする。gate は渡さない。imageIds の画像は、置き場のファイルから images に戻す（ファイルが無ければ、その画像だけ渡さない）
+function forModel(message: ChatMessage, load: (id: string) => ImageRef | undefined): ChatMessage {
+  if (message.role !== 'tool' || (!message.gate && !message.imageIds)) return message;
+  const { gate: _gate, imageIds, ...rest } = message;
+  const images = [...(rest.images ?? []), ...(imageIds ?? []).flatMap(id => load(id) ?? [])];
+  return images.length ? { ...rest, images } : rest;
 }
 const clean = (message: ChatMessage, fence: ReturnType<typeof makeFence> | undefined): ChatMessage =>
   (fence && message.role !== 'assistant' && message.content.toLowerCase().includes(fence.nonce.toLowerCase()) ? { ...message, content: fence.clean(message.content) } : message);
@@ -371,6 +372,41 @@ export class ChatEngine {
   readonly created: CreatedFiles;
 
   constructor(deps: ChatEngineDeps) { this.#d = deps; this.created = new CreatedFiles({ kv: deps.kv, dataDir: deps.paths.data, ...(deps.log ? { log: deps.log } : {}) }); }
+
+  #imageStore?: Uploads;
+  #images(): Uploads {
+    const d = this.#d;
+    return this.#imageStore ??= new Uploads(d.conversations.db, d.paths.uploads, () => (d.now?.() ?? new Date()).getTime());
+  }
+
+  // 道具の結果の画像は、添付と同じ置き場（uploads の行とファイル）に置き、発言には id だけ残す（base64 のまま入れると messages.parts が大きくなる）。置けなかった画像は、失わないよう base64 のまま残す
+  #storeImages(tool: string, images: ImageRef[]): { ids: string[]; inline: ImageRef[] } {
+    const ids: string[] = [];
+    const inline: ImageRef[] = [];
+    for (const image of images) {
+      try { ids.push(this.#images().save({ name: tool, mime: image.mediaType, body: Buffer.from(image.data, 'base64') }).id); } catch (error) {
+        this.#d.log?.(`[WARN] Could not put an image of ${tool} in the uploads folder; kept it in the message: ${(error as Error).message}`);
+        inline.push(image);
+      }
+    }
+    return { ids, inline };
+  }
+
+  // 読めない画像は、モデルに渡さず、画像ごとに 1 回だけ知らせる（#assemble は 1 つの返事のあいだに何度も動く）
+  #imageLost = new Set<string>();
+  #loadImage(id: string): ImageRef | undefined {
+    try {
+      const upload = this.#images().get(id);
+      if (upload?.kind !== 'image') throw new Error('it is not in the uploads table');
+      return this.#images().image(upload);
+    } catch (error) {
+      if (!this.#imageLost.has(id)) {
+        this.#imageLost.add(id);
+        this.#d.log?.(`[WARN] Could not read the image ${id} of a tool result; the model will not see it: ${(error as Error).message}`);
+      }
+      return undefined;
+    }
+  }
 
   #busy(key: EngineMessageKey): SendOutcome {
     return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), key), errorCode: `engine.${key}` };
@@ -1363,9 +1399,10 @@ export class ChatEngine {
           countDone(toolCall.name, outcome);
           if (outcome.invalidArguments) invalidThisRound++;
           if (toolCall.name === 'ask_owner' && !outcome.output.isError) askedOwner = true;
+          const images = !outcome.output.isError && outcome.output.images?.length ? this.#storeImages(toolCall.name, outcome.output.images) : undefined;
           const toolSaved = d.conversations.append(conversationId, {
             role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}), ...(outcome.gate ? { gate: outcome.gate } : {}),
-            ...(!outcome.output.isError && outcome.output.images?.length ? { images: outcome.output.images } : {}),
+            ...(images?.inline.length ? { images: images.inline } : {}), ...(images?.ids.length ? { imageIds: images.ids } : {}),
           }, runId);
           unrun.shift();
           d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: toolSaved.id, role: 'tool' });
@@ -1767,7 +1804,7 @@ export class ChatEngine {
     // 実行の中では、道具の結果・発言から会話の nonce を消す（tail の印を装えないように）
     // 消した・外した会話（TE-4）でも、要約と同じく考える部分を送り返さない。消した位置より前の道具の結果は、nonce を消したあとに印へ替える
     const reduced = Boolean(conversation?.summary) || trimUpto > 0 || clearedUpto > 0;
-    let history = stored.map(m => withThinkingFor(clean(forModel(m.message), p.runId ? fence : undefined), reduced ? undefined : { provider: model.provider, model: model.model }));
+    let history = stored.map(m => withThinkingFor(clean(forModel(m.message, id => this.#loadImage(id)), p.runId ? fence : undefined), reduced ? undefined : { provider: model.provider, model: model.model }));
     const clearedCalls = new Set<string>();
     history = this.#clearResults(history, stored, clearedUpto, { conversationId: p.conversationId, kind: p.kind, readable, fence: p.runId ? fence : undefined, language }, clearedCalls);
     // 発言に保存した tail（TE-1）は、次の実行でも同じ文で同じ場所に送る。実行の中では、いまの会話の印で囲まれたものだけ送る（ほかは外し、載せていた節は送っていないものとして付け直す）。
