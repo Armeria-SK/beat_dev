@@ -18,7 +18,7 @@ import {
   type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
 import { findClaudeExecutable } from './executable.ts';
-import { answerFor, claudeMode, disallowedTools, isCodexPermission, STOPPED_ANSWER, toolHooks, type ClaudePermissionMode } from './permissions.ts';
+import { answerFor, claudeMode, disallowedTools, isCodexPermission, KEPT_TOOLS, STOPPED_ANSWER, toolHooks, type ClaudePermissionMode } from './permissions.ts';
 import { apiKeyInUse, EventTranslator, MIN_CLAUDE_CODE_VERSION, safeText, versionAtLeast, versionParts } from './protocol.ts';
 
 export interface ClaudeCodeSdk {
@@ -270,6 +270,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
           env: childEnv.env,
           permissionMode: permission,
           settingSources: ['user'],
+          tools: [...KEPT_TOOLS],
           disallowedTools: disallowedTools(),
           hooks: toolHooks(),
           canUseTool,

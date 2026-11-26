@@ -42,13 +42,34 @@ export const DISALLOWED_TOOLS = [
   'Workflow', 'Projects',
 ] as const;
 
+// 残す道具（組み込み。SDK の BUILTIN_TOOL_NAMES から、外す道具を引いた残り。試験が 2 つの一覧の合わせを SDK の名前の全部と突き合わせる）。起こすときの `tools` に渡して、基本の一覧をこれに固定する。
+// 使う人の claude.exe は自分で更新されて新しい道具を足すことがあるが、ここに無い名前は基本の一覧に入らない。それでも入ってきたとき（起動の知らせの tools にこれ以外の組み込みの名前があるとき）は、protocol.ts がその返事を続けない。
+// どれも、名前と SDK の文書で見直して外す理由が無いとした道具（本物で動かしたものは一部）。Agent の isolation だけは、下のフックで断る
+export const KEPT_TOOLS = [
+  'Agent', 'Bash', 'Edit', 'EndConversation', 'EnterPlanMode', 'ExitPlanMode', 'Glob', 'Grep', 'ListAgents', 'ListMcpResourcesTool', 'LSP', 'Monitor',
+  'NotebookEdit', 'OfferChromeSetup', 'PowerShell', 'propose_skills', 'Read', 'ReadMcpResourceDirTool', 'ReadMcpResourceTool', 'ReadNotifications', 'ReportFindings', 'SetGoal',
+  'ShowOnboardingRolePicker', 'Skill', 'SubagentHandback', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskStop', 'TaskUpdate', 'TodoWrite', 'ToolSearch', 'WaitForMcpServers', 'WebFetch', 'WebSearch', 'Write',
+] as const;
+
+// 本物の Claude Code 2.1.331 は、起動の知らせの tools で Agent を旧い名前 Task で言う（呼び出しの名前は Agent。本物で見た）。その別名は見直し済みの Agent として数える。tools には渡さない（Agent で足りる）
+export const REPORTED_ALIASES = ['Task'] as const;
+
+const KEPT = new Set<string>([...KEPT_TOOLS, ...REPORTED_ALIASES]);
+
+// 起動の知らせの tools のうち、見直していない組み込みの名前（mcp__ で始まる MCP の道具は、組み込みではないので数えない）。tools が配列でないときは undefined（確かめられない）
+export function unreviewedTools(tools: unknown): string[] | undefined {
+  if (!Array.isArray(tools)) return undefined;
+  return tools.map(name => String(name)).filter(name => !name.startsWith('mcp__') && !KEPT.has(name));
+}
+
 // 残した Agent（部下の作業役）は、引数の isolation（"worktree" = 作業の木を作る・"remote" = 遠くで動かす。SDK の道具の定義）を付けられる。名前を外すと部下ごと使えなくなるので、
 // 外さずに、PreToolUse のフックで isolation が付いた呼び出し（値は何でも）だけ断る。読めない入力も断る。フック自体が失敗したときも、その呼び出しは止める（onFailure: 'block'）。
+// どの呼び出しがフックに届くかは matcher（Agent|Task）が決める。コールバックは名前を見直さない（道具の名前が変わって別名が matcher に残っても、断りが消えないように）。
 // 断ったあとモデルは isolation なしで頼み直せる（その呼び出しは通る）
 const AGENT_TOOL_NAMES = 'Agent|Task';
 
 export const refuseIsolation: HookCallback = async input => {
-  if (input.hook_event_name !== 'PreToolUse' || !/^(?:Agent|Task)$/u.test(input.tool_name)) return {};
+  if (input.hook_event_name !== 'PreToolUse') return {};
   const tool: unknown = input.tool_input;
   const readable = typeof tool === 'object' && tool !== null && !Array.isArray(tool);
   if (readable && (tool as { isolation?: unknown }).isolation === undefined) return {};

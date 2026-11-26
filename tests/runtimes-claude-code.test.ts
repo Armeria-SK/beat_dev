@@ -7,6 +7,7 @@ import type { RuntimeConfig } from '../src/config/schema.ts';
 import type { AppPaths } from '../src/paths.ts';
 import { ClaudeCodeError, createClaudeCodeRuntime, type ClaudeCodeOptions } from '../src/runtimes/claude-code/adapter.ts';
 import { findClaudeExecutable } from '../src/runtimes/claude-code/executable.ts';
+import { KEPT_TOOLS } from '../src/runtimes/claude-code/permissions.ts';
 import { ProcessManager } from '../src/runtimes/process-manager.ts';
 import { RuntimeRegistry } from '../src/runtimes/registry.ts';
 import type { RuntimeEvent, RuntimePermission, RuntimeRequest } from '../src/runtimes/types.ts';
@@ -138,6 +139,9 @@ test('start asks for the default permission mode, user settings only, a fresh se
   assert.equal(typeof options.canUseTool, 'function');
   assert.equal(typeof options.spawnClaudeCodeProcess, 'function');
   assert.ok(options.disallowedTools?.includes('AskUserQuestion'));
+  assert.deepEqual(options.tools, [...KEPT_TOOLS], 'the base set of built-in tools is fixed to the reviewed list, not the preset that grows with each Claude Code update');
+  const toolsArg = (s.runtime.launchOf(session.id)?.record?.args ?? []).filter(arg => arg.startsWith('--tools='));
+  assert.deepEqual(toolsArg, [`--tools=${KEPT_TOOLS.join(',')}`], 'the child command line carries exactly that list');
   assert.deepEqual(s.runtime.launchOf(session.id)?.settingSources, ['user']);
 });
 
@@ -408,6 +412,13 @@ test('if the first message says an API key is in use, or a different permission 
   assert.deepEqual(silentEvents.map(event => event.type), ['failed'], 'a first message that does not say where the key comes from is not trusted');
   assert.ok(silentEvents[0]?.type === 'failed' && silentEvents[0].kind === 'auth');
   await until(() => silent.sdk.last.ctx.child!.killed);
+  const grown = setup(t, { script: async function* () { yield initMessage({ tools: ['Read', 'BrandNewTool', 'mcp__server__tool'] }); yield textMessage('m1', 'should never be shown'); yield resultMessage(); } });
+  const g = await grown.start();
+  await grown.runtime.send(g.id, { text: 'go' });
+  const grownEvents = await collect(grown.runtime, g.id);
+  assert.deepEqual(grownEvents.map(event => event.type), ['failed'], 'a built-in tool that was not reviewed stops the reply before any text');
+  assert.ok(grownEvents[0]?.type === 'failed' && grownEvents[0].kind === 'process' && grownEvents[0].message.includes('BrandNewTool'));
+  await until(() => grown.sdk.last.ctx.child!.killed);
   const mode = setup(t, { script: async function* () { yield initMessage({ permissionMode: 'bypassPermissions' }); yield textMessage('m1', 'nope'); yield resultMessage(); } });
   const b = await mode.start();
   await mode.runtime.send(b.id, { text: 'go' });
@@ -708,11 +719,12 @@ test('an agent that asks for its own worktree or a remote run is refused by a ho
   assert.deepEqual(await callHooks(options, 'AgentX', { isolation: 'worktree' }), [], 'only the agent tool names match');
 });
 
-test('the hook function itself ignores other tools and other events, and still answers a tool name that the matcher would not send', async () => {
+test('the hook function itself does not look at the tool name (the matcher picks the calls, so a renamed tool that keeps the matcher alias is still refused) and ignores other events', async () => {
   const { refuseIsolation } = await import('../src/runtimes/claude-code/permissions.ts');
   const signal = new AbortController().signal;
   const call = (over: object) => refuseIsolation({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: {}, tool_use_id: 't', session_id: 's', transcript_path: 'p', cwd: 'c', ...over } as never, 't', { signal });
-  assert.deepEqual(await call({ tool_name: 'Read', tool_input: { isolation: 'worktree' } }), {});
+  assert.equal(((await call({ tool_name: 'SomeNewAgentName', tool_input: { isolation: 'worktree' } })) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision, 'deny', 'a call that reached the hook is judged by its isolation, whatever its tool name');
+  assert.deepEqual(await call({ tool_name: 'SomeNewAgentName', tool_input: { prompt: 'x' } }), {});
   assert.deepEqual(await call({ hook_event_name: 'PostToolUse', tool_input: { isolation: 'worktree' } }), {});
   assert.deepEqual(await call({ tool_input: { isolation: undefined } }), {});
   assert.equal(((await call({ tool_name: 'Task', tool_input: { isolation: 'remote' } })) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision, 'deny');

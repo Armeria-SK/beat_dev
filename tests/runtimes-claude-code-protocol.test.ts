@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import { answerFor, claudeMode, DISALLOWED_TOOLS, disallowedTools, isCodexPermission, secretDenyRules, sessionOnlyUpdates, STOPPED_ANSWER } from '../src/runtimes/claude-code/permissions.ts';
+import { answerFor, claudeMode, DISALLOWED_TOOLS, disallowedTools, isCodexPermission, KEPT_TOOLS, REPORTED_ALIASES, secretDenyRules, sessionOnlyUpdates, STOPPED_ANSWER, unreviewedTools } from '../src/runtimes/claude-code/permissions.ts';
 import { apiKeyInUse, EventTranslator, failureKind, versionAtLeast, type TranslatorOptions } from '../src/runtimes/claude-code/protocol.ts';
 import { PERMISSIONS } from '../src/runtimes/types.ts';
 import { SECRET_GLOBS } from '../src/tools/hooks/scope.ts';
@@ -185,14 +185,42 @@ test('the tools that ask a question, schedule later work, start remote work, pub
   }
   for (const name of turnedOff) assert.ok((BUILTIN_TOOL_NAMES as readonly string[]).includes(name), `${name} is not a built-in tool name of this SDK (renamed?)`);
   assert.ok(disallowedTools().every(rule => !/[,\s]/u.test(rule)), 'the SDK joins the list with commas into one argument, so no rule may hold a comma or a space');
-  // 外していない道具は、ここに名前を挙げて「意図して残した」ことを残す。SDK が新しい道具を足したら、この試験が止まって、外すか残すかを決めさせる。
+  // 外していない道具は KEPT_TOOLS に名前を挙げて「意図して残した」ことを残す（起こすときの tools にもこの一覧を渡す）。SDK が新しい道具を足したら、この試験が止まって、外すか残すかを決めさせる。
   // Agent は残す（部下の作業役は使う）が、isolation を付けた呼び出しはフックで断る（runtimes-claude-code.test.ts）
-  const kept = [
-    'Agent', 'Bash', 'Edit', 'EndConversation', 'EnterPlanMode', 'ExitPlanMode', 'Glob', 'Grep', 'ListAgents', 'ListMcpResourcesTool', 'LSP', 'Monitor',
-    'NotebookEdit', 'OfferChromeSetup', 'PowerShell', 'propose_skills', 'Read', 'ReadMcpResourceDirTool', 'ReadMcpResourceTool', 'ReadNotifications', 'ReportFindings', 'SetGoal',
-    'ShowOnboardingRolePicker', 'Skill', 'SubagentHandback', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskStop', 'TaskUpdate', 'TodoWrite', 'ToolSearch', 'WaitForMcpServers', 'WebFetch', 'WebSearch', 'Write',
-  ];
+  const kept: readonly string[] = KEPT_TOOLS;
+  assert.deepEqual(turnedOff.filter(name => kept.includes(name)), [], 'no tool is both turned off and kept');
+  assert.equal(new Set(kept).size, kept.length, 'no name is listed twice');
   assert.deepEqual([...turnedOff, ...kept].sort(), [...BUILTIN_TOOL_NAMES].sort());
+});
+
+test('the init message is trusted only when every built-in tool it lists was reviewed; MCP tools do not count, and a missing list is not trusted', () => {
+  assert.deepEqual(unreviewedTools([...KEPT_TOOLS]), []);
+  assert.deepEqual(unreviewedTools(['Task']), [], 'a real Claude Code 2.1.331 lists the Agent tool as Task in its init message');
+  assert.deepEqual(unreviewedTools(['Task', 'Agent', 'Read']), []);
+  assert.deepEqual([...REPORTED_ALIASES], ['Task']);
+  assert.deepEqual([...REPORTED_ALIASES].filter(name => (KEPT_TOOLS as readonly string[]).includes(name) || (DISALLOWED_TOOLS as readonly string[]).includes(name)), [], 'an alias is a spelling of a kept tool, not a tool of its own');
+  assert.deepEqual(unreviewedTools(['Read', 'mcp__server__tool', 'mcp__plugin_x__y']), []);
+  assert.deepEqual(unreviewedTools([]), []);
+  assert.deepEqual(unreviewedTools(['Read', 'BrandNewTool', 'Artifact', 'mcp__a__b']), ['BrandNewTool', 'Artifact'], 'a turned-off tool that shows up anyway is not reviewed either');
+  assert.deepEqual(unreviewedTools(['read']), ['read'], 'names are compared exactly');
+  assert.deepEqual(unreviewedTools([42, null]), ['42', 'null']);
+  for (const missing of [undefined, null, 'Read', { 0: 'Read' }]) assert.equal(unreviewedTools(missing), undefined, JSON.stringify(missing));
+
+  const ok = translator();
+  assert.deepEqual(ok.translate.translate(initMessage({ tools: ['Read', 'Bash', 'mcp__server__tool'] })), []);
+  assert.equal(ok.translate.guarded, false);
+  const extra = translator();
+  const extraEvents = extra.translate.translate(initMessage({ tools: ['Read', 'BrandNewTool', 'mcp__server__tool'] }));
+  const event = failed(extraEvents);
+  assert.ok(event?.type === 'failed' && event.kind === 'process' && event.message.includes('BrandNewTool') && !event.message.includes('mcp__'), JSON.stringify(extraEvents));
+  assert.equal(extra.translate.guarded, true);
+  const many = translator();
+  const manyEvent = failed(many.translate.translate(initMessage({ tools: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'] })));
+  assert.ok(manyEvent?.type === 'failed' && manyEvent.message.includes('A5') && !manyEvent.message.includes('A6') && manyEvent.message.includes('...'), 'at most five names are shown');
+  const none = translator();
+  const noneEvent = failed(none.translate.translate(initMessage({ tools: undefined })));
+  assert.ok(noneEvent?.type === 'failed' && noneEvent.kind === 'process' && /did not report/u.test(noneEvent.message));
+  assert.equal(none.translate.guarded, true);
 });
 
 const update = (over: object): PermissionUpdate => over as PermissionUpdate;

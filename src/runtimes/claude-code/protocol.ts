@@ -3,6 +3,7 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { RuntimeEvent } from '../types.ts';
+import { unreviewedTools } from './permissions.ts';
 
 type Failed = Extract<RuntimeEvent, { type: 'failed' }>;
 
@@ -121,6 +122,17 @@ export class EventTranslator {
     if (message.permissionMode !== this.#options.expectedMode) {
       this.#guarded = true;
       return [{ type: 'failed', kind: 'process', message: `Claude Code started in the "${safeText(String(message.permissionMode), 40)}" permission mode, not the requested "${this.#options.expectedMode}". The reply was stopped.` }];
+    }
+    // 使う人の claude.exe が更新されて、見直していない組み込みの道具を足したら、続けない（基本の一覧を tools で固定しているので、普通は来ない。来たら止める）。tools が読めないときも確かめられない
+    const unreviewed = unreviewedTools(message.tools);
+    if (unreviewed === undefined || unreviewed.length > 0) {
+      this.#guarded = true;
+      return [{
+        type: 'failed', kind: 'process',
+        message: unreviewed === undefined
+          ? 'Claude Code did not report its list of tools, so the reply was stopped.'
+          : `Claude Code reported tools that beat has not reviewed (${safeText(unreviewed.slice(0, 5).join(', '), 200)}${unreviewed.length > 5 ? ', ...' : ''}), so the reply was stopped. This version of Claude Code needs a newer beat.`,
+      }];
     }
     return [];
   }

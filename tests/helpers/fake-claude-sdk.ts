@@ -12,7 +12,7 @@ export const SESSION_ID = '11111111-2222-4333-8444-555555555555';
 export const sdkMessage = (message: object): SDKMessage => message as unknown as SDKMessage;
 
 export const initMessage = (over: Record<string, unknown> = {}): SDKMessage =>
-  sdkMessage({ type: 'system', subtype: 'init', apiKeySource: 'none', permissionMode: 'default', session_id: SESSION_ID, ...over });
+  sdkMessage({ type: 'system', subtype: 'init', apiKeySource: 'none', permissionMode: 'default', tools: ['Read', 'Bash', 'Task', 'mcp__someserver__sometool'], session_id: SESSION_ID, ...over });
 
 export const textMessage = (id: string, text: string, over: Record<string, unknown> = {}): SDKMessage =>
   sdkMessage({ type: 'assistant', message: { id, content: [{ type: 'text', text }] }, parent_tool_use_id: null, session_id: SESSION_ID, ...over });
@@ -79,7 +79,7 @@ export class FakeQuery {
     try {
       child = options.spawnClaudeCodeProcess?.({
         command: options.pathToClaudeCodeExecutable as string,
-        args: [FAKE_RUNTIME_SCRIPT, ...(config.childArgs ?? []), '--permission-mode', String(options.permissionMode), ...(options.disallowedTools?.length ? [`--disallowedTools=${options.disallowedTools.join(',')}`] : [])],
+        args: [FAKE_RUNTIME_SCRIPT, ...(config.childArgs ?? []), '--permission-mode', String(options.permissionMode), ...(Array.isArray(options.tools) ? [`--tools=${options.tools.join(',')}`] : []), ...(options.disallowedTools?.length ? [`--disallowedTools=${options.disallowedTools.join(',')}`] : [])],
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         env: options.env ?? {},
         signal: this.#abort.signal,
