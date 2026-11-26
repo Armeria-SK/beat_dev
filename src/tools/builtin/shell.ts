@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -12,8 +12,8 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
 import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
-import { isInterpreter, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
-import { expandPath, isInside, placePath } from '../hooks/scope.ts';
+import { isInterpreter, packageScriptName, packageScriptView, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { expandPath, isInside, placePath, realish, type ScopePolicy } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
@@ -129,8 +129,50 @@ function peek(file: string, language: Language): Peeked {
   const fingerprint = `${file}\0${sha256(bytes)}`;
   if (bytes.subarray(0, 8000).includes(0)) return unreadable(fingerprint);
   const content = bytes.toString('utf8');
+  return { preview: previewOf(file, content), fingerprint, content };
+}
+
+function previewOf(path: string, content: string): PreviewFile {
   const rest = redactSecrets(content);
-  return { preview: { path: file, text: content.slice(0, PREVIEW_CHARS), truncated: content.length > PREVIEW_CHARS, ...(content.length > PREVIEW_CHARS ? { chars: content.length } : {}), rest: { text: rest.slice(0, PREVIEW_CHARS), truncated: rest.length > PREVIEW_CHARS } }, fingerprint, content };
+  return { path, text: content.slice(0, PREVIEW_CHARS), truncated: content.length > PREVIEW_CHARS, ...(content.length > PREVIEW_CHARS ? { chars: content.length } : {}), rest: { text: rest.slice(0, PREVIEW_CHARS), truncated: rest.length > PREVIEW_CHARS } };
+}
+
+const PACKAGE_PROGRAM = /^(?:npm|pnpm|yarn|bun)$/u;
+const ENTRY_FILES_MAX = 4;
+
+// package.json ごとに、その文が動かすスクリプトの名前。同じ package.json にほかの呼び出し（install・名前が変数・旗つきなど）が 1 つでも届くか、包みの中が読めないときは、その package.json を入れない（札は全体を見せる）
+function scriptRuns(statements: readonly StatementFacts[], scripts: ReadonlySet<string>): Map<string, string[]> {
+  const runs = new Map<string, string[] | null>();
+  const walk = (list: readonly StatementFacts[]): boolean => list.every(st => {
+    if (st.inner === null || st.unknownInner?.length || !walk(st.inner ?? [])) return false;
+    const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
+    const file = st.cwd === null ? undefined : resolve(st.cwd, 'package.json');
+    if (!PACKAGE_PROGRAM.test(program) || file === undefined || !scripts.has(file)) return true;
+    const words = st.words.slice(1);
+    const name = words.some(w => w.dynamic || w.glob) ? undefined : packageScriptName(program, words.map(w => w.text));
+    const known = runs.get(file);
+    runs.set(file, name === undefined || known === null ? null : [...(known ?? []), name]);
+    return true;
+  });
+  const all = walk(statements);
+  return new Map([...runs].flatMap(([file, names]) => (all && names ? [[file, names] as [string, string[]]] : [])));
+}
+
+// npm run x などの札: package.json の全体のかわりに、動かすスクリプトの行と、その行が渡すファイル（製品の中・秘密のパスでない・ふつうのファイル）を見せる。
+// 判定には使わない。指紋は package.json の全体と見せたファイルを bind に入れるので、あとで変わったら承認は古くなる
+function runCards(cards: readonly Peeked[], statements: readonly StatementFacts[], scripts: readonly string[], root: string, policy: ScopePolicy, language: Language): Peeked[] {
+  const runs = scriptRuns(statements, new Set(scripts));
+  if (runs.size === 0) return [...cards];
+  const have = new Set(cards.map(card => card.preview.path));
+  const shown = (file: string): boolean => isInside(root, file) && isInside(realish(root), realish(file)) && placePath(file, policy).kind === 'inside' && statSync(file, { throwIfNoEntry: false })?.isFile() === true;
+  return cards.flatMap(card => {
+    const names = runs.get(card.preview.path);
+    const view = names && card.content !== undefined ? packageScriptView(card.content, names, dirname(card.preview.path), language) : undefined;
+    if (!view) return [card];
+    const entries = view.files.filter(file => !have.has(file) && shown(file)).slice(0, ENTRY_FILES_MAX);
+    for (const file of entries) have.add(file);
+    return [{ ...card, preview: previewOf(card.preview.path, view.lines.join('\n')) }, ...entries.map(file => peek(file, language))];
+  });
 }
 
 function hookFingerprints(dir: string | null | undefined, language: Language): string[] {
@@ -469,8 +511,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const scope = filesScope(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace, verdict.scripts);
   const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
     writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? (scope.kind === 'owner' ? scope.why : undefined), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
-  const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
-  const peeked = cards;
+  const peeked = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
+  const cards = runCards(peeked, verdict.statements, verdict.scripts, ctx.project?.root ?? ctx.workspace, ctx.policy, language);
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
   const found = selfTouchMarkers(input.command, selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx), peeked.flatMap(p => p.content ?? []));
   const markers = [...found.strong, ...(peekTouch ? [peekTouch] : [])];
@@ -577,6 +619,7 @@ const shellDescription = (maxTimeoutSec?: number): string => [
   'Destructive operations and reading secrets cannot be run.',
   'Walking a large folder such as node_modules or .git with -Recurse or the like is slow (over 20 seconds for 15,000 files), and the result is too long to fit in the context. Exclude such folders, or narrow the scope with -Name, -Filter or -Depth.',
   'On Windows, PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
+  'In Windows PowerShell 5.1, && and || do not exist (join commands with ;), and rm -rf fails (write Remove-Item -Recurse -Force).',
   'PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
   'In Windows PowerShell, cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user\'s confirmation every time, even when the path is fixed. To write a file, use the file_write / file_edit tools, not the shell. Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
   'Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',

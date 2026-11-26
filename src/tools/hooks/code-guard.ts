@@ -298,6 +298,45 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   return [];
 }
 
+// ── R1.4 の札用: npm run x が本当に動かすもの（札に見せる行とファイルを選ぶだけ。判定には使わない） ──
+// npm run <名前>・npm test・npm start（pnpm・yarn・bun も）が動かすスクリプトの名前。ほかの書き方（名前の前の旗・install・bun test など）は undefined
+export function packageScriptName(cmd: string, args: readonly string[]): string | undefined {
+  const [sub, name] = args;
+  if (!PACKAGE_TOOLS.has(cmd) || sub === undefined) return undefined;
+  if (sub === 'test' || sub === 'start') return cmd === 'bun' && sub === 'test' ? undefined : sub;
+  return (sub === 'run' || sub === 'run-script') && name !== undefined && !name.startsWith('-') ? name : undefined;
+}
+
+export interface ScriptView { lines: string[]; files: string[] }
+
+// 名前のスクリプトの行（前後のフック pre<名前>・post<名前> と、行の中の npm run が呼ぶスクリプトも）と、行が渡す先のファイル（node x.js・tsx x.ts など、直接の実行と同じ読み方）。
+// 行を絞りきれない（名前のスクリプトが無い・install など別の呼び出しがある・package.json が読めない）ときは undefined。札は package.json の全体を見せる
+export function packageScriptView(packageText: string, names: readonly string[], dir: string, language: Language): ScriptView | undefined {
+  let table: unknown;
+  try { table = (JSON.parse(packageText) as { scripts?: unknown }).scripts; } catch { return undefined; }
+  if (typeof table !== 'object' || table === null) return undefined;
+  const scripts = table as Record<string, unknown>;
+  const lines: string[] = [];
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const one = (key: string): boolean => {
+    if (seen.has(key)) return true;
+    seen.add(key);
+    const value = Object.hasOwn(scripts, key) ? scripts[key] : undefined;
+    if (typeof value !== 'string') return false;
+    lines.push(`${JSON.stringify(key)}: ${JSON.stringify(value)}`);
+    return segments(value).every(seg => {
+      const called = packageScriptName(seg.cmd, seg.args);
+      if (called !== undefined) return withHooks(called);
+      if (PACKAGE_TOOLS.has(seg.cmd) && !PACKAGE_READONLY_SUB.has(seg.args.find(a => !a.startsWith('-')) ?? '')) return false;
+      files.push(...codeFindings(seg, { cwd: dir, language, selfHosts: [] }).flatMap(f => f.scripts));
+      return true;
+    });
+  };
+  const withHooks = (name: string): boolean => [`pre${name}`, name, `post${name}`].every(key => (key !== name && !Object.hasOwn(scripts, key)) || one(key));
+  return names.every(withHooks) ? { lines, files: [...new Set(files)] } : undefined;
+}
+
 // ── R1.5 ほかのプロセスを起こす・残す ──
 export const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
   xargs: new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--max-chars', '--process-slot-var']),
