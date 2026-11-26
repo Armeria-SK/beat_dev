@@ -91,7 +91,7 @@ export function Composer(props: ComposerProps) {
   const submitting = useRef(false);
 
   const use = props.runtime ?? NO_RUNTIME;
-  const current = modelInEffect(runtimeShown(models ?? [], use), chatOrder, modelId);
+  const current = modelInEffect(runtimeShown(models ?? [], use), chatOrder, modelId, use);
   const byRuntime = runtimeInEffect(use, current);
   const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
   const depths = depthOptions(current);

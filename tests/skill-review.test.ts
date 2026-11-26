@@ -296,7 +296,7 @@ test('S-1b: without bot memory no memory review is queued (idle, long chat, task
 
 const SKILL_FIX = 'Use skill_draft to fix a skill the record shows was wrong or out of date.';
 const SKILL_NEW = 'Use it to create a new skill only when the user corrected how the work should be done, or asked for it to be done this way from now on or next time.';
-const SKILL_NOT_DRAFT = "Do not draft general know-how that is not specific to this user's work (unless the user had to correct it), a procedure already covered by a listed skill, or one that only fits this task";
+const SKILL_NOT_DRAFT = "Do not draft general know-how that is not specific to this user's work (unless the user had to correct it), or a procedure that only fits this task. Do not create a new skill for a procedure a listed skill already covers (fixing that skill stays allowed)";
 
 test('S-1b bar: a skill review creates a new skill only on a correction or a request for next time (fixing a wrong skill stays allowed), most reviews end with No changes, and the memory review gets none of it', () => {
   for (const skillsAutoRegister of [false, true]) {
@@ -317,6 +317,16 @@ test('S-1b bar: a skill review creates a new skill only on a correction or a req
   }
   assert.doesNotMatch(reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill' }), /not used until the user approves it/u, 'the policy line no longer says a wrong draft is harmless; the tool description keeps that sentence');
   assert.equal(reviewPolicyLines('en').find(line => line.text === `- ${SKILL_NOT_DRAFT}`)?.skillOnly, true, 'marked skill-only');
+});
+
+test('S-1b bar (#264): a procedure a listed skill already covers bans only a new skill for it, not a draft that fixes that skill', () => {
+  const skill = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill' });
+  const line = skill.split('\n').find(entry => entry.includes('a listed skill already covers')) ?? '';
+  const [drafts, creates] = line.split('. Do not create');
+  assert.match(creates ?? '', /^ a new skill for a procedure a listed skill already covers \(fixing that skill stays allowed\)$/u, line);
+  assert.doesNotMatch(drafts ?? '', /listed skill|already covered/u, 'the "do not draft" sentence says nothing about skills that already exist');
+  assert.doesNotMatch(skill, /already covered by a listed skill/u, 'the old wording read as a ban on drafting the fix of the skill that covers the procedure');
+  assert.ok(skill.includes(SKILL_FIX), 'fixing a wrong skill stays allowed');
 });
 
 test('S-1b bar: the prompt a skill review run actually sends carries the bar', async t => {
