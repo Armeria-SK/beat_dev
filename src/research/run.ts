@@ -107,6 +107,7 @@ export class ResearchRunner {
   async autoStart(input: Omit<StartResearch, 'trigger'>): Promise<ResearchRunRow | undefined> {
     const settings = this.#settings(input.projectId);
     if (!settings || settings.when !== 'new' || this.store.hasAny(input.projectId, 'products') || this.store.running(input.projectId)) return undefined;
+    if (this.#d.conversations.get(input.sourceConversationId)?.runtime_id) return undefined;
     if (!(await this.isNewProduct(input.projectId))) return undefined;
     try { return this.start({ ...input, trigger: 'owner_send' }); } catch (error) {
       if (error instanceof ResearchError && error.code === 'running') return undefined;

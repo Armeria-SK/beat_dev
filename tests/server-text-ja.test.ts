@@ -1,6 +1,9 @@
 import { loadTsx } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { format } from '../src/shared/messages/define.ts';
 import { ApiError } from '../web/src/api.ts';
 import { sendFailureOf } from '../web/src/chat-logic.ts';
@@ -94,4 +97,15 @@ test('呼ぶ側（使えるモデルが無い 409・設定の問題・会話の�
     assert.equal(noticeText(t, { runId: 'r', kind: 'warning', code: 'context_trimmed', message: 'srv', params: { count: 3 } }), format(ja('engine', 'warn.context_trimmed'), { count: 3 }));
     assert.equal(noticeText(t, { runId: 'r', kind: 'error', errorKind: 'internal', errorCode: 'engine.run.no_provider', errorParams: { id: 'p' }, errorMessage: 'srv' }), format(ja('engine', 'run.no_provider'), { id: 'p' }));
   } finally { setExplainLanguage('en'); }
+});
+
+test('メッセージの表（英語・日本語）は、1 行に 1 つのコードだけ。2 つのコードが 1 行にくっついていない', () => {
+  const joined: string[] = [];
+  for (const dir of ['../src/shared/messages/', '../web/src/i18n/ja-server/']) {
+    const folder = fileURLToPath(new URL(dir, import.meta.url));
+    for (const name of readdirSync(folder).filter(file => file.endsWith('.ts'))) {
+      readFileSync(join(folder, name), 'utf8').split(/\r?\n/u).forEach((line, i) => { if (/["'],\s+'[\w.]+':\s/u.test(line)) joined.push(`${dir}${name}:${i + 1}`); });
+    }
+  }
+  assert.deepEqual(joined, []);
 });

@@ -489,8 +489,7 @@ export class ChatEngine {
     if (existing) {
       if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
     } else {
-      const permissionMode = choice.permissionMode ?? (projectId !== undefined && this.#d.plans?.has(projectId) === false ? 'plan' : 'auto');
-      this.#d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode });
+      this.#d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode: this.#newConversationMode(choice, projectId) });
     }
     const runId = randomUUID();
     this.#notePreempted(runId, preempted);
@@ -506,6 +505,11 @@ export class ChatEngine {
     this.#taintFromHistory(runId, conversationId);
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, effort);
     return { ok: true, runId, ...(firstId !== undefined ? { messageId: firstId } : {}) };
+  }
+
+  // The mode a new conversation starts in when the send names none: plan for a product that has no plan yet, else auto (provider and runtime routes alike)
+  #newConversationMode(choice: SendChoice, projectId: string | undefined): PermissionMode {
+    return choice.permissionMode ?? (projectId !== undefined && this.#d.plans?.has(projectId) === false ? 'plan' : 'auto');
   }
 
   // 外から読んだ内容が残ったまま始まる実行は、シェルと書き込みを承認制にする（taint）。次のどれかなら、始まる実行も「外から読んだ」扱いにする:
@@ -919,10 +923,12 @@ export class ChatEngine {
 
   // 会話で使うモデル（選んでいればそれ。自動なら使える先頭、使えるものが無ければ候補の先頭）で選べる考える深さ。画面の検査と一覧に使う
   // 実行役に結ばれた会話（boundRuntime）でモデルを選んでいないときは、その実行役のモデルで決める（提供元の先頭のモデルではなく）
-  effortChoices(pinned: string | null, boundRuntime: string | null = null): { modelId: string | undefined; efforts: string[] } {
+  // freshInProduct (a product conversation with no messages and no runtime yet) with no model chosen: the first send goes to the first chat runtime model (same rule as #runtimeRoute), so its efforts apply
+  effortChoices(pinned: string | null, boundRuntime: string | null = null, freshInProduct = false): { modelId: string | undefined; efforts: string[] } {
     const config = this.#d.config();
     const runtimeFirst = pinned === null && boundRuntime !== null ? config.models.find(m => isRuntimeModel(m) && m.runtime === boundRuntime)?.id : undefined;
-    const id = pinned ?? runtimeFirst ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
+    const autoRuntime = pinned === null && boundRuntime === null && freshInProduct ? this.#firstChatRuntimeModel()?.id : undefined;
+    const id = pinned ?? runtimeFirst ?? autoRuntime ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
     const model = config.models.find(m => m.id === id);
     return { modelId: model?.id, efforts: model ? modelEfforts(model, this.#d.status.get(model.id)) : [] };
   }
@@ -1110,8 +1116,16 @@ export class ChatEngine {
       if (!fresh) return { refused: this.#refuse({ key: 'runtime.not_fresh', params: { id: pinnedModel.runtime } }) };
       return { runtimeId: pinnedModel.runtime, model: pinnedModel };
     }
+    const first = this.#firstChatRuntimeModel();
+    return fresh && first ? { runtimeId: first.runtime, model: first, auto: true } : undefined;
+  }
+
+  // The first chat candidate when it is a runtime model (where the first send of a conversation with no model goes). None when the engine has no runtimes
+  #firstChatRuntimeModel(): RuntimeModelConfig | undefined {
+    if (!this.#d.runtimes) return undefined;
+    const config = this.#d.config();
     const first = config.models.find(m => m.id === candidateModelIds(config, 'chat')[0]);
-    return fresh && first && isRuntimeModel(first) ? { runtimeId: first.runtime, model: first, auto: true } : undefined;
+    return first && isRuntimeModel(first) ? first : undefined;
   }
 
   #runtimeConversation(conversation: ConversationRow | undefined): boolean {
@@ -1147,7 +1161,7 @@ export class ChatEngine {
     d.conversations.reopen(conversationId);
     if (existing) {
       if (hasChoice(choice)) d.conversations.setChoice(conversationId, choice);
-    } else d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode: choice.permissionMode ?? 'auto' });
+    } else d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode: this.#newConversationMode(choice, projectId) });
     if (!d.conversations.bindRuntime(conversationId, route.runtimeId)) return this.#refuse({ key: 'runtime.fixed', params: { id: d.conversations.runtimeOf(conversationId).runtimeId ?? route.runtimeId } });
     const runId = randomUUID();
     let firstId: number | undefined;

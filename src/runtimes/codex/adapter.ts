@@ -295,7 +295,7 @@ class CodexSession {
         this.#push({ type: 'tool_end', id: rowId, output: row.message, isError: true });
       }
     } catch (error) {
-      this.#log(`[WARN] Codex request ${safeLabel(method)} could not be answered: ${short((error as Error).message)}`);
+      this.#log(`[WARN] Codex request ${safeLabel(method)} could not be answered: ${safeLabel((error as Error).message, 300)}`);
     }
   }
 

@@ -158,10 +158,15 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   // 実行役への呼びかけ（断る・止める・閉じる）を順に呼び、待つ時間は全部で止める猶予まで。応えない実行役のせいで、止めた返事が終わらないままにしない。呼びかけは必ず全部出す
   const bounded = async (calls: ReadonlyArray<readonly [string, () => Promise<void>]>): Promise<void> => {
     let timer: NodeJS.Timeout | undefined;
-    const expiry = new Promise<void>(resolve => { timer = setTimeout(resolve, deps.stopGraceMs ?? STOP_GRACE_MS); });
+    const limit = deps.stopGraceMs ?? STOP_GRACE_MS;
+    const expiry = new Promise<'expired'>(resolve => { timer = setTimeout(() => resolve('expired'), limit); });
     try {
       for (const [what, call] of calls) {
-        await Promise.race([(async () => call())().catch((error: unknown) => log(`[WARN] Could not ${what} of runtime ${runtimeId}: ${clean((error as Error).message)}`)), expiry]);
+        const answered = (async () => call())().then(() => 'answered' as const, (error: unknown) => {
+          log(`[WARN] Could not ${what} of runtime ${runtimeId}: ${clean((error as Error).message)}`);
+          return 'answered' as const;
+        });
+        if (await Promise.race([answered, expiry]) === 'expired') log(`[WARN] Gave up waiting for runtime ${runtimeId} to ${what} after ${limit} ms; its process may be left running`);
       }
     } finally { clearTimeout(timer); }
   };

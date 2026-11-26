@@ -573,3 +573,20 @@ test('止まり方（B1）: 1 件ずつのとき、最初の部分が失敗し�
   assert.deepEqual(s.app.research.store.parts(record.id).map(p => [p.kind, p.end]), [['first', 'failed']], 'the candidate part never started');
   assert.deepEqual([record.status, record.stop_reason, record.partial], ['failed', 'failed', 0]);
 });
+
+test('自動の始まり: 外の実行役に結ばれた会話を元にしては始まらない（確定が runtime_source で断られるので、提供元のトークンを無駄にしない）。結ばれていなければ、同じ状態から始まる', async t => {
+  const s = await researchApp(t);
+  s.app.conversations.create({ id: uuid(1), projectId: s.projectId });
+  s.app.conversations.append(uuid(1), { role: 'user', content: 'I want a Markdown notes app.' });
+  assert.equal(s.app.conversations.bindRuntime(uuid(1), 'claude-code'), true);
+  const input = { projectId: s.projectId, sourceConversationId: uuid(1), owner: new OwnerAct() };
+  assert.equal(await s.app.research.autoStart(input), undefined);
+  assert.equal(s.records().length, 0, 'no record was made');
+  assert.equal(s.adapter().calls.length, 0, 'no provider model was called');
+
+  s.app.db.prepare('UPDATE conversations SET runtime_id = NULL WHERE id = ?').run(uuid(1));
+  s.adapter().scripts.push(reply('Recorded.'));
+  const started = await s.app.research.autoStart(input);
+  assert.ok(started, 'the same product and conversation start research once the conversation is not bound to a runtime');
+  await s.settle();
+});

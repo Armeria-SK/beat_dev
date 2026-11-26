@@ -126,7 +126,7 @@ function modelsView(app: App) {
 
 // モデルと考える深さ・権限モードの選び方（PATCH と送信で共通）。設定にあるモデルだけ、そのモデルで選べる値だけを受ける。
 // モデルだけを替えて、今の考える深さが新しいモデルに無いときは、null に戻して effortReset で知らせる。何も書く前に検査を終える
-function readChoice(app: App, body: Record<string, unknown>, current: { id?: string; model_id: string | null; effort: string | null; runtime_id?: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
+function readChoice(app: App, body: Record<string, unknown>, current: { id?: string; model_id: string | null; effort: string | null; runtime_id?: string | null; project_id?: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
   const choice: SendChoice = {};
   if (body.permissionMode !== undefined) {
     if (!isPermissionMode(body.permissionMode)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'permissionMode', params: { field: 'permissionMode', values: PERMISSION_MODES.join(' / ') } });
@@ -150,7 +150,10 @@ function readChoice(app: App, body: Record<string, unknown>, current: { id?: str
     choice.modelId = modelId;
   }
   if (effort !== undefined) choice.effort = effort;
-  const { efforts } = app.engine.effortChoices(modelId !== undefined ? modelId : current?.model_id ?? null, current?.runtime_id ?? null);
+  // A product conversation with no messages and no runtime yet, with no model chosen, sends to the first runtime model: check the effort against what the screen shows for it
+  const inProduct = current ? (current.project_id ?? null) !== null : typeof body.projectId === 'string';
+  const fresh = (current?.id === undefined || app.conversations.messages(current.id, 1).length === 0) && !current?.runtime_id;
+  const { efforts } = app.engine.effortChoices(modelId !== undefined ? modelId : current?.model_id ?? null, current?.runtime_id ?? null, inProduct && fresh);
   if (effort) {
     if (!efforts.includes(effort)) throw problem(400, 'invalid_field', 'bad_effort', { field: 'effort', params: { effort, values: efforts.join(' / ') || '-' } });
     return { choice, effortReset: false };
