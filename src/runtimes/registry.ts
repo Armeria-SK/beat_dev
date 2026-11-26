@@ -2,6 +2,7 @@
 // 1 つの実行役が止まっていても・作れなくても、ほかの実行役と提供元の道には触らない（Approach 9）
 import { RUNTIME_KINDS, type AppConfig, type RuntimeConfig, type RuntimeKind } from '../config/schema.ts';
 import { redactSecrets } from '../shared/redaction.ts';
+import { createCodexRuntime } from './codex/adapter.ts';
 import type { ProcessManager } from './process-manager.ts';
 import { permissionFor, type AgentRuntime, type RuntimePermission, type RuntimeRequest, type RuntimeSession } from './types.ts';
 
@@ -12,10 +13,10 @@ export interface RuntimeDeps {
 
 export type RuntimeFactory = (config: RuntimeConfig, deps: RuntimeDeps) => AgentRuntime;
 
-// まだ作っていない種類は undefined
+// まだ作っていない種類は undefined（claude-code は AR-5）
 export const FACTORIES: Readonly<Record<RuntimeKind, RuntimeFactory | undefined>> = {
   'claude-code': undefined,
-  codex: undefined,
+  codex: createCodexRuntime,
 };
 
 export type RuntimeLookup =
