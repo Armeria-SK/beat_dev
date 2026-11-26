@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ProcessManager, ProcessRefused, type ProcessManagerOptions, type RuntimeProcess } from '../src/runtimes/process-manager.ts';
+import { ProcessManager, ProcessRefused, resolveExecutable, type ProcessManagerOptions, type RuntimeProcess } from '../src/runtimes/process-manager.ts';
 import { FAKE_RUNTIME_SCRIPT } from './helpers/fake-runtime.ts';
 import { tempDir } from './helpers.ts';
 
@@ -201,6 +201,34 @@ test('the program must be an absolute, existing path (or a name found on PATH, w
   const child = second.spawn({ file: 'node', args: [FAKE_RUNTIME_SCRIPT], cwd: named.dir });
   assert.equal(child.record.executable.toLowerCase(), process.execPath.toLowerCase(), 'the name was turned into the absolute path before starting');
   await second.finish();
+});
+
+test('a bare program name is never looked up in the work folder: empty, "." and relative PATH entries are skipped, absolute ones still work', t => {
+  const dir = tempDir(t);
+  const name = WINDOWS ? 'codex.exe' : 'codex';
+  writeFileSync(join(dir, name), '');
+  for (const PATH of ['', delimiter, ['', '.'].join(delimiter), ['relative-bin', '.', ''].join(delimiter), [dirname(process.execPath), '', '.'].join(delimiter)]) {
+    assert.throws(() => resolveExecutable('codex', { PATH }, dir), (error: unknown) => error instanceof ProcessRefused && error.reason === 'not_found', JSON.stringify(PATH));
+  }
+  assert.equal(resolveExecutable('codex', { PATH: ['', '.', dir].join(delimiter) }, dir), join(dir, name), 'an absolute entry is still searched');
+  const mixedCase = WINDOWS ? { Path: ['', '.'].join(delimiter) } : { PATH: ['', '.'].join(delimiter) };
+  assert.throws(() => resolveExecutable('codex', mixedCase, dir), (error: unknown) => error instanceof ProcessRefused && error.reason === 'not_found', 'Path is the same name as PATH');
+});
+
+test('writeLine: a large line is accepted and arrives whole (a full pipe is not a refusal); only an input that can no longer be written gives false', async t => {
+  const s = setup(t);
+  const { scope, child } = await s.start();
+  for (const size of [20_000, 200_000]) {
+    assert.equal(child.writeLine(JSON.stringify({ type: 'user', text: 'x'.repeat(size) })), true, `${size} characters`);
+  }
+  const seen: Array<{ type: string; delta?: string }> = [];
+  for await (const line of child.lines()) { seen.push(JSON.parse(line)); if (seen.length === 4) break; }
+  assert.deepEqual(seen.map(message => message.type), ['text', 'done', 'text', 'done']);
+  assert.equal(seen[0]!.delta!.length, 'echo: '.length + 20_000, 'the whole line arrived');
+  assert.equal(seen[2]!.delta!.length, 'echo: '.length + 200_000);
+  child.closeInput();
+  assert.equal(child.writeLine('{"type":"user","text":"late"}'), false, 'a closed input refuses');
+  await scope.finish();
 });
 
 test('a .cmd or .bat launcher is refused with a message that says what to do (Windows)', { skip: !WINDOWS && 'only Windows has .cmd launchers' }, async t => {
