@@ -145,7 +145,7 @@ type GateMark =
   | { kind: 'owner'; pendingId: number; used: boolean };
 
 const GUARD_TEXT: Record<RefusalCode | 'plan_mode', EngineMessageKey> = {
-  plan_mode: 'runtime.plan_declined', secret: 'runtime.guard.secret', outside_write: 'runtime.guard.outside_write', readonly_root: 'runtime.guard.readonly_root',
+  plan_mode: 'runtime.plan_declined', secret: 'runtime.guard.secret', outside_write: 'runtime.guard.outside_write', outside_read: 'runtime.guard.outside_read', readonly_root: 'runtime.guard.readonly_root',
   link_write: 'runtime.guard.link_write', protect_files: 'runtime.guard.protect_files', outside_cwd: 'runtime.guard.outside_cwd', self_target: 'runtime.guard.self_target',
   shell_deny: 'runtime.guard.shell_deny',
 };

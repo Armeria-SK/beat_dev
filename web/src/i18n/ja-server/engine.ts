@@ -87,6 +87,7 @@ export const engineJa = {
   'runtime.plan_declined': "beat は許しませんでした: この会話は計画モードなので、承認が要るものは何も許しません。あなたには聞いていません",
   'runtime.guard.secret': "beat は許しませんでした: 秘密が入っているかもしれない場所、または beat が守っている場所に触れます（{detail}）。あなたには聞いていません",
   'runtime.guard.outside_write': "beat は許しませんでした: 製品のフォルダと、あなたが許したフォルダの外に書きます（{detail}）。あなたには聞いていません",
+  'runtime.guard.outside_read': "beat は許しませんでした: 製品のフォルダと、あなたが許したフォルダの外を読みます。設定で外は許さないことにしています（{detail}）。あなたには聞いていません",
   'runtime.guard.readonly_root': "beat は許しませんでした: 読むだけに設定したフォルダに書きます（{detail}）。あなたには聞いていません",
   'runtime.guard.link_write': "beat は許しませんでした: シンボリックリンクを通して書きます（{detail}）。あなたには聞いていません",
   'runtime.guard.protect_files': "beat は許しませんでした: あなたが守ると決めたファイルを変えます（{detail}）。あなたには聞いていません",

@@ -18,7 +18,7 @@ import { isToolConfigPath } from '../tools/hooks/tool-config.ts';
 import type { CommandApprovalInput, FileChangeApprovalInput, PermissionApprovalInput } from './codex/approvals.ts';
 
 // 持ち主に聞かずに断る理由（閉じた一覧。画面の文・試験はこの一覧から作る）
-export const REFUSALS = ['secret', 'outside_write', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target', 'shell_deny'] as const;
+export const REFUSALS = ['secret', 'outside_write', 'outside_read', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target', 'shell_deny'] as const;
 export type RefusalCode = (typeof REFUSALS)[number];
 
 export interface MapContext {
@@ -181,19 +181,36 @@ function claudeFileWrite(checker: Checker, tool: string, input: Record<string, u
   return ask(claudeWriteCard(tool, checker.shown(paths[0]!), input, field, verb), checks, true, !once && unresolved === undefined);
 }
 
+// Glob の pattern の、ワイルドカードより前の部分（src/**/*.ts → src。/etc/*.conf → /etc）。ここから先が実際に開く場所
+function globPrefix(pattern: string): string {
+  const fixed: string[] = [];
+  for (const segment of pattern.split(/[\\/]/u)) {
+    if (/[*?[\]{}!]/u.test(segment)) break;
+    fixed.push(segment);
+  }
+  return fixed.join('/');
+}
+
 function claudeFileRead(checker: Checker, tool: string, input: Record<string, unknown>): Mapped {
   const { field, verb } = FILE_READ_TOOLS[tool]!;
   const given = text(input[field]);
   if (given === undefined && tool === 'Read') return unchecked(tool, input, UNREADABLE);
-  const { paths, unresolved } = checker.candidates(given ?? '.');
+  const base = checker.candidates(given ?? '.');
+  const prefix = tool === 'Glob' ? globPrefix(text(input.pattern) ?? '') : '';
+  const aimed = prefix === '' ? base : isAbsolute(prefix) ? checker.candidates(prefix) : { paths: base.paths.map(abs => resolve(abs, prefix)), unresolved: base.unresolved };
+  const unresolved = base.unresolved ?? aimed.unresolved;
+  const paths = [...new Set([...base.paths, ...aimed.paths])];
   const checks: string[] = unresolved !== undefined ? [`${unresolved}, so beat could not tell what this reads`] : [];
   for (const abs of paths) {
     const placement = placePath(abs, checker.policy);
     if (placement.kind === 'deny') return refuse('secret', placement.reason);
-    if (placement.kind === 'outside') checks.push(guardText(checker.language, 'guard.touches_outside', { path: abs }));
+    if (placement.kind === 'outside') {
+      if (checker.ctx.config.tools.outsideRoots === 'deny') return refuse('outside_read', abs);
+      checks.push(guardText(checker.language, 'guard.touches_outside', { path: abs }));
+    }
   }
   const rest = Object.fromEntries(Object.entries(input).filter(([key]) => key !== field));
-  const card: Card = { title: oneLine(`${verb} ${checker.shown(paths[0]!)}`), body: Object.keys(rest).length ? json(rest, BODY_MAX) : null, cwd: null, extra: null };
+  const card: Card = { title: oneLine(`${verb} ${checker.shown(aimed.paths[0]!)}`), body: Object.keys(rest).length ? json(rest, BODY_MAX) : null, cwd: null, extra: null };
   return ask(card, checks, true, unresolved === undefined);
 }
 
@@ -225,21 +242,34 @@ function shellGuard(checker: Checker, command: string, shell: 'bash' | 'powershe
   return { checks, onceOnly: verdict.onceOnly };
 }
 
-function claudeShell(checker: Checker, tool: 'Bash' | 'PowerShell', input: Record<string, unknown>): Mapped {
+function claudeShell(checker: Checker, tool: 'Bash' | 'PowerShell' | 'Monitor', input: Record<string, unknown>): Mapped {
   const command = text(input.command);
   if (command === undefined) return unchecked(tool, input, UNREADABLE);
   const { ctx } = checker;
   const rest = Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'command'));
-  const card: Card = { title: tool === 'Bash' ? 'Run a command (Bash)' : 'Run a command (PowerShell)', body: visible(command, BODY_MAX), cwd: ctx.root, extra: Object.keys(rest).length ? json(rest, EXTRA_MAX) : null };
-  const guarded = shellGuard(checker, command, tool === 'Bash' ? 'bash' : 'powershell', ctx.root);
+  const title = tool === 'Monitor' ? 'Watch a command (Monitor)' : `Run a command (${tool})`;
+  const card: Card = { title, body: visible(command, BODY_MAX), cwd: ctx.root, extra: Object.keys(rest).length ? json(rest, EXTRA_MAX) : null };
+  const guarded = shellGuard(checker, command, tool === 'PowerShell' ? 'powershell' : 'bash', ctx.root);
   if (guarded === undefined) return ask(card, [UNREADABLE], false, false);
   if (isRefusal(guarded)) return refuse(guarded.refuse.code, guarded.refuse.detail);
   return ask(card, guarded.checks, true, !guarded.onceOnly);
 }
 
+// Monitor は command（シェルの 1 行）か ws（WebSocket の URL）を渡して動かし続ける。command は Bash と同じ検査、ws は beat 自身への接続だけ断る（それ以外の宛先は beat は見ない）
+function claudeMonitor(checker: Checker, input: Record<string, unknown>): Mapped {
+  const url = plain(input.ws) ? text(input.ws.url) : undefined;
+  if (url !== undefined) {
+    const self = selfTarget(url, checker.ctx.config.server);
+    if (self !== undefined) return refuse('self_target', self);
+  }
+  if (text(input.command) !== undefined) return claudeShell(checker, 'Monitor', input);
+  return unchecked('Monitor', input, url === undefined ? UNREADABLE : UNKNOWN_TOOL);
+}
+
 function claudeCode(checker: Checker, tool: string, raw: unknown): Mapped {
   if (!plain(raw)) return unchecked(tool, raw ?? null, UNREADABLE);
   if (tool === 'Bash' || tool === 'PowerShell') return claudeShell(checker, tool, raw);
+  if (tool === 'Monitor') return claudeMonitor(checker, raw);
   if (Object.hasOwn(FILE_WRITE_TOOLS, tool)) return claudeFileWrite(checker, tool, raw);
   if (Object.hasOwn(FILE_READ_TOOLS, tool)) return claudeFileRead(checker, tool, raw);
   return unchecked(tool, raw, UNKNOWN_TOOL);
@@ -268,7 +298,7 @@ function codexCommand(checker: Checker, input: CommandApprovalInput): Mapped {
   if (input.cwd === null) return ask(card, [UNREADABLE], false, false);
   const cwd = resolve(ctx.root, input.cwd);
   if (!isInside(realish(ctx.root), realish(cwd))) return refuse('outside_cwd', cwd);
-  if (input.command === null) return ask(card, [], true, true);
+  if (input.command === null) return ask(card, [UNREADABLE], false, false);
   const guarded = shellGuard(checker, input.command, process.platform === 'win32' ? 'powershell' : 'bash', cwd);
   if (guarded === undefined) return ask(card, [UNREADABLE], false, false);
   if (isRefusal(guarded)) return refuse(guarded.refuse.code, guarded.refuse.detail);
@@ -299,7 +329,8 @@ function codexFiles(checker: Checker, input: FileChangeApprovalInput): Mapped {
     if (placement.kind === 'outside') return refuse('outside_write', abs);
     if (placement.mode === 'read') return refuse('readonly_root', placement.root);
   }
-  return ask({ title: 'Change files (Codex)', body: visible(lines.join('\n'), BODY_MAX), cwd: null, extra }, checks, true, !once && input.grantRoot === null);
+  const diffs = input.changes.flatMap(change => (change.diff === undefined ? [] : [`--- ${CHANGE_VERB[change.kind]} ${change.path}\n${change.diff}`]));
+  return ask({ title: 'Change files (Codex)', body: visible([...lines, ...(diffs.length ? [''] : []), ...diffs].join('\n'), BODY_MAX), cwd: null, extra }, checks, true, !once && input.grantRoot === null);
 }
 
 function codexPermissions(input: PermissionApprovalInput): Mapped {

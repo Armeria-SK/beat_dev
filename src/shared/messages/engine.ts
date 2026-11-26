@@ -87,6 +87,7 @@ const en = {
   'runtime.plan_declined': 'Not allowed by beat: this conversation is in plan mode, so nothing that needs approval is allowed. You were not asked',
   'runtime.guard.secret': 'Not allowed by beat: it touches a path that may hold secrets or that beat protects ({detail}). You were not asked',
   'runtime.guard.outside_write': 'Not allowed by beat: it writes outside the product folder and the folders you allowed ({detail}). You were not asked',
+  'runtime.guard.outside_read': 'Not allowed by beat: it reads outside the product folder and the folders you allowed, and your settings say not to allow that ({detail}). You were not asked',
   'runtime.guard.readonly_root': 'Not allowed by beat: it writes into a folder that is set to read only ({detail}). You were not asked',
   'runtime.guard.link_write': 'Not allowed by beat: it writes through a symbolic link ({detail}). You were not asked',
   'runtime.guard.protect_files': 'Not allowed by beat: it changes a file on your protected list ({detail}). You were not asked',

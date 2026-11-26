@@ -64,18 +64,34 @@ test('a request Codex closed itself (resolved) can no longer be answered; cancel
   assert.equal(table.size, 0);
 });
 
-test('the file table keeps paths only, caps its size, and forgets a malformed item rather than guess', () => {
+test('the file table keeps the paths and a bounded diff of each change, caps its size, and forgets a malformed item rather than guess', () => {
   const table = new ApprovalTable();
-  table.rememberChanges('f1', [{ path: 'a.ts', kind: { type: 'add' }, diff: 'SECRET DIFF' }]);
+  table.rememberChanges('f1', [{ path: 'a.ts', kind: { type: 'add' }, diff: 'SOME DIFF' }]);
   table.rememberChanges('bad', [{ path: 'a.ts', kind: { type: 'teleport' } }]);
   const ok = table.classify(1, 'item/fileChange/requestApproval', { itemId: 'f1' });
   const bad = table.classify(2, 'item/fileChange/requestApproval', { itemId: 'bad' });
   assert.ok('approval' in ok && 'approval' in bad);
-  assert.deepEqual((ok as { approval: { input: unknown } }).approval.input, { itemId: 'f1', reason: null, grantRoot: null, changes: [{ path: 'a.ts', kind: 'add' }] });
+  assert.deepEqual((ok as { approval: { input: unknown } }).approval.input, { itemId: 'f1', reason: null, grantRoot: null, changes: [{ path: 'a.ts', kind: 'add', diff: 'SOME DIFF' }] });
   assert.equal(((bad as { approval: { input: { changes: unknown } } }).approval.input).changes, null);
   for (let index = 0; index < 400; index += 1) table.rememberChanges(`i${index}`, [{ path: `${index}.ts`, kind: { type: 'add' } }]);
   const forgotten = table.classify(3, 'item/fileChange/requestApproval', { itemId: 'f1' });
   assert.equal(((forgotten as { approval: { input: { changes: unknown } } }).approval.input).changes, null, 'the oldest entries were dropped');
+});
+
+test('a diff is cut per change and per item, and the cut is written in the text so a short diff is never mistaken for a whole one', () => {
+  const table = new ApprovalTable();
+  const changes = Array.from({ length: 12 }, (_, index) => ({ path: `f${index}.ts`, kind: { type: 'update' }, diff: `${index}`.repeat(20000) }));
+  table.rememberChanges('big', changes);
+  const input = (table.classify(1, 'item/fileChange/requestApproval', { itemId: 'big' }) as { approval: { input: { changes: Array<{ path: string; diff?: string }> } } }).approval.input;
+  const diffs = input.changes.map(change => change.diff ?? '');
+  assert.equal(input.changes.length, 12, 'every path is kept');
+  assert.ok(diffs.every(diff => diff.length < 8100), 'one change never carries more than its share');
+  assert.match(diffs[0]!, /^0{100}[\s\S]*\n\[12000 more characters of this change not shown\]$/u);
+  assert.ok(diffs.reduce((sum, diff) => sum + diff.length, 0) < 70000, 'one item never holds more than its total');
+  assert.equal(diffs[11], '[the diff is not kept]', 'a change after the total is used up says so');
+  table.rememberChanges('empty', [{ path: 'e.ts', kind: { type: 'delete' }, diff: '' }, { path: 'g.ts', kind: { type: 'add' } }]);
+  const none = (table.classify(2, 'item/fileChange/requestApproval', { itemId: 'empty' }) as { approval: { input: { changes: unknown } } }).approval.input.changes;
+  assert.deepEqual(none, [{ path: 'e.ts', kind: 'delete' }, { path: 'g.ts', kind: 'add' }], 'no diff given, no diff key');
 });
 
 test('forgetChanges drops the paths of one item, so a changed list is never shown stale', () => {

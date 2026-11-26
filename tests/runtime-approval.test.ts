@@ -215,6 +215,40 @@ test('守りに当たる求め（秘密・beat のデータ・製品の外・リ
   assert.equal(existsSync(join(root, '.env')), false);
 });
 
+test('「外は許さない」設定の外を読む求め・Monitor の守りも、橋を通して聞かずに断る（理由は読む側の文で、道具の行は 1 つ）', async t => {
+  const r = await rig(t, { configure: config => { config.tools.outsideRoots = 'deny'; } });
+  const { id: projectId, root } = await r.product();
+  await r.check();
+  const port = r.s.app.config().server.port;
+  const cases: Array<{ name: string; tool: string; input: unknown; code: RefusalCode; text: RegExp }> = [
+    { name: 'a read outside', tool: 'Read', input: { file_path: join(r.products, 'other', 'x.txt') }, code: 'outside_read', text: /it reads outside the product folder/u },
+    { name: 'a Glob that lists outside', tool: 'Glob', input: { pattern: join(r.products, 'other', '**', '*.txt') }, code: 'outside_read', text: /it reads outside the product folder/u },
+    { name: 'a Monitor command that reads .env', tool: 'Monitor', input: { description: 'w', timeout_ms: 1000, command: 'cat .env' }, code: 'secret', text: /secrets/u },
+    { name: 'a Monitor socket to beat itself', tool: 'Monitor', input: { description: 'w', timeout_ms: 1000, ws: { url: `ws://127.0.0.1:${port}/events` } }, code: 'self_target', text: /talks to beat itself/u },
+  ];
+  for (const c of cases) {
+    const id = `req-${c.code}-${++n}`;
+    r.runtime.script = asking(r, [{ id, tool: c.tool, input: c.input }]);
+    const before = count(r, 'pending_actions');
+    const { conversation, runId } = await start(r, projectId);
+    await settled(r.s.app, runId);
+    assert.equal(answerOf(r, id), 'decline', c.name);
+    assert.equal(count(r, 'pending_actions'), before, `${c.name}: the owner was not asked`);
+    const tools = toolMessages(r, conversation);
+    assert.equal(tools.length, 1, `${c.name}: exactly one tool row`);
+    assert.deepEqual(tools[0]!.gate, { by: 'guard', key: c.code }, c.name);
+    assert.match(tools[0]!.content, c.text, c.name);
+  }
+  assert.equal(r.s.app.runtimeApprovals.size, 0);
+  const inside = r.runtime.approvals.length;
+  r.runtime.script = asking(r, [{ id: 'req-inside', tool: 'Read', input: { file_path: join(root, 'a.txt') } }]);
+  const { runId: last } = await start(r, projectId);
+  await waitFor(() => runtimeRows(r).length === 1, 'a read inside the product folder still reaches the owner');
+  assert.equal(r.runtime.approvals.length, inside, 'and it was not answered by beat');
+  assert.equal((await reject(r, runtimeRows(r)[0]!.id)).status, 200);
+  await settled(r.s.app, last);
+});
+
 test('断った求めの道具の行は、実行役が道具の知らせを出さない・始めだけ出す場合でも、返事の終わりでちょうど 1 つになる', async t => {
   const r = await rig(t);
   const { id: projectId, root } = await r.product();

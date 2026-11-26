@@ -45,7 +45,7 @@ function link(target: string, at: string): void {
 }
 
 test('断る理由は閉じた一覧で、画面の文・試験はそこから作られる', () => {
-  assert.deepEqual([...REFUSALS], ['secret', 'outside_write', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target', 'shell_deny']);
+  assert.deepEqual([...REFUSALS], ['secret', 'outside_write', 'outside_read', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target', 'shell_deny']);
 });
 
 test('書く先の守りは files.ts の checkFilePath と食い違わない: 断る所は断り、聞く所（git・設定ファイル）は持ち主に聞き、「聞かない」を出さない', t => {
@@ -144,6 +144,59 @@ test('読む道具（Read・Glob・Grep）: 秘密の場所は断り、製品の
   assert.equal(unreadable.checked, false);
 });
 
+test('読む道具: 設定が「外は許さない」なら、製品の外を読む求めは聞かずに断る（outside_read）。「聞く」の設定なら今までどおり聞く', t => {
+  const strict = world(t, { mutate: config => { config.tools.outsideRoots = 'deny'; } });
+  const outsideFile = join(strict.base, 'outside.txt');
+  for (const [tool, input] of [
+    ['Read', { file_path: outsideFile }], ['Glob', { pattern: '*', path: strict.base }], ['Grep', { pattern: 'x', path: strict.base }],
+  ] as const) assert.equal(refusedWith(mapApproval(strict.ctx, { tool, input })), 'outside_read', tool);
+  assert.equal(refusedWith(mapApproval(strict.ctx, { tool: 'Read', input: { file_path: '../../outside.txt' } })), 'outside_read', 'a relative path that leaves the product folder');
+  assert.equal(asked(mapApproval(strict.ctx, { tool: 'Read', input: { file_path: join(strict.root, 'a.txt') } })).checked, true, 'a read inside the product folder is not affected');
+  assert.equal(asked(mapApproval(strict.ctx, { tool: 'Read', input: { file_path: join(strict.paths.data, 'reference', 'doc.md') } })).checked, true, 'nor a read inside a folder the owner allowed');
+  assert.equal(refusedWith(mapApproval(strict.ctx, { tool: 'Read', input: { file_path: join(strict.root, '.env') } })), 'secret', 'a secret is still named as a secret');
+  const loose = world(t);
+  const asks = asked(mapApproval(loose.ctx, { tool: 'Read', input: { file_path: join(loose.base, 'outside.txt') } }));
+  assert.ok(asks.checks.some(line => line.includes(join(loose.base, 'outside.txt'))), 'with the setting on ask, the owner is asked with the place named');
+});
+
+test('Glob の pattern: ワイルドカードより前の場所にも守りを当て、札には実際に開く場所を出す', t => {
+  const w = world(t);
+  const glob = (pattern: string, path?: string, ctx = w.ctx) => mapApproval(ctx, { tool: 'Glob', input: { pattern, ...(path !== undefined ? { path } : {}) } });
+  const inside = asked(glob('src/**/*.ts'));
+  assert.deepEqual([inside.card.title, inside.checks, inside.reply], ['List files in src', [], true]);
+  assert.equal(asked(glob('**/*.ts')).card.title, `List files in ${w.root}`, 'a pattern that starts with a wildcard lists the folder itself');
+  const absolute = asked(glob(join(w.base, 'elsewhere', '**', '*.txt')));
+  assert.ok(absolute.checks.some(line => line.includes(join(w.base, 'elsewhere'))), JSON.stringify(absolute.checks));
+  assert.equal(absolute.card.title, `List files in ${join(w.base, 'elsewhere')}`, 'the card names where it lists, not the product folder');
+  const upward = asked(glob('../../**/*.ts'));
+  assert.ok(upward.checks.some(line => line.includes(w.base)), JSON.stringify(upward.checks));
+  assert.equal(refusedWith(glob(join(w.root, '.ssh', '*'))), 'secret');
+  assert.equal(refusedWith(glob('*', join(w.root, '.ssh'))), 'secret');
+  const strict = world(t, { mutate: config => { config.tools.outsideRoots = 'deny'; } });
+  assert.equal(refusedWith(glob(join(strict.base, 'elsewhere', '**'), undefined, strict.ctx)), 'outside_read');
+  assert.equal(refusedWith(glob('../../**/*.ts', undefined, strict.ctx)), 'outside_read');
+  const grep = asked(mapApproval(w.ctx, { tool: 'Grep', input: { pattern: join(w.base, 'elsewhere') } }));
+  assert.deepEqual([grep.checks, grep.checked], [[], true], 'a Grep pattern is a regular expression, not a place');
+});
+
+test('Monitor: command は Bash と同じ検査（秘密・beat 自身・beat のシェルが拒むもの）、ws の URL は beat 自身への接続を断る', t => {
+  const w = world(t);
+  const monitor = (input: Record<string, unknown>, ctx = w.ctx) => mapApproval(ctx, { tool: 'Monitor', input: { description: 'watch', timeout_ms: 5000, ...input } });
+  assert.equal(refusedWith(monitor({ command: 'cat .env' })), 'secret');
+  assert.equal(refusedWith(monitor({ command: `curl http://127.0.0.1:${w.config.server.port}/api/pending` })), 'self_target');
+  assert.equal(refusedWith(monitor({ command: 'sudo ls' })), 'shell_deny');
+  assert.equal(refusedWith(monitor({ command: 'echo hi > ../outside.txt' })), 'outside_write');
+  assert.equal(refusedWith(monitor({ ws: { url: `ws://127.0.0.1:${w.config.server.port}/events` } })), 'self_target');
+  assert.equal(refusedWith(monitor({ ws: { url: `ws://localhost:${w.config.server.port}/events` }, command: 'tail -f log.txt' })), 'self_target', 'a ws that points at beat is refused whatever else is given');
+  const ok = asked(monitor({ command: 'tail -f log.txt' }));
+  assert.deepEqual([ok.card.title, ok.card.body, ok.card.cwd, ok.checked], ['Watch a command (Monitor)', 'tail -f log.txt', w.root, true]);
+  assert.match(ok.card.extra ?? '', /timeout_ms/u);
+  const elsewhere = asked(monitor({ ws: { url: 'wss://example.com/stream' } }));
+  assert.deepEqual([elsewhere.checked, elsewhere.reply], [false, false], 'a ws elsewhere is only the owner\'s call');
+  assert.match(elsewhere.card.body ?? '', /example\.com/u);
+  assert.equal(asked(monitor({})).checked, false, 'nothing to watch that beat can read');
+});
+
 test('シェルの求め: 秘密を読む・製品の外へ書く・beat 自身へ話しかけるものは断り、ふつうのコマンドは持ち主に聞く（札にコマンドと作業フォルダ）', t => {
   const w = world(t);
   const run = (command: string, tool = 'Bash') => mapApproval(w.ctx, { tool, input: { command } });
@@ -233,6 +286,9 @@ test('Codex の求め: 作業フォルダが製品の外・beat 自身へ話し�
   assert.match(inside.card.extra ?? '', /to look/u);
   assert.match(inside.card.extra ?? '', /listFiles ls/u);
   assert.equal(asked(run(command({ cwd: null }))).checked, false, 'no working folder: only the owner decides');
+  const unseen = asked(run(command({ cwd: w.root, command: null })));
+  assert.deepEqual([unseen.card.body, unseen.checked, unseen.reply], [null, false, false], 'a command beat cannot see is never shown as checked, and never offered as "do not ask again"');
+  assert.match(unseen.checks.join('\n'), /did not check/u, 'and the card says beat did not check it');
 
   const net = asked(run(command({ cwd: w.root, network: { host: 'example.com', protocol: 'https' } })));
   assert.deepEqual([net.checked, net.reply], [false, false]);
@@ -248,6 +304,11 @@ test('Codex の求め: 作業フォルダが製品の外・beat 自身へ話し�
   const okFiles = asked(run(files([change('src/a.ts'), change(join(w.root, 'n.ts'), 'add')]), 'fileChange'));
   assert.deepEqual([okFiles.card.title, okFiles.reply, okFiles.checked], ['Change files (Codex)', true, true]);
   assert.match(okFiles.card.body ?? '', /update src\/a\.ts\nadd /u);
+  const diffed = asked(run(files([{ ...change('src/a.ts'), diff: '@@ -1 +1 @@\n-old line\n+new line' }, { ...change(join(w.root, 'n.ts'), 'add'), diff: '+brand new‮' }]), 'fileChange'));
+  assert.match(diffed.card.body ?? '', /^update src\/a\.ts\nadd .*n\.ts\n\n--- update src\/a\.ts\n@@ -1 \+1 @@\n-old line\n\+new line\n--- add .*n\.ts\n\+brand new$/u, 'what each file would become is on the card');
+  const huge = asked(run(files([{ ...change('src/a.ts'), diff: 'z'.repeat(20000) }]), 'fileChange')).card.body ?? '';
+  assert.ok(huge.length < 8100, String(huge.length));
+  assert.match(huge, /more characters not shown\]$/u);
   const wide = asked(run(files([change('src/a.ts')], { grantRoot: w.root }), 'fileChange'));
   assert.deepEqual([wide.reply, wide.checked], [false, true], 'a request for a whole folder is never offered as "do not ask again"');
   assert.match(wide.card.extra ?? '', /anywhere under/u);
