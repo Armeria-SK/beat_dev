@@ -1257,7 +1257,7 @@ export const en = {
   'ui.set.runtime.versionOkDesc': (version: string) => `Version ${version} (a version beat has checked)`,
   'ui.set.runtime.versionNewDesc': (version: string) => `Version ${version} (not a version beat has checked; it may still work)`,
   'ui.set.runtime.issueTooOldDesc': (minimum: string) => `Version ${minimum} or newer is needed. Update it`,
-  'ui.set.runtime.issueSandboxDesc': (state: string) => `The Windows sandbox is not ready (${state}), so beat will not start a conversation yet`,
+  'ui.set.runtime.issueSandboxDesc': (state: string) => `The Windows sandbox is not ready (${state}), so beat will not start a conversation yet. Run Codex once yourself, outside beat, so it can update its sandbox, then press Check`,
   'ui.set.runtime.issueScanFailedDesc': 'The check for folders the sandbox cannot protect did not finish',
   'ui.set.runtime.readOnlyUnverifiedDesc': 'This Codex version is not one beat has checked, so it starts read-only whatever is set above',
   'ui.set.runtime.issueWritableDesc': (folders: string) => `Folders the sandbox cannot protect: ${folders}`,

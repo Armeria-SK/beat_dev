@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, type ModelView, type RuntimeIssue, type RuntimeView } from '../../api.ts';
+import { api, ApiError, type ModelView, type RuntimeIssue, type RuntimeIssueCode, type RuntimeView } from '../../api.ts';
 import { formatRelative, useT } from '../../i18n/index.ts';
 import { addRuntimeModel, updateRuntime } from '../../settings/model.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -49,14 +49,22 @@ function authLine(t: T, check: NonNullable<RuntimeView['check']>): string {
   return check.auth === 'ok' ? t('ui.set.runtime.authOkDesc') : t('ui.set.runtime.authUnknownDesc');
 }
 
-// 状態の説明の 1 行: 入っているか・版（確かめた版か）・どの認証か・いつ確かめたか
+// 会話を始められなくする注意（サーバーの BLOCKING_ISSUES を写した。tests/runtimes-settings-dom.test.ts が一致を見張る）
+const BLOCKING: ReadonlySet<RuntimeIssueCode> = new Set(['too_old', 'sandbox_not_ready']);
+
+function whyBlocked(view: Pick<RuntimeView, 'enabled' | 'check'>): RuntimeIssue | undefined {
+  return pillOf(view) === 'blocked' ? view.check?.issues.find(issue => BLOCKING.has(issue.code)) : undefined;
+}
+
+// 状態の説明の 1 行: 入っているか・版（確かめた版か）・どの認証か・いつ確かめたか。札が Not ready なら、終わりにその理由
 export function stateLine(t: T, view: Pick<RuntimeView, 'enabled' | 'check'>): string {
   if (!view.enabled) return t('ui.set.runtime.offDesc');
   const check = view.check;
   if (!check) return t('ui.set.runtime.uncheckedDesc');
   if (!check.installed) return t('ui.set.runtime.missingDesc');
   const version = check.version === null ? t('ui.set.runtime.versionUnknownDesc') : check.verified ? t('ui.set.runtime.versionOkDesc', check.version) : t('ui.set.runtime.versionNewDesc', check.version);
-  return [version, authLine(t, check), t('ui.set.key.checked', formatRelative(check.checkedAt))].join(' · ');
+  const why = whyBlocked(view);
+  return [version, authLine(t, check), t('ui.set.key.checked', formatRelative(check.checkedAt)), ...(why ? [issueLine(t, why)] : [])].join(' · ');
 }
 
 export function issueLine(t: T, issue: RuntimeIssue): string {
@@ -111,7 +119,8 @@ function RuntimeRow({ view, onView }: { view: RuntimeView; onView: (view: Runtim
   const taken = new Set((ctx.config.models as Array<{ runtime?: string; model: string }>).filter(m => m.runtime === view.id).map(m => m.model));
   const available: Option<string>[] = (view.models ?? []).filter(m => !taken.has(m.id)).map(m => ({ value: m.id, label: m.label === m.id ? m.id : `${m.label} (${m.id})` }));
   const addModel = (entry: { id: string; label: string; efforts: readonly string[] }) => void ctx.commit('runtime:add', c => addRuntimeModel(c, view.id, entry).config).then(ok => { if (ok) setTyped(''); });
-  const lines = [...(check?.issues ?? []), ...(check?.stop ? [check.stop] : [])];
+  const why = whyBlocked(view);
+  const lines = [...(check?.issues ?? []).filter(issue => issue !== why), ...(check?.stop ? [check.stop] : [])];
   const permission = view.permissions.includes(view.permission) ? view.permission : null;
 
   return (

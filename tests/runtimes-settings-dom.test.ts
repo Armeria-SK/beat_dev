@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import { defaultConfig } from '../src/config/store.ts';
-import { PERMISSIONS } from '../src/runtimes/types.ts';
+import { BLOCKING_ISSUES, PERMISSIONS, RUNTIME_ISSUES } from '../src/runtimes/types.ts';
+import type { RuntimeIssue, RuntimeView } from '../web/src/api.ts';
+import { en } from '../web/src/i18n/en.ts';
+import { setExplainLanguage, t } from '../web/src/i18n/index.ts';
+import { ja } from '../web/src/i18n/ja.ts';
 import { addModel, addRuntimeModel, updateRuntime } from '../web/src/settings/model.ts';
 import { setConversation } from '../web/src/ui/settings/view.ts';
 import { cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
@@ -11,6 +15,10 @@ import { cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts
 
 interface SettingsProps { section: string | undefined; onClose: () => void; held: (() => void) | null; onReplay: () => void; onSaved: () => void; onProfile: () => void }
 const { Settings } = await loadTsx<{ Settings: ComponentType<SettingsProps> }>('../web/src/ui/settings/Settings.tsx', import.meta.url);
+const { stateLine, issueLine } = await loadTsx<{
+  stateLine: (t: typeof import('../web/src/i18n/index.ts').t, view: Pick<RuntimeView, 'enabled' | 'check'>) => string;
+  issueLine: (t: typeof import('../web/src/i18n/index.ts').t, issue: RuntimeIssue) => string;
+}>('../web/src/ui/settings/runtimes.tsx', import.meta.url);
 
 type Json = Record<string, any>;
 window.HTMLElement.prototype.scrollTo ??= () => undefined;
@@ -18,6 +26,7 @@ const realFetch = globalThis.fetch;
 afterEach(async () => {
   await cleanup();
   globalThis.fetch = realFetch;
+  setExplainLanguage('en');
 });
 
 interface Sent { method: string; path: string; body: Json | null }
@@ -142,13 +151,69 @@ test('what the check found is said under the row: unwritable folders, a sandbox 
   const c = await open(world);
   const lines = (id: string) => [...c.querySelectorAll(`[data-below="runtime:${id}"] [data-issue]`)].map(el => [el.getAttribute('data-issue'), text(el)]);
   assert.deepEqual(lines('codex'), [
-    ['sandbox_not_ready', 'The Windows sandbox is not ready (updateRequired), so beat will not start a conversation yet'],
     ['world_writable', 'Folders the sandbox cannot protect: C:/shared/a, C:/shared/b (+7)'],
     ['writable_scan_failed', 'The check for folders the sandbox cannot protect did not finish'],
-  ]);
-  assert.deepEqual(lines('claude-code').map(([code]) => code), ['too_old', 'tools_unreviewed']);
-  assert.match(lines('claude-code')[1]![1]!, /tools beat has not reviewed \(Foo, Bar\)/u);
+  ], 'the sandbox line that now sits on the description line is not said a second time below');
+  assert.match(text(row(c, 'runtime:codex')!.querySelector('.bt-setting__desc')), /The Windows sandbox is not ready \(updateRequired\), so beat will not start a conversation yet\./u);
+  assert.deepEqual(lines('claude-code').map(([code]) => code), ['tools_unreviewed']);
+  assert.match(lines('claude-code')[0]![1]!, /tools beat has not reviewed \(Foo, Bar\)/u);
+  assert.match(text(row(c, 'runtime:claude-code')!.querySelector('.bt-setting__desc')), /Version 2\.1\.296 or newer is needed\. Update it$/u);
   assert.match(text(row(c, 'runtime:codex')), /Not ready/u);
+});
+
+// 持ち主が見た画面: Codex の札は「Not ready」なのに、説明の行は「版 OK・契約でログイン・確かめた」だけで、理由は下の小さな行にしか無かった
+test('a runtime that is Not ready because of a blocking issue says why on its description line, right after the good facts, and a non-blocking issue stays below only', async () => {
+  const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), {
+    checks: {
+      codex: { ...CHECKED, version: '0.172.0', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }, { code: 'too_old', detail: '0.180.0' }, { code: 'world_writable', detail: 'C:/shared/a' }], usable: false },
+      'claude-code': { ...CHECKED, issues: [{ code: 'world_writable', detail: 'C:/shared/a' }], usable: true },
+    },
+  });
+  const c = await open(world);
+  const desc = (id: string) => text(row(c, `runtime:${id}`)!.querySelector('.bt-setting__desc'));
+  const below = (id: string) => [...c.querySelectorAll(`[data-below="runtime:${id}"] [data-issue]`)].map(el => el.getAttribute('data-issue'));
+  assert.match(desc('codex'), /^Version 0\.172\.0 \(a version beat has checked\) · Signed in with your subscription · checked [^·]+ · The Windows sandbox is not ready \(updateRequired\), so beat will not start a conversation yet\. Run Codex once yourself, outside beat, so it can update its sandbox, then press Check$/u);
+  assert.match(text(row(c, 'runtime:codex')!.querySelector('.bt-pill')), /^Not ready$/u);
+  assert.deepEqual(below('codex'), ['too_old', 'world_writable'], 'only the first blocking issue moves up; the second blocking one and the non-blocking one stay below');
+  assert.doesNotMatch(desc('claude-code'), /sandbox|needed/u, 'a Ready runtime has nothing to explain on its description line');
+  assert.deepEqual(below('claude-code'), ['world_writable']);
+});
+
+test('which issue the description line carries follows the server rule for a blocked start (BLOCKING_ISSUES), for every issue code', () => {
+  const view = (code: RuntimeIssue['code']): RuntimeView => ({
+    id: 'codex', kind: 'codex', configured: true, enabled: true, permission: 'read-only', permissions: ['read-only'], models: null,
+    check: { ...CHECKED, version: '0.172.0', issues: [{ code, detail: 'x' }], stop: null, usable: !BLOCKING_ISSUES.has(code) } as NonNullable<RuntimeView['check']>,
+  });
+  for (const code of RUNTIME_ISSUES) {
+    const said = stateLine(t, view(code)).includes(issueLine(t, { code, detail: 'x' }));
+    assert.equal(said, BLOCKING_ISSUES.has(code), `${code}: said on the description line iff it blocks a start`);
+  }
+});
+
+test('the sandbox message tells the owner what to do, in English and in Japanese', () => {
+  for (const [table, asks] of [[en, /Run Codex once yourself, outside beat, so it can update its sandbox, then press Check$/u], [ja, /beat の外で Codex を一度自分で動かして、囲いを更新させてから「Check」を押してください$/u]] as const) {
+    const message = table['ui.set.runtime.issueSandboxDesc']('updateRequired');
+    assert.match(message, /updateRequired/u);
+    assert.match(message, asks);
+  }
+});
+
+test('the badge is in Japanese when the explanation language is Japanese: every pill key has a Japanese text, on the runtime row and in the description', async () => {
+  const pillKeys = Object.keys(en).filter(key => key.startsWith('ui.set.runtime.pill'));
+  assert.equal(pillKeys.length, 6, 'off, unchecked, ready, missing, signed out, blocked');
+  for (const key of pillKeys) {
+    const entry = (ja as Record<string, unknown>)[key];
+    assert.equal(typeof entry === 'string' && entry.trim().length > 0, true, `${key} has a Japanese text`);
+    assert.notEqual(entry, (en as Record<string, unknown>)[key], `${key} is not the English text`);
+  }
+  const world = serve(base({ ui: { ...(defaultConfig() as Json).ui, explainLanguage: 'ja' }, runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), {
+    checks: { codex: { ...CHECKED, issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }], usable: false }, 'claude-code': CHECKED },
+  });
+  const c = await open(world);
+  const pill = (id: string) => text(row(c, `runtime:${id}`)!.querySelector('.bt-pill'));
+  assert.equal(pill('codex'), ja['ui.set.runtime.pillBlocked']);
+  assert.equal(pill('claude-code'), ja['ui.set.runtime.pillReady']);
+  assert.ok(text(row(c, 'runtime:codex')!.querySelector('.bt-setting__desc')).endsWith(ja['ui.set.runtime.issueSandboxDesc']('updateRequired')), 'the reason is in Japanese, last on the description line');
 });
 
 test('the permission row offers only the closed list for the runtime, never a value that allows everything, and saving a choice writes only that value', async () => {
