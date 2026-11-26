@@ -13,8 +13,12 @@ export type Found = { path: string } | { reason: string };
 // PATH は絶対パスの項目だけで探す。空の項目と . は、探す側の作業フォルダ（ここでは一時フォルダ）を指してしまうので使わない。PATH が無い・絶対の項目が 1 つも無いなら探さない
 function absolutePathEnv(env: NodeJS.ProcessEnv): Record<string, string> | undefined {
   const strings = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-  const cleaned = Object.fromEntries(Object.entries(strings).map(([name, value]) => [name, name.toUpperCase() === 'PATH' ? absolutePathEntries(value) : value]));
-  return Object.entries(cleaned).some(([name, value]) => name.toUpperCase() === 'PATH' && value !== '') ? cleaned : undefined;
+  const cleaned = Object.fromEntries(Object.entries(strings).flatMap(([name, value]): Array<[string, string]> => {
+    if (name.toUpperCase() !== 'PATH') return [[name, value]];
+    const dirs = absolutePathEntries(value);
+    return dirs === '' ? [] : [[name, dirs]];
+  }));
+  return Object.keys(cleaned).some(name => name.toUpperCase() === 'PATH') ? cleaned : undefined;
 }
 
 const isFile = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isFile() === true;

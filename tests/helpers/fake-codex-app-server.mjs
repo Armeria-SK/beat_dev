@@ -51,6 +51,7 @@ async function play() {
     case 'text':
       notify('configWarning', { summary: 'a warning with sk-ant-abcdefgh12345678 in it', details: null });
       notify('something/new', { threadId: THREAD, x: 1 });
+      notify('windows/worldWritableWarning', { threadId: THREAD, samplePaths: ['D:/open-folder'], extraCount: 2, failedScan: false });
       started(item('agentMessage', 'a1', { text: '' }));
       notify('item/agentMessage/delta', { threadId: THREAD, turnId: TURN, itemId: 'a1', delta: 'Hel' });
       notify('item/agentMessage/delta', { threadId: THREAD, turnId: TURN, itemId: 'a1', delta: 'lo' });
@@ -149,6 +150,13 @@ async function play() {
     case 'hang-approval': {
       commandRequest(150, 'c1');
       await new Promise(resolve => { interruptWaiter = resolve; });
+      finish('interrupted');
+      break;
+    }
+    case 'approval-after-interrupt': {
+      await new Promise(resolve => { interruptWaiter = resolve; });
+      commandRequest(180, 'c1');
+      await waitAnswer(180);
       finish('interrupted');
       break;
     }

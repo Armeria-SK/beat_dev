@@ -277,6 +277,11 @@ test('the PATH search uses only absolute entries: "." and empty entries do not l
   }
   writeFileSync(join(bin, name), 'real');
   assert.deepEqual(findClaudeExecutable(undefined, env(`.${delimiter}${delimiter}${bin}`)), { path: join(bin, name) }, 'the absolute entry is used, the "." and empty ones are skipped');
+  for (const both of [{ PATH: '', Path: bin }, { Path: bin, PATH: '' }, { PATH: `.${delimiter}`, Path: bin }, { PATH: bin, Path: '' }]) {
+    assert.deepEqual(findClaudeExecutable(undefined, { ...both, PATHEXT: '.COM;.EXE;.CMD' }), { path: join(bin, name) }, `PATH and Path together: ${JSON.stringify(both)}`);
+  }
+  const none = findClaudeExecutable(undefined, { PATH: '', Path: `.${delimiter}`, PATHEXT: '.COM;.EXE;.CMD' });
+  assert.ok(!('path' in none) || none.path !== planted, 'no absolute entry in either key: the temp folder is not searched');
 });
 
 test('every optional program package of the SDK (its own copy of the Claude Code body) is turned into nothing by an override in package.json', () => {
