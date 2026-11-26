@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { parseConfig } from '../src/config/store.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import {
   markSetupShown, resumeStep, setupModelConfig, STEPS, wasSetupShown,
   type ModelForm, type OnboardingSteps,
 } from '../web/src/onboarding.ts';
 import { estimateTokens, overPersonaBudget } from '../web/src/tokens.ts';
+import { testConfig } from './helpers.ts';
 
 const steps = (patch: Partial<Record<'user' | 'identity' | 'persona' | 'model', boolean>> = {}) => ({ user: false, identity: false, persona: false, model: false, ...patch });
 
@@ -58,6 +60,14 @@ test('setupModelConfig: Anthropic は、すでにあるプロバイダを使い�
   assert.deepEqual(second.config.routing, { chat: ['qwen3-27b', 'another-model'], background: ['qwen3-27b', 'another-model'], retriesPerModel: 2 }, '順番がすでにあるときは、足したモデルを最後に足す');
   assert.equal(setupModelConfig(first.config, form(), null).modelId, 'qwen3-27b-2', '同じ id があれば番号を付ける');
   assert.equal(base().models.length, 0, '元の設定は書き換えない');
+});
+
+test('setupModelConfig: runtime models are left out of the lists it fills (a runtime model may only be first in chat), so the saved settings are accepted', () => {
+  const runtimes = { ...testConfig(), runtimes: [{ id: 'cc', kind: 'claude-code', enabled: true }], providers: [], models: ['rt1', 'rt2'].map(id => ({ id, runtime: 'cc', model: id, vision: false })), routing: { chat: [], background: [], retriesPerModel: 0 } };
+  assert.doesNotThrow(() => parseConfig(runtimes), 'the starting settings are valid');
+  const { config } = setupModelConfig(runtimes as never, form(), null);
+  assert.deepEqual(config.routing, { chat: ['qwen3-27b'], background: ['qwen3-27b'], retriesPerModel: 0 });
+  assert.doesNotThrow(() => parseConfig(config));
 });
 
 test('estimateTokens: 画面の見積もりは、サーバーの estimateTextTokens と同じ式。予算を超えたときだけ注意する（予算なしなら出さない）', () => {
