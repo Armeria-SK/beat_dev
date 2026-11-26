@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import type { App } from '../app.ts';
 import { branchEntries, gitEntries, present, recordEntries, type ChangeBase, type ChangeEntry } from '../changes/diff.ts';
 import { changesDir, sha256 } from '../changes/record.ts';
+import { listRunChanges } from '../changes/runtime.ts';
 import { redoBatch, undoEntries } from '../changes/restore.ts';
 import { SNAPSHOT_EVENT } from '../projects/snapshot-before.ts';
 import { folderMissing, ProjectError, type ProjectRow } from '../projects/store.ts';
@@ -109,7 +110,8 @@ export function registerChangeRoutes(router: Router, app: App): void {
       const after = made.entries[i]!.after;
       return file.undo && (after === null || Buffer.isBuffer(after)) ? { ...file, hash: after === null ? null : sha256(after) } : file;
     });
-    sendJson(res, 200, { base: made.base, files, more: made.more, redo: redoOf(project.id) });
+    // 外の実行役が返事のあいだに変えたファイル（beat が git の前後から割り出したもの。元に戻す・やり直すの対象ではなく、file_changes の記録でもない）
+    sendJson(res, 200, { base: made.base, files, more: made.more, redo: redoOf(project.id), runtime: { runs: listRunChanges(app.kv, project.id, scope.conversation) } });
   });
 
   router.add('POST', '/api/projects/:id/changes/undo', async ({ req, res, params }) => {

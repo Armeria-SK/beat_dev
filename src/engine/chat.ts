@@ -1145,7 +1145,7 @@ export class ChatEngine {
 
   #bridge(): RuntimeTurnDeps {
     const d = this.#d;
-    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs, pending: d.tools?.pending, approvals: d.runtimeApprovals };
+    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs, pending: d.tools?.pending, approvals: d.runtimeApprovals, kv: d.kv };
   }
 
   // 実行役の道で、発言を保存して返事を始める。何かを書く前に、製品・作業フォルダ・実行役の確かめを見て、断れるものは断る（何も保存しない）

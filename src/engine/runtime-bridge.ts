@@ -3,9 +3,11 @@
 // 道具の行は、名前を `<種類>:<道具>` にして beat の道具の登録に結び付かないようにし（: は beat の道具の名前に無い）、tool_calls・file_changes の表には書かない。
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
+import { beginWatch, endWatch, saveRunChanges, type RunWatch, type RuntimeRunChanges } from '../changes/runtime.ts';
 import type { AppConfig } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
+import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
 import type { AppPaths } from '../paths.ts';
 import { readHead, stripInvisible } from '../projects/instructions.ts';
@@ -44,6 +46,8 @@ export interface RuntimeTurnDeps {
   // 実行役の承認の求めを持ち主へ回す先（Pending）と、答えを待つ控え。どちらかが無いときは、求めを全部断る（何も許さない）
   pending?: Pick<PendingStore, 'parkRuntime' | 'row'> | undefined;
   approvals?: RuntimeApprovals | undefined;
+  // 返事のあいだに変わったファイルの一覧（AR-9。実行ごとに kv へ）の置き場。無ければ、変わったファイルは見張らない
+  kv?: KV | undefined;
 }
 
 export interface RuntimeTurnInput {
@@ -206,6 +210,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   let planMode = false;
   let workRoot = '';
   let timedOut = false;
+  let watch: RunWatch | undefined;
 
   const save = (message: ChatMessage): void => {
     const saved = deps.conversations.append(conversationId, message, runId);
@@ -410,6 +415,12 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     previousSession = previous;
     resumed = previous !== null;
     const instructions = found.runtime.kind === 'claude-code' ? productInstructions(folder.root, log) : undefined;
+    // 実行役が何かを書く前に、git の状態を取る（返事のあとの状態と比べて、変わったファイルを beat が自分で割り出す。実行役の自己申告は当てにしない）
+    if (deps.kv && input.projectId) {
+      const began = await Promise.race([beginWatch({ config, paths: deps.paths, root: folder.root, runId, conversationId }), stopped]);
+      if (began === 'stopped') return cancelled();
+      watch = began;
+    }
     try {
       held.session = await deps.runtimes.registry.start(config, runtimeId, {
         conversationId, cwd: folder.root, model: input.model, signal, beatPort: config.server.port,
@@ -494,13 +505,40 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     await bounded([['close the runtime session', () => closing.runtime.close(closing.session.id)]]);
   }
   if (sessionEnd) { try { deps.conversations.setRuntimeSession(conversationId, sessionEnd); } catch (error) { log(`[WARN] Could not remember the runtime session of ${conversationId}: ${clean((error as Error).message)}`); } }
+  // 実行役を閉じたあと、前と比べて、この返事のあいだに変わったファイルの一覧を kv に実行ごとに残す（beat の道具の記録 tool_calls・元に戻す対象の file_changes には書かない）
+  let changes: RuntimeRunChanges | undefined;
+  if (watch && held.session && deps.kv && input.projectId) {
+    try {
+      const ended = await endWatch(watch);
+      changes = { v: 1, runId, conversationId, projectId: input.projectId, runtime: runtimeId, kind: held.runtime?.kind ?? null, at: deps.kv.now(), outcome: outcome.ok ? 'ok' : outcome.cancelled === true ? 'stopped' : 'failed', ...ended };
+      saveRunChanges(deps.kv, changes);
+    } catch (error) {
+      changes = undefined;
+      log(`[WARN] Could not record the files changed during run ${runId}: ${clean((error as Error).message)}`);
+    }
+  }
   try {
     // 続きに使う会話の ID（beat が付けたもの・実行役が付けたもの）は、記録に残さない（起動の引数・thread の ID に入っていても伏せる）。一覧の API はこの記録をそのまま返す
     const sessionIds = [sessionStart, sessionEnd, previousSession].filter((id): id is string => typeof id === 'string' && id !== '');
-    const record = redactJsonValue({ runtime: runtimeId, kind: held.runtime?.kind ?? null, model: input.model, effort: effort ?? null, permission, resumed, contained: held.session ? held.session.containReason === undefined : null, launch: launch ?? null });
+    const seen = changes ? { state: changes.state, files: changes.files.length + changes.more, unchecked: changes.unchecked, git: changes.git, alert: changes.alert } : null;
+    const record = redactJsonValue({ runtime: runtimeId, kind: held.runtime?.kind ?? null, model: input.model, effort: effort ?? null, permission, resumed, contained: held.session ? held.session.containReason === undefined : null, launch: launch ?? null, changes: seen });
     const hidden = sessionIds.reduce((json, id) => json.split(id).join('[session]'), redactExact(JSON.stringify(record), secrets));
     deps.runs.setRuntime(runId, JSON.parse(hidden) as unknown);
   } catch (error) { log(`[WARN] Could not record the runtime launch of run ${runId}: ${clean((error as Error).message)}`); }
+  // 守りに当たる変更（守るファイル・安全に扱えないパス・リンク・製品の外・git の設定とフック）があれば、実行の記録に印を付け、画面に知らせる。止めも戻しもしない
+  if (changes?.alert) {
+    flags.push('runtime_changes_guarded');
+    try {
+      const marked = changes.files.filter(file => file.marks.some(mark => mark !== 'guarded'));
+      if (marked.length) {
+        const paths = clean(`${marked.slice(0, 3).map(file => file.path).join(', ')}${marked.length > 3 ? ', …' : ''}`, 400);
+        deps.bus.publish({ type: 'warning', runId, conversationId, code: 'runtime_changes_guarded', message: engineText(language, 'warn.runtime_changes_guarded', { paths }), params: { paths } });
+      }
+      for (const [part, key] of [['hooks', 'warn.runtime_git_hooks'], ['config', 'warn.runtime_git_config']] as const) {
+        if (changes.git.includes(part)) deps.bus.publish({ type: 'warning', runId, conversationId, code: `runtime_git_${part}`, message: engineText(language, key), params: {} });
+      }
+    } catch (error) { log(`[WARN] Could not announce the changes seen in run ${runId}: ${clean((error as Error).message)}`); }
+  }
 
   if (outcome.ok) {
     deps.runs.finish(runId, { ok: true, modelId: input.modelId, model: input.model, attempts: 1, stop: 'end_turn', iterations: 1, toolCalls: toolCount, flags });
