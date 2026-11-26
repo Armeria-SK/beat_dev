@@ -245,17 +245,17 @@ test('ui/Sidebar（DOM）: 検索の失敗は「0 件」と分けて Could not l
     state: 'idle', route: { view: 'new' }, foot: { kind: 'idle' }, kanban: 0, questions: 0, pending: 0, sessionPending: new Map(), drafts: 0, unread: 0,
     conversations: [], conversationsMore: {}, projects: [], running: new Set(), setupPending: false, onSetup: () => undefined,
   }));
-  await click(container.querySelector('button[aria-label="Search sessions"]'));
-  const status = container.querySelector('.ui-search [role="status"]');
+  await click([...container.querySelectorAll('button.ui-side-find')].find(b => b.textContent === en['ui.search.open']));
+  const status = document.querySelector('[role="dialog"] [role="status"]');
   assert.ok(status, '打つ前から入れ物がある');
   assert.equal(status.textContent, '');
-  await input(container.querySelector('input[aria-label="Search past sessions"]'), 'pricing');
+  await input(document.querySelector('input[aria-label="' + en['ui.search.field'] + '"]'), 'pricing');
   await update(() => new Promise(resolve => setTimeout(resolve, 300)));
   await settle();
-  assert.ok(container.querySelector('.ui-search [role="status"]') === status, '同じ入れ物のまま');
+  assert.ok(document.querySelector('[role="dialog"] [role="status"]') === status, '同じ入れ物のまま');
   assert.equal(status.textContent, 'Could not load');
   fail = false;
-  await input(container.querySelector('input[aria-label="Search past sessions"]'), 'pricing notes');
+  await input(document.querySelector('input[aria-label="' + en['ui.search.field'] + '"]'), 'pricing notes');
   await update(() => new Promise(resolve => setTimeout(resolve, 300)));
   await settle();
   assert.equal(status.textContent, 'No matches', '0 件は失敗と分ける');

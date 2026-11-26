@@ -2,6 +2,7 @@
 // 1 つの実行役が止まっていても・作れなくても、ほかの実行役と提供元の道には触らない（Approach 9）
 import { RUNTIME_KINDS, type AppConfig, type RuntimeConfig, type RuntimeKind } from '../config/schema.ts';
 import { redactSecrets } from '../shared/redaction.ts';
+import { createCodexRuntime } from './codex/adapter.ts';
 import type { ProcessManager } from './process-manager.ts';
 import { permissionFor, type AgentRuntime, type RuntimePermission, type RuntimeRequest, type RuntimeSession } from './types.ts';
 import { createClaudeCodeRuntime } from './claude-code/adapter.ts';
@@ -16,7 +17,7 @@ export type RuntimeFactory = (config: RuntimeConfig, deps: RuntimeDeps) => Agent
 // まだ作っていない種類は undefined
 export const FACTORIES: Readonly<Record<RuntimeKind, RuntimeFactory | undefined>> = {
   'claude-code': (config, deps) => createClaudeCodeRuntime(config, deps),
-  codex: undefined,
+  codex: createCodexRuntime,
 };
 
 export type RuntimeLookup =

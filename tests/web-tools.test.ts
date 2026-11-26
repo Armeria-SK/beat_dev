@@ -10,6 +10,7 @@ import { webFailure, webFetch, webSearch } from '../src/tools/builtin/web.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { htmlText } from '../src/tools/web/html-text.ts';
 import { decodeText, defaultNetwork, fetchPublic, mediaTypeOf, pageUrl, publicIPv4, RetrievalFailure, type PageNetwork, type PageResponse } from '../src/tools/web/public-page.ts';
+import { toolText } from '../src/shared/messages/tools.ts';
 import { SearchFailure, SearchThrottle } from '../src/tools/web/search.ts';
 import { readSafely } from '../src/tools/web/search/engine.ts';
 import { bing } from '../src/tools/web/search/engines/bing.ts';
@@ -245,7 +246,7 @@ test('web_fetch: ローカルの宛先は実行前に断り、秘密らしい UR
 
 // ── 6c: 検索の失敗を繰り返さない ──
 
-function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error'>): PageNetwork & { gets: string[] } {
+function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error' | 'empty'>): PageNetwork & { gets: string[] } {
   const gets: string[] = [];
   return {
     gets,
@@ -254,6 +255,7 @@ function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error'>): PageNet
       gets.push(url.href);
       const answer = answers[gets.length - 1] ?? 'blocked';
       if (answer === 'ok') return { status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from(DDG) };
+      if (answer === 'empty') return { status: 200, contentType: 'text/html; charset=utf-8', body: readFileSync(new URL('./fixtures/search/duckduckgo-html-empty.html', import.meta.url)) };
       return { status: answer === 'blocked' ? 202 : 500, contentType: 'text/html', body: Buffer.alloc(0) };
     },
   };
@@ -458,6 +460,14 @@ test('mediaTypeOf: 種類の部分だけを取り、形が違えば undefined。
   assert.equal(mediaTypeOf('text/html\u0007'), undefined);
   assert.equal(mediaTypeOf(''), undefined);
   assert.equal(mediaTypeOf(`application/${'x'.repeat(500)}`)?.length, 100);
+});
+
+test('0 件の検索のあとは、外を読んだ扱いにならない（判定役に「外を読んだ」の 1 行が付かず、積んだ行にも印が付かない。返事に外の文字が 1 つも入らない）', async t => {
+  const s = await setupApp(t, scriptedNetwork('empty'), steppingClock());
+  s.adapter().scripts.push(toolCall('web_search', { query: '見つからない言葉' }), probeShell(), reply('書けませんでした'));
+  assert.equal(await judgedTainted(s, '調べて書いて'), false, '外を読んだ扱いの確かめにならない');
+  assert.equal(toolTexts(s)[0], toolText('en', 'web.no_hits', { query: '見つからない言葉' }), '0 件の返事は決まった文そのもの（これ以外の文を足したら noRemoteContent は付けられない）');
+  assert.equal((s.app.db.prepare('SELECT tainted FROM engine_runs ORDER BY started_at DESC LIMIT 1').get() as { tainted: number }).tainted, 0, '実行に印は付かない');
 });
 
 test('成功した検索のあとも、今までどおり外を読んだ扱い（判定役に 1 行・積んだ行に印）', async t => {

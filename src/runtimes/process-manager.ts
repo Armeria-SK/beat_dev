@@ -4,7 +4,7 @@
 // Windows はジョブ（src/os/run-job.ts）に入れ、閉じたとき・beat が落ちたときに孫まで止める
 import { spawn, type ChildProcess } from 'node:child_process';
 import { statSync } from 'node:fs';
-import { basename, extname, isAbsolute } from 'node:path';
+import { basename, delimiter, extname, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Transform, type Readable, type Writable } from 'node:stream';
 import { openRunJob, type RunJob } from '../os/run-job.ts';
@@ -54,11 +54,26 @@ function checkArgs(args: readonly string[]): void {
 
 const SEPARATOR = /[\\/]/u;
 
+// PATH の空の項目と相対の項目は作業フォルダを指す（シェルの決まり）。実行役の名前探しには使わない: 作業フォルダに置かれた同名のプログラムが起動しないように、絶対の項目だけ残す。
+// 絶対の項目が 1 つも残らないときは undefined（空の PATH を渡すと、探す側が「空の項目 = 作業フォルダ」に戻ってしまうため、探さずに「無い」とする）
+function absolutePathOnly(env: Record<string, string>): Record<string, string> | undefined {
+  const separator = WINDOWS ? ';' : delimiter;
+  let usable = false;
+  const kept = Object.fromEntries(Object.entries(env).map(([name, value]) => {
+    if (name.toUpperCase() !== 'PATH') return [name, value];
+    const dirs = value.split(separator).filter(dir => dir !== '' && isAbsolute(dir));
+    usable ||= dirs.length > 0;
+    return [name, dirs.join(separator)];
+  }));
+  return usable ? kept : undefined;
+}
+
 // 名前は PATH から絶対パスに直し、パスは絶対で実在するものだけ。Windows は .exe / .com だけ（.cmd・.bat の入れ物はシェルなしでは起こせず、シェルは通さない）
 export function resolveExecutable(file: string, env: Record<string, string>, cwd: string): string {
   let resolved = file;
   if (!SEPARATOR.test(file)) {
-    const found = findExecutable(file, env, cwd);
+    const safe = absolutePathOnly(env);
+    const found = safe ? findExecutable(file, safe, cwd) : undefined;
     if (!found) throw new ProcessRefused('not_found', `"${file}" was not found on PATH. Set the full path of the program in the runtime settings`);
     resolved = found;
   } else if (!isAbsolute(file)) {
@@ -153,6 +168,7 @@ export interface RuntimeProcess {
   // ジョブに入れられなかった理由（入れられていれば無い）。入れられないと、孫は止められない
   readonly containReason: string | undefined;
   lines(): AsyncIterable<string>;
+  // 行を渡せたか（true）。入力がもう書けないときだけ false。大きな行で stream が「詰まっている」と言っても、true（届く）
   writeLine(line: string): boolean;
   closeInput(): void;
   // 入力を閉じる → 決まった秒数待つ → 残っていれば木ごと止める
@@ -212,11 +228,14 @@ class ManagedProcess implements RuntimeProcess {
     })();
   }
 
-  // 1 行 1 メッセージ。改行を含む文字列は、別のメッセージ（承認の返事など）を作れてしまうので書かない
+  // 1 行 1 メッセージ。改行を含む文字列は、別のメッセージ（承認の返事など）を作れてしまうので書かない。
+  // 戻りは「受け付けたか」: 入力がもう書けないとき（閉じた・終わった）だけ false。stream の write() が返す「詰まっている」は受け付けた印にしない（全部届く。順番も保たれる）
   writeLine(line: string): boolean {
     if (/[\r\n]/u.test(line)) throw new ProcessRefused('line', 'A line written to a runtime cannot contain a line break');
     const stdin = this.child.stdin;
-    return stdin !== null && stdin.writable ? stdin.write(`${line}\n`) : false;
+    if (stdin === null || !stdin.writable) return false;
+    stdin.write(`${line}\n`);
+    return true;
   }
 
   closeInput(): void {
