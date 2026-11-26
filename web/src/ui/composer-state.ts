@@ -61,10 +61,12 @@ export function escStops(e: { key: string; composing: boolean }, running: boolea
 
 const usable = (m: ModelView): boolean => m.probe?.status === 'ok';
 
-export function modelInEffect(models: readonly ModelView[], chatOrder: readonly string[], modelId: string | null): ModelView | undefined {
+export function modelInEffect(models: readonly ModelView[], chatOrder: readonly string[], modelId: string | null, use: RuntimeUse): ModelView | undefined {
   if (modelId) return models.find(m => m.id === modelId);
   const ordered = chatOrder.map(id => models.find(m => m.id === id)).filter((m): m is ModelView => m !== undefined);
-  return ordered.find(usable) ?? ordered[0];
+  const firstSend = use.bound === null && use.allowed;
+  if (firstSend && ordered[0]?.runtime) return ordered[0];
+  return (firstSend ? ordered.filter(m => !m.runtime) : ordered).find(usable) ?? ordered[0];
 }
 
 export const depthOptions = (model: ModelView | undefined): string[] => [...(model?.efforts ?? [])];

@@ -177,6 +177,24 @@ test('ボタン（R3.12）: 持ち主の口で何度でも始められる（前�
   await s.settle();
 });
 
+test('ボタン（#266）: 外の実行役に結ばれた会話を元にしては、始める前に 409 runtime_source で断る（記録も調べる会話も作らず、提供元のモデルも呼ばない。確定で断られる調べものに、トークンを使わない）。結ばれていなければ、同じ状態から始まる', async t => {
+  const s = await researchApp(t);
+  s.app.conversations.create({ id: uuid(1), projectId: s.projectId });
+  s.app.conversations.append(uuid(1), { role: 'user', content: 'I want a Markdown notes app.' });
+  assert.equal(s.app.conversations.bindRuntime(uuid(1), 'claude-code'), true);
+  const refused = await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) });
+  assert.deepEqual([refused.status, refused.body.code], [409, 'research.runtime_source'], JSON.stringify(refused.body));
+  assert.equal(s.records().length, 0, 'no record was made');
+  assert.equal(s.adapter().calls.length, 0, 'no provider model was called');
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE kind = 'task'").get()!.n, 0, 'no research conversation was made');
+
+  s.app.db.prepare('UPDATE conversations SET runtime_id = NULL WHERE id = ?').run(uuid(1));
+  s.adapter().scripts.push(reply('Recorded.'));
+  const started = await s.json(`/api/projects/${s.projectId}/research`, 'POST', { conversationId: uuid(1) });
+  assert.equal(started.status, 202, 'the same product and conversation start once the conversation is not bound to a runtime');
+  await s.settle();
+});
+
 test('始める道は持ち主の口だけ（R3.12・R3.13 の 3）: 持ち主の印が無い・きっかけが違うと断る。engine.send・タスク・道具からは始まらない', async t => {
   const s = await researchApp(t);
   s.adapter().scripts.push(reply('ok'));
