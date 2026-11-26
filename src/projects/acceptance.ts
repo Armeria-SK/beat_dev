@@ -106,14 +106,125 @@ interface Spoken { id: number; conversationId: string; raw: string; view?: Owner
 
 // lines: 確定の文に書いた、この選びの行（「Feature: 名前」など）。引用がそのどれかとまるごと同じでも当てる
 export interface OwnerPick { researchId: string; itemId: number; label: string; lines?: readonly string[] }
-export interface Speech { owner: Spoken[]; budget: { left: number }; picks?: readonly OwnerPick[] }
 
-export function prepareSpeech(rows: readonly SpeechRow[], scanBudget = SCAN_BUDGET, picks: readonly OwnerPick[] = []): Speech {
+// ask_owner の札: 持ち主に見せた問いと、その答え。options と header は AI が書いた文。
+// 選択肢を選んだことが示すのは「その選択肢を選んだ」ことだけで、文の中身は持ち主の言葉ではない（owner_words にはしない）
+export interface AskedQuestion { question: string; header: string; options: readonly string[]; multiSelect: boolean }
+export interface AskedCard { conversationId: string; questionMessageId: number; answerMessageId: number | null; questions: readonly AskedQuestion[] }
+interface AnsweredCard { card: AskedCard; answer: Spoken }
+
+export interface Speech { owner: Spoken[]; budget: { left: number }; picks?: readonly OwnerPick[]; cards?: readonly AnsweredCard[] }
+
+export function prepareSpeech(rows: readonly SpeechRow[], scanBudget = SCAN_BUDGET, picks: readonly OwnerPick[] = [], asked: readonly AskedCard[] = []): Speech {
   const owner = rows
     .filter(row => row.role === 'user' && row.generated !== 1)
     .map(row => ({ id: row.id, conversationId: row.conversation_id, raw: stripAttachments(row.text) }))
     .sort((a, b) => b.id - a.id);
-  return { owner, budget: { left: scanBudget }, picks };
+  const byId = new Map(owner.map(message => [message.id, message]));
+  const cards = asked
+    .flatMap(card => { const answer = card.answerMessageId === null ? undefined : byId.get(card.answerMessageId); return answer ? [{ card, answer }] : []; })
+    .sort((a, b) => b.card.questionMessageId - a.card.questionMessageId);
+  return { owner, budget: { left: scanBudget }, picks, cards };
+}
+
+interface CardRow { id: number; conversation_id: string; role: 'user' | 'assistant' | 'tool'; parts: string | null; note: string | null; ask: number; generated: number }
+
+const CARD_ROWS = `SELECT m.id, m.conversation_id, m.role, CASE WHEN m.role = 'user' THEN NULL ELSE m.parts END AS parts, json_extract(m.parts, '$.note') AS note,
+  COALESCE(json_extract(m.parts, '$.askAnswer'), 0) AS ask, COALESCE(json_extract(m.parts, '$.generated'), 0) AS generated
+  FROM messages m JOIN conversations c ON c.id = m.conversation_id`;
+const CARD_KEPT = "(m.role = 'user' OR m.parts LIKE '%ask_owner%') ORDER BY m.id";
+
+export function askedCards(db: DatabaseSync, projectId: string): AskedCard[] {
+  return cardsOf(db.prepare(`${CARD_ROWS} WHERE c.project_id = ? AND c.kind = 'chat' AND c.parent_run_id IS NULL AND ${CARD_KEPT}`).all(projectId) as unknown as CardRow[]);
+}
+
+export function askedCardsIn(db: DatabaseSync, conversationId: string): AskedCard[] {
+  return cardsOf(db.prepare(`${CARD_ROWS} WHERE m.conversation_id = ? AND ${CARD_KEPT}`).all(conversationId) as unknown as CardRow[]);
+}
+
+function questionsOf(args: unknown): AskedQuestion[] | undefined {
+  const list = (args as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(list) || list.length === 0) return undefined;
+  const out: AskedQuestion[] = [];
+  for (const entry of list) {
+    const { question, header, options, multiSelect } = (entry ?? {}) as Record<string, unknown>;
+    if (typeof question !== 'string' || typeof header !== 'string' || !Array.isArray(options)) return undefined;
+    const labels = options.map(option => (option as { label?: unknown } | null)?.label);
+    if (!labels.every((label): label is string => typeof label === 'string')) return undefined;
+    out.push({ question, header, options: labels, multiSelect: multiSelect === true });
+  }
+  return out;
+}
+
+// ask_owner の呼び出し（誤りでない結果が返ったもの）ごとに 1 枚。答えは、その後の最初の持ち主の発言で、札が開いていたあいだに届いた印（askAnswer）があるものだけ
+function cardsOf(rows: readonly CardRow[]): AskedCard[] {
+  const asked = new Map<string, readonly AskedQuestion[]>();
+  const open = new Map<string, AskedCard>();
+  const cards: AskedCard[] = [];
+  for (const row of rows) {
+    if (row.role === 'user') {
+      const card = open.get(row.conversation_id);
+      if (!card || row.note !== null) continue;
+      if (row.ask === 1 && row.generated !== 1) card.answerMessageId = row.id;
+      open.delete(row.conversation_id);
+      continue;
+    }
+    let message: { name?: unknown; isError?: unknown; toolCallId?: unknown; toolCalls?: unknown };
+    try { message = JSON.parse(row.parts ?? 'null') ?? {}; } catch { continue; }
+    if (row.role === 'assistant') {
+      for (const call of Array.isArray(message.toolCalls) ? message.toolCalls as Array<{ id?: unknown; name?: unknown; arguments?: unknown }> : []) {
+        const questions = call?.name === 'ask_owner' && typeof call.id === 'string' ? questionsOf(call.arguments) : undefined;
+        if (questions) asked.set(`${row.conversation_id}\0${call.id}`, questions);
+      }
+    } else if (message.name === 'ask_owner' && message.isError !== true && typeof message.toolCallId === 'string') {
+      const questions = asked.get(`${row.conversation_id}\0${message.toolCallId}`);
+      if (!questions) continue;
+      const card = { conversationId: row.conversation_id, questionMessageId: row.id, answerMessageId: null, questions };
+      cards.push(card);
+      open.set(row.conversation_id, card);
+    }
+  }
+  return cards;
+}
+
+// 札の答えのうち、持ち主が自分で書いた部分だけ（card の選択肢と header の文を外した残り）。札の答えか分からない発言には使わない
+export function ownerTypedParts(text: string, card: AskedCard): string[] {
+  const written = [...new Set(card.questions.flatMap(q => [q.header, ...q.options]))].filter(Boolean).sort((a, b) => b.length - a.length);
+  let parts = [text];
+  for (const piece of written) parts = parts.flatMap(part => part.split(piece));
+  return parts.map(part => part.trim()).filter(Boolean);
+}
+
+const RECOMMENDED = /\s*\(recommended\)\s*$/iu;
+const optionKey = (text: string): string => fold(text.replace(RECOMMENDED, ''));
+
+// 札の答えの形（先頭に 1 行、問いごとに "- header: 選んだ選択肢を ', ' でつないだもの"。web/src/ui/ask.ts の answerText）の、index 番目の問いで
+// 持ち主が選んだ選択肢。自分で書いた文（Something else）が混じる・形が違うときは、選んだと言い切れないので undefined
+function pickedIn(card: AskedCard, index: number, text: string): string[] | undefined {
+  const lines = text.split(/\r?\n/u);
+  const q = card.questions[index]!;
+  const prefix = `- ${q.header}: `;
+  const line = lines[index + 1];
+  if (lines.length !== card.questions.length + 1 || line === undefined || !line.startsWith(prefix)) return undefined;
+  const content = line.slice(prefix.length);
+  for (let mask = 1; mask < 1 << q.options.length; mask++) {
+    const chosen = q.options.filter((_, i) => mask & (1 << i));
+    if ((q.multiSelect || chosen.length === 1) && chosen.join(', ') === content) return chosen;
+  }
+  return undefined;
+}
+
+// owner_choice の主張を、持ち主が札で選んだものと照らす。問い・選択肢の文は札のものとまるごと同じ（部分は不可）で、その選択肢が答えの文に選ばれた形である
+function chosenOption(speech: Speech, claimed: { question: string; answer: string }): AcceptanceSource | undefined {
+  const question = fold(claimed.question);
+  const answer = optionKey(claimed.answer);
+  for (const { card, answer: reply } of speech.cards ?? []) {
+    const index = card.questions.findIndex(q => fold(q.question) === question);
+    if (index < 0) continue;
+    const option = pickedIn(card, index, reply.raw)?.find(label => optionKey(label) === answer);
+    if (option !== undefined) return { kind: 'owner_choice', question: card.questions[index]!.question, questionMessageId: card.questionMessageId, answer: option, answerMessageId: reply.id, conversationId: card.conversationId };
+  }
+  return undefined;
 }
 
 function foldChar(text: string, i: number): [string, number] {
@@ -176,7 +287,7 @@ function contextOf(view: OwnerView, from: number, to: number): string {
 
 export function verifySource(speech: Speech, claimed: ClaimedSource): AcceptanceSource {
   if (claimed.kind === 'ai_added') return { kind: 'ai_added' };
-  if (claimed.kind === 'owner_choice') return { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: claimed.question, answer: claimed.answer };
+  if (claimed.kind === 'owner_choice') return chosenOption(speech, claimed) ?? { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: claimed.question, answer: claimed.answer };
   const unchecked = (reason: UncheckedReason): AcceptanceSource => ({ kind: 'ai_added', claimed: 'owner_words', reason, quote: claimed.quote });
   // R3.11 M7: 確定した名前とまるごと同じ引用は、重さの確かめより前に当てる（「タグ」のような短い名前も）
   const whole = claimed.quote.normalize('NFKC').trim();
