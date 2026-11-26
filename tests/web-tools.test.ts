@@ -245,7 +245,7 @@ test('web_fetch: ローカルの宛先は実行前に断り、秘密らしい UR
 
 // ── 6c: 検索の失敗を繰り返さない ──
 
-function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error'>): PageNetwork & { gets: string[] } {
+function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error' | 'empty'>): PageNetwork & { gets: string[] } {
   const gets: string[] = [];
   return {
     gets,
@@ -254,6 +254,7 @@ function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error'>): PageNet
       gets.push(url.href);
       const answer = answers[gets.length - 1] ?? 'blocked';
       if (answer === 'ok') return { status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from(DDG) };
+      if (answer === 'empty') return { status: 200, contentType: 'text/html; charset=utf-8', body: readFileSync(new URL('./fixtures/search/duckduckgo-html-empty.html', import.meta.url)) };
       return { status: answer === 'blocked' ? 202 : 500, contentType: 'text/html', body: Buffer.alloc(0) };
     },
   };
@@ -458,6 +459,14 @@ test('mediaTypeOf: 種類の部分だけを取り、形が違えば undefined。
   assert.equal(mediaTypeOf('text/html\u0007'), undefined);
   assert.equal(mediaTypeOf(''), undefined);
   assert.equal(mediaTypeOf(`application/${'x'.repeat(500)}`)?.length, 100);
+});
+
+test('0 件の検索のあとは、外を読んだ扱いにならない（判定役に「外を読んだ」の 1 行が付かず、積んだ行にも印が付かない。返事に外の文字が 1 つも入らない）', async t => {
+  const s = await setupApp(t, scriptedNetwork('empty'), steppingClock());
+  s.adapter().scripts.push(toolCall('web_search', { query: '見つからない言葉' }), probeShell(), reply('書けませんでした'));
+  assert.equal(await judgedTainted(s, '調べて書いて'), false, '外を読んだ扱いの確かめにならない');
+  assert.match(String(toolTexts(s)[0]), /There were no search results for "見つからない言葉"/u, '期待した 0 件の返事だった');
+  assert.equal((s.app.db.prepare('SELECT tainted FROM engine_runs ORDER BY started_at DESC LIMIT 1').get() as { tainted: number }).tainted, 0, '実行に印は付かない');
 });
 
 test('成功した検索のあとも、今までどおり外を読んだ扱い（判定役に 1 行・積んだ行に印）', async t => {

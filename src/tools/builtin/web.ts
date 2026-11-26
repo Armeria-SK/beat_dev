@@ -152,7 +152,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       ctx.searchBlocks = 0;
       if (ctx.research) ctx.research.budget.answered = (ctx.research.budget.answered ?? 0) + 1;
       if (ctx.research) for (const hit of hits) ctx.research.see(hit.url);
-      if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }) };
+      if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }), noRemoteContent: true };
       return {
         content: [
           toolText(language, 'web.external'),
