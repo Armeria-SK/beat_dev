@@ -4,6 +4,7 @@ import { RUNTIME_KINDS, type AppConfig, type RuntimeConfig, type RuntimeKind } f
 import { redactSecrets } from '../shared/redaction.ts';
 import type { ProcessManager } from './process-manager.ts';
 import { permissionFor, type AgentRuntime, type RuntimePermission, type RuntimeRequest, type RuntimeSession } from './types.ts';
+import { createClaudeCodeRuntime } from './claude-code/adapter.ts';
 
 export interface RuntimeDeps {
   processes: ProcessManager;
@@ -14,7 +15,7 @@ export type RuntimeFactory = (config: RuntimeConfig, deps: RuntimeDeps) => Agent
 
 // まだ作っていない種類は undefined
 export const FACTORIES: Readonly<Record<RuntimeKind, RuntimeFactory | undefined>> = {
-  'claude-code': undefined,
+  'claude-code': (config, deps) => createClaudeCodeRuntime(config, deps),
   codex: undefined,
 };
 
