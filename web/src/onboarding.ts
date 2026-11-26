@@ -1,6 +1,6 @@
 import { deepEqual } from './settings/merge.ts';
 import type { Config } from './settings/model.ts';
-import { newAnthropicProvider, uniqueId } from './settings/model.ts';
+import { isRuntimeEntry, newAnthropicProvider, uniqueId } from './settings/model.ts';
 
 // はじめの設定の、画面を使わない部分: 手順・続きの位置・モデルの入力から設定への書き換え。
 
@@ -62,7 +62,7 @@ function placeProvider(config: Config, providers: Entry[], models: readonly Entr
 }
 
 // 入力を設定に反映する。同じモデルをもう一度確かめるとき（modelId）は、その項目を直す。
-// 順番（チャット・裏方）が両方空なら、設定のモデル全部と足したモデルを入れる。すでに順番があれば、足したモデルを最後に足す。
+// When both lists (chat, background) are empty, they get every provider model plus the added one (a runtime model may only be first in chat, so it is left out). Otherwise the added model goes last.
 export function setupModelConfig(config: Config, form: ModelForm, modelId: string | null): { config: Config; modelId: string } {
   const providers = [...(config.providers as Entry[])];
   const models = [...(config.models as Entry[])];
@@ -80,7 +80,7 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
   if (at >= 0) models[at] = { ...existing, ...model }; else models.push(model);
 
   const routing = config.routing as { chat: string[]; background: string[] };
-  const ids = models.map(m => m.id);
+  const ids = models.filter(m => !isRuntimeEntry({ runtime: m.runtime })).map(m => m.id);
   const next = routing.chat.length === 0 && routing.background.length === 0
     ? { ...routing, chat: ids, background: ids }
     : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
