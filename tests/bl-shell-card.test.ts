@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { guardText } from '../src/shared/messages/guard.ts';
@@ -7,33 +8,37 @@ import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
 import { cardQuote, packageScriptName } from '../src/tools/hooks/code-guard.ts';
 import { selfRunRig } from './helpers/self-run-rig.ts';
 
-// UX-10: the "Will run" card of `npm run x` shows the script line that runs and the file it points to, not the whole package.json.
-// The verdict (decision, reason keys, ask kinds) is the same as before; only what the card shows and what the bind pins changed.
-// Any shape that the card cannot tie to the lines that really run shows the whole package.json, as before.
+// UX-10: the "Will run" card of `npm run x` keeps the whole package.json (as before) and gets one extra card in front of it:
+// the script lines that are likely to run. Nothing is hidden; the extra card is display only (no verdict, no bind, no rule, no judge key).
+// L55: the shell tool description tells about PowerShell 5.1.
 
 const PACKAGE = {
   name: 'demo',
   description: 'UNRELATED-MARKER',
+  main: 'scripts/main.js',
+  nodemonConfig: { exec: 'node scripts/watch-exec.js' },
   dependencies: { 'left-pad': '1.0.0' },
   scripts: {
     x: 'tsx src/cli.ts --flag',
     prex: 'node scripts/pre.js',
+    postx: 'echo POST-X-HOOK',
     serve: 'node --watch src/server.ts',
     start: 'node src/server.ts',
     build: 'node scripts/build.mjs && npm run lint',
     lint: 'tsc --noEmit',
-    'lint:css': 'echo CSS-UNRELATED',
     check: 'npm run build && npm test',
     test: 'node --import ./tests/loader.mjs --test "tests/**/*.test.ts"',
     other: 'echo UNRELATED-SCRIPT',
     install: 'node scripts/install.js',
     bad: 'npm install && node scripts/pre.js',
-    bad2: 'npm add left-pad && node scripts/pre.js',
     release: 'npm version patch',
-    release2: 'yarn version --patch',
-    fixup: 'npm audit fix && node scripts/pre.js',
     postversion: 'echo POSTVERSION-MARKER',
-    lsrun: 'npm ls && node scripts/pre.js',
+    ce2: 'cross-env A=1 npm install',
+    postinstall: 'echo POSTINSTALL-MARKER',
+    ros: 'run-script-os',
+    'ros:win32': 'echo WIN32-MARKER',
+    watch: 'nodemon',
+    dot: 'node .',
     loop: 'npm run loop',
     keep: 'node secrets/helper.js',
     envfile: 'node .env.js',
@@ -41,20 +46,8 @@ const PACKAGE = {
     big: 'node big.js',
     dir: 'node scripts',
     missing: 'node nope.js',
-    more: 'node f1.js f2.js f3.js f4.js && node f5.js f6.js',
-    client: 'npm start --prefix sub',
-    client2: 'cd sub && npm run go',
-    cdsame: 'cd sub && npm run serve',
-    cdfile: 'cd sub && node f1.js',
-    ci: 'run-s lint other',
-    dev: 'concurrently "npm:serve" "npm:other"',
-    ce: 'cross-env A=1 npm run other',
-    hash: 'node scripts/pre.js # && npm run other',
-    sq: "echo 'a & npm run other & echo b'",
-    glob: 'run-p "lint:*"',
     nul: `node a${String.fromCodePoint(0)}b.js`,
     bidi: `node a${String.fromCodePoint(0x202e)}b.js`,
-    long: `node scripts/pre.js # ${'zz '.repeat(2200)}`,
   },
 };
 
@@ -65,125 +58,127 @@ const FILES: Record<string, string> = {
   'scripts/pre.js': "console.log('pre');\n",
   'scripts/build.mjs': "console.log('build');\n",
   'scripts/install.js': "console.log('install');\n",
+  'scripts/main.js': "console.log('main');\n",
+  'scripts/watch-exec.js': "console.log('watch');\n",
   'tests/loader.mjs': "console.log('loader');\n",
   'tests/a.test.ts': "console.log('a');\n",
   'secrets/helper.js': "console.log('SECRET-BODY');\n",
   '.env.js': "console.log('env');\n",
   'big.js': `// ${'b'.repeat(20_000)}\n`,
-  'f1.js': '1', 'f2.js': '2', 'f3.js': '3', 'f4.js': '4', 'f5.js': '5', 'f6.js': '6',
-  'sub/package.json': JSON.stringify({ description: 'SUB-UNRELATED', scripts: { go: 'node run.js', up: 'node ../f1.js' } }),
+  'sub/package.json': JSON.stringify({ description: 'SUB-UNRELATED', scripts: { go: 'node run.js' } }),
   'sub/run.js': "console.log('sub run');\n",
   'packages/api/package.json': JSON.stringify({ description: 'API-UNRELATED', scripts: { test: 'node evil.js' } }),
   'packages/api/evil.js': "console.log('evil');\n",
 };
 
-const EXCERPT = '(excerpt of package.json: only the scripts that run)';
+const LIKELY = 'Likely to run (from the scripts in package.json; the whole file is below)';
+const SCRIPTS = '#scripts';
 const rel = (path: string): string => path.replaceAll('\\', '/').replace(/^.*\/workspace\//u, '');
-const cardOf = (pre: ReturnType<typeof shellPreCheck>) => (pre.preview ?? []).map(p => ({ path: rel(p.path), text: p.text, truncated: p.truncated, chars: p.chars }));
+const cardOf = (pre: ReturnType<typeof shellPreCheck>) => (pre.preview ?? []).map(p => ({ abs: p.path, path: rel(p.path), text: p.text, truncated: p.truncated, chars: p.chars }));
 const pathsOf = (pre: ReturnType<typeof shellPreCheck>) => cardOf(pre).map(p => p.path);
-const excerpt = (...lines: string[]): string => [EXCERPT, ...lines].join('\n');
 const line = (key: string): string => `${cardQuote(key)}: ${cardQuote((PACKAGE.scripts as Record<string, string>)[key]!)}`;
-const whole = (card: ReturnType<typeof cardOf>, why: string): void => {
-  const pkg = card.find(p => p.path === 'package.json');
-  assert.ok(pkg, why);
-  assert.ok(pkg.text.includes('UNRELATED-MARKER') && pkg.text.includes('left-pad') && !pkg.text.startsWith(EXCERPT), `${why}: the whole file`);
-};
+const likely = (...lines: string[]): string => [LIKELY, ...lines].join('\n');
+const extraOf = (cards: ReturnType<typeof cardOf>) => cards.filter(p => p.path.endsWith(SCRIPTS));
 
-test('UX-10: npm run x shows the script line (and its pre hook) and the files they run, not the whole package.json', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  const pre = shellPreCheck({ command: 'npm run x' }, r.ctx);
-  assert.equal(pre.decision, 'ask');
-  const [pkg, ...entries] = cardOf(pre);
-  assert.equal(pkg!.path, 'package.json');
-  assert.equal(pkg!.text, excerpt(line('prex'), line('x')));
-  assert.deepEqual(entries.map(e => e.path), ['scripts/pre.js', 'src/cli.ts']);
-  assert.equal(entries[1]!.text, "console.log('cli');\n");
-});
+// What the base code shows for a file: the file's own text, cut at 8000 characters
+const baseText = (abs: string): string => (existsSync(abs) ? readFileSync(abs, 'utf8').slice(0, 8000) : guardText('en', 'code.preview_missing'));
 
-test('UX-10: npm test and npm run of a script that calls other scripts show every line that runs, and the loader file (a glob is not a file)', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  const test_ = cardOf(shellPreCheck({ command: 'npm test' }, r.ctx));
-  assert.deepEqual(test_.map(p => p.path), ['package.json', 'tests/loader.mjs']);
-  assert.equal(test_[0]!.text, excerpt(line('test'), '(not shown: "tests")'));
-  const check = cardOf(shellPreCheck({ command: 'npm run check' }, r.ctx));
-  assert.deepEqual(check.map(p => p.path), ['package.json', 'scripts/build.mjs', 'tests/loader.mjs']);
-  assert.equal(check[0]!.text, excerpt(line('check'), line('build'), line('lint'), line('test'), '(not shown: "tests")'));
-  const passed = cardOf(shellPreCheck({ command: 'npm test -- --grep a' }, r.ctx));
-  assert.equal(passed[0]!.text, excerpt(line('test'), '(not shown: "tests")'), 'arguments after -- go to the script');
-});
+// Every command below is read by the card code; "clean" ones also get the extra card with the listed script lines
+const CLEAN: Array<[string, string[]]> = [
+  ['npm run x', ['prex', 'x', 'postx']],
+  ['npm test', ['test']],
+  ['npm test -- --grep a', ['test']],
+  ['npm run check', ['check', 'build', 'lint', 'test']],
+  ['npm start', ['start']],
+  ['pnpm run serve', ['serve']],
+  ['yarn run serve', ['serve']],
+  ['bun run serve', ['serve']],
+  ['npm run loop', ['loop']],
+  ['npm run x; npm install', ['prex', 'x', 'postx']],
+  ['npm install; npm test', ['test']],
+  ['npm.ps1 install; npm test', ['test']],
+  ['npm run release', ['release']],
+  ['npm run bad', ['bad']],
+];
+const UNCERTAIN = [
+  'npm install', 'npm run nosuch', 'npm run -s x', 'npm --silent run x', 'bun test', 'npm run',
+  'npm test -w packages/api', 'npm run go --prefix sub', 'npm run go -C sub', 'npm run x --workspaces', 'npm run x --if-present', 'npm test --workspace=packages/api',
+  'npm_config_prefix=sub npm run go', 'FOO=1 npm run x', '$env:npm_config_prefix = "sub"; npm test', '$env:FOO = "1"; npm run x',
+  'time npm run x', 'bash -c "npm run x"', 'timeout 5 npm test', 'npx foo', 'corepack npm install',
+];
+// The shapes the reviews found: a wrapper that runs install hooks, tools that pick their own script, a bare nodemon, `node .` with main
+const REVIEWED: Array<[string, string]> = [
+  ['npm run ce2', 'POSTINSTALL-MARKER'], ['npm run ros', 'WIN32-MARKER'], ['npm run watch', 'nodemonConfig'], ['npm run dot', '"main": "scripts/main.js"'], ['npm run release', 'POSTVERSION-MARKER'],
+];
 
-test('UX-10: an unrelated line of package.json (description, dependencies, other scripts) is not on the card', t => {
+test('UX-10: for every command, every card of the base (package.json and the others) carries the file text exactly, and the card list keeps the base order', t => {
   const r = selfRunRig(t, undefined, FILES);
-  for (const command of ['npm run x', 'npm test', 'npm run check', 'npm run serve']) {
-    const text = cardOf(shellPreCheck({ command }, r.ctx))[0]!.text;
-    for (const noise of ['UNRELATED-MARKER', 'left-pad', 'UNRELATED-SCRIPT', '"name"']) assert.ok(!text.includes(noise), `${command}: ${noise}`);
+  const commands = [...CLEAN.map(([command]) => command), ...UNCERTAIN, ...REVIEWED.map(([command]) => command), 'cd sub; npm run go', 'npm run nul', 'npm run bidi', 'npm run keep', 'npm run big', 'node scripts/pre.js', 'tsx src/cli.ts'];
+  let withPackage = 0;
+  for (const command of new Set(commands)) {
+    const cards = cardOf(shellPreCheck({ command }, r.ctx));
+    for (const card of cards.filter(p => !p.path.endsWith(SCRIPTS))) {
+      assert.equal(card.text, baseText(card.abs), `${command}: ${card.path} is the file itself`);
+      assert.equal(card.truncated, existsSync(card.abs) && readFileSync(card.abs, 'utf8').length > 8000, `${command}: ${card.path}`);
+    }
+    cards.forEach((card, i) => {
+      if (card.path.endsWith(SCRIPTS)) assert.equal(cards[i + 1]?.path, card.path.slice(0, -SCRIPTS.length), `${command}: the extra card is right in front of its package.json`);
+    });
+    if (cards.some(p => p.path.endsWith('package.json'))) withPackage++;
   }
+  assert.ok(withPackage >= 30, `the check is not empty: ${withPackage} commands showed a package.json`);
 });
 
-test('UX-10: pnpm, yarn and bun run <name> are read the same way; a cd before it picks that folder\'s package.json', t => {
+test('UX-10: a clean `npm run x` / `npm test` / `npm start` gets one extra card in front of the whole package.json, with the lines that are likely to run (pre and post hooks, scripts it calls)', t => {
   const r = selfRunRig(t, undefined, FILES);
-  for (const command of ['pnpm run serve', 'yarn run serve', 'bun run serve']) {
-    const card = cardOf(shellPreCheck({ command }, r.ctx));
-    assert.deepEqual(card.map(p => p.path), ['package.json', 'src/server.ts'], command);
-    assert.equal(card[0]!.text, excerpt(line('serve')), command);
+  for (const [command, keys] of CLEAN) {
+    const cards = cardOf(shellPreCheck({ command }, r.ctx));
+    const extras = extraOf(cards);
+    assert.equal(extras.length, 1, command);
+    assert.equal(extras[0]!.path, 'package.json#scripts', command);
+    assert.equal(extras[0]!.text, likely(...keys.map(line)), command);
+    const pkg = cards.find(p => p.path === 'package.json')!;
+    assert.equal(pkg.text, baseText(pkg.abs), `${command}: the whole file stays`);
+    assert.ok(pkg.text.includes('UNRELATED-MARKER') && pkg.text.includes('left-pad'), command);
   }
   const sub = cardOf(shellPreCheck({ command: 'cd sub; npm run go' }, r.ctx));
-  assert.deepEqual(sub.map(p => p.path), ['sub/package.json', 'sub/run.js']);
-  assert.equal(sub[0]!.text, excerpt('"go": "node run.js"'));
+  assert.deepEqual(sub.map(p => p.path), ['sub/package.json#scripts', 'sub/package.json']);
+  assert.equal(sub[0]!.text, likely('"go": "node run.js"'));
+  assert.equal(sub[1]!.text, baseText(sub[1]!.abs));
 });
 
-test('UX-10: every form that cannot be tied to the script lines still shows the whole package.json (as before)', t => {
+test('UX-10: when the lines cannot be tied to what runs (a flag, a workspace, a prefix, an env var, an install, a wrapper, a missing script), there is no extra card and the whole package.json is there', t => {
   const r = selfRunRig(t, undefined, FILES);
-  for (const command of ['npm install', 'npm run nosuch', 'npm run -s x', 'npm --silent run x', 'npm run x; npm install', 'npm run bad', 'npm run bad2', 'bun test', 'npm run', 'npm run release', 'npm run release2', 'npm run fixup']) {
-    whole(cardOf(shellPreCheck({ command }, r.ctx)), command);
-  }
-  const release = cardOf(shellPreCheck({ command: 'npm run release' }, r.ctx));
-  assert.ok(release[0]!.text.includes('POSTVERSION-MARKER'), 'npm version runs postversion, so its line is on the card');
-  const lsrun = cardOf(shellPreCheck({ command: 'npm run lsrun' }, r.ctx));
-  assert.deepEqual(lsrun.map(p => p.path), ['package.json', 'scripts/pre.js'], 'a read-only package call (npm ls) runs no script, so the card still narrows');
-  assert.equal(lsrun[0]!.text, excerpt(line('lsrun')));
-});
-
-test('UX-10: a flag after the name, a workspace, a prefix or an env var that picks another package shows the whole package.json, not the root script lines', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  for (const command of [
-    'npm test -w packages/api', 'npm run go --prefix sub', 'npm run go -C sub', 'npm run x --workspaces', 'npm run x --if-present', 'npm test --workspace=packages/api',
-    'npm_config_prefix=sub npm run go', 'export npm_config_prefix=sub; npm test', 'FOO=1 npm run x', '$env:npm_config_prefix = "sub"; npm test', '$env:FOO = "1"; npm run x',
-  ]) whole(cardOf(shellPreCheck({ command }, r.ctx)), command);
-});
-
-test('UX-10: a wrapper, an npx / corepack call, or a folder that cannot be worked out shows the whole package.json', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  for (const command of ['npm test; npx npm install', 'npm test; corepack npm install', String.raw`& "C:\Program Files\nodejs\npm.cmd" install; npm test`, 'npm.ps1 install; npm test', 'npm.cmd install; npm test', 'time npm run x', 'bash -c "npm run x"', 'timeout 5 npm test', 'npm run x; bash -c "npm run serve"', 'npm run x; & $p run serve', 'npm run x; corepack pnpm@9 run serve', 'npm run x; npx pnpm@9 run serve']) {
-    whole(cardOf(shellPreCheck({ command }, r.ctx)), command);
+  for (const command of UNCERTAIN) {
+    const cards = cardOf(shellPreCheck({ command }, r.ctx));
+    assert.deepEqual(extraOf(cards), [], command);
+    for (const card of cards) assert.equal(card.text, baseText(card.abs), command);
   }
 });
 
-test('UX-10: a script that moves to another folder or passes flags to a package tool shows the whole package.json', t => {
+test('UX-10: the shapes the reviews found (a wrapper running install hooks, run-script-os, a bare nodemon, node . with main) show the whole package.json, so the owner can see what they pick', t => {
   const r = selfRunRig(t, undefined, FILES);
-  for (const name of ['client', 'client2', 'cdsame', 'cdfile']) whole(cardOf(shellPreCheck({ command: `npm run ${name}` }, r.ctx)), name);
-});
-
-test('UX-10: a script line that hands work to a runner beat does not read (run-s, concurrently, cross-env, a comment, a quoted string, a glob) shows the whole package.json', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  for (const name of ['ci', 'dev', 'ce', 'hash', 'sq', 'glob']) {
-    const card = cardOf(shellPreCheck({ command: `npm run ${name}` }, r.ctx));
-    whole(card, name);
-    assert.ok(card[0]!.text.includes('UNRELATED-SCRIPT') || name === 'glob', `${name}: the script that may run is on the card`);
+  for (const [command, marker] of REVIEWED) {
+    const pkg = cardOf(shellPreCheck({ command }, r.ctx)).find(p => p.path === 'package.json');
+    assert.ok(pkg, command);
+    assert.equal(pkg.text, baseText(pkg.abs), command);
+    assert.ok(pkg.text.includes(marker), `${command}: ${marker}`);
   }
-  assert.ok(cardOf(shellPreCheck({ command: 'npm run glob' }, r.ctx))[0]!.text.includes('CSS-UNRELATED'));
 });
 
-test('UX-10: a script text longer than the limit shows the whole package.json', t => {
+test('UX-10: the extra card never carries a file of its own: no entry file is shown (it would not be pinned by the approval)', t => {
   const r = selfRunRig(t, undefined, FILES);
-  whole(cardOf(shellPreCheck({ command: 'npm run long' }, r.ctx)), 'long');
+  assert.deepEqual(pathsOf(shellPreCheck({ command: 'npm run x' }, r.ctx)), ['package.json#scripts', 'package.json']);
+  assert.deepEqual(pathsOf(shellPreCheck({ command: 'npm run keep' }, r.ctx)), ['package.json#scripts', 'package.json']);
+  assert.deepEqual(pathsOf(shellPreCheck({ command: 'npm run big' }, r.ctx)), ['package.json#scripts', 'package.json']);
 });
 
-test('UX-10: a NUL in a path inside a script does not make the call throw: the decision stays ask and the card is the whole file', t => {
+test('UX-10: a NUL in a script line does not make the call throw: the decision stays ask, the card is the whole file', t => {
   const r = selfRunRig(t, undefined, FILES);
   const pre = shellPreCheck({ command: 'npm run nul' }, r.ctx);
   assert.equal(pre.decision, 'ask');
-  whole(cardOf(pre), 'nul');
+  const cards = cardOf(pre);
+  assert.equal(cards.find(p => p.path === 'package.json')!.text, baseText(cards.find(p => p.path === 'package.json')!.abs));
 });
 
 test('UX-10: control, format and line-separator characters in a script line are written as \\u escapes on the card', t => {
@@ -197,65 +192,52 @@ test('UX-10: control, format and line-separator characters in a script line are 
   assert.equal(cardQuote('a"b\n'), '"a\\"b\\n"');
 });
 
-test('UX-10: a file named by a script but not shown (outside the product, secret, missing, a folder, over the limit of 4) is named on the card, never read', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  const keep = cardOf(shellPreCheck({ command: 'npm run keep' }, r.ctx));
-  assert.deepEqual(keep.map(p => p.path), ['package.json']);
-  assert.equal(keep[0]!.text, excerpt(line('keep'), '(not shown: "secrets/helper.js")'));
-  assert.ok(!JSON.stringify(keep).includes('SECRET-BODY'));
-  const cases: Array<[string, string]> = [['envfile', '".env.js"'], ['away', '"../outside.js"'], ['missing', '"nope.js"']];
-  for (const [name, shown] of cases) {
-    const card = cardOf(shellPreCheck({ command: `npm run ${name}` }, r.ctx));
-    assert.deepEqual(card.map(p => p.path), ['package.json'], name);
-    assert.equal(card[0]!.text, excerpt(line(name), `(not shown: ${shown})`), name);
-  }
-  assert.equal(cardOf(shellPreCheck({ command: 'npm run dir' }, r.ctx))[0]!.text, excerpt(line('dir')), 'a bare folder name is not read as a file');
-  const more = cardOf(shellPreCheck({ command: 'npm run more' }, r.ctx));
-  assert.deepEqual(more.map(p => p.path), ['package.json', 'f1.js', 'f2.js', 'f3.js', 'f4.js']);
-  assert.equal(more[0]!.text, excerpt(line('more'), '(not shown: "f5.js", "f6.js")'));
-});
-
-test('UX-10: a file outside the product folder is not shown even when the policy allows its place', t => {
-  const r = selfRunRig(t, undefined, FILES);
-  const card = cardOf(shellPreCheck({ command: 'cd sub; npm run up' }, { ...r.ctx, project: { id: 'p1', root: join(r.ws, 'sub') } }));
-  assert.deepEqual(card.map(p => p.path), ['sub/package.json']);
-  assert.equal(card[0]!.text, excerpt('"up": "node ../f1.js"', '(not shown: "../f1.js")'));
-});
-
-test('UX-10: the excerpt note and the not-shown note come from the guard messages, not from text inside the card code', t => {
+test('UX-10: the label of the extra card comes from the guard messages, not from text inside the card code', t => {
   const r = selfRunRig(t, undefined, FILES);
   const table = guardText.tables.en as Record<string, string>;
-  const saved = [table['card.excerpt']!, table['card.not_shown']!];
-  assert.equal(saved[0], EXCERPT);
-  table['card.excerpt'] = 'EXCERPT-MARK';
-  table['card.not_shown'] = 'LEFT-MARK {names}';
+  const saved = table['card.likely']!;
+  assert.equal(saved, LIKELY);
+  table['card.likely'] = 'LIKELY-MARK';
   try {
     const card = cardOf(shellPreCheck({ command: 'npm run keep' }, r.ctx));
-    assert.equal(card[0]!.text, ['EXCERPT-MARK', line('keep'), 'LEFT-MARK "secrets/helper.js"'].join('\n'));
+    assert.equal(card[0]!.text, ['LIKELY-MARK', line('keep')].join('\n'));
   } finally {
-    table['card.excerpt'] = saved[0]!;
-    table['card.not_shown'] = saved[1]!;
+    table['card.likely'] = saved;
   }
 });
 
-test('UX-10: a long entry file is clipped', t => {
+test('UX-10: if building the extra card fails, the cards are exactly the base ones (the whole package.json only) and the decision is not touched', t => {
   const r = selfRunRig(t, undefined, FILES);
-  const big = cardOf(shellPreCheck({ command: 'npm run big' }, r.ctx));
-  assert.deepEqual(big.map(p => p.path), ['package.json', 'big.js']);
-  assert.equal(big[1]!.truncated, true);
-  assert.ok(big[1]!.text.length <= 8000 && (big[1]!.chars ?? 0) > 20_000);
+  const table = guardText.tables.en as Record<string, string>;
+  const saved = table['card.likely']!;
+  delete table['card.likely'];
+  try {
+    const pre = shellPreCheck({ command: 'npm run x' }, r.ctx);
+    assert.equal(pre.decision, 'ask');
+    const cards = cardOf(pre);
+    assert.deepEqual(cards.map(p => p.path), ['package.json']);
+    assert.equal(cards[0]!.text, baseText(cards[0]!.abs));
+  } finally {
+    table['card.likely'] = saved;
+  }
 });
 
-test('UX-10: the bind pins the whole package.json and the files shown, so a change after the card was drawn makes the approval stale', t => {
+test('UX-10: the bind is exactly the base one: package.json and the shown files only, so the entry file and the extra card do not change it (a rule such as "always allow npm start" keeps matching)', t => {
   const r = selfRunRig(t, undefined, FILES);
   const bind = (command: string) => shellPreCheck({ command }, r.ctx).bind;
-  const before = bind('npm run x');
-  assert.equal(bind('npm run x'), before);
+  const pkgPath = cardOf(shellPreCheck({ command: 'npm start' }, r.ctx)).find(p => p.path === 'package.json')!.abs;
+  const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+  const fingerprint = `${pkgPath}\0${sha(readFileSync(pkgPath))}`;
+  const baseBind = sha([fingerprint, fingerprint].join('\n'));
+  const before = bind('npm start');
+  assert.equal(before, baseBind, 'the hash of the file fingerprints that the base code makes (the card file, then the shown file)');
+  assert.equal(bind('npm run x'), baseBind, 'a command with an extra card of other lines has the same bind');
+  assert.equal(bind('npm run x --if-present'), baseBind, 'and so does one with no extra card at all');
+  writeFileSync(join(r.ws, 'src/server.ts'), "console.log('changed');\n");
   writeFileSync(join(r.ws, 'src/cli.ts'), "console.log('changed');\n");
-  const afterEntry = bind('npm run x');
-  assert.notEqual(afterEntry, before, 'the entry file is pinned');
+  assert.equal(bind('npm start'), before, 'the entry file is not in the bind');
   writeFileSync(join(r.ws, 'package.json'), JSON.stringify({ ...PACKAGE, description: 'changed' }, null, 2));
-  assert.notEqual(bind('npm run x'), afterEntry, 'the whole package.json is pinned, not only the lines on the card');
+  assert.notEqual(bind('npm start'), before, 'the whole package.json is pinned');
 });
 
 // Captured from the code before this change (same commands; the fixture only gained scripts that carry no marker): [decision, reason keys, ask kinds, number of reasons]
@@ -303,20 +285,21 @@ test('UX-10: node and tsx files still show the file itself', t => {
   assert.deepEqual(pathsOf(shellPreCheck({ command: 'tsx src/cli.ts' }, r.ctx)), ['src/cli.ts']);
 });
 
-test('UX-10: through the pipeline, the waiting Pending row carries the narrowed card (the script line and the file it runs)', async t => {
+test('UX-10: through the pipeline, the waiting Pending row carries the extra card in front of the whole package.json', async t => {
   const r = selfRunRig(t, undefined, FILES);
   const out = await r.call('shell_run', { command: 'npm run x' }, { ...r.ctx, kind: 'chat', task: undefined, project: undefined });
   assert.equal(out.decidedBy, 'pending', out.output.content);
   const [row] = r.pending.list({ status: 'waiting' });
-  assert.deepEqual(row!.preview.map(p => rel(p.path)), ['package.json', 'scripts/pre.js', 'src/cli.ts']);
-  assert.equal(row!.preview[0]!.text, excerpt(line('prex'), line('x')));
+  assert.deepEqual(row!.preview.map(p => rel(p.path)), ['package.json#scripts', 'package.json']);
+  assert.equal(row!.preview[0]!.text, likely(line('prex'), line('x'), line('postx')));
+  assert.equal(row!.preview[1]!.text, baseText(row!.preview[1]!.path));
   assert.deepEqual(r.ran, []);
 });
 
 test('UX-10: a script that calls itself shows its line once', t => {
   const r = selfRunRig(t, undefined, FILES);
   const card = cardOf(shellPreCheck({ command: 'npm run loop' }, r.ctx));
-  assert.deepEqual(card.map(p => [p.path, p.text]), [['package.json', excerpt('"loop": "npm run loop"')]]);
+  assert.deepEqual(extraOf(card).map(p => p.text), [likely('"loop": "npm run loop"')]);
 });
 
 test('UX-10: packageScriptName reads only the forms that run one named script, with nothing after the name but -- arguments', () => {
@@ -333,6 +316,6 @@ test('UX-10: packageScriptName reads only the forms that run one named script, w
   }
 });
 
-test('L55 (S): the shell tool description tells that Windows PowerShell 5.1 has no && or || and no rm -rf', () => {
-  assert.match(shellRun.description, /PowerShell 5\.1[^.]*&&[^.]*\|\|[^.]*;[^.]*rm -rf[^.]*Remove-Item -Recurse -Force/u);
+test('L55 (S): the shell tool description tells that Windows PowerShell 5.1 has no && or || (and shows the form that stops on failure) and no rm -rf', () => {
+  assert.match(shellRun.description, /PowerShell 5\.1[^.]*&&[^.]*\|\|[^.]*cmd1; if \(\$\?\) \{ cmd2 \}[^.]*rm -rf[^.]*Remove-Item -Recurse -Force/u);
 });

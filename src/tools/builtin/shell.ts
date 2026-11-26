@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -12,8 +12,8 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
 import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
-import { cardQuote, isInterpreter, packageScriptName, packageScriptView, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
-import { expandPath, isInside, placePath, realish, type ScopePolicy } from '../hooks/scope.ts';
+import { isInterpreter, packageScriptName, packageScriptView, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
 import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
@@ -138,53 +138,31 @@ function previewOf(path: string, content: string): PreviewFile {
 }
 
 const PACKAGE_PROGRAM = /^(?:npm|pnpm|yarn|bun)$/u;
-const PACKAGE_WRAPPER = /^(?:npx|pnpx|bunx|corepack)$/u;
-const ENV_PROGRAM = /^(?:export|declare|typeset|local|readonly|set|setx|setenv|set-item|si|set-variable|sv|new-item|ni|env|eval|iex|invoke-expression|source|\.)$/u;
-const ENTRY_FILES_MAX = 4;
-const NOT_SHOWN_NAMES_MAX = 8;
-const lowerName = (text: string): string => text.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
 
-// package.json ごとに、その文が動かすスクリプトの名前。同じ package.json に、ほかの呼び出し（install・旗・環境変数・動的な名前・npm が語に出るだけの文）が 1 つでも届けば、その package.json は入れない（札は全体を見せる）。
-// 作業フォルダが決まらない文・包み（inner）・動的な実行役・npx / pnpx / bunx / corepack・環境変数を決める文が 1 つでもあれば、どれも入れない
-function scriptRuns(statements: readonly StatementFacts[], scripts: ReadonlySet<string>, reasonKeys: readonly string[]): Map<string, string[]> {
-  const runs = new Map<string, string[] | null>();
-  const walk = (list: readonly StatementFacts[]): boolean => list.every(st => {
-    const program = lowerName(st.program);
-    if (st.cwd === null || st.programDynamic || st.inner !== undefined || st.unknownInner?.length || PACKAGE_WRAPPER.test(program) || ENV_PROGRAM.test(program) || st.words.some(w => PACKAGE_WRAPPER.test(lowerName(w.text)))) return false;
-    if (!PACKAGE_PROGRAM.test(program) && !st.words.some(w => PACKAGE_PROGRAM.test(lowerName(w.text)))) return true;
-    const words = st.words.slice(1);
-    const clean = PACKAGE_PROGRAM.test(program) && lowerName(st.words[0]!.text) === program && st.env.length === 0 && !words.some(w => w.dynamic || w.glob);
-    const name = clean ? packageScriptName(program, words.map(w => w.text)) : undefined;
+// package.json ごとに、「名前のスクリプトを動かすだけ」の呼び出し（npm run x・npm test・npm start。名前のあとに -- の引数だけ）が動かす名前
+function scriptRuns(statements: readonly StatementFacts[]): Map<string, string[]> {
+  const runs = new Map<string, string[]>();
+  for (const st of statements) {
+    if (st.cwd === null || !PACKAGE_PROGRAM.test(st.program)) continue;
+    const name = packageScriptName(st.program, st.words.slice(1).map(w => w.text));
+    if (name === undefined) continue;
     const file = resolve(st.cwd, 'package.json');
-    const known = runs.get(file);
-    runs.set(file, name === undefined || known === null ? null : [...(known ?? []), name]);
-    return true;
-  });
-  const ok = !reasonKeys.some(key => key === 'list.env' || key === 'code.env') && walk(statements);
-  return new Map([...runs].flatMap(([file, names]) => (ok && names && scripts.has(file) ? [[file, names] as [string, string[]]] : [])));
+    runs.set(file, [...(runs.get(file) ?? []), name]);
+  }
+  return runs;
 }
 
-// npm run x などの札: package.json の全体のかわりに、動かすスクリプトの行（抜き出しだと分かる 1 行を付ける）と、その行が渡すファイル（製品の中・秘密のパスでない・ふつうのファイル）を見せる。
-// 見せなかったファイルは名前だけを 1 行で挙げる（中身は読まない）。判定には使わない。指紋は package.json の全体と見せたファイルを bind に入れるので、あとで変わったら承認は古くなる。
-// 何か投げたら、札はこれまでどおり（全体）
-function runCards(cards: readonly Peeked[], statements: readonly StatementFacts[], scripts: readonly string[], reasonKeys: readonly string[], root: string, policy: ScopePolicy, language: Language): Peeked[] {
+// 札の並び。package.json の札（全体・指紋・位置）は base のまま変えず、動かしそうなスクリプトの行を、その直前に 1 枚だけ足す（「全部だ」とは言わない）。
+// 足す札は表示だけ: 判定・bind・承認の決まり・判定役の鍵には入れない（指紋を持たない）。行が出せない・何か投げたときは、足さない
+function previewCards(cards: readonly Peeked[], statements: readonly StatementFacts[], reasonKeys: readonly string[], language: Language): PreviewFile[] {
   try {
-    const runs = scriptRuns(statements, new Set(scripts), reasonKeys);
-    if (runs.size === 0) return [...cards];
-    const have = new Set(cards.map(card => card.preview.path));
-    const shown = (file: string): boolean => isInside(root, file) && isInside(realish(root), realish(file)) && placePath(file, policy).kind === 'inside' && statSync(file, { throwIfNoEntry: false })?.isFile() === true;
+    const runs = reasonKeys.some(key => key === 'list.env' || key === 'code.env') ? new Map<string, string[]>() : scriptRuns(statements);
     return cards.flatMap(card => {
       const names = runs.get(card.preview.path);
-      const view = names && card.content !== undefined ? packageScriptView(card.content, names, dirname(card.preview.path), language) : undefined;
-      if (!view) return [card];
-      const wanted = view.files.filter(file => !have.has(file));
-      const entries = wanted.filter(shown).slice(0, ENTRY_FILES_MAX);
-      for (const file of entries) have.add(file);
-      const left = wanted.filter(file => !entries.includes(file)).map(file => cardQuote(relative(dirname(card.preview.path), file).replaceAll('\\', '/')));
-      const note = left.length ? [guardText(language, 'card.not_shown', { names: [...left.slice(0, NOT_SHOWN_NAMES_MAX), ...(left.length > NOT_SHOWN_NAMES_MAX ? ['…'] : [])].join(', ') })] : [];
-      return [{ ...card, preview: previewOf(card.preview.path, [guardText(language, 'card.excerpt'), ...view.lines, ...note].join('\n')) }, ...entries.map(file => peek(file, language))];
+      const lines = names && card.content !== undefined ? packageScriptView(card.content, names) : [];
+      return lines.length ? [previewOf(`${card.preview.path}#scripts`, [guardText(language, 'card.likely'), ...lines].join('\n')), card.preview] : [card.preview];
     });
-  } catch { return [...cards]; }
+  } catch { return cards.map(card => card.preview); }
 }
 
 function hookFingerprints(dir: string | null | undefined, language: Language): string[] {
@@ -523,8 +501,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const scope = filesScope(verdict.statements, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace, verdict.scripts);
   const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
     writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? (scope.kind === 'owner' ? scope.why : undefined), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
-  const peeked = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
-  const cards = runCards(peeked, verdict.statements, verdict.scripts, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace, ctx.policy, language);
+  const cards = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
+  const peeked = cards;
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
   const found = selfTouchMarkers(input.command, selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx), peeked.flatMap(p => p.content ?? []));
   const markers = [...found.strong, ...(peekTouch ? [peekTouch] : [])];
@@ -536,7 +514,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     decision: verdict.decision, reasons, reasonKeys, details, paths, pathsMore, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects,
     ...(markers.length && 'productRun' in runFacts ? {} : runFacts),
     ...('problem' in shown.fact || (shown.fact.files.length > 0 && scope.kind === 'files') ? { judgeFiles: shown.fact } : {}),
-    preview: cards.map(p => p.preview), bind: sha256([...cards.map(p => p.fingerprint), ...shown.read.map(file => file.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
+    preview: previewCards(cards, verdict.statements, verdict.reasonKeys, language), bind: sha256([...cards.map(p => p.fingerprint), ...shown.read.map(file => file.fingerprint), ...hookFingerprints(verdict.ownHooksDir, language)].join('\n')),
   };
 }
 
@@ -631,7 +609,7 @@ const shellDescription = (maxTimeoutSec?: number): string => [
   'Destructive operations and reading secrets cannot be run.',
   'Walking a large folder such as node_modules or .git with -Recurse or the like is slow (over 20 seconds for 15,000 files), and the result is too long to fit in the context. Exclude such folders, or narrow the scope with -Name, -Filter or -Depth.',
   'On Windows, PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
-  'In Windows PowerShell 5.1, && and || do not exist (join commands with ;), and rm -rf fails (write Remove-Item -Recurse -Force).',
+  'In Windows PowerShell 5.1, && and || do not exist (write cmd1; if ($?) { cmd2 }), and rm -rf fails (write Remove-Item -Recurse -Force).',
   'PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
   'In Windows PowerShell, cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user\'s confirmation every time, even when the path is fixed. To write a file, use the file_write / file_edit tools, not the shell. Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
   'Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user\'s confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).',
