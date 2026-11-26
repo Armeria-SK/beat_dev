@@ -52,6 +52,7 @@ export interface SkillChange {
   oldest: boolean;
   who: Who;
   auto: boolean;
+  outside: boolean;
   created: boolean;
   delta: LineDelta | null;
   action: VersionAction;
@@ -71,7 +72,7 @@ export function skillHistory(versions: readonly SkillVersion[], current: SkillCo
     const produced: SkillContent = index === 0 ? current : versions[index - 1]!;
     const target: SkillContent = index === 0 ? version : produced;
     return {
-      key: version.id, version, oldest: false, who: version.who === 'you' ? 'you' : 'beat', auto: version.who === 'beat-auto',
+      key: version.id, version, oldest: false, who: version.who === 'you' ? 'you' : 'beat', auto: version.who === 'beat-auto', outside: version.who === 'outside',
       created: isEmpty(version), delta: lineDelta(version.body, produced.body),
       action: actionFor(target, current, index === 0 ? 'undo' : 'restore'), target,
     };
@@ -79,7 +80,7 @@ export function skillHistory(versions: readonly SkillVersion[], current: SkillCo
   const last = versions.at(-1);
   if (last && !(versions.length === 1 && isEmpty(last))) {
     rows.push({
-      key: `oldest:${last.id}`, version: null, oldest: true, who: 'beat', auto: last.who === 'beat-auto', created: isEmpty(last), delta: null,
+      key: `oldest:${last.id}`, version: null, oldest: true, who: 'beat', auto: last.who === 'beat-auto', outside: false, created: isEmpty(last), delta: null,
       action: actionFor(last, current, 'restore'), target: last,
     });
   }

@@ -1068,6 +1068,7 @@ export const en = {
   'ui.skills.namePlaceholder': 'lowercase-with-dashes',
   'ui.skills.change.you': 'Edited by you',
   'ui.skills.change.beat': 'Updated from a draft',
+  'ui.skills.change.outside': 'Edited outside beat',
   'ui.skills.change.auto': 'Updated by beat without review',
   'ui.skills.change.autoNew': 'Registered by beat without review',
   'ui.skills.change.oldest': 'Oldest kept version',

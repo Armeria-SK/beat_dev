@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { findExecutable, scrubEnv } from '../tools/shell/runner.ts';
 
@@ -20,6 +20,7 @@ const AGGREGATE = ['check', 'verify', 'ci'] as const;
 const WRITES_FILES = /(?:^|\s)--(?:fix|write)(?=\s|=|$)/u;
 const PLACEHOLDER_TEST = /^\s*echo\b[^&|;]*no test specified[^&|;]*&&\s*exit\s+1\s*$/iu;
 const WINDOWS_APPS = /[\\/]WindowsApps[\\/]/iu;
+const STORE_STUB_TARGET = /[\\/]AppInstallerPythonRedirector\.exe$/iu;
 
 export const TEST_CONFIG_NAME = /^((jest|vitest|vitest\.workspace|playwright|cypress|karma|ava|babel)\.config\.[^/]+|karma\.conf\.[^/]+|\.mocharc[^/]*|\.c8rc[^/]*|\.nycrc[^/]*|pytest\.ini|conftest\.py|tox\.ini|noxfile\.py|phpunit\.xml(\.dist)?)$/iu;
 const NPM_GUARD_NAME = /^(\.npmrc|tsconfig[^/]*\.json|eslint\.config\.[^/]+|\.eslintrc.*|vite\.config\.[^/]+)$/u;
@@ -138,6 +139,10 @@ function pythonConfigured(root: string, list: Listing): boolean {
   return sections.some(([name, pattern]) => list.files.has(name) && pattern.test(readRegular(root, name) ?? ''));
 }
 
+function storeAlias(file: string): 'found' | 'stub' {
+  try { return STORE_STUB_TARGET.test(readlinkSync(file)) ? 'stub' : 'found'; } catch { return 'stub'; }
+}
+
 function pythonOnPath(env: Record<string, string>, cwd: string, windows: boolean): 'found' | 'stub' | 'missing' {
   const lookup = (key: string): string | undefined => env[key] ?? Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1];
   const exts = windows ? (lookup('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(ext => ext.toLowerCase()) : [''];
@@ -148,7 +153,7 @@ function pythonOnPath(env: Record<string, string>, cwd: string, windows: boolean
       const store = WINDOWS_APPS.test(file);
       try {
         lstatSync(file);
-        if (store) return 'stub';
+        if (store) return storeAlias(file);
         if (statSync(file).isFile()) return 'found';
       } catch (error) {
         if (store && !['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return 'stub';

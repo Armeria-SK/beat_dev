@@ -39,7 +39,7 @@ const MAX_DESCRIPTION = 300;
 export const askBeforeRegister = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.askBeforeRegister !== false;
 export const growSkills = (config: Pick<AppConfig, 'skills'>): boolean => config.skills?.grow !== false;
 
-export type SkillAuthor = 'you' | 'beat' | 'beat-auto';
+export type SkillAuthor = 'you' | 'beat' | 'beat-auto' | 'outside';
 export interface SkillVersion { id: string; at: number; who: SkillAuthor; lines: number; description: string; body: string }
 export const SKILL_VERSIONS_KEPT = 20;
 export const SKILL_AUTO_PER_DAY = 5;
@@ -48,7 +48,7 @@ const AUTO_LOG_KEY = 'skills:auto-registered';
 const SEEN_KEY = 'skill-seen:';
 const SEEN_MAX = MAX_BODY * 2;
 const DAY_MS = 86_400_000;
-const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat)(?:-(\d{1,4}))?\.md$/u;
+const VERSION_FILE = /^(\d{1,16})-(you|beat-auto|beat|outside)(?:-(\d{1,4}))?\.md$/u;
 
 function versionOrder(file: string): [number, number] {
   const m = VERSION_FILE.exec(file)!;
@@ -265,7 +265,7 @@ export class SkillStore {
       this.#log(`[WARN] Skill "${name}" is longer than ${SEEN_MAX} characters, so its text is not kept when it is changed outside the app`);
     }
     if (tooBig && seen === '') return;
-    if (seen !== '') this.#saveVersion(this.#backups, name, seen, 'beat');
+    if (seen !== '') this.#saveVersion(this.#backups, name, seen, 'outside');
     this.#markSeen(name, tooBig ? '' : current);
   }
 
