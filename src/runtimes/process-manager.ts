@@ -59,11 +59,11 @@ const SEPARATOR = /[\\/]/u;
 function absolutePathOnly(env: Record<string, string>): Record<string, string> | undefined {
   const separator = WINDOWS ? ';' : delimiter;
   let usable = false;
-  const kept = Object.fromEntries(Object.entries(env).map(([name, value]) => {
-    if (name.toUpperCase() !== 'PATH') return [name, value];
+  const kept = Object.fromEntries(Object.entries(env).flatMap(([name, value]) => {
+    if (name.toUpperCase() !== 'PATH') return [[name, value]];
     const dirs = value.split(separator).filter(dir => dir !== '' && isAbsolute(dir));
     usable ||= dirs.length > 0;
-    return [name, dirs.join(separator)];
+    return dirs.length > 0 ? [[name, dirs.join(separator)]] : [];
   }));
   return usable ? kept : undefined;
 }

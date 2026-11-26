@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeConfig } from '../src/config/schema.ts';
-import { CodexRuntime, createCodexRuntime, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
+import { checksWindowsSandbox, CodexRuntime, createCodexRuntime, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
 import { CodexRefused } from '../src/runtimes/codex/app-server.ts';
 import { wirePermission } from '../src/runtimes/codex/protocol.ts';
 import { ProcessManager } from '../src/runtimes/process-manager.ts';
@@ -31,12 +31,13 @@ async function gone(pid: number, ms = 10_000): Promise<boolean> {
 }
 
 function rig(t: { after: (fn: () => void | Promise<void>) => void }, scenario = 'text', extra: string[] = [], config: Partial<RuntimeConfig> = {}, options: { initializeTimeoutMs?: number } = {}) {
+  const lines: string[] = [];
+  const processes = new ProcessManager({ log: line => lines.push(line), graceMs: 3000 });
+  t.after(() => processes.closeAll());
   const dir = tempDir(t);
   const logFile = join(dir, 'client.jsonl');
   const work = join(dir, 'work');
   mkdirSync(work);
-  const lines: string[] = [];
-  const processes = new ProcessManager({ log: line => lines.push(line), graceMs: 3000 });
   const deps = { processes, log: (line: string) => lines.push(line) };
   const launch = { file: process.execPath, args: [FAKE, '--log', logFile, '--scenario', scenario, ...extra] };
   const runtime = new CodexRuntime({ id: 'cx', kind: 'codex', enabled: true, ...config }, deps, { launch, ...options });
@@ -72,6 +73,7 @@ test('a normal reply: text, tools, no experimental API, and every request carrie
   assert.equal(events.filter(event => event.type === 'done').length, 1, 'a turn of another conversation is not ours');
   assert.equal(events.filter(event => event.type === 'unknown').length, 1, 'only the truly new notification is kept');
   assert.ok(r.lines.some(line => line.includes('Codex said (configWarning)') && !line.includes(SECRET)), 'a warning is logged with secrets hidden');
+  assert.ok(r.lines.some(line => line.includes('Codex said (windows/worldWritableWarning)') && line.includes('D:/open-folder')), 'the folders the sandbox cannot protect are logged, not dropped');
   const requests = r.requests();
   const init = requests.find(message => message.method === 'initialize');
   assert.equal(init.params.capabilities.experimentalApi, false);
@@ -126,6 +128,27 @@ test('the permission setting is applied on every start: garbage, missing and eve
   }
 });
 
+test('a Codex version beat has not checked (or cannot read) is started with read-only only, even when workspace-write was asked for; a checked version keeps it', { timeout: 120_000 }, async t => {
+  for (const version of ['0.199.0', 'garbage']) {
+    for (const resume of [undefined, 'thr-9']) {
+      const r = rig(t, 'text', ['--version', version]);
+      const { session } = await reply(r, { permission: 'workspace-write', ...(resume ? { resume } : {}) });
+      const label = `${version}${resume ? ' resume' : ''}`;
+      const start = r.requests().find(message => message.method === (resume ? 'thread/resume' : 'thread/start'));
+      assert.equal(start.params.sandbox, 'read-only', `${label}: thread`);
+      assert.equal(r.requests().find(message => message.method === 'turn/start').params.sandboxPolicy.type, 'readOnly', `${label}: turn`);
+      assert.equal(session.record.permission, 'read-only', label);
+      assert.equal(session.record.sent.sandbox, 'read-only', label);
+      assert.equal(session.record.verifiedVersion, false, label);
+      assert.ok(r.lines.some(line => line.includes('[WARN]') && line.includes('started with read-only instead of workspace-write')), `${label}: the change is logged`);
+    }
+  }
+  const checked = rig(t);
+  const { session } = await reply(checked, { permission: 'workspace-write' });
+  assert.equal(session.record.permission, 'workspace-write', 'the checked version keeps the setting');
+  assert.ok(!checked.lines.some(line => line.includes('instead of')), 'nothing is changed, nothing is logged');
+});
+
 test('a Claude Code permission value is refused, and no process is started for it', { timeout: 30_000 }, async t => {
   for (const value of PERMISSIONS['claude-code']) {
     const r = rig(t);
@@ -143,9 +166,27 @@ test('the Windows sandbox must be ready: not ready means no conversation, no thr
     assert.ok(!methods.includes('thread/start') && !methods.includes('turn/start'), `${readiness}: a thread was started`);
     assert.equal(alive(r.pid()), false, 'the process was stopped');
   }
-  const linux = rig(t, 'text', ['--platform', 'linux', '--readiness', 'updateRequired']);
-  await reply(linux);
-  assert.ok(!linux.requests().some(message => message.method === 'windowsSandbox/readiness'), 'the Windows check is only for Windows');
+  // beat 自身の OS か Codex の自己申告のどちらかが Windows なら確かめる。Windows の beat は、Codex が何の文字列を名乗っても確かめる
+  for (const platform of WINDOWS ? ['linux', 'Windows', 'win32', 'windows'] : ['Windows', 'win32', 'windows']) {
+    const reported = rig(t, 'text', ['--platform', platform, '--readiness', 'updateRequired']);
+    await assert.rejects(reported.runtime.start(reported.request()), refused('sandbox_not_ready'), `Codex says ${platform}`);
+    assert.ok(reported.requests().some(message => message.method === 'windowsSandbox/readiness'), `Codex says ${platform}: the check was made`);
+  }
+  if (!WINDOWS) {
+    const other = rig(t, 'text', ['--platform', 'linux', '--readiness', 'updateRequired']);
+    await reply(other);
+    assert.ok(!other.requests().some(message => message.method === 'windowsSandbox/readiness'), 'neither a Windows beat nor a Windows Codex: no Windows check');
+  }
+});
+
+test('the Windows sandbox check applies when beat or Codex says Windows (a Windows Codex started from a non-Windows beat is checked too)', () => {
+  for (const platformOs of ['windows', 'Windows', 'WINDOWS', 'win32', 'winnt']) assert.equal(checksWindowsSandbox(platformOs, 'linux'), true, `Codex says ${platformOs}, beat is on linux`);
+  for (const platformOs of ['linux', 'macos', 'darwin', 'unix', '', undefined, 'wsl-linux']) {
+    assert.equal(checksWindowsSandbox(platformOs, 'win32'), true, `beat is on win32, Codex says ${String(platformOs)}`);
+    assert.equal(checksWindowsSandbox(platformOs, 'linux'), false, `neither says Windows: ${String(platformOs)}`);
+    assert.equal(checksWindowsSandbox(platformOs, 'darwin'), false, `neither says Windows: ${String(platformOs)}`);
+  }
+  assert.equal(checksWindowsSandbox('linux'), WINDOWS, 'the default for beat is the real platform');
 });
 
 test('the login must be a ChatGPT subscription: not signed in or an API key means no conversation', { timeout: 60_000 }, async t => {
@@ -395,6 +436,7 @@ test('a bare "codex" is never taken from the work folder: empty and relative PAT
   mkdirSync(work);
   writeFileSync(join(work, WINDOWS ? 'codex.exe' : 'codex'), '');
   const processes = new ProcessManager({ env: { PATH: ['', '.', 'relative-bin'].join(delimiter) } });
+  t.after(() => processes.closeAll());
   const runtime = new CodexRuntime({ id: 'cx', kind: 'codex', enabled: true }, { processes, log: () => undefined });
   await assert.rejects(runtime.start({ conversationId: 'c1', cwd: work, permission: 'read-only', signal: new AbortController().signal }), refused('not_installed'));
 });
@@ -428,6 +470,23 @@ test('interrupt asks Codex to stop the turn and the reply ends; waiting approval
   assert.equal(stopped.at(-1)?.type, 'done', 'a refused interrupt falls back to stopping the process');
   assert.equal(alive(stubborn.pid()), false);
   await stubborn.runtime.close(third.id);
+});
+
+test('an approval that arrives after interrupt() is cancelled by beat and never reaches the owner', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'approval-after-interrupt');
+  const session = await r.runtime.start(r.request());
+  await r.runtime.send(session.id, { text: 'go' });
+  await r.runtime.interrupt(session.id);
+  const reached: string[] = [];
+  const events = await collect(r.runtime, session.id, async event => {
+    if (event.type !== 'approval') return;
+    reached.push(event.requestId);
+    await r.runtime.approve(session.id, event.requestId, 'decline');
+  });
+  assert.deepEqual(reached, [], 'the owner was not asked');
+  assert.deepEqual(r.answers().map(answer => ({ id: answer.id, result: answer.result })), [{ id: 180, result: { decision: 'cancel' } }]);
+  assert.equal(events.at(-1)?.type, 'done');
+  await r.runtime.close(session.id);
 });
 
 test('aborting the request signal stops the process and ends the reply as stopped, not failed', { timeout: 60_000 }, async t => {
