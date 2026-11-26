@@ -7,7 +7,7 @@ import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
 import { eraseConversation } from '../src/db/erase.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { seedSkillUpto } from '../src/memory/review.ts';
+import { reviewPolicyLines, reviewPrompt, seedSkillUpto } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { FakeAdapter, reply, type Script, tempDir, testConfig, withLoad } from './helpers.ts';
 
@@ -292,6 +292,43 @@ test('S-1b: without bot memory no memory review is queued (idle, long chat, task
   s.app.worker.start();
   s.app.worker.stop();
   assert.equal(s.app.reviews.get(pendingAtStart.id)!.status, 'done', 'start closes waiting memory reviews');
+});
+
+const SKILL_FIX = 'Use skill_draft to fix a skill the record shows was wrong or out of date.';
+const SKILL_NEW = 'Use it to create a new skill only when the user corrected how the work should be done, or asked for it to be done this way from now on or next time.';
+const SKILL_NOT_DRAFT = "Do not draft general know-how that is not specific to this user's work (unless the user had to correct it), a procedure already covered by a listed skill, or one that only fits this task";
+
+test('S-1b bar: a skill review creates a new skill only on a correction or a request for next time (fixing a wrong skill stays allowed), most reviews end with No changes, and the memory review gets none of it', () => {
+  for (const skillsAutoRegister of [false, true]) {
+    const skill = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill', skillsAutoRegister });
+    const draftLine = skill.split('\n').find(line => line.includes('skill_draft')) ?? '';
+    assert.ok(draftLine.includes(SKILL_FIX), `the fix of a wrong skill is allowed without the new-skill bar (auto-register ${skillsAutoRegister})`);
+    assert.ok(draftLine.includes(SKILL_NEW), `the bar is for a new skill (auto-register ${skillsAutoRegister})`);
+    assert.ok(skill.includes(SKILL_NOT_DRAFT), 'the skill-only line is in the skill review');
+    assert.ok(skill.split('\n')[0]!.includes("Most reviews should end with 'No changes'"), 'the intro says what most reviews end with');
+    assert.doesNotMatch(skill, /history_search/u, 'no repeat check: the record itself would meet it, and the search taints the run so a draft is refused');
+    assert.doesNotMatch(skill, /looks reusable/u);
+    assert.doesNotMatch(skill, /a procedure that worked and will be useful again/u);
+    assert.doesNotMatch(skill, /kept or repeated|a procedure that was repeated|capable model/u);
+    const memory = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'memory', skillsAutoRegister });
+    assert.equal(memory.includes(SKILL_NOT_DRAFT), false, 'the memory review does not get the skill-only line');
+    assert.equal(memory.includes(SKILL_NEW), false);
+    assert.doesNotMatch(memory, /Most reviews should end with/u);
+  }
+  assert.doesNotMatch(reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill' }), /not used until the user approves it/u, 'the policy line no longer says a wrong draft is harmless; the tool description keeps that sentence');
+  assert.equal(reviewPolicyLines('en').find(line => line.text === `- ${SKILL_NOT_DRAFT}`)?.skillOnly, true, 'marked skill-only');
+});
+
+test('S-1b bar: the prompt a skill review run actually sends carries the bar', async t => {
+  const s = await setup(t);
+  s.app.conversations.create({ id: 'c1' });
+  s.app.conversations.append('c1', { role: 'tool', toolCallId: 'k1', name: 'calculate', content: '2' });
+  s.app.reviews.enqueue('manual', 'skill:manual:c1', { conversationId: 'c1', kind: 'skill' });
+  s.adapter().scripts.push(reply('No changes'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const prompt = String(s.adapter().calls.at(-1)!.messages.at(-1)?.content);
+  assert.ok(prompt.includes(SKILL_FIX) && prompt.includes(SKILL_NEW) && prompt.includes(SKILL_NOT_DRAFT), prompt);
+  assert.doesNotMatch(prompt, /looks reusable|history_search/u);
 });
 
 test('S-1b R9: a skill with a token in it is refused, from a draft or a save; a plain one is kept', async t => {

@@ -170,7 +170,8 @@ test('1-5s 聞く / 聞かないで、モデルに渡す文（skill_draft の説
   assert.equal(ToolRegistry.specs([skillDraft])[0]!.description, skillDraft.description, '設定を渡さなければ今の文');
   const askText = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill' });
   const autoText = reviewPrompt({ trigger: 'idle', forgotten: [], skillsAutoRegister: true, kind: 'skill' });
-  assert.match(askText, /it is not used until the user approves it/u);
+  assert.match(askText, /to create a new skill only when/u);
+  assert.doesNotMatch(askText, /registered right away/u, 'the ask text does not describe the auto-register behaviour');
   assert.doesNotMatch(autoText, /until the user approves/u);
   assert.match(autoText, /registered right away without the user's review/u);
   assert.equal(askText.split('\n').length, autoText.split('\n').length, '替えるのは 1 行だけ');
