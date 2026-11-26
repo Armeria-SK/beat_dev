@@ -35,7 +35,10 @@ function Meta({ doc, writing }: { doc: PlanDoc | null; writing: boolean }) {
   return <span className="bt-meta">{file} · {by ? t('ui.plan.editedBy', when, t(by)) : t('ui.plan.edited', when)}</span>;
 }
 
-interface Editing { hint: string | null; busy: boolean; locked: boolean; base: EditBase; onEdit: (op: OwnerOp, base: EditBase) => Promise<'saved' | 'stale' | 'failed'> }
+interface Editing {
+  hint: string | null; busy: boolean; locked: boolean; base: EditBase; onEdit: (op: OwnerOp, base: EditBase) => Promise<'saved' | 'stale' | 'failed'>;
+  lost?: ((opened: string, form: ItemForm) => void) | undefined;
+}
 
 const CHECK_KINDS: ReadonlyArray<ItemForm['check']> = ['command', 'look', 'read'];
 
@@ -44,36 +47,43 @@ function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | nu
   const id = useId();
   const [form, setForm] = useState<ItemForm>(() => itemForm(item));
   const problem = formProblem(form);
-  const start = itemForm(item);
-  const touched = form.result !== start.result || form.check !== start.check || form.command !== start.command;
+  const [start] = useState(() => itemForm(item));
+  const typed = useRef<ItemForm | null>(null);
+  const differs = (f: ItemForm) => f.result !== start.result || f.check !== start.check || f.command !== start.command;
+  const touched = differs(form);
+  const type = (next: ItemForm) => { setForm(next); typed.current = differs(next) ? next : null; };
+  const finish = () => { typed.current = null; onDone(); };
+  const replaced = item !== null && differs(itemForm(item));
+  useEffect(() => { if (replaced) onDone(); }, [replaced]);
+  useEffect(() => () => { if (item && typed.current) editing.lost?.(start.result, typed.current); }, []);
   const shown = touched ? problem : null;
   const field = shown ? problemField(shown) : null;
   const op = problem ? null : editOp(form, item);
   const blocked = editing.busy || editing.locked;
   const save = async () => {
     if (!op || blocked) return;
-    if (await editing.onEdit(op, base) !== 'failed') onDone();
+    if (await editing.onEdit(op, base) !== 'failed') finish();
   };
   const invalid = (which: 'result' | 'command') => (field === which ? { 'aria-invalid': true, 'aria-describedby': `${id}-problem` } : {});
   return (
     <div className="ui-acc__form" onClick={e => e.stopPropagation()}
-      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onDone(); } }}>
+      onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(); } }}>
       <label className="ui-acc__pair">
         <span className="bt-label">{t('ui.acc.edit.result')}</span>
-        <textarea className="bt-field ui-acc__input" rows={2} autoFocus value={form.result} onChange={e => setForm({ ...form, result: e.target.value })} {...invalid('result')} />
+        <textarea className="bt-field ui-acc__input" rows={2} autoFocus value={form.result} onChange={e => type({ ...form, result: e.target.value })} {...invalid('result')} />
       </label>
       <div className="ui-acc__pair">
         <span className="bt-label">{t('ui.acc.edit.check')}</span>
         <span className="bt-seg" role="group" aria-label={t('ui.acc.edit.check')}>
           {CHECK_KINDS.map(kind => (
-            <button key={kind} type="button" className="bt-seg__opt" aria-pressed={form.check === kind} onClick={() => setForm({ ...form, check: kind })}>{t(checkLabel({ kind } as AcceptanceItem['check']))}</button>
+            <button key={kind} type="button" className="bt-seg__opt" aria-pressed={form.check === kind} onClick={() => type({ ...form, check: kind })}>{t(checkLabel({ kind } as AcceptanceItem['check']))}</button>
           ))}
         </span>
       </div>
       {form.check === 'command' && (
         <label className="ui-acc__pair">
           <span className="bt-label">{t('ui.acc.edit.command')}</span>
-          <input className="bt-field bt-field--mono" spellCheck={false} autoComplete="off" value={form.command} onChange={e => setForm({ ...form, command: e.target.value })} {...invalid('command')}
+          <input className="bt-field bt-field--mono" spellCheck={false} autoComplete="off" value={form.command} onChange={e => type({ ...form, command: e.target.value })} {...invalid('command')}
             onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); void save(); } }} />
         </label>
       )}
@@ -81,7 +91,7 @@ function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | nu
       {editing.hint && <p className="bt-meta ui-acc__problem">{editing.hint}</p>}
       <span className="ui-acc__buttons">
         <Button small disabled={op === null || blocked} onClick={() => void save()}>{t('ui.acc.edit.save')}</Button>
-        <Button variant="ghost" small onClick={onDone}>{t('ui.acc.edit.cancel')}</Button>
+        <Button variant="ghost" small onClick={finish}>{t('ui.acc.edit.cancel')}</Button>
       </span>
     </div>
   );
@@ -251,8 +261,12 @@ function AcceptanceList({ acc, editing, differs, building }: { acc: Acceptance; 
     refocus.current = false;
     addButton.current?.focus();
   }, [adding]);
+  const [lost, setLost] = useState<ReadonlyArray<{ key: number; opened: string; form: ItemForm }>>([]);
+  const lostKeys = useRef(0);
+  const report = useCallback((opened: string, form: ItemForm) => { lostKeys.current += 1; const key = lostKeys.current; setLost(old => [...old, { key, opened, form }]); }, []);
   const items = shownItems(acc);
   const notDoing = shownNotDoing(acc);
+  const tracked = editing && { ...editing, lost: report };
   return (
     <>
       <section className="bt-section ui-acc" aria-label={t('ui.acc.title')}>
@@ -260,7 +274,15 @@ function AcceptanceList({ acc, editing, differs, building }: { acc: Acceptance; 
           <span className="bt-label">{t('ui.acc.title')}</span>
           <span className="bt-meta">{acceptanceMeta(acc, building)}</span>
         </div>
-        {items.length > 0 && <ul className="bt-list">{items.map(i => <Row key={i.id} entry={i} editing={editing} differs={differs.has(i.id)} />)}</ul>}
+        {lost.length > 0 && (
+          <div role="status">
+            {lost.map(({ key, opened, form }) => (
+              <Notice key={key} tone="warn" icon="alert" title={t('ui.acc.edit.lost', opened.length > 60 ? `${opened.slice(0, 59)}…` : opened)} text={form.result.trim() ? t('ui.acc.edit.lostText', form.check === 'command' && form.command.trim() ? `${form.result} · ${form.command}` : form.result) : undefined}
+                action={{ label: t('ui.close'), run: () => setLost(old => old.filter(entry => entry.key !== key)) }} />
+            ))}
+          </div>
+        )}
+        {items.length > 0 && <ul className="bt-list">{items.map(i => <Row key={i.id} entry={i} editing={tracked} differs={differs.has(i.id)} />)}</ul>}
         {editing && (adding
           ? <ItemEditor item={null} base={adding} editing={editing} onDone={() => { refocus.current = true; setAdding(null); }} />
           : <span className="ui-acc__buttons"><Button ref={addButton} variant="ghost" small icon="plus" disabled={editing.busy || editing.locked} onClick={() => setAdding(editing.base)}>{t('ui.acc.edit.add')}</Button></span>)}
