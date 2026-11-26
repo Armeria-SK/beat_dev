@@ -5,12 +5,12 @@ import { parseConfig, defaultConfig } from '../src/config/store.ts';
 import type { ModelView, Project, Task, WaitReason } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
-import { setupRuntimeConfig } from '../web/src/onboarding.ts';
-import { noProviderNow, setNoProvider } from '../web/src/provider-state.ts';
+import { setupModelConfig, setupRuntimeConfig } from '../web/src/onboarding.ts';
+import { noProviderNow, setNoProvider, subscribeNoProvider } from '../web/src/provider-state.ts';
 import { noProviderConfig } from '../web/src/settings/model.ts';
 import { buildAction } from '../web/src/ui/acceptance.ts';
 import { chatModelCount, composerView, runtimeDown } from '../web/src/ui/composer-state.ts';
-import { connectProblem, emptyConnect, PROVIDERS } from '../web/src/ui/onboarding-steps.ts';
+import { connectProblem, emptyConnect, modelFormOf, PROVIDERS } from '../web/src/ui/onboarding-steps.ts';
 import { waitText } from '../web/src/ui/wait.ts';
 import { cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
 
@@ -51,6 +51,32 @@ test('setupRuntimeConfig: 提供元のモデルがあるときは会話の順番
   assert.equal(back.runtimeId, 'cc');
   assert.deepEqual(back.config.runtimes, [{ id: 'cc', kind: 'claude-code', enabled: true, permission: 'acceptEdits' }], 'the permission the owner set stays');
   assert.equal(back.config.models[0].runtime, 'cc');
+});
+
+test('はじめの設定の取り直し: 実行役を試して選び直しても、会話の順番の先頭は「いま選んだもの」だけになる（前に試した実行役・綴りを直す前のモデルが先頭に残らない）', () => {
+  const first = setupRuntimeConfig(bare(), { kind: 'claude-code', model: 'sonet' });
+  assert.deepEqual(first.config.routing.chat, ['claude-code-sonet']);
+  const fixed = setupRuntimeConfig(first.config, { kind: 'claude-code', model: 'sonnet' });
+  assert.deepEqual(fixed.config.routing.chat, ['claude-code-sonnet'], 'a typo fixed: the corrected model is the default');
+  const other = setupRuntimeConfig(first.config, { kind: 'codex', model: 'gpt-x' });
+  assert.equal(other.config.routing.chat[0], other.modelId, 'Claude Code failed, Codex chosen: Codex is the default');
+  assert.deepEqual(other.config.routing.chat, [other.modelId]);
+  assert.doesNotThrow(() => parseConfig(other.config));
+  const again = setupRuntimeConfig(other.config, { kind: 'codex', model: 'gpt-x' });
+  assert.deepEqual(again.config, other.config, 'choosing the same thing again changes nothing');
+});
+
+test('はじめの設定の取り直し: 実行役を試したあとで提供元のモデルに切り替えて通ると、会話の順番も裏の順番も提供元のモデルだけになる（実行役の行は残るが、先頭ではない）', () => {
+  const runtime = setupRuntimeConfig(bare(), { kind: 'claude-code', model: 'sonnet' });
+  const form = modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'k' });
+  const provider = setupModelConfig(runtime.config, form, null);
+  assert.equal(provider.config.routing.chat[0], provider.modelId, 'the provider model is the default of the chat');
+  assert.deepEqual(provider.config.routing.chat, [provider.modelId]);
+  assert.deepEqual(provider.config.routing.background, [provider.modelId]);
+  assert.equal((provider.config.models as Json[]).some(m => m.runtime === 'claude-code'), true, 'the runtime row stays (a model of it can still be picked)');
+  assert.doesNotThrow(() => parseConfig(provider.config));
+  const second = setupModelConfig(provider.config, modelFormOf({ ...emptyConnect('openai'), model: 'gpt-x', context: '32768' }), null);
+  assert.deepEqual(second.config.routing.chat, [provider.modelId, second.modelId], 'with a provider model already there the order is kept and the new one goes last');
 });
 
 test('はじめの設定の入力: 選べる「つなぐもの」に実行役が入り、実行役はモデル名だけで足りる（鍵・URL・長さは要らない）', () => {
@@ -99,10 +125,21 @@ test('「つなぐものが無い」に戻る: ログアウト・入っていな
   assert.equal(down.disabled, true, 'logged out: the composer goes back to "no model configured"');
 });
 
-test('提供元の有無の置き場: 変わったときだけ知らせ、入れ直しても同じ値のときは何も起こさない', () => {
+test('提供元の有無の置き場: 変わったときだけ聞いている所に知らせ、同じ値の入れ直しでは知らせない。聞くのをやめたあとは知らせない', () => {
   setNoProvider(false);
   assert.equal(noProviderNow(), false);
+  const heard: boolean[] = [];
+  const stop = subscribeNoProvider(() => { heard.push(noProviderNow()); });
+  setNoProvider(false);
+  assert.deepEqual(heard, [], 'the same value as now is not a change');
   setNoProvider(true);
+  setNoProvider(true);
+  assert.deepEqual(heard, [true], 'one change, one call');
+  setNoProvider(false);
+  assert.deepEqual(heard, [true, false]);
+  stop();
+  setNoProvider(true);
+  assert.deepEqual(heard, [true, false], 'after stopping listening nothing is called');
   assert.equal(noProviderNow(), true);
 });
 
@@ -205,6 +242,41 @@ test('はじめの設定: 「List models」は実行役を入れてから、そ�
   assert.deepEqual([...c.querySelectorAll('#ui-ob-model-names option')].map(o => o.getAttribute('value')), ['sonnet']);
 });
 
+test('はじめの設定: 実行役のモデル名は、一覧を読み込んであれば一覧と照らし、無ければ「名前は確かめていない」と画面に出す。名前を直したら、もう一度確かめるまで先へ進めない', async () => {
+  const world = serve(bare());
+  const c = await onboard(world);
+  await click(button(c, 'Claude Code or Codex'));
+  await click(button(c, 'List models'));
+  await settle(); await settle();
+  assert.deepEqual([...c.querySelectorAll('#ui-ob-model-names option')].map(o => o.getAttribute('value')), ['sonnet']);
+  world.sent.length = 0;
+  await input(c.querySelector('input[list="ui-ob-model-names"]'), 'sonet');
+  await click(button(c, 'Test connection'));
+  await settle(); await settle();
+  assert.deepEqual(world.sent, [], 'a name that is not in the loaded list saves nothing and checks nothing');
+  assert.equal(text(c.querySelector('.bt-del[role="alert"]')), en['ui.ob.model.problem.runtimeModel']);
+  assert.equal(c.querySelector('input[list="ui-ob-model-names"]')!.getAttribute('aria-invalid'), 'true');
+  assert.equal(next(c).disabled, true);
+  await input(c.querySelector('input[list="ui-ob-model-names"]'), 'sonnet');
+  await click(button(c, 'Test connection'));
+  await settle(); await settle();
+  assert.deepEqual(world.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check']);
+  assert.equal(next(c).disabled, false);
+  assert.equal(c.querySelector('[data-runtime-untested]'), null, 'the name was found in the list: nothing is left untested');
+
+  const plain = serve(bare());
+  const d = await onboard(plain);
+  await click(button(d, 'Claude Code or Codex'));
+  await input(d.querySelector('input[list="ui-ob-model-names"]'), 'sonnet');
+  await click(button(d, 'Test connection'));
+  await settle(); await settle();
+  assert.equal(next(d).disabled, false);
+  assert.equal(text(d.querySelector('[data-runtime-untested]')), en['ui.ob.model.runtimeUntested'], 'without a list, the screen says the name was not tested');
+  await input(d.querySelector('input[list="ui-ob-model-names"]'), 'sonnet-2');
+  assert.equal(next(d).disabled, true, 'a changed name needs a new check');
+  assert.equal(d.querySelector('[data-runtime-untested]'), null);
+});
+
 const project = { id: 'p1', name: 'prod', root: '/x', check_command: 'npm test', scout_mode: 'off', remotes: [] } as unknown as Project;
 
 test('考える役の切り替え: 提供元が無いときは Research only・Research and pre-fix を押せず、理由を出す。Off はいつも選べる', async () => {
@@ -257,10 +329,18 @@ test('Settings の役の行・裏の作業・学習: 提供元のモデルが無
 });
 
 test('辞書: 提供元が無いときの文は、日本語の説明にもある（英語のままにならない）', () => {
-  for (const key of ['ui.np.build', 'ui.np.schedule', 'ui.np.scout', 'ui.np.research', 'ui.np.roles', 'ui.np.background', 'ui.np.grow', 'ui.np.short', 'ui.conv.runtimeText', 'ui.ob.model.runtimeNote'] as const) {
+  for (const key of ['ui.np.build', 'ui.np.schedule', 'ui.np.scout', 'ui.np.research', 'ui.np.roles', 'ui.np.background', 'ui.np.grow', 'ui.np.short', 'ui.conv.runtimeText', 'ui.ob.model.runtimeNote', 'ui.ob.model.problem.runtimeModel', 'ui.ob.model.runtimeUntested'] as const) {
     assert.ok(typeof ja[key] === 'string' && (ja[key] as string).length > 0, key);
     assert.notEqual(ja[key], en[key], key);
   }
+  for (const [name, dict] of [['en', en], ['ja', ja]] as const) {
+    for (const key of ['ui.wait.noProvider', 'ui.np.build', 'ui.np.schedule', 'ui.np.scout', 'ui.np.research'] as const) {
+      assert.doesNotMatch(String((dict as Json)[key]), /Settings › Providers/u, `${name} ${key}: Providers is a group inside Settings › Models`);
+      assert.match(String((dict as Json)[key]), /Settings › Models › Providers/u, `${name} ${key}`);
+    }
+  }
+  assert.doesNotMatch(String(ja['ui.conv.runtimeText']), /秘密|守っているファイル|製品の外/u, 'the Japanese text does not promise more than the English one (what is refused outside the product depends on a setting)');
+  assert.doesNotMatch(String(en['ui.conv.runtimeText']), /secret|outside/iu);
 });
 
 // 動かないものの画面（Build・定期の仕事・考える役の空の欄・調べもの）。提供元が無いときだけ、押せない形か理由の文が出る

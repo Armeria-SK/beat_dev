@@ -174,3 +174,76 @@ test('考える役（Think now）と調べもの: 提供元が無いときは、
   const research = await r.s.json(`/api/projects/${projectId}/research`, 'POST', { conversationId: chat.id });
   assert.deepEqual([research.status, research.body.code], [409, 'research.no_provider'], JSON.stringify(research.body));
 });
+
+const PROVIDER = { id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 };
+const PROVIDER_MODEL = { id: 'm1', provider: 'fake', model: 'x', contextLength: 65536, maxOutputTokens: 1024, vision: false };
+
+test('実行役で始めたあとに設定の画面から提供元を足しても、裏の作業・調べものは提供元のモデルに向かう（実行役は会話の既定のまま。実行役のモデルは裏の道に入らない）', async t => {
+  const r = await bare(t);
+  await r.enable();
+  await r.check();
+  await r.save(config => { config.providers = [{ ...PROVIDER }]; config.models.push({ ...PROVIDER_MODEL }); });
+  const config = r.s.app.config();
+  assert.deepEqual(config.routing.chat, [MODEL.id], 'the owner chose the runtime: it stays the conversation default');
+  assert.deepEqual(config.routing.background, []);
+  assert.deepEqual(candidateModelIds(config, 'chat'), [MODEL.id]);
+  assert.deepEqual(candidateModelIds(config, 'background'), ['m1'], 'background follows the chat list without its runtime model, and falls back to the provider models');
+  assert.deepEqual(candidateModelIds(config, 'research'), ['m1']);
+  const mixed = { ...config, routing: { ...config.routing, chat: [MODEL.id, 'm1'] } };
+  assert.deepEqual(candidateModelIds(mixed, 'background'), ['m1'], 'a runtime model in front of a provider model is left out of the background');
+  assert.deepEqual(candidateModelIds(mixed, 'research'), ['m1']);
+  const own = { ...config, routing: { ...config.routing, background: ['m1'] } };
+  assert.deepEqual(candidateModelIds(own, 'background'), ['m1'], 'an explicit background list is used as it is');
+  assert.deepEqual(candidateModelIds({ ...config, models: [config.models[0]!] }, 'background'), [], 'no provider model: nothing to run the background');
+});
+
+test('実行役で始めて提供元を足したあと: 裏の作業の使える量と調べものの道が、提供元のモデルで決まる（実行役のモデルで空にならない）', async t => {
+  const s = await startApp(t, {
+    models: [{ ...PROVIDER_MODEL }, { ...MODEL } as never],
+    configure: config => { config.runtimes = [{ id: 'claude-code', kind: 'claude-code', enabled: true }] as never; config.routing = { chat: [MODEL.id], background: [], retriesPerModel: 0 }; },
+    runtimeFactories: { 'claude-code': scriptedFactory({}) },
+  });
+  assert.ok((s.app.engine.backgroundAvailable() ?? 0) > 0, 'the background runs on the provider model');
+  assert.equal(s.app.engine.researchRoute(null)?.modelId, 'm1', 'research is routed to the provider model');
+});
+
+test('はじめの設定の印: 会話の既定になる実行役（会話の順番の先頭）が使えるときだけ満たす。先頭が使えず後ろの実行役だけ使えるときは満たさない', async t => {
+  const claude: { current?: ScriptedRuntime } = {};
+  const codex: { current?: ScriptedRuntime } = {};
+  const s = await startApp(t, {
+    models: [],
+    configure: config => {
+      config.providers = [];
+      config.routing = { chat: [], background: [], retriesPerModel: 0 };
+      config.runtimes = [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] as never;
+      config.models = [{ ...MODEL }, { id: 'codex-gpt', runtime: 'codex', model: 'gpt', vision: false }] as never;
+    },
+    runtimeFactories: { 'claude-code': scriptedFactory(claude), codex: scriptedFactory(codex) },
+    env: {},
+  });
+  const check = async (id: string) => { const res = await s.json(`/api/runtimes/${id}/check`, 'POST'); assert.equal(res.status, 200, JSON.stringify(res.body)); };
+  const step = async () => (await s.json('/api/onboarding', 'GET')).body.steps.model as boolean;
+  await check('claude-code');
+  await check('codex');
+  claude.current!.status = { ...OK_STATUS, auth: 'login_required' };
+  await check('claude-code');
+  assert.deepEqual(candidateModelIds(s.app.config(), 'chat'), [MODEL.id], 'the first runtime model is the default');
+  assert.equal(await step(), false, 'the default runtime is signed out; the second one being usable does not make a conversation start');
+  const config = structuredClone((await s.json('/api/settings', 'GET')).body.config) as Json;
+  config.routing.chat = ['codex-gpt'];
+  assert.equal((await s.json('/api/settings', 'PUT', { config })).status, 200);
+  assert.equal(await step(), true, 'with the usable runtime first in the chat order, the step is met');
+});
+
+test('調べものの断りの順番: 提供元が無いときは、元の会話が実行役に結ばれていても「提供元が要る」が先（実行役の会話だから、は提供元がある場合の話）', async t => {
+  const r = await bare(t);
+  await r.enable();
+  const { id: projectId } = await r.product();
+  const chat = r.s.app.conversations.create({ projectId });
+  assert.equal(r.s.app.conversations.bindRuntime(chat.id, 'claude-code'), true);
+  const first = await r.s.json(`/api/projects/${projectId}/research`, 'POST', { conversationId: chat.id });
+  assert.deepEqual([first.status, first.body.code], [409, 'research.no_provider'], JSON.stringify(first.body));
+  await r.save(config => { config.providers = [{ ...PROVIDER }]; config.models.push({ ...PROVIDER_MODEL }); });
+  const second = await r.s.json(`/api/projects/${projectId}/research`, 'POST', { conversationId: chat.id });
+  assert.deepEqual([second.status, second.body.code], [409, 'research.runtime_source'], 'with a provider model the runtime source is what is refused');
+});

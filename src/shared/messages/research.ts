@@ -54,7 +54,7 @@ const en = {
   'merged': 'Added to #{id}. Products seen with it: {count}',
   'evidence_dropped': 'Evidence not kept: {dropped} of {given} ({not_row} with a url that is not a similar row of this research, {not_on_page} too short or not found word for word on that page; quote the whole sentence).',
 
-  'no_provider': 'Research needs a model from a provider, and none is set. Add a provider in Settings › Providers first',
+  'no_provider': 'Research needs a model from a provider, and none is set. Add a provider in Settings › Models › Providers first',
 } as const;
 
 export type ResearchMessageKey = keyof typeof en;

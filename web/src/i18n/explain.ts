@@ -709,6 +709,8 @@ export const EXPLAIN_KEYS = [
   'ui.conv.runtimeTitle',
   'ui.conv.runtimeText',
   'ui.ob.model.runtimeNote',
+  'ui.ob.model.problem.runtimeModel',
+  'ui.ob.model.runtimeUntested',
 ] as const satisfies readonly DictKey[];
 
 export type ExplainKey = typeof EXPLAIN_KEYS[number];

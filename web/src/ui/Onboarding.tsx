@@ -26,7 +26,7 @@ const RUNTIME_KINDS = ['claude-code', 'codex'] as const satisfies readonly Runti
 const RUNTIME_PILL = { off: 'ui.set.runtime.pillOff', unchecked: 'ui.set.runtime.pillUnchecked', ready: 'ui.set.runtime.pillReady', missing: 'ui.set.runtime.pillMissing', signedOut: 'ui.set.runtime.pillSignedOut', blocked: 'ui.set.runtime.pillBlocked' } as const satisfies Record<RuntimePill, string>;
 const RUNTIME_PILL_TONE = { off: undefined, unchecked: 'warn', ready: 'ok', missing: 'danger', signedOut: 'danger', blocked: 'warn' } as const;
 const SIGN_IN = { 'claude-code': 'ui.set.runtime.signInClaudeDesc', codex: 'ui.set.runtime.signInCodexDesc' } as const;
-const PROBLEM_TEXT = { model: 'ui.ob.model.problem.model', baseUrl: 'ui.ob.model.problem.baseUrl', context: 'ui.ob.model.problem.context', key: 'ui.ob.model.problem.key' } as const;
+const PROBLEM_TEXT = { model: 'ui.ob.model.problem.model', baseUrl: 'ui.ob.model.problem.baseUrl', context: 'ui.ob.model.problem.context', key: 'ui.ob.model.problem.key', runtimeModel: 'ui.ob.model.problem.runtimeModel' } as const;
 const STYLE_TEXT = {
   calm: ['ui.ob.style.calm', 'ui.ob.style.calm.example'], friendly: ['ui.ob.style.friendly', 'ui.ob.style.friendly.example'],
   direct: ['ui.ob.style.direct', 'ui.ob.style.direct.example'], none: ['ui.ob.style.none', 'ui.ob.style.none.example'],
@@ -138,6 +138,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     const found = connectProblem(form, keySet);
     setProblem(found); setRuntimeView(null);
     if (found) return;
+    if (names.length > 0 && !names.includes(form.model.trim())) { setProblem('runtimeModel'); return; }
     setBusy(true); setError(null);
     try {
       const latest = (await api.settings()).config;
@@ -294,8 +295,8 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
                   </div></div></div>
               )}
               <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.name')}</span>
-                <input className="bt-field bt-field--mono" value={form.model} placeholder={t('ui.ob.model.namePh')} spellCheck={false} autoComplete="off" aria-invalid={problem === 'model' || undefined} list="ui-ob-model-names"
-                  onChange={e => { setForm({ ...form, model: e.target.value }); setResult(null); }} /></label>
+                <input className="bt-field bt-field--mono" value={form.model} placeholder={t('ui.ob.model.namePh')} spellCheck={false} autoComplete="off" aria-invalid={problem === 'model' || problem === 'runtimeModel' || undefined} list="ui-ob-model-names"
+                  onChange={e => { setForm({ ...form, model: e.target.value }); setResult(null); setRuntimeView(null); }} /></label>
               <datalist id="ui-ob-model-names">{names.map(n => <option key={n} value={n} />)}</datalist>
               {form.provider === 'custom' && (
                 <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.url')}</span>
@@ -322,6 +323,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
                 <>
                   <p className="bt-meta" data-runtime-state>{stateLine(t, runtimeView)}</p>
                   {['missing', 'signedOut'].includes(pillOf(runtimeView)) && <p className="bt-meta" data-runtime-signin>{t(SIGN_IN[runtimeView.kind])}</p>}
+                  {runtimePassed && names.length === 0 && <p className="bt-meta" data-runtime-untested>{t('ui.ob.model.runtimeUntested')}</p>}
                 </>
               )}
               {result && !REACHABLE.has(result.status) && result.message && <p className="bt-meta">{result.message}</p>}

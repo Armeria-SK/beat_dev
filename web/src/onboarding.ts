@@ -62,7 +62,7 @@ function placeProvider(config: Config, providers: Entry[], models: readonly Entr
 }
 
 // 入力を設定に反映する。同じモデルをもう一度確かめるとき（modelId）は、その項目を直す。
-// When both lists (chat, background) are empty, they get every provider model plus the added one (a runtime model may only be first in chat, so it is left out). Otherwise the added model goes last.
+// When both lists (chat, background) are empty, or there was no provider model yet, they get every provider model plus the added one (a runtime model may only be first in chat, so it is left out; one left by an abandoned runtime attempt goes too). Otherwise the added model goes last.
 export function setupModelConfig(config: Config, form: ModelForm, modelId: string | null): { config: Config; modelId: string } {
   const providers = [...(config.providers as Entry[])];
   const models = [...(config.models as Entry[])];
@@ -77,18 +77,19 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     vision: false,
   };
   const at = existing ? models.findIndex(m => m.id === existing.id) : -1;
+  const hadProvider = models.some(m => !isRuntimeEntry({ runtime: m.runtime }));
   if (at >= 0) models[at] = { ...existing, ...model }; else models.push(model);
 
   const routing = config.routing as { chat: string[]; background: string[] };
   const ids = models.filter(m => !isRuntimeEntry({ runtime: m.runtime })).map(m => m.id);
-  const next = routing.chat.length === 0 && routing.background.length === 0
+  const next = !hadProvider || (routing.chat.length === 0 && routing.background.length === 0)
     ? { ...routing, chat: ids, background: ids }
     : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
   return { config: { ...config, providers, models, routing: next }, modelId: model.id };
 }
 
 // 実行役（Claude Code・Codex）を、はじめの設定の「つなぐもの」にする（AR-10）。その種類の実行役を入れ、モデルを 1 つ足す（同じモデルがあれば足さない）。
-// 提供元のモデルが 1 つも無く、会話の順番が空のときだけ、そのモデルを会話の順番の先頭に置く（実行役のモデルは先頭にだけ置ける。提供元のモデルがあれば、空のままで今までどおり）
+// 提供元のモデルが 1 つも無いときは、そのモデルを会話の順番の先頭に（それだけを）置く（実行役のモデルは先頭にだけ置ける。前に試した実行役が残っていても、いま選んだものが先頭になる。提供元のモデルがあれば、会話の順番に触らず今までどおり）
 export type RuntimeKindId = 'claude-code' | 'codex';
 export const runtimeIdOf = (config: Config, kind: RuntimeKindId): string => ((config.runtimes as Array<{ id: string; kind: string }> | undefined) ?? []).find(item => item.kind === kind)?.id ?? kind;
 
@@ -100,7 +101,7 @@ export function setupRuntimeConfig(config: Config, form: { kind: RuntimeKindId; 
   const added = same ? { config: turnedOn, id: same.id } : addRuntimeModel(turnedOn, runtimeId, { id: entry, label: entry, efforts: [] });
   const routing = added.config.routing as { chat: string[]; background: string[] };
   const ownModels = (added.config.models as Entry[]).some(m => !isRuntimeEntry({ runtime: m.runtime }));
-  const next = !ownModels && routing.chat.length === 0 ? { ...routing, chat: [added.id] } : routing;
+  const next = !ownModels && !(routing.chat.length === 1 && routing.chat[0] === added.id) ? { ...routing, chat: [added.id] } : routing;
   return { config: next === routing ? added.config : { ...added.config, routing: next }, runtimeId, modelId: added.id };
 }
 

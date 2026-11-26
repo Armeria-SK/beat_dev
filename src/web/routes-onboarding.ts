@@ -1,6 +1,7 @@
 import type { App } from '../app.ts';
 import { enabledRuntimeModels, providerModels } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
+import { candidateModelIds } from '../engine/chat.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import {
   isInitialPersona, normalizePersonaInput, startsWithHash, PERSONA_MAX_CHARS, PersonaError, personaTexts, readPersona, STYLE_NOTE_MAX_CHARS, STYLES, USER_NAME_MAX_CHARS, NAME_MAX_CHARS,
@@ -23,11 +24,12 @@ function personaProblem(error: unknown): never {
 }
 
 export function registerOnboardingRoutes(router: Router, app: App): void {
-  // AR-10: 提供元のモデルが無くても、入れた実行役のモデルが設定にあり、その実行役の最後の確かめが「使える」なら、会話を始められる（確かめが無い・ログアウト・切った間は満たさない）
-  const usableRuntime = (config: ReturnType<App['config']>): boolean => enabledRuntimeModels(config).some(model => {
-    const check = app.runtimeChecks.get(model.runtime);
+  // AR-10: 提供元のモデルが無くても、会話の既定（会話の順番の先頭）が入れた実行役のモデルで、その実行役の最後の確かめが「使える」なら、会話を始められる（確かめが無い・ログアウト・切った間は満たさない）
+  const usableRuntime = (config: ReturnType<App['config']>): boolean => {
+    const first = enabledRuntimeModels(config).find(model => model.id === candidateModelIds(config, 'chat')[0]);
+    const check = first && app.runtimeChecks.get(first.runtime);
     return check !== undefined && usableCheck(check.status);
-  });
+  };
   const state = () => {
     const config = app.config();
     const flags = app.kv.getJson<StepFlags>(STEPS_KEY) ?? {};

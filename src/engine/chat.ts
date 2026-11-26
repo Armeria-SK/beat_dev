@@ -297,14 +297,21 @@ export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: 
 
 // 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
-export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
-  const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
-  if (preferred.length) return [...preferred];
+// research は routing.research が空のときの道で、会話の順番を借りる（裏の作業と同じく、実行役のモデルは外す）
+export function candidateModelIds(config: AppConfig, route: 'chat' | 'background' | 'research'): string[] {
   const own = providerModels(config).map(m => m.id);
-  if (own.length > 0 || route !== 'chat') return own;
-  // AR-10: 提供元のモデルが 1 つも無いとき、会話の既定は、切っていない実行役の先頭のモデル（実行役は裏方の道には使わない）
-  const runtime = enabledRuntimeModels(config)[0];
-  return runtime ? [runtime.id] : [];
+  if (route === 'chat') {
+    if (config.routing.chat.length) return [...config.routing.chat];
+    if (own.length > 0) return own;
+    // AR-10: 提供元のモデルが 1 つも無いとき、会話の既定は、切っていない実行役の先頭のモデル
+    const runtime = enabledRuntimeModels(config)[0];
+    return runtime ? [runtime.id] : [];
+  }
+  if (route === 'background' && config.routing.background.length) return [...config.routing.background];
+  // AR-10: 実行役のモデルは会話の先頭にしか置けず、裏の作業・調べものには使えない。会話の順番を借りるときは外し、残らなければ提供元のモデル全部
+  const runtimeIds = new Set(config.models.filter(isRuntimeModel).map(m => m.id));
+  const borrowed = config.routing.chat.filter(id => !runtimeIds.has(id));
+  return borrowed.length ? borrowed : own;
 }
 
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
@@ -1011,7 +1018,7 @@ export class ChatEngine {
     const config = this.#d.config();
     const language = languageOf(config);
     const research = route === 'research' ? config.routing.research ?? [] : [];
-    const ids = research.length ? [...research] : pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : candidateModelIds(config, route === 'research' ? 'chat' : route);
+    const ids = research.length ? [...research] : pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];

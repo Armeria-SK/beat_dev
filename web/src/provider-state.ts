@@ -12,9 +12,9 @@ export function setNoProvider(value: boolean): void {
 
 export const noProviderNow = (): boolean => none;
 
-const subscribe = (listener: () => void): (() => void) => {
+export const subscribeNoProvider = (listener: () => void): (() => void) => {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 };
 
-export const useNoProvider = (): boolean => useSyncExternalStore(subscribe, () => none, () => false);
+export const useNoProvider = (): boolean => useSyncExternalStore(subscribeNoProvider, () => none, () => false);

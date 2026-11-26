@@ -35,5 +35,5 @@ export const projectJa = {
   'folder_secret': "秘密を持つフォルダは製品のフォルダにできません",
   'folder_denied': "このフォルダは設定の禁止の一覧に入っています",
   'folder_link': "このリンクはたどれません。リンクの先のフォルダのフルパスを貼り付けてください",
-  'scout_no_provider': "scout には提供元のモデルが要りますが、1 つも設定されていません。先に Settings › Providers で提供元を足してください",
+  'scout_no_provider': "scout には提供元のモデルが要りますが、1 つも設定されていません。先に Settings › Models › Providers で提供元を足してください",
 } satisfies JaTable<typeof projectText>;
