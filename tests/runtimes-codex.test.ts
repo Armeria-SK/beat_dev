@@ -381,6 +381,12 @@ test('network and stdin requests are carried for the owner, flagged; permission 
   }
 });
 
+test('an approval request between two messages does not hide the change from one message to the next: it is still marked', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'text-approval-text');
+  const { events } = await reply(r, {}, () => 'decline');
+  assert.deepEqual(events.map(event => event.type === 'text' ? `text ${JSON.stringify(event.delta)}${event.boundary === true ? ' boundary' : ''}` : event.type), ['text "First"', 'approval', 'text "\\n\\n" boundary', 'text "Second"', 'done']);
+});
+
 test('requests beat cannot answer are declined without hanging Codex, and leave a row in the conversation', { timeout: 60_000 }, async t => {
   const r = rig(t, 'unanswerable');
   const { events } = await reply(r);

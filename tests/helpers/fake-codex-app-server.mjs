@@ -114,6 +114,18 @@ async function play() {
       finish();
       break;
     }
+    case 'text-approval-text': {
+      started(item('agentMessage', 'a1', { text: '' }));
+      notify('item/agentMessage/delta', { threadId: THREAD, turnId: TURN, itemId: 'a1', delta: 'First' });
+      completed(item('agentMessage', 'a1', { text: 'First' }));
+      out({ id: 121, method: 'item/permissions/requestApproval', params: { threadId: THREAD, turnId: TURN, itemId: 'p2', environmentId: null, startedAtMs: 1, cwd: 'D:\\work', reason: 'needs network', permissions: { network: { enabled: true }, fileSystem: null } } });
+      await waitAnswer(121);
+      started(item('agentMessage', 'a2', { text: '' }));
+      notify('item/agentMessage/delta', { threadId: THREAD, turnId: TURN, itemId: 'a2', delta: 'Second' });
+      completed(item('agentMessage', 'a2', { text: 'Second' }));
+      finish();
+      break;
+    }
     case 'network-and-stdin': {
       commandRequest(130, 'c1', { networkApprovalContext: { host: 'example.com', protocol: 'https' } });
       commandRequest(131, 'c2', { kind: 'writeStdin' });

@@ -192,7 +192,9 @@ class CodexSession {
 
   #push(event: RuntimeEvent): void {
     if (this.finished) return;
-    this.#last = event.type === 'text' ? 'text' : 'tool';
+    // 発言の切れ目の目印（boundary）は、直前が文で、間に道具の行が無いときだけ付ける。承認・注意・知らない出来事は、橋が文を区切らないので、ここでも数えない
+    if (event.type === 'text') this.#last = 'text';
+    else if (event.type === 'tool_start' || event.type === 'tool_end') this.#last = 'tool';
     this.queue.push(event);
   }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { planBlocksOf } from '../src/engine/runtime-plan-blocks.ts';
+import { planBlocksOf, unreadPlanBlocks } from '../src/engine/runtime-plan-blocks.ts';
 import { PLAN_BUTTON, runtimeRequirementsText } from '../src/engine/workspace.ts';
 import type { AppPaths } from '../src/paths.ts';
 import { tempDir } from './helpers.ts';
@@ -43,6 +43,32 @@ test('前置きの文の中の印の言及は塊の開き・閉じに読まな�
   assert.deepEqual(planBlocksOf(prose), [{ tool: 'acceptance_write', input: ITEMS }]);
   assert.deepEqual(planBlocksOf('<beat-plan> is the tag I use.\n\n<beat-plan language="en">\n# Plan\n</beat-plan>'), [{ tool: 'plan_write', input: { content: '# Plan', language: 'en' } }], 'the nearest opener before the closing tag wins');
   assert.deepEqual(planBlocksOf('Text <beat-plan language="en">\n# Plan\n</beat-plan>'), [], 'an opening tag in the middle of a line is not a block');
+});
+
+test('塊の終わりは、開きの印のあとの最初の閉じの印。そのあとの閉じの印（言及・書き重ね）は計画に入れない', () => {
+  const plan = [{ tool: 'plan_write', input: { content: '# Plan', language: 'en' } }];
+  assert.deepEqual(planBlocksOf('<beat-plan language="en">\n# Plan\n</beat-plan>\nI closed it with </beat-plan>'), plan, 'a closing tag at the end of a later sentence');
+  assert.deepEqual(planBlocksOf('<beat-plan language="en">\n# Plan\n</beat-plan>\n</beat-plan>'), plan, 'a closing line written twice');
+  assert.deepEqual(planBlocksOf('<beat-plan language="en">\n# Plan\n</beat-plan></beat-plan>'), plan, 'two closing tags on one line');
+  assert.deepEqual(planBlocksOf('<beat-plan language="en">\n# Plan\n</beat-plan>\n\n<beat-plan language="en">\n# Second\n</beat-plan>\n</beat-plan>'), [{ tool: 'plan_write', input: { content: '# Second', language: 'en' } }], 'the last block still wins, and it also ends at its own first closing tag');
+  assert.deepEqual(planBlocksOf('<beat-acceptance>\n{"items":[]}\n</beat-acceptance>\nthe end tag </beat-acceptance>'), [{ tool: 'acceptance_write', input: { items: [] } }]);
+});
+
+test('読まなかった印は黙って捨てない: 行の頭に印があるのに、最後の発言から取れなかった種類を「読めなかった」にする。取れた種類・印が無い文は何も足さない', () => {
+  const taken = (text: string) => planBlocksOf(text);
+  const unread = (whole: string, last = whole) => unreadPlanBlocks(whole, taken(last)).map(block => block.tool);
+  assert.deepEqual(unread('<beat-plan language="en">\n# Plan\n</beat-plan>'), [], 'a block that was read');
+  assert.deepEqual(unread('Nothing to save yet. The `<beat-plan>` block is for later.'), [], 'a tag only mentioned inside a sentence');
+  assert.deepEqual(unread('```\n<beat-plan language="en">\n# Example\n</beat-plan>\n```'), ['plan_write'], 'a block inside a code fence');
+  assert.deepEqual(unread('<beat-plan language="en">\n# Plan\n```\n</beat-plan>'), ['plan_write'], 'a plan whose own fence is not closed swallows the closing tag');
+  assert.deepEqual(unread('Earlier:\n<beat-plan language="en">\n# Draft\n</beat-plan>\n\nLater: nothing', 'Later: nothing'), ['plan_write'], 'a block in an earlier message');
+  assert.deepEqual(unread('<beat-acceptance>\n{"items":[]}'), ['acceptance_write'], 'a block that is not closed');
+  assert.deepEqual(unread('Text <beat-plan language="en">\n# Plan\n</beat-plan>'), ['plan_write'], 'a closing tag at the start of a line, but the opening tag in the middle of one');
+  assert.deepEqual(unread('<beat-plan language="en" onload="x">\n# Plan\n</beat-plan>'), ['plan_write'], 'an opening tag with something else in it');
+  assert.deepEqual(unread('```\n<beat-plan>\nx\n</beat-plan>\n```\n<beat-acceptance-change>{"changes":[]}</beat-acceptance-change>', '<beat-acceptance-change>{"changes":[]}</beat-acceptance-change>'), ['plan_write'], 'only the kind that was not read is named; the other kind was');
+  assert.deepEqual(unread('<beat-acceptance-change>\n{"changes":[]}'), ['acceptance_change'], 'acceptance and acceptance change are different kinds');
+  assert.deepEqual(unreadPlanBlocks('<beat-plan>', [{ tool: 'plan_write', error: 'the plan is empty' }]), [], 'a block that was read but is wrong is already reported by its own row');
+  assert.match((unreadPlanBlocks('<beat-plan>', [])[0] as { error: string }).error, /code fence.*earlier message.*not closed.*plain text in the last message/u);
 });
 
 test('コードの囲い（```・~~~）の中の塊は読まない。計画の中のコードの例は、そのまま計画に入る', () => {

@@ -30,7 +30,7 @@ import { plainBlock, plainLine } from '../shared/plain-text.ts';
 import { redactExact, redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { TOOL_INPUT_PREVIEW_CHARS, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import type { RunBus } from './bus.ts';
-import { planBlocksOf } from './runtime-plan-blocks.ts';
+import { planBlocksOf, unreadPlanBlocks } from './runtime-plan-blocks.ts';
 import type { RuntimeApprovals } from './runtime-approvals.ts';
 import type { ChatMessage, EngineErrorKind, EngineResult, ToolGate } from './types.ts';
 import { runtimeRequirementsText, type RuntimePlanChannel } from './workspace.ts';
@@ -556,7 +556,8 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   // 計画の道具を MCP で渡せなかった実行役（Codex）: 返事の中の決まった塊を取り出し、実行役が道具を呼んだのと同じ形（行と結果）で、beat の道具に書かせる
   if (outcome.ok && planSurface && planChannel === 'text') {
     const surface = planSurface;
-    for (const block of planBlocksOf(text.slice(messageFrom))) {
+    const taken = planBlocksOf(text.slice(messageFrom));
+    for (const block of [...taken, ...unreadPlanBlocks(text, taken)]) {
       try {
         const entry: OpenTool = { callId: callIdFor(`beat_${block.tool}`), name: toolName(block.tool), input: shownInput('input' in block ? block.input : {}), nested: false };
         toolCount += 1;

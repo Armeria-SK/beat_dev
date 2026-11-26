@@ -26,6 +26,7 @@ const answerOf = (r: Rig, id: string) => r.runtime.approvals.find(a => a.request
 const untilAnswer = (r: Rig, id: string) => waitFor(() => answerOf(r, id) !== undefined, `answer to ${id}`);
 const count = (r: Rig, sql: string) => (r.s.app.db.prepare(sql).get() as { c: number }).c;
 const toolRows = (r: Rig, conversation: string) => r.rows(conversation).filter((m): m is Extract<ChatMessage, { role: 'tool' }> => m.role === 'tool');
+const rowsOf = (r: Rig, conversation: string) => toolRows(r, conversation).map(m => [m.name, m.isError === true] as [string, boolean]);
 
 async function start(r: Rig, projectId: string, extra: Record<string, unknown> = {}) {
   const conversation = uuid(++n);
@@ -230,7 +231,8 @@ test('Codex の塊は、その返事の最後の発言からだけ取り出す�
   const split = await start(r, projectId);
   await settled(r.s.app, split.runId);
   assert.equal(r.s.app.plans.view(projectId, split.conversation).content, null, 'a block in an earlier message of the same turn is not saved');
-  assert.equal(toolRows(r, split.conversation).length, 0);
+  assert.deepEqual(rowsOf(r, split.conversation), [['codex:plan_write', true]], 'and it is not dropped silently: a row says that nothing was saved');
+  assert.match(toolRows(r, split.conversation)[0]!.content, /could not read the plan_write block in the reply, so nothing was saved: the block was inside a code fence, in an earlier message of the reply, or not closed; ask for it again as plain text in the last message/u);
 
   r.runtime.script = feed => {
     textOf(feed, `Earlier draft:\n${BLOCK('# Draft')}`);
@@ -242,16 +244,19 @@ test('Codex の塊は、その返事の最後の発言からだけ取り出す�
   const tooled = await start(r, projectId);
   await settled(r.s.app, tooled.runId);
   assert.equal(r.s.app.plans.view(projectId, tooled.conversation).content, null, 'a block before a tool call is not saved either');
+  assert.deepEqual(rowsOf(r, tooled.conversation), [['codex:commandExecution', false], ['codex:plan_write', true]]);
 
   r.runtime.script = feed => { textOf(feed, `Draft:\n${BLOCK('# Draft')}`); feed.push({ type: 'tool_start', id: 'open', name: 'commandExecution', input: { command: 'ls' } }); textOf(feed, 'Waiting for it.'); feed.done(); };
   const started = await start(r, projectId);
   await settled(r.s.app, started.runId);
   assert.equal(r.s.app.plans.view(projectId, started.conversation).content, null, 'a tool that has started but not ended already closes the message before it');
+  assert.ok(rowsOf(r, started.conversation).some(([name, isError]) => name === 'codex:plan_write' && isError === true));
 
   r.runtime.script = feed => { textOf(feed, `Draft:\n${BLOCK('# Draft')}`); feed.push({ type: 'tool_end', id: 'late', output: 'a.txt', isError: false }); textOf(feed, 'Nothing else.'); feed.done(); };
   const ended = await start(r, projectId);
   await settled(r.s.app, ended.runId);
   assert.equal(r.s.app.plans.view(projectId, ended.conversation).content, null, 'a tool result that arrives without a start closes the message before it too');
+  assert.ok(rowsOf(r, ended.conversation).some(([name, isError]) => name === 'codex:plan_write' && isError === true));
 
   r.runtime.script = feed => { textOf(feed, `First try:\n${BLOCK('# Draft')}`); textOf(feed, '\n\n', true); textOf(feed, `The final plan:\n${BLOCK(PLAN.trimEnd())}`); feed.done(); };
   const last = await start(r, projectId);
@@ -270,13 +275,37 @@ test('Codex の返事がテンプレートの例をコードの囲いで引用�
   await settled(r.s.app, quoted.runId);
   assert.equal(r.s.app.plans.view(projectId, quoted.conversation).content, null);
   assert.equal(r.s.app.acceptance.read(projectId, quoted.conversation), undefined, 'the acceptance list is not replaced by a quoted example');
-  assert.equal(toolRows(r, quoted.conversation).length, 0);
+  assert.deepEqual(rowsOf(r, quoted.conversation), [['codex:plan_write', true], ['codex:acceptance_write', true]], 'a block that was not read is said so, one row for each kind, and nothing is written');
+  assert.match(toolRows(r, quoted.conversation)[0]!.content, /inside a code fence/u);
+  assert.equal(count(r, 'SELECT COUNT(*) AS c FROM tool_calls'), 0);
 
   r.runtime.script = feed => { textOf(feed, `${quote}\n\nMy plan:\n${BLOCK(PLAN.trimEnd())}`); feed.done(); };
   const both = await start(r, projectId);
   await settled(r.s.app, both.runId);
   assert.equal(r.s.app.plans.view(projectId, both.conversation).content, PLAN.trimEnd());
   assert.equal(r.s.app.acceptance.read(projectId, both.conversation), undefined);
+  assert.deepEqual(rowsOf(r, both.conversation), [['codex:plan_write', false], ['codex:acceptance_write', true]], 'the plan is saved; the quoted acceptance example is the only block not read');
+});
+
+test('Codex の塊が読めないときは、黙って捨てずに「読めなかった」の行を残す。普通の返事（前置きの言及つき）には、その行は付かない', async t => {
+  const r = await rig(t, { kind: 'codex' });
+  const { id: projectId } = await r.product();
+  await r.check();
+  const cases: Array<{ name: string; reply: string; rows: Array<[string, boolean]>; plan: string | null }> = [
+    { name: 'an unclosed fence inside the plan swallows the closing tag', reply: `<beat-plan language="en">\n# Plan\n\`\`\`bash\nnpm test\n</beat-plan>`, rows: [['codex:plan_write', true]], plan: null },
+    { name: 'an opening tag in the middle of a line', reply: `Here it is: <beat-plan language="en">\n# Plan\n</beat-plan>`, rows: [['codex:plan_write', true]], plan: null },
+    { name: 'a block that was never closed', reply: '<beat-acceptance>\n{"items":[]}', rows: [['codex:acceptance_write', true]], plan: null },
+    { name: 'a normal reply that mentions the tag first', reply: `I put it in the \`<beat-plan>\` block below.\n\n${BLOCK(PLAN.trimEnd())}\n\nThe \`</beat-plan>\` tag closes it.`, rows: [['codex:plan_write', false]], plan: PLAN.trimEnd() },
+    { name: 'a reply with no block at all', reply: 'I have no plan yet; what should the notes app be called?', rows: [], plan: null },
+  ];
+  for (const one of cases) {
+    r.runtime.script = feed => { textOf(feed, one.reply); feed.done(); };
+    const run = await start(r, projectId);
+    await settled(r.s.app, run.runId);
+    assert.deepEqual(rowsOf(r, run.conversation), one.rows, one.name);
+    assert.equal(r.s.app.plans.view(projectId, run.conversation).content, one.plan, one.name);
+    assert.equal(r.s.app.runs.get(run.runId)!.ok, 1, 'the reply itself is not a failure');
+  }
 });
 
 test('計画の道具は、会話の「外を読んだ」の印とは別に、実行役の実行そのものを「外を読んだ」として書く（会話の印が無くても計画に印が付く）', async t => {
