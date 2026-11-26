@@ -67,18 +67,43 @@ test('実機（Windows PowerShell 5.1）: 外のプログラムへ渡す引数�
   assert.equal(existsSync(victim), false, '" が落ちて、文字列のはずの Remove-Item victim.txt が命令として動いた');
 });
 
-test('実機（Windows PowerShell 5.1）: 子の powershell の引数に " があるコマンドは、判定役が「許す」と答えても動かさずに断る（victim.txt が残る）', { skip: SKIP }, async t => {
+// 同じ穴の別の通り道（本物の 5.1 で確かめた）。cmd.exe を挟む形・括弧で包んだ引数・Start-Process の @( ) 配列・空白を含んで末尾が \ の引数
+const CMD_C = `cmd /c powershell -NoProfile -Command '"Remove-Item victim.txt"'`;
+const CMD_START = `cmd /c start /wait powershell -NoProfile -Command '"Remove-Item victim.txt"'`;
+const PAREN = `powershell -NoProfile -Command ('"Remove-Item victim.txt"')`;
+const SAPS_ARRAY = `Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-c','"Remove-Item victim.txt"') -Wait -NoNewWindow`;
+const BACKSLASH = `powershell -NoProfile -Command 'Write-Output a\\' 'x'' \\' '; Remove-Item victim.txt ; ''' '''#'''`;
+
+test('実機（Windows PowerShell 5.1）: cmd.exe を挟む形・括弧で包んだ引数・@( ) 配列も、" が落ちて子の powershell で命令として動く（前の版の穴）', { skip: SKIP }, t => {
+  const s = setup(t, 'ask');
+  for (const command of [CMD_C, CMD_START, PAREN, SAPS_ARRAY]) {
+    const victim = s.victim();
+    const ran = spawnSync('powershell.exe', ['-NoProfile', '-Command', command], { cwd: s.cwd, encoding: 'utf8' });
+    assert.equal(ran.status, 0, `${command}: ${ran.stderr}`);
+    assert.equal(existsSync(victim), false, `${command}: 動いて victim.txt が消えるはず`);
+  }
+  const victim = s.victim();
+  writeFileSync(s.file('run.ps1'), BACKSLASH);
+  const ran = spawnSync('powershell.exe', ['-NoProfile', '-File', s.file('run.ps1')], { cwd: s.cwd, encoding: 'utf8' });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.equal(existsSync(victim), false, '空白を含んで末尾が \\ の引数のあとの ; が命令として動いた');
+});
+
+test('実機（Windows PowerShell 5.1）: 子の powershell に隠れた命令が渡る形は、判定役が「許す」と答えても動かさずに断る（victim.txt が残る）', { skip: SKIP }, async t => {
   const s = setup(t, 'allow');
-  const shapes = [
-    HIDDEN, `powershell.exe -NoProfile -c '"Remove-Item victim.txt"'`, `& powershell -NoProfile -Command '"Remove-Item victim.txt"'`,
-    `powershell -NoProfile -Command """Remove-Item victim.txt"""`, `powershell -NoProfile -Command 'Write-Output "x"; Remove-Item victim.txt'`,
+  const QUOTE = /write the argument without a double quote inside it \(use single quotes\)/u;
+  const shapes: ReadonlyArray<readonly [string, RegExp]> = [
+    [HIDDEN, QUOTE], [`powershell.exe -NoProfile -c '"Remove-Item victim.txt"'`, QUOTE], [`& powershell -NoProfile -Command '"Remove-Item victim.txt"'`, QUOTE],
+    [`powershell -NoProfile -Command """Remove-Item victim.txt"""`, QUOTE], [`powershell -NoProfile -Command 'Write-Output "x"; Remove-Item victim.txt'`, QUOTE],
+    [CMD_C, QUOTE], [CMD_START, QUOTE], [SAPS_ARRAY, /worked out when the command runs/u], [PAREN, /worked out when the command runs/u],
+    [BACKSLASH, /ends with a backslash/u],
   ];
-  for (const command of shapes) {
+  for (const [command, hint] of shapes) {
     const victim = s.victim();
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, /rules for passing them to a program on Windows/u, command);
-    assert.match(outcome.output.content, /write the argument without a double quote inside it \(use single quotes\)/u, `${command}: 断る文に、" を使わずに書き直す案内がある`);
+    assert.match(outcome.output.content, hint, `${command}: 断る文に、書き直す案内がある`);
     assert.ok(existsSync(victim), `${command}: victim.txt が消えた（動いてしまった）`);
   }
   assert.deepEqual(s.judged, [], '断った形は判定役に回さない');
@@ -124,7 +149,39 @@ const NOW_DENIED: readonly string[] = [
   `Start-Process powershell -ArgumentList '-NoProfile','-Command','"Remove-Item victim.txt"' -Wait`,
   `Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','"Remove-Item victim.txt"'`,
   `saps pwsh -ArgumentList '-NoProfile','-Command','"Remove-Item victim.txt"'`,
+  CMD_C,
+  `cmd.exe /c pwsh -NoProfile -Command '"Remove-Item victim.txt"'`,
+  `cmd /c start powershell -NoProfile -Command '"Remove-Item victim.txt"'`,
+  CMD_START,
+  `conhost cmd /c powershell -NoProfile -Command '"Remove-Item victim.txt"'`,
+  `Start-Process cmd -ArgumentList '/c','powershell','-NoProfile','-Command','"Remove-Item victim.txt"' -Wait`,
+  `Start-Process cmd -ArgumentList '/c powershell -NoProfile -Command "Remove-Item victim.txt"' -Wait`,
+  PAREN,
+  `powershell -NoProfile -Command $('"Remove-Item victim.txt"')`,
+  `pwsh -NoProfile -Command (Get-Content s.ps1 -Raw)`,
+  SAPS_ARRAY,
+  `Start-Process powershell -ArgumentList @('-NoProfile','-Command','Get-Date') -Wait`,
+  BACKSLASH,
+  `powershell -NoProfile -Command 'a b\\'`,
+  `Start-Process powershell -ArgumentList '-NoProfile','-Command','a b\\' -Wait`,
 ];
+
+// 前の版でも断っていた形（path で書いた名前を実在の .exe と確かめられないとき、& | < > ^ % ! の引数は list.winargs）。子の powershell の見張りを足したあとも、緩めずに断る
+const STILL_DENIED: readonly string[] = [
+  `conhost C:\\nope\\powershell.exe -NoProfile -Command 'Get-Date & whoami'`,
+  `conhost .\\powershell.exe -NoProfile -Command 'Get-Date | whoami'`,
+  `Set-Content x.txt y; conhost C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -Command 'a & b'`,
+  `conhost C:\\nope\\pwsh.exe -NoProfile -Command 'Get-Date ^ whoami'`,
+];
+
+test('前の版でも list.winargs で断っていた conhost 経由の path 付きの子 powershell は、今も断る（緩めない）', t => {
+  const wrong: string[] = [];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of STILL_DENIED) {
+    const v = verdictOf(command, shell, t);
+    if (v.decision !== 'deny' || !v.refused.includes('list.winargs')) wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
+  }
+  assert.deepEqual(wrong, []);
+});
 
 test('子の powershell / pwsh・conhost・Start-Process の引数に " があれば list.winargs で断る（持ち主の許可でも外せない一覧）', t => {
   const wrong: string[] = [];
@@ -155,6 +212,11 @@ const UNCHANGED: ReadonlyArray<readonly [string, 'allow' | 'ask', string]> = [
   [`Start-Process powershell -ArgumentList '-NoProfile','-Command','Get-Date' -Wait`, 'ask', 'list.command,list.command,code.powershell,code.spawn'],
   [`cmd /c powershell -NoProfile -Command 'Get-Date'`, 'ask', 'list.command,list.command,code.powershell'],
   [`foo.exe '"x"'`, 'ask', 'list.command'],
+  [`$c = '"Remove-Item victim.txt"'; powershell -NoProfile -Command $c`, 'ask', 'list.command,code.powershell'],
+  [`powershell -NoProfile -Command { Get-Date }`, 'ask', 'list.command,code.powershell'],
+  [`powershell -NoProfile -Command { "Write-Output hi" }`, 'ask', 'list.command,code.powershell'],
+  [`powershell -NoProfile -File 'C:\\a b\\x.ps1'`, 'ask', 'list.command,code.powershell'],
+  [`Start-Process powershell -ArgumentList '-NoProfile','-Command','Get-Date' -Wait`, 'ask', 'list.command,list.command,code.powershell,code.spawn'],
 ];
 
 test('毎日の読むだけの形と、" の無い子の powershell は、判定が変わらない（allow は allow、ask は同じ理由の ask）', t => {

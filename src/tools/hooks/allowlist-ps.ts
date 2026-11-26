@@ -308,15 +308,29 @@ const isPsHost = (t: string): boolean => /^(?:powershell|pwsh)(?:\.exe)?$/iu.tes
 // Windows PowerShell 5.1 は、外のプログラムへ引数を渡すとき中の " を落とす（'"Remove-Item x"' は、ガードには文字列を出すだけに見えるが、子の powershell には命令として渡る。
 // 本物の 5.1 で確かめた: tests/bl-ps-guard-holes-winargs.test.ts）。子の powershell・pwsh の引数に " があれば、ガードの読みと子の受け取りがずれるので断る（ほかのプログラムの list.winargs と同じ）。
 // Start-Process の -ArgumentList は " を落とさないが、ガードは空白で分けて読むので、同じく断る
+// ほかに、実行のときに値が決まる括弧・部分式・@( ) の引数（'"Remove-Item x"' を括弧で包んでも同じ）と、空白を含んで末尾が \ の引数（winArgs と同じ。あとの引数が 1 つにつながり、; のあとが命令になる）も断る。
+// 変数だけの引数（$c）は、今までどおり判定役へ回す
 const PS_QUOTE_HINT = ' -- Windows PowerShell 5.1 drops a double quote inside an argument it passes to a program; write the argument without a double quote inside it (use single quotes)';
+const PS_COMPUTED_HINT = ' -- the argument is worked out when the command runs, so what the child powershell receives cannot be checked; write it as a plain single-quoted string';
+const PS_BACKSLASH_HINT = ' -- an argument that holds a space and ends with a backslash is not passed to the child powershell as written; remove the trailing backslash';
 function psHostArgs(args: readonly Word[], deny: (w: Word, hint?: string) => void): void {
-  const w = args.find(x => !x.dynamic && x.text.includes('"'));
-  if (w) deny(w, PS_QUOTE_HINT);
+  for (const x of args) {
+    if (x.dynamic) { if (x.kind === 'paren') { deny(x, PS_COMPUTED_HINT); return; } continue; }
+    if (x.text.includes('"')) { deny(x, PS_QUOTE_HINT); return; }
+    if (/\s/u.test(x.text) && x.text.endsWith('\\')) { deny(x, PS_BACKSLASH_HINT); return; }
+  }
+}
+// cmd.exe・conhost・Start-Process の引数の中に子の powershell・pwsh の名前があれば、その語から後ろを子の引数として調べる（cmd /c powershell …、cmd /c start powershell …）。
+// Start-Process の -ArgumentList の '/c','powershell',… は 1 つの語（カンマでつながる）で、'/c powershell -c "x"' は空白を含む 1 つの語なので、名前は空白とカンマで分けて探す
+function psHostAfter(args: readonly Word[], deny: (w: Word, hint?: string) => void): void {
+  const at = args.findIndex(x => !x.dynamic && x.text.split(/[\s,]+/u).some(isPsHost));
+  if (at >= 0) psHostArgs(args.slice(at), deny);
 }
 
-function cmdExeArgs(args: readonly Word[], st: Statement, acc: Acc, deny: (w: Word) => void): void {
+function cmdExeArgs(args: readonly Word[], st: Statement, acc: Acc, deny: (w: Word, hint?: string) => void): void {
   const w = args.find(x => x.dynamic);
   if (w) { deny(w); return; }
+  psHostAfter(args, deny);
   const syntax = args.find(x => CMD_SYNTAX.test(x.text));
   if (syntax) acc.add('once', 'list.cmd_syntax', { detail: syntax.text }, false);
   else if (st.pipedIn) acc.add('once', 'list.cmd_syntax', { detail: '|' }, false);
@@ -333,7 +347,7 @@ export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) 
     if (splat) { deny(splat); return; }
     rest.forEach((w, i) => {
       if (!w.dynamic && /^(?:-|\/[A-Za-z?]$)/u.test(w.text)) return;
-      if (!w.dynamic && isPsHost(w.text)) { psHostArgs(rest.slice(i + 1), deny); return; }
+      if (!w.dynamic && isPsHost(w.text)) psHostArgs(rest.slice(i + 1), deny);
       if (!(w.dynamic || isCmdExe(w.text) || cmdTarget(w.text) || cmdTarget(w.text.replace(/[ .]+$/u, '') || w.text))) return;
       const args = rest.slice(i + 1);
       if (!w.dynamic && isCmdExe(w.text)) { cmdExeArgs(args, st, acc, deny); return; }
@@ -375,6 +389,7 @@ export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) 
   const args = [...list, ...(unknown ? positional : files.length ? positional : positional.slice(1))];
   if (splat) { deny(splat); return; }
   if (fileCandidates.some(f => !f.dynamic && isPsHost(f.text))) psHostArgs(args, deny);
+  if (fileCandidates.some(f => !f.dynamic && (isCmdExe(f.text) || isConhost(f.text)))) psHostAfter(args, deny);
   const host = fileCandidates.some(f => f.dynamic || isCmdExe(f.text) || isConhost(f.text) || cmdTarget(f.text) || cmdTarget(f.text.replace(/[ .]+$/u, '') || f.text));
   if (!host) return;
   const w = args.find(x => x.dynamic || /[&|<>^%!]/u.test(x.text));

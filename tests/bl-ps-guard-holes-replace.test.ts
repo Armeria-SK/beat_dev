@@ -133,6 +133,68 @@ test('L176: 値が文字列か分からない Replace（変数・括弧の結果
   assert.deepEqual(wrong, []);
 });
 
+// 添字 [ ] のあとは、値の種類が分からなくなる（.Name が辞書で、['k'] がファイルのこともある）。lexer の chain が [ のあとで文字列の印を外す
+const AFTER_INDEX: readonly string[] = [
+  `Get-ChildItem | ForEach-Object { $_.Name['k'].Replace('victim.txt', 'victim.bak') }`,
+  `$d = @{ Name = @{ k = (Get-Item a.txt) } }; $d.Name['k'].Replace('victim.txt', 'victim.bak')`,
+  `('a-b')[0].Replace('victim.txt', 'victim.bak')`,
+];
+
+test('L176: 添字 [ ] のあとの .Replace( は、文字列の Name や括弧のあとでも、値の種類が分からないので聞く（shape.method）', t => {
+  const wrong: string[] = [];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of AFTER_INDEX) {
+    const v = verdictOf(command, shell, t);
+    if (v.decision !== 'ask' || !v.keys.includes('shape.method')) wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('実機（Windows PowerShell 5.1）L176: 辞書の中のファイルを $d.Name[\'k\'].Replace(先, 控え) で呼ぶと、元のファイルが消える。判定役が聞くと答えれば動かさない', { skip: SKIP }, async t => {
+  const s = setup(t, 'ask');
+  s.seed();
+  const form = `$d = @{ Name = @{ k = (Get-Item src.txt) } }; $d.Name['k'].Replace('dest.txt', 'dest.bak')`;
+  const parked = await s.call(form);
+  assert.equal(parked.decidedBy, 'pending', parked.output.content);
+  assert.ok(existsSync(s.file('src.txt')), '元のファイルが消えた（動いてしまった）');
+  assert.equal(readFileSync(s.file('dest.txt'), 'utf8'), 'D', '先が上書きされた（動いてしまった）');
+  const ran = spawnSync('powershell.exe', ['-NoProfile', '-Command', form], { cwd: s.cwd, encoding: 'utf8' });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.equal(existsSync(s.file('src.txt')), false, '前提: 本物の 5.1 ではこの形でファイルの Replace が動く');
+  assert.equal(readFileSync(s.file('dest.txt'), 'utf8'), 'S');
+});
+
+// 文字列と分からない値は、今も聞く（$PWD.Path・括弧の結果・変数）。環境変数 $env:名前 は値がいつも文字列なので、通すのが目標
+const STILL_ASK: readonly string[] = [
+  `$PWD.Path.Replace('\\','/')`,
+  `(Get-Location).Path.Replace('\\','/')`,
+  `$s.Replace('a','b')`,
+  `(Get-Content a.txt -Raw).Replace('a','b')`,
+];
+
+test('L176: $PWD.Path・括弧の結果・変数の Replace は、文字列と分からないので聞く（shape.method）', t => {
+  const wrong: string[] = [];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of STILL_ASK) {
+    const v = verdictOf(command, shell, t);
+    if (v.decision !== 'ask' || !v.keys.includes('shape.method')) wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+const ENV_TEXT: readonly string[] = [
+  `$env:USERPROFILE.Replace('\\','/')`,
+  `$env:Path.Replace(';', ',')`,
+  `$env:Path.Trim().Replace(';', ',')`,
+];
+
+test('L176 の目標（未着手）: $env:名前 のあとの Replace は、環境変数の値がいつも文字列なので通る', { todo: 'shell-lex.ts の operand の var の枝を chain(depth, st, true, t.v.startsWith(\'env:\') ? \'text\' : \'object\') にする一行の直し' }, t => {
+  const wrong: string[] = [];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of ENV_TEXT) {
+    const v = verdictOf(command, shell, t);
+    if (v.decision !== 'allow') wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
 test('実機（Windows PowerShell 5.1）L176: ファイルの .Replace(先, 控え) は判定役が聞くと答えれば動かさず、文字列の Replace は動く', { skip: SKIP }, async t => {
   const s = setup(t, 'ask');
   s.seed();
