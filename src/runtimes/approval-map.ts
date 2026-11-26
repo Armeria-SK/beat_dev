@@ -18,7 +18,7 @@ import { isToolConfigPath } from '../tools/hooks/tool-config.ts';
 import type { CommandApprovalInput, FileChangeApprovalInput, PermissionApprovalInput } from './codex/approvals.ts';
 
 // 持ち主に聞かずに断る理由（閉じた一覧。画面の文・試験はこの一覧から作る）
-export const REFUSALS = ['secret', 'outside_write', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target'] as const;
+export const REFUSALS = ['secret', 'outside_write', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target', 'shell_deny'] as const;
 export type RefusalCode = (typeof REFUSALS)[number];
 
 export interface MapContext {
@@ -124,7 +124,7 @@ class Checker {
   }
 }
 
-const isRefusal = (value: Refusal | Allowed): value is Refusal => 'refuse' in value;
+const isRefusal = (value: Refusal | Allowed | { checks: string[]; onceOnly: boolean }): value is Refusal => 'refuse' in value;
 const refuse = (code: RefusalCode, detail: string): Mapped => ({ decision: 'refuse', code, detail });
 
 const dedupe = (lines: readonly string[]): string[] => [...new Set(lines)];
@@ -197,34 +197,44 @@ function claudeFileRead(checker: Checker, tool: string, input: Record<string, un
   return ask(card, checks, true, unresolved === undefined);
 }
 
+// beat のシェルの検査（shell.ts と同じ checkShellCommand）を当てる。拒否になるもの（秘密・beat のデータ・製品の外・守るファイル・beat 自身への通信・そのほか beat のシェルが拒否するもの）は断り、聞く段のものは札に添える理由を返す。検査が落ちたら undefined
+function shellGuard(checker: Checker, command: string, shell: 'bash' | 'powershell', cwd: string): Refusal | { checks: string[]; onceOnly: boolean } | undefined {
+  const { ctx } = checker;
+  let verdict: ShellVerdict;
+  try {
+    verdict = checkShellCommand(command, cwd, {
+      policy: checker.policy, outsideRoots: ctx.config.tools.outsideRoots, deny: ctx.config.tools.shell.deny, language: checker.language,
+      selfHosts: selfHostsOf(ctx.config), shell, windows: process.platform === 'win32', dataDir: ctx.paths.data,
+    });
+  } catch {
+    return undefined;
+  }
+  const denied = verdict.paths.find(p => p.placement.kind === 'deny');
+  if (denied && denied.placement.kind === 'deny') return { refuse: { code: 'secret', detail: denied.placement.reason } };
+  const denyAt = verdict.reasonKeys.indexOf('scope.deny');
+  if (denyAt >= 0) return { refuse: { code: 'secret', detail: verdict.reasons[denyAt] ?? command } };
+  const checks: string[] = [...verdict.reasons];
+  for (const abs of dedupe(verdict.writes)) {
+    const result = checker.write(abs);
+    if (isRefusal(result)) return result;
+    checks.push(...result.reasons);
+  }
+  const self = selfTarget(command, ctx.config.server);
+  if (self !== undefined) return { refuse: { code: 'self_target', detail: self } };
+  if (verdict.decision === 'deny') return { refuse: { code: 'shell_deny', detail: verdict.reasons.join('; ') || command } };
+  return { checks, onceOnly: verdict.onceOnly };
+}
+
 function claudeShell(checker: Checker, tool: 'Bash' | 'PowerShell', input: Record<string, unknown>): Mapped {
   const command = text(input.command);
   if (command === undefined) return unchecked(tool, input, UNREADABLE);
   const { ctx } = checker;
   const rest = Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'command'));
   const card: Card = { title: tool === 'Bash' ? 'Run a command (Bash)' : 'Run a command (PowerShell)', body: visible(command, BODY_MAX), cwd: ctx.root, extra: Object.keys(rest).length ? json(rest, EXTRA_MAX) : null };
-  let verdict: ShellVerdict;
-  try {
-    verdict = checkShellCommand(command, ctx.root, {
-      policy: checker.policy, outsideRoots: 'ask', deny: ctx.config.tools.shell.deny, language: checker.language,
-      selfHosts: selfHostsOf(ctx.config), shell: tool === 'Bash' ? 'bash' : 'powershell', windows: process.platform === 'win32', dataDir: ctx.paths.data,
-    });
-  } catch {
-    return ask(card, [UNREADABLE], false, false);
-  }
-  const denied = verdict.paths.find(p => p.placement.kind === 'deny');
-  if (denied && denied.placement.kind === 'deny') return refuse('secret', denied.placement.reason);
-  const denyAt = verdict.reasonKeys.indexOf('scope.deny');
-  if (denyAt >= 0) return refuse('secret', verdict.reasons[denyAt] ?? command);
-  const checks: string[] = [...verdict.reasons];
-  for (const abs of dedupe(verdict.writes)) {
-    const result = checker.write(abs);
-    if (isRefusal(result)) return refuse(result.refuse.code, result.refuse.detail);
-    checks.push(...result.reasons);
-  }
-  const self = selfTarget(command, ctx.config.server);
-  if (self !== undefined) return refuse('self_target', self);
-  return ask(card, checks, true, verdict.decision !== 'deny' && !verdict.onceOnly);
+  const guarded = shellGuard(checker, command, tool === 'Bash' ? 'bash' : 'powershell', ctx.root);
+  if (guarded === undefined) return ask(card, [UNREADABLE], false, false);
+  if (isRefusal(guarded)) return refuse(guarded.refuse.code, guarded.refuse.detail);
+  return ask(card, guarded.checks, true, !guarded.onceOnly);
 }
 
 function claudeCode(checker: Checker, tool: string, raw: unknown): Mapped {
@@ -258,11 +268,11 @@ function codexCommand(checker: Checker, input: CommandApprovalInput): Mapped {
   if (input.cwd === null) return ask(card, [UNREADABLE], false, false);
   const cwd = resolve(ctx.root, input.cwd);
   if (!isInside(realish(ctx.root), realish(cwd))) return refuse('outside_cwd', cwd);
-  if (input.command !== null) {
-    const self = selfTarget(input.command, ctx.config.server);
-    if (self !== undefined) return refuse('self_target', self);
-  }
-  return ask(card, [], true, true);
+  if (input.command === null) return ask(card, [], true, true);
+  const guarded = shellGuard(checker, input.command, process.platform === 'win32' ? 'powershell' : 'bash', cwd);
+  if (guarded === undefined) return ask(card, [UNREADABLE], false, false);
+  if (isRefusal(guarded)) return refuse(guarded.refuse.code, guarded.refuse.detail);
+  return ask(card, guarded.checks, true, !guarded.onceOnly);
 }
 
 function codexFiles(checker: Checker, input: FileChangeApprovalInput): Mapped {

@@ -190,6 +190,7 @@ test('守りに当たる求め（秘密・beat のデータ・製品の外・リ
     { name: 'a command that reads .env', tool: 'Bash', input: { command: 'cat .env' }, code: 'secret' },
     { name: 'a command that writes outside', tool: 'Bash', input: { command: 'echo x > ../outside.txt' }, code: 'outside_write' },
     { name: 'beat itself', tool: 'Bash', input: { command: `curl http://127.0.0.1:${port}/api/pending` }, code: 'self_target' },
+    { name: 'running with administrator rights', tool: 'Bash', input: { command: 'sudo ls' }, code: 'shell_deny' },
   ];
   for (const c of cases) {
     const id = `req-${c.code}-${++n}`;
@@ -566,4 +567,43 @@ test('答えが来ないままの時間切れは、返事の終わりの知ら�
   const run = r.s.app.runs.get(runId)!;
   assert.deepEqual([run.ok, run.error_kind], [0, 'provider_error']);
   assert.match(run.error_message!, /waited more than 1 minutes for your answer/u);
+});
+
+test('beat のシェルの検査が拒否するコマンド（取り返しのつかない削除・管理者の権限・fork bomb）は、持ち主に聞かずに断る。聞く段のコマンドは、理由つきで持ち主に回る', async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await r.product();
+  await r.check();
+  const cases: Array<{ name: string; command: string; code: RefusalCode }> = [
+    { name: 'a delete of the product folder (the protected-files list answers before the shell check)', command: 'rm -rf .', code: 'protect_files' },
+    { name: 'running with administrator rights', command: 'sudo ls', code: 'shell_deny' },
+    { name: 'a fork bomb', command: ':(){ :|:& };:', code: 'shell_deny' },
+  ];
+  for (const c of cases) {
+    const id = `req-deny-${++n}`;
+    r.runtime.script = asking(r, [{ id, tool: 'Bash', input: { command: c.command } }]);
+    const before = count(r, 'pending_actions');
+    const { conversation, runId } = await start(r, projectId);
+    await settled(r.s.app, runId);
+    assert.equal(answerOf(r, id), 'decline', c.name);
+    assert.equal(count(r, 'pending_actions'), before, `${c.name}: the owner was not asked`);
+    assert.equal(r.s.app.runs.get(runId)!.ok, 1, c.name);
+    const tools = toolMessages(r, conversation);
+    assert.deepEqual(tools.map(m => m.gate), [{ by: 'guard', key: c.code }], c.name);
+    assert.match(tools[0]!.content, /^Not allowed by beat: .*You were not asked$/u, c.name);
+    if (c.code === 'shell_deny') assert.match(tools[0]!.content, /shell check .* refuses this command/u, c.name);
+  }
+  assert.equal(r.s.app.runtimeApprovals.size, 0);
+  assert.equal(existsSync(root), true, 'the product folder is still there');
+
+  const id = `req-ask-${++n}`;
+  r.runtime.script = asking(r, [{ id, tool: 'Bash', input: { command: 'npm test' }, forReply: true }]);
+  const { runId } = await start(r, projectId);
+  await waitFor(() => runtimeRows(r).some(row => requestOf(row) === id), 'the ask-level command reached Pending');
+  const view = r.s.app.pending.view(rowOf(r, id).id)!;
+  assert.equal(view.status, 'waiting');
+  assert.ok(view.checks.length > 0, 'the reasons beat found are on the card');
+  assert.deepEqual(view.runtime, { id: 'claude-code', reply: false });
+  assert.equal(answerOf(r, id), undefined);
+  assert.equal((await reject(r, view.id)).status, 200);
+  await settled(r.s.app, runId);
 });

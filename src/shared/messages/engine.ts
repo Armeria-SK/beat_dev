@@ -92,6 +92,7 @@ const en = {
   'runtime.guard.protect_files': 'Not allowed by beat: it changes a file on your protected list ({detail}). You were not asked',
   'runtime.guard.outside_cwd': 'Not allowed by beat: it runs outside the product folder ({detail}). You were not asked',
   'runtime.guard.self_target': 'Not allowed by beat: it talks to beat itself ({detail}). You were not asked',
+  'runtime.guard.shell_deny': 'Not allowed by beat: the same shell check that guards the beat shell tool refuses this command ({detail}). You were not asked',
   'runtime.tool_lost': '(The result did not arrive)',
   'runtime.stopped_partway': '(stopped partway)',
   'usage.runtime': 'The length gauge is not shown for a conversation that runs through an external runtime, because the runtime manages its own context',

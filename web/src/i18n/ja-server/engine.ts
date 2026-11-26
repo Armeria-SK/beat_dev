@@ -92,6 +92,7 @@ export const engineJa = {
   'runtime.guard.protect_files': "beat は許しませんでした: あなたが守ると決めたファイルを変えます（{detail}）。あなたには聞いていません",
   'runtime.guard.outside_cwd': "beat は許しませんでした: 製品のフォルダの外で動かします（{detail}）。あなたには聞いていません",
   'runtime.guard.self_target': "beat は許しませんでした: beat 自身に話しかけます（{detail}）。あなたには聞いていません",
+  'runtime.guard.shell_deny': "beat は許しませんでした: beat 自身のシェルでも断るコマンドです（{detail}）。あなたには聞いていません",
   'runtime.tool_lost': "（結果が届きませんでした）",
   'runtime.stopped_partway': "（途中で止めました）",
   'usage.runtime': "外の実行役を通す会話では、実行役が自分で長さを管理するので、長さの目盛りは出しません",

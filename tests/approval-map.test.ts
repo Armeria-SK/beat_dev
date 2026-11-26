@@ -45,7 +45,7 @@ function link(target: string, at: string): void {
 }
 
 test('断る理由は閉じた一覧で、画面の文・試験はそこから作られる', () => {
-  assert.deepEqual([...REFUSALS], ['secret', 'outside_write', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target']);
+  assert.deepEqual([...REFUSALS], ['secret', 'outside_write', 'readonly_root', 'link_write', 'protect_files', 'outside_cwd', 'self_target', 'shell_deny']);
 });
 
 test('書く先の守りは files.ts の checkFilePath と食い違わない: 断る所は断り、聞く所（git・設定ファイル）は持ち主に聞き、「聞かない」を出さない', t => {
@@ -150,6 +150,13 @@ test('シェルの求め: 秘密を読む・製品の外へ書く・beat 自身�
   assert.equal(refusedWith(run('cat .env')), 'secret');
   assert.equal(refusedWith(run('echo hi > ../outside.txt')), 'outside_write');
   assert.equal(refusedWith(run(`curl http://127.0.0.1:${w.config.server.port}/api/pending`)), 'self_target');
+  for (const [what, command] of [['a delete that cannot be undone', 'rm -rf .'], ['running with administrator rights', 'sudo ls'], ['a fork bomb', ':(){ :|:& };:']] as const) assert.equal(refusedWith(run(command)), 'shell_deny', `${what}: what the beat shell tool refuses is not asked about`);
+  assert.equal(refusedWith(run('Remove-Item -Recurse -Force .', 'PowerShell')), 'shell_deny');
+  assert.equal(asked(run('cat ../outside.txt')).checked, true, 'reading outside the product folder is asked about when the setting says ask');
+  const strict = world(t, { mutate: config => { config.tools.outsideRoots = 'deny'; } });
+  assert.equal(refusedWith(mapApproval(strict.ctx, { tool: 'Bash', input: { command: 'cat ../outside.txt' } })), 'shell_deny', 'and refused when the setting says deny, as the beat shell tool does');
+  const asks = asked(run('npm test'));
+  assert.deepEqual([asks.checked, asks.reply, asks.checks.length > 0], [true, false, true], 'what the beat shell tool would ask about is parked with its reasons, and not offered as "do not ask again"');
   assert.equal(refusedWith(run(`Invoke-WebRequest http://localhost:${w.config.server.port}/api/pending`, 'PowerShell')), 'self_target');
   const ok = asked(run('ls -la'));
   assert.deepEqual([ok.card.title, ok.card.body, ok.card.cwd, ok.checked], ['Run a command (Bash)', 'ls -la', w.root, true]);
@@ -189,8 +196,9 @@ test('札に出す文は、向きを変える文字・制御文字を消し、�
   const card = asked(mapApproval(w.ctx, { tool: 'Write', input: { file_path: join(w.root, 'a.txt'), content: `${'a'.repeat(9000)}‮\u0007tail` } })).card;
   assert.ok((card.body ?? '').length < 8100, String((card.body ?? '').length));
   assert.match(card.body ?? '', /\[\d+ more characters not shown\]$/u);
-  const dirty = asked(mapApproval(w.ctx, { tool: 'Bash', input: { command: 'echo ‮hi\u0007\u001b[31m there' } })).card;
-  assert.ok(!/[‮\u0007\u001b]/u.test(dirty.body ?? ''), JSON.stringify(dirty.body));
+  const dirty = asked(mapApproval(w.ctx, { tool: 'Edit', input: { file_path: join(w.root, 'a.txt'), old_string: 'echo \u202ehi\u0007\u001b[31m there', new_string: 'x' } })).card;
+  assert.ok(!/[\u202e\u0007\u001b]/u.test(dirty.body ?? ''), JSON.stringify(dirty.body));
+  assert.equal(refusedWith(mapApproval(w.ctx, { tool: 'Bash', input: { command: 'echo \u202ehi' } })), 'shell_deny', 'a command written with an invisible character cannot be judged, and the beat shell tool refuses it as well');
   const title = asked(mapApproval(w.ctx, { tool: 'Write', input: { file_path: join(w.root, `x${'y'.repeat(800)}.txt`) } })).card.title;
   assert.ok(title.length <= 350 && !title.includes('\n') && /more characters not shown/u.test(title), String(title.length));
 });
@@ -210,7 +218,7 @@ test('Edit・NotebookEdit・Write の札: 何をどこへ書くかが見える',
 
 // ---- Codex ----
 
-const command = (over: Record<string, unknown> = {}) => ({ kind: 'command', itemId: 'c1', command: 'ls -la', cwd: null as string | null, reason: null, network: null, actions: [], ...over });
+const command = (over: Record<string, unknown> = {}) => ({ kind: 'command', itemId: 'c1', command: 'git status', cwd: null as string | null, reason: null, network: null, actions: [], ...over });
 
 test('Codex の求め: 作業フォルダが製品の外・beat 自身へ話しかける・書く先が守りに当たるものは断り、それ以外は持ち主に聞く', t => {
   const w = world(t, { kind: 'codex' });
@@ -218,8 +226,10 @@ test('Codex の求め: 作業フォルダが製品の外・beat 自身へ話し�
   assert.equal(refusedWith(run(command({ cwd: w.base }))), 'outside_cwd');
   assert.equal(refusedWith(run(command({ cwd: join(w.root, '..', 'prod2') }))), 'outside_cwd');
   assert.equal(refusedWith(run(command({ cwd: w.root, command: `curl http://127.0.0.1:${w.config.server.port}/api/pending` }))), 'self_target');
+  assert.equal(refusedWith(run(command({ cwd: w.root, command: 'sudo ls' }))), 'shell_deny', 'the shell check of the beat shell tool applies to a Codex command too');
+  assert.equal(refusedWith(run(command({ cwd: w.root, command: 'cat .env' }))), 'secret');
   const inside = asked(run(command({ cwd: join(w.root, 'sub'), actions: [{ type: 'listFiles', command: 'ls' }], reason: 'to look' })));
-  assert.deepEqual([inside.card.title, inside.card.body, inside.checked, inside.reply], ['Run a command (Codex)', 'ls -la', true, true]);
+  assert.deepEqual([inside.card.title, inside.card.body, inside.checked, inside.reply], ['Run a command (Codex)', 'git status', true, true]);
   assert.match(inside.card.extra ?? '', /to look/u);
   assert.match(inside.card.extra ?? '', /listFiles ls/u);
   assert.equal(asked(run(command({ cwd: null }))).checked, false, 'no working folder: only the owner decides');
