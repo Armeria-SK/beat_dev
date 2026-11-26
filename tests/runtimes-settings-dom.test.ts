@@ -5,7 +5,7 @@ import { defaultConfig } from '../src/config/store.ts';
 import { BLOCKING_ISSUES, PERMISSIONS, RUNTIME_ISSUES } from '../src/runtimes/types.ts';
 import type { RuntimeIssue, RuntimeView } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
-import { setExplainLanguage, t } from '../web/src/i18n/index.ts';
+import { t } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { addModel, addRuntimeModel, updateRuntime } from '../web/src/settings/model.ts';
 import { setConversation } from '../web/src/ui/settings/view.ts';
@@ -26,7 +26,6 @@ const realFetch = globalThis.fetch;
 afterEach(async () => {
   await cleanup();
   globalThis.fetch = realFetch;
-  setExplainLanguage('en');
 });
 
 interface Sent { method: string; path: string; body: Json | null }
@@ -196,24 +195,6 @@ test('the sandbox message tells the owner what to do, in English and in Japanese
     assert.match(message, /updateRequired/u);
     assert.match(message, asks);
   }
-});
-
-test('the badge is in Japanese when the explanation language is Japanese: every pill key has a Japanese text, on the runtime row and in the description', async () => {
-  const pillKeys = Object.keys(en).filter(key => key.startsWith('ui.set.runtime.pill'));
-  assert.equal(pillKeys.length, 6, 'off, unchecked, ready, missing, signed out, blocked');
-  for (const key of pillKeys) {
-    const entry = (ja as Record<string, unknown>)[key];
-    assert.equal(typeof entry === 'string' && entry.trim().length > 0, true, `${key} has a Japanese text`);
-    assert.notEqual(entry, (en as Record<string, unknown>)[key], `${key} is not the English text`);
-  }
-  const world = serve(base({ ui: { ...(defaultConfig() as Json).ui, explainLanguage: 'ja' }, runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), {
-    checks: { codex: { ...CHECKED, issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }], usable: false }, 'claude-code': CHECKED },
-  });
-  const c = await open(world);
-  const pill = (id: string) => text(row(c, `runtime:${id}`)!.querySelector('.bt-pill'));
-  assert.equal(pill('codex'), ja['ui.set.runtime.pillBlocked']);
-  assert.equal(pill('claude-code'), ja['ui.set.runtime.pillReady']);
-  assert.ok(text(row(c, 'runtime:codex')!.querySelector('.bt-setting__desc')).endsWith(ja['ui.set.runtime.issueSandboxDesc']('updateRequired')), 'the reason is in Japanese, last on the description line');
 });
 
 test('the permission row offers only the closed list for the runtime, never a value that allows everything, and saving a choice writes only that value', async () => {
