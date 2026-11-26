@@ -37,7 +37,7 @@ function Meta({ doc, writing }: { doc: PlanDoc | null; writing: boolean }) {
 
 interface Editing {
   hint: string | null; busy: boolean; locked: boolean; base: EditBase; onEdit: (op: OwnerOp, base: EditBase) => Promise<'saved' | 'stale' | 'failed'>;
-  typing?: ((id: string, form: ItemForm | null) => void) | undefined;
+  lost?: ((opened: string, form: ItemForm) => void) | undefined;
 }
 
 const CHECK_KINDS: ReadonlyArray<ItemForm['check']> = ['command', 'look', 'read'];
@@ -47,11 +47,15 @@ function ItemEditor({ item, base, editing, onDone }: { item: AcceptanceItem | nu
   const id = useId();
   const [form, setForm] = useState<ItemForm>(() => itemForm(item));
   const problem = formProblem(form);
-  const start = itemForm(item);
+  const [start] = useState(() => itemForm(item));
+  const typed = useRef<ItemForm | null>(null);
   const differs = (f: ItemForm) => f.result !== start.result || f.check !== start.check || f.command !== start.command;
   const touched = differs(form);
-  const type = (next: ItemForm) => { setForm(next); if (item) editing.typing?.(item.id, differs(next) ? next : null); };
-  const finish = () => { if (item) editing.typing?.(item.id, null); onDone(); };
+  const type = (next: ItemForm) => { setForm(next); typed.current = differs(next) ? next : null; };
+  const finish = () => { typed.current = null; onDone(); };
+  const replaced = item !== null && differs(itemForm(item));
+  useEffect(() => { if (replaced) onDone(); }, [replaced]);
+  useEffect(() => () => { if (item && typed.current) editing.lost?.(start.result, typed.current); }, []);
   const shown = touched ? problem : null;
   const field = shown ? problemField(shown) : null;
   const op = problem ? null : editOp(form, item);
@@ -257,13 +261,12 @@ function AcceptanceList({ acc, editing, differs, building }: { acc: Acceptance; 
     refocus.current = false;
     addButton.current?.focus();
   }, [adding]);
-  const [typed, setTyped] = useState<ReadonlyMap<string, ItemForm>>(new Map());
-  const track = useCallback((id: string, form: ItemForm | null) => setTyped(old => { const next = new Map(old); if (form) next.set(id, form); else next.delete(id); return next; }), []);
+  const [lost, setLost] = useState<ReadonlyArray<{ key: number; opened: string; form: ItemForm }>>([]);
+  const lostKeys = useRef(0);
+  const report = useCallback((opened: string, form: ItemForm) => { lostKeys.current += 1; const key = lostKeys.current; setLost(old => [...old, { key, opened, form }]); }, []);
   const items = shownItems(acc);
   const notDoing = shownNotDoing(acc);
-  const listed = new Set(items.map(i => i.id));
-  const lost = [...typed].filter(([id]) => !listed.has(id));
-  const tracked = editing && { ...editing, typing: track };
+  const tracked = editing && { ...editing, lost: report };
   return (
     <>
       <section className="bt-section ui-acc" aria-label={t('ui.acc.title')}>
@@ -273,9 +276,9 @@ function AcceptanceList({ acc, editing, differs, building }: { acc: Acceptance; 
         </div>
         {lost.length > 0 && (
           <div role="status">
-            {lost.map(([id, form]) => (
-              <Notice key={id} tone="warn" icon="alert" title={t('ui.acc.edit.lost', id)} text={form.result.trim() ? t('ui.acc.edit.lostText', form.check === 'command' && form.command.trim() ? `${form.result} · ${form.command}` : form.result) : undefined}
-                action={{ label: t('ui.close'), run: () => track(id, null) }} />
+            {lost.map(({ key, opened, form }) => (
+              <Notice key={key} tone="warn" icon="alert" title={t('ui.acc.edit.lost', opened.length > 60 ? `${opened.slice(0, 59)}…` : opened)} text={form.result.trim() ? t('ui.acc.edit.lostText', form.check === 'command' && form.command.trim() ? `${form.result} · ${form.command}` : form.result) : undefined}
+                action={{ label: t('ui.close'), run: () => setLost(old => old.filter(entry => entry.key !== key)) }} />
             ))}
           </div>
         )}

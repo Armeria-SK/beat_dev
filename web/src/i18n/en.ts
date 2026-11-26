@@ -1878,7 +1878,7 @@ export const en = {
   'ui.acc.edit.noCommand': 'Write the command',
   'ui.acc.edit.longCommand': 'The command is longer than 1000 characters',
   'ui.acc.edit.stale': 'The list changed meanwhile. Your edit was not saved. Open Edit again',
-  'ui.acc.edit.lost': (id: string) => `The list changed. ${id} was removed while you were editing it`,
+  'ui.acc.edit.lost': (item: string) => `The list changed while you were editing "${item}". Your edit was not saved`,
   'ui.acc.edit.lostText': (text: string) => `Your unsaved text: ${text}`,
   'ui.acc.edit.failed': 'Could not save the item',
   'ui.acc.ask.title': 'Plan changed. Update the acceptance items too?',
