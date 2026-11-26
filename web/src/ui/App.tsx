@@ -287,7 +287,7 @@ export function App() {
   const sessionPending = useMemo(() => sessionCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingByTask = useMemo(() => taskCounts(live.pendingWaiting), [live.pendingWaiting]);
   const pendingRevision = `${live.pendingRevision}:${live.epoch}`;
-  const buildLive = useMemo((): BuildLive => ({ toolOf: b => buildToolItem(drafts, b), questions: id => questionsByTask.get(id) ?? 0, pending: id => pendingByTask.get(id) ?? 0 }), [drafts, questionsByTask, pendingByTask]);
+  const buildLive = useMemo((): BuildLive => ({ toolOf: b => buildToolItem(drafts, b), checklistOf: b => (b.conversation_id ? checklists.get(b.conversation_id) : undefined), questions: id => questionsByTask.get(id) ?? 0, pending: id => pendingByTask.get(id) ?? 0 }), [drafts, checklists, questionsByTask, pendingByTask]);
   const waiting: Waiting = useMemo(
     () => ({ drafts: skillDrafts, pending: pendingAll, questions: questionsAll, ...countTasks([...live.tasks].map(([id, m]) => [id, m.status, m.waitingKind] as const), questionsByTask), checks: countChecks(live.tasks.values(), new Set(live.projectsLoaded ? live.projects.map(p => p.id) : [])) }),
     [skillDrafts, live.tasks, live.projects, live.projectsLoaded, pendingAll, questionsAll, questionsByTask],

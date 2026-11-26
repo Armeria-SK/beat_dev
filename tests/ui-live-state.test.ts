@@ -364,17 +364,22 @@ test('ui/live-state: タスクの印は返事待ちの種類（質問か Pending
   assert.equal(live.tasks.get('t2')?.waitingKind, 'question');
 });
 
-test('ui/live-state: Build のタスクが押された会話を持てば、そのタスクの変化とそのタスクの会話の Checklist の更新で、押された会話を読み直す', () => {
+test('ui/live-state: Build のタスクが押された会話を持てば、そのタスクの変化で押された会話を読み直す。タスクの会話の Checklist の更新では読み直さず、表だけを渡す', () => {
   const build = (status: Task['status'], updated: number, conversation: string | null): Task => ({ ...task('b1', status, updated), project_id: 'p1aaaa', acceptance_items: '["A-1"]', created_in_conversation: 'chat1', conversation_id: conversation });
   const queued = run(EMPTY, ev({ type: 'task.changed', task: build('ready', 1, null) }));
   assert.equal(queued.revisions.get('chat1'), 1);
   const running = run(queued, ev({ type: 'task.changed', task: build('running', 2, 'tc1') }));
   assert.equal(running.revisions.get('chat1'), 2);
-  const ticked = run(running, ev({ type: 'checklist.updated', runId: 'r', conversationId: 'tc1', items: [{ text: 'Do it', status: 'in_progress' }], tainted: false }));
-  assert.equal(ticked.revisions.get('chat1'), 3);
+  const items = [{ text: 'Do it', status: 'in_progress' as const }];
+  const ticked = run(running, ev({ type: 'checklist.updated', runId: 'r', conversationId: 'tc1', items, tainted: false }));
+  assert.equal(ticked.revisions.get('chat1'), 2, 'Checklist の更新では、押された会話を読み直さない');
   assert.equal(ticked.revisions.get('tc1'), undefined);
+  assert.deepEqual(ticked.checklists.get('tc1'), items, '表は渡す（会話の画面が、読み直しなしで出す）');
+  const again = run(ticked, ev({ type: 'checklist.updated', runId: 'r', conversationId: 'tc1', items: [{ text: 'Do it', status: 'done' }], tainted: false }));
+  assert.equal(again.revisions.get('chat1'), 2);
+  assert.deepEqual(again.checklists.get('tc1'), [{ text: 'Do it', status: 'done' }]);
   const reloaded = run(EMPTY, { type: 'tasks', tasks: [build('running', 2, 'tc1')] }, ev({ type: 'checklist.updated', runId: 'r', conversationId: 'tc1', items: [], tainted: false }));
-  assert.equal(reloaded.revisions.get('chat1'), 1, '読み込んだ一覧からも、タスクの会話と押された会話を結ぶ');
+  assert.equal(reloaded.revisions.get('chat1'), undefined, '読み込んだ一覧からでも、Checklist の更新では読み直さない');
   const plain = run(EMPTY, ev({ type: 'task.changed', task: { ...task('t1', 'ready', 1), created_in_conversation: 'chat1' } }), ev({ type: 'checklist.updated', runId: 'r', conversationId: 'other', items: [], tainted: false }));
   assert.equal(plain.revisions.get('chat1'), undefined, 'Build でないタスクでは読み直さない');
 });

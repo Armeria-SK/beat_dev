@@ -218,11 +218,8 @@ function onEvent(s: LiveState, e: RunEvent, hidden: boolean, now: number): { sta
     case 'memoryFile.changed':
       if (!e.conversationId || (e.action !== 'create' && e.action !== 'update' && e.action !== 'forget')) return { state: library(s), effects: [] };
       return { state: addNotice(library(s), e.conversationId, { runId: e.runId, kind: 'memoryNote', action: e.action, projectId: e.projectId, name: e.name, eventId: e.eventId }), effects: [] };
-    case 'checklist.updated': {
-      const state = { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) };
-      const chat = [...s.tasks.values()].find(mark => mark.buildChat?.conversation === e.conversationId)?.buildChat?.chat;
-      return { state: chat ? bump(state, chat) : state, effects: [] };
-    }
+    case 'checklist.updated':
+      return { state: { ...s, checklists: new Map(s.checklists).set(e.conversationId, e.items) }, effects: [] };
     case 'pendingAction.changed':
       return { state: { ...s, pendingRevision: s.pendingRevision + 1 }, effects: [...refresh('pending'), ...counts(s)] };
     case 'question.changed':
