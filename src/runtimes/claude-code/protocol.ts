@@ -11,6 +11,7 @@ export const MIN_CLAUDE_CODE_VERSION = '2.1.296';
 
 const MAX_MESSAGE = 2000;
 const MAX_RAW = 4000;
+const MAX_OUTPUT = 20_000;
 
 export function versionParts(text: string | undefined): [number, number, number] | undefined {
   const match = /(\d+)\.(\d+)\.(\d+)/u.exec(text ?? '');
@@ -45,14 +46,20 @@ export function failureKind(error: string | undefined): Failed['kind'] {
 const cut = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}…` : text);
 export const safeText = (text: string, max: number = MAX_MESSAGE): string => cut(redactSecrets(text), max);
 
+// ツールの結果は、鍵らしい文字を伏せてから出す（読んだファイルや実行の出力に鍵が入ることがある）。伏せたあとで長さを切る。行は残す
+function safeOutput(text: string): string {
+  const clean = redactSecrets(text, [], { keepLines: true });
+  return clean.length > MAX_OUTPUT ? `${clean.slice(0, MAX_OUTPUT)}\n[output cut at ${MAX_OUTPUT} characters]` : clean;
+}
+
 // ツールの結果は文字列か、文・画像などの並び。画像などの中身は写さない
 function resultText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return content === undefined || content === null ? '' : safeText(JSON.stringify(content));
-  return content.map(block => {
+  if (typeof content === 'string') return safeOutput(content);
+  if (!Array.isArray(content)) return content === undefined || content === null ? '' : safeOutput(JSON.stringify(content));
+  return safeOutput(content.map(block => {
     const item = block as { type?: string; text?: unknown };
     return item.type === 'text' && typeof item.text === 'string' ? item.text : `[${typeof item.type === 'string' ? item.type : 'content'}]`;
-  }).join('\n');
+  }).join('\n'));
 }
 
 // 流れとして出さない、知っている出来事（版が上がっても増える種類）
@@ -103,10 +110,13 @@ export class EventTranslator {
     if (message.subtype !== 'init') return [];
     this.#sawInit = true;
     this.#options.onSession(message.session_id);
-    // 契約のつもりが API キーの課金になっていたら、番を続けない（環境の絞りが破られたときの最後の関門）
-    if (apiKeyInUse(message.apiKeySource)) {
+    // 契約のつもりが API キーの課金になっていたら、番を続けない（環境の絞りが破られたときの最後の関門）。ログインなら 'none' が付く。付いていない（読めない）ときも確かめられていないので続けない
+    if (message.apiKeySource !== 'none') {
       this.#guarded = true;
-      return [{ type: 'failed', kind: 'auth', message: 'Claude Code reported that it is using an API key, not the Claude login. The reply was stopped so it is not billed to an API key.' }];
+      const reason = apiKeyInUse(message.apiKeySource)
+        ? 'Claude Code reported that it is using an API key, not the Claude login. The reply was stopped so it is not billed to an API key.'
+        : 'Claude Code did not report that it is using the Claude login, so the reply was stopped.';
+      return [{ type: 'failed', kind: 'auth', message: reason }];
     }
     if (message.permissionMode !== this.#options.expectedMode) {
       this.#guarded = true;

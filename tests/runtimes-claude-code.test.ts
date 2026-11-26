@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import type { RuntimeConfig } from '../src/config/schema.ts';
@@ -141,10 +141,10 @@ test('start asks for the default permission mode, user settings only, a fresh se
   assert.deepEqual(s.runtime.launchOf(session.id)?.settingSources, ['user']);
 });
 
-test('the permission value is narrowed again inside the adapter: a Codex value, a wide-open value, or nothing becomes default; acceptEdits stays', async t => {
+test('the permission value is narrowed again inside the adapter: a wide-open value or nothing becomes default; acceptEdits stays', async t => {
   const s = setup(t);
   const cases: Array<[string | undefined, string]> = [
-    ['default', 'default'], ['acceptEdits', 'acceptEdits'], ['workspace-write', 'default'], ['read-only', 'default'], ['bypassPermissions', 'default'],
+    ['default', 'default'], ['acceptEdits', 'acceptEdits'], ['bypassPermissions', 'default'],
     ['plan', 'default'], ['auto', 'default'], ['dontAsk', 'default'], ['ACCEPTEDITS', 'default'], [undefined, 'default'],
   ];
   for (const [given, expected] of cases) {
@@ -153,6 +153,18 @@ test('the permission value is narrowed again inside the adapter: a Codex value, 
     assert.equal(s.runtime.launchOf(session.id)?.permission, expected);
     await s.runtime.close(session.id);
   }
+});
+
+test('a permission value of the other runtime (Codex) is refused before anything starts, not turned into default', async t => {
+  const s = setup(t);
+  for (const given of ['workspace-write', 'read-only']) {
+    await assert.rejects(s.start({ permission: given as RuntimePermission }), refused('permission'), given);
+  }
+  assert.equal(s.loads.count, 0, 'the SDK was not even loaded');
+  assert.equal(s.sdk.queries.length, 0);
+  assert.equal(s.lines.some(line => line.includes('runtime process started')), false, 'no process was started');
+  await s.start({ permission: 'default' });
+  assert.equal(s.sdk.queries.length, 1);
 });
 
 test('a session continues with the saved id (resume, no sessionId); a bad id or model name is refused before the SDK is called', async t => {
@@ -190,6 +202,16 @@ test('the working folder must be an existing absolute folder that does not overl
   assert.equal(s.sdk.queries.length, 1, 'a folder of its own is accepted');
 });
 
+test('the working folder cannot be a device path, a network path, or a data-stream path, even when it points at an ordinary folder', async t => {
+  const s = setup(t);
+  const hazards = [`\\\\?\\${s.work}`, `\\\\.\\${s.work}`, `${s.work}:stream`, ...(WINDOWS ? ['\\\\server\\share\\work', '//server/share/work', `\\??\\${s.work}`] : [])];
+  for (const cwd of hazards) {
+    await assert.rejects(s.start({ cwd }), (error: unknown) => refused('cwd')(error) && /network path or a device path/u.test((error as Error).message), `${cwd} must be refused as a hazard`);
+  }
+  assert.equal(s.sdk.queries.length, 0, 'the SDK was never called');
+  assert.equal(s.lines.some(line => line.includes('runtime process started')), false, 'no process was started');
+});
+
 test('a reply that was already stopped does not start; a missing or relative Claude Code path is refused', async t => {
   const s = setup(t);
   const stopped = new AbortController();
@@ -202,6 +224,22 @@ test('a reply that was already stopped does not start; a missing or relative Cla
   }
 });
 
+test('a stop that arrives while Claude Code is still starting is not lost: the start is refused as stopped and the process is stopped', async t => {
+  const s = setup(t, { sdkConfig: { initDelayMs: 400 } });
+  const controller = new AbortController();
+  const starting = s.runtime.start(s.request({ signal: controller.signal }));
+  const outcome = assert.rejects(starting, refused('aborted'));
+  await until(() => s.sdk.queries.length === 1);
+  controller.abort();
+  await outcome;
+  const child = s.sdk.last.ctx.child!;
+  await until(() => child.killed);
+  assert.ok(s.sdk.last.closed);
+  await until(() => child.exitCode !== null);
+  const later = await s.start();
+  assert.ok(later.id, 'a start that is not stopped still works');
+});
+
 test('the Claude Code body is found beside an npm launcher (.cmd), and a launcher without it is refused (Windows)', { skip: !WINDOWS }, t => {
   const root = tempDir(t);
   const bin = join(root, 'bin');
@@ -212,6 +250,39 @@ test('the Claude Code body is found beside an npm launcher (.cmd), and a launche
   writeFileSync(join(real, 'claude.exe'), 'x');
   assert.deepEqual(findClaudeExecutable(join(bin, 'claude.cmd'), {}), { path: join(real, 'claude.exe') });
   assert.deepEqual(findClaudeExecutable(undefined, { PATH: bin, PATHEXT: '.COM;.EXE;.CMD' }), { path: join(real, 'claude.exe') });
+});
+
+test('the PATH search uses only absolute entries: "." and empty entries do not look in the temp folder, relative entries do not look in the current folder', t => {
+  const root = tempDir(t);
+  const fakeTemp = join(root, 'temp');
+  const bin = join(root, 'bin');
+  mkdirSync(fakeTemp, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const name = WINDOWS ? 'claude.exe' : 'claude';
+  writeFileSync(join(fakeTemp, name), 'planted');
+  const saved = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
+  t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  process.env.TEMP = fakeTemp;
+  process.env.TMP = fakeTemp;
+  process.env.TMPDIR = fakeTemp;
+  const planted = join(fakeTemp, name);
+  const env = (path: string): NodeJS.ProcessEnv => ({ PATH: path, PATHEXT: '.COM;.EXE;.CMD' });
+  for (const path of [`.${delimiter}`, `${delimiter}.${delimiter}`, delimiter, '.', 'temp']) {
+    const found = findClaudeExecutable(undefined, env(path));
+    assert.ok(!('path' in found) || found.path !== planted, `PATH=${path} must not find a program in the temp folder`);
+  }
+  writeFileSync(join(bin, name), 'real');
+  assert.deepEqual(findClaudeExecutable(undefined, env(`.${delimiter}${delimiter}${bin}`)), { path: join(bin, name) }, 'the absolute entry is used, the "." and empty ones are skipped');
+});
+
+test('every optional program package of the SDK (its own copy of the Claude Code body) is turned into nothing by an override in package.json', () => {
+  const root = new URL('..', import.meta.url);
+  const read = (file: string): { optionalDependencies?: Record<string, string>; overrides?: Record<string, unknown> } => JSON.parse(readFileSync(new URL(file, root), 'utf8'));
+  const sdk = read('node_modules/@anthropic-ai/claude-agent-sdk/package.json');
+  const mine = read('package.json');
+  const optional = Object.keys(sdk.optionalDependencies ?? {});
+  assert.ok(optional.length > 0, 'the SDK lists its body packages as optional dependencies');
+  for (const name of optional) assert.equal(mine.overrides?.[name], '0.0.0-none', `${name} must be overridden so the SDK's own ~400 MB body is not installed`);
 });
 
 test('the SDK is loaded when the first reply starts, not when the runtime is made; a failed load is reported and tried again next time', async t => {
@@ -281,6 +352,21 @@ test('a reply streams text once (no double text from the finished message), show
   assert.deepEqual(report.answers, [{ behavior: 'allow', updatedInput: bash('echo hi') }]);
 });
 
+test('a tool result that holds a key reaches the screen with the key removed', async t => {
+  const script: FakeScript = async function* (ctx) {
+    yield initMessage();
+    await ctx.nextUser();
+    yield sdkMessage({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'bad sk-ant-api03-ABCDEFGHIJKLMNOP', is_error: false }] } });
+    yield resultMessage();
+  };
+  const s = setup(t, { script });
+  const session = await s.start();
+  await s.runtime.send(session.id, { text: 'go' });
+  const events = await collect(s.runtime, session.id);
+  const end = events.find(event => event.type === 'tool_end');
+  assert.ok(end?.type === 'tool_end' && end.output.startsWith('bad ') && !end.output.includes('ABCDEFGHIJKLMNOP'), JSON.stringify(end));
+});
+
 test('a session takes one message: a second or empty message is refused', async t => {
   const s = setup(t);
   const session = await s.start();
@@ -315,6 +401,13 @@ test('if the first message says an API key is in use, or a different permission 
   assert.deepEqual(keyEvents.map(event => event.type), ['failed']);
   assert.ok(keyEvents[0]?.type === 'failed' && keyEvents[0].kind === 'auth');
   await until(() => key.sdk.last.ctx.child!.killed);
+  const silent = setup(t, { script: async function* () { yield initMessage({ apiKeySource: undefined }); yield textMessage('m1', 'should never be shown'); yield resultMessage(); } });
+  const d = await silent.start();
+  await silent.runtime.send(d.id, { text: 'go' });
+  const silentEvents = await collect(silent.runtime, d.id);
+  assert.deepEqual(silentEvents.map(event => event.type), ['failed'], 'a first message that does not say where the key comes from is not trusted');
+  assert.ok(silentEvents[0]?.type === 'failed' && silentEvents[0].kind === 'auth');
+  await until(() => silent.sdk.last.ctx.child!.killed);
   const mode = setup(t, { script: async function* () { yield initMessage({ permissionMode: 'bypassPermissions' }); yield textMessage('m1', 'nope'); yield resultMessage(); } });
   const b = await mode.start();
   await mode.runtime.send(b.id, { text: 'go' });
@@ -344,7 +437,7 @@ test('decline and cancel are answered as denials (cancel also stops the reply); 
   ]);
 });
 
-test('accept_for_reply returns only suggestions that stay inside this reply; user, project and local settings, directories and wide modes are never returned', async t => {
+test('accept_for_reply returns only allow rules that stay inside this reply; user, project and local settings, directories and every mode change (acceptEdits too) are never returned', async t => {
   const dir = '/some/dir';
   const sessionRule: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'session' };
   const sessionMode: PermissionUpdate = { type: 'setMode', mode: 'acceptEdits', destination: 'session' };
@@ -362,13 +455,14 @@ test('accept_for_reply returns only suggestions that stay inside this reply; use
     sessionRule, sessionMode,
   ];
   const report: Report = { answers: [] };
-  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a', suggestions }, { toolUseID: 'b', suggestions: suggestions.slice(0, 5) }, { toolUseID: 'c', suggestions, suppress: true }]) });
+  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a', suggestions }, { toolUseID: 'b', suggestions: suggestions.slice(0, 5) }, { toolUseID: 'c', suggestions, suppress: true }, { toolUseID: 'd', suggestions: [sessionMode] }]) });
   const session = await s.start();
   await s.runtime.send(session.id, { text: 'go' });
   await collect(s.runtime, session.id, event => event.type === 'approval' ? s.runtime.approve(session.id, event.requestId, 'accept_for_reply') : undefined);
-  assert.deepEqual(report.answers[0], { behavior: 'allow', updatedInput: bash('echo hi'), updatedPermissions: [sessionRule, sessionMode] });
+  assert.deepEqual(report.answers[0], { behavior: 'allow', updatedInput: bash('echo hi'), updatedPermissions: [sessionRule] }, 'the session mode change (acceptEdits for the rest of the reply) is wider than one approval and is dropped');
   assert.deepEqual(report.answers[1], { behavior: 'allow', updatedInput: bash('echo hi') }, 'nothing session-only to return: no updatedPermissions at all');
   assert.deepEqual(report.answers[2], { behavior: 'allow', updatedInput: bash('echo hi') }, 'a rule wider than the ask (suppressAlwaysAllowRule) is not returned');
+  assert.deepEqual(report.answers[3], { behavior: 'allow', updatedInput: bash('echo hi') }, 'only a mode change on offer: a plain accept');
 });
 
 test('an approval is answered once; an unknown or already answered id, and a second ask with the same id while one waits, are refused', async t => {
@@ -544,6 +638,21 @@ test('every secret-path deny rule goes through the command line check of the pro
   }
   const args = s.runtime.launchOf(session.id)?.record?.args ?? [];
   assert.ok(args.includes('Read(**/.env*)') && args.includes('Edit(**/*.pem)'), 'the fake child received the rules as arguments (nothing was redacted)');
+});
+
+test('the tools that ask a question, schedule later work, start remote work, publish or notify are turned off for a reply, for the model list, and on the child command line', async t => {
+  const turnedOff = ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide'];
+  const s = setup(t);
+  const session = await s.start();
+  const reply = s.sdk.last.ctx.options.disallowedTools ?? [];
+  const args = s.runtime.launchOf(session.id)?.record?.args ?? [];
+  for (const name of turnedOff) {
+    assert.ok(reply.includes(name), `${name} is turned off for a reply`);
+    assert.ok(args.includes(name), `${name} reached the child command line`);
+  }
+  await s.runtime.models();
+  const listing = s.sdk.last.ctx.options.disallowedTools ?? [];
+  for (const name of turnedOff) assert.ok(listing.includes(name), `${name} is turned off for the model list`);
 });
 
 // ---------------------------------------------------------------- 状態・一覧

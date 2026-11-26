@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import { answerFor, claudeMode, disallowedTools, secretDenyRules, sessionOnlyUpdates, STOPPED_ANSWER } from '../src/runtimes/claude-code/permissions.ts';
+import { answerFor, claudeMode, DISALLOWED_TOOLS, disallowedTools, isCodexPermission, secretDenyRules, sessionOnlyUpdates, STOPPED_ANSWER } from '../src/runtimes/claude-code/permissions.ts';
 import { apiKeyInUse, EventTranslator, failureKind, versionAtLeast, type TranslatorOptions } from '../src/runtimes/claude-code/protocol.ts';
 import { PERMISSIONS } from '../src/runtimes/types.ts';
 import { SECRET_GLOBS } from '../src/tools/hooks/scope.ts';
@@ -60,6 +60,30 @@ test('tool use becomes tool_start, and a tool result becomes tool_end with its e
   assert.deepEqual(translate.translate(sdkMessage({ type: 'user', message: { content: 'a plain string' } })), []);
 });
 
+test('a tool result has secrets removed (a string, text blocks, and anything else), keeps its lines, and is cut at a long cap', () => {
+  const { translate } = translator();
+  const result = (content: unknown) => translate.translate(sdkMessage({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content }] } }));
+  const output = (events: ReturnType<EventTranslator['translate']>): string => {
+    const event = events[0];
+    assert.ok(event?.type === 'tool_end');
+    return event.output;
+  };
+  const key = 'sk-ant-api03-ABCDEFGHIJKLMNOP';
+  const text = output(result(`bad ${key}`));
+  assert.ok(!text.includes('ABCDEFGHIJKLMNOP') && text.startsWith('bad '), text);
+  const blocks = output(result([{ type: 'text', text: `first\nANTHROPIC_API_KEY=${key}\nthird` }, { type: 'text', text: `again ${key}` }]));
+  assert.ok(!blocks.includes('ABCDEFGHIJKLMNOP'), blocks);
+  assert.deepEqual(blocks.split('\n').length, 4, 'the lines of a result are kept');
+  assert.ok(blocks.startsWith('first\n') && blocks.includes('\nthird\n'));
+  assert.ok(!output(result({ note: key })).includes('ABCDEFGHIJKLMNOP'));
+  const long = output(result(`${'line of output\n'.repeat(2000)}${key}`));
+  assert.ok(long.length > 2001 && long.length < 20_100, String(long.length));
+  assert.ok(long.endsWith('[output cut at 20000 characters]'));
+  assert.ok(!long.includes('ABCDEFGHIJKLMNOP'));
+  const tailKey = output(result(`${'x'.repeat(19_990)} ${key}`));
+  assert.ok(!tailKey.includes('ABCDEFGHIJKLMNOP') && !tailKey.includes('sk-ant'), 'a key that straddles the cap is removed before the cut, not left as a fragment');
+});
+
 test('a message of a kind we do not know is kept as unknown with secrets removed; known side messages are dropped', () => {
   const { translate } = translator();
   const events = translate.translate(sdkMessage({ type: 'brand_new_kind', note: 'key sk-ant-api03-ABCDEFGHIJKLMNOP' }));
@@ -71,13 +95,15 @@ test('a message of a kind we do not know is kept as unknown with secrets removed
   assert.deepEqual(translate.translate(sdkMessage({ type: 'system', subtype: 'status' })), []);
 });
 
-test('the first message: a login with no API key passes; an API key or a different permission mode stops the reply', () => {
+test('the first message: a login with no API key passes; an API key, a missing source or a different permission mode stops the reply', () => {
   const ok = translator();
   assert.deepEqual(ok.translate.translate(initMessage({ session_id: 'abc' })), []);
   assert.equal(ok.translate.guarded, false);
   assert.deepEqual(ok.sessions, ['abc']);
   const missing = translator();
-  assert.deepEqual(missing.translate.translate(initMessage({ apiKeySource: undefined })), []);
+  const missingEvents = missing.translate.translate(initMessage({ apiKeySource: undefined }));
+  assert.ok(failed(missingEvents)?.type === 'failed' && (failed(missingEvents) as { kind: string }).kind === 'auth', 'no API key source reported is not proof of a login');
+  assert.equal(missing.translate.guarded, true);
 
   const key = translator();
   const keyEvents = key.translate.translate(initMessage({ apiKeySource: 'ANTHROPIC_API_KEY' }));
@@ -137,22 +163,45 @@ test('claudeMode keeps the two allowed values and turns everything else into def
   for (const value of ['bypassPermissions', 'plan', 'auto', 'dontAsk', 'workspace-write', 'read-only', 'acceptedits', '', undefined]) assert.equal(claudeMode(value), 'default', String(value));
 });
 
-test('deny rules cover every secret path for both Read and Edit, and the question tool is off', () => {
+test('Codex permission values are recognised so the adapter can refuse them; Claude Code values and unknown values are not', () => {
+  for (const value of PERMISSIONS.codex) assert.equal(isCodexPermission(value), !(PERMISSIONS['claude-code'] as readonly string[]).includes(value), value);
+  for (const value of ['workspace-write', 'read-only']) assert.equal(isCodexPermission(value), true, value);
+  for (const value of ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'something-else', '', undefined]) assert.equal(isCodexPermission(value), false, String(value));
+});
+
+test('deny rules cover every secret path for both Read and Edit', () => {
   const rules = secretDenyRules();
   assert.equal(rules.length, SECRET_GLOBS.length * 2);
   for (const glob of SECRET_GLOBS) assert.ok(rules.includes(`Read(${glob})`) && rules.includes(`Edit(${glob})`), glob);
-  assert.deepEqual(disallowedTools(), ['AskUserQuestion', ...rules]);
+  assert.deepEqual(disallowedTools(), [...DISALLOWED_TOOLS, ...rules]);
+});
+
+test('the tools that ask a question, schedule later work, start remote work, publish or notify are all turned off, by the SDK\'s own names', async () => {
+  const { BUILTIN_TOOL_NAMES } = await import('@anthropic-ai/claude-agent-sdk');
+  const turnedOff: readonly string[] = DISALLOWED_TOOLS;
+  for (const name of ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback']) {
+    assert.ok(turnedOff.includes(name), `${name} must be turned off`);
+    assert.ok(disallowedTools().includes(name), `${name} must reach the --disallowedTools list`);
+  }
+  for (const name of turnedOff) assert.ok((BUILTIN_TOOL_NAMES as readonly string[]).includes(name), `${name} is not a built-in tool name of this SDK (renamed?)`);
+  // 外していない道具は、ここに名前を挙げて「意図して残した」ことを残す。SDK が新しい道具を足したら、この試験が止まって、外すか残すかを決めさせる
+  const kept = [
+    'Agent', 'Bash', 'Edit', 'EndConversation', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Glob', 'Grep', 'ListAgents', 'ListMcpResourcesTool', 'LSP', 'Monitor',
+    'NotebookEdit', 'OfferChromeSetup', 'PowerShell', 'Projects', 'propose_skills', 'Read', 'ReadMcpResourceDirTool', 'ReadMcpResourceTool', 'ReadNotifications', 'ReportFindings', 'SetGoal',
+    'ShowOnboardingRolePicker', 'Skill', 'SubagentHandback', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskStop', 'TaskUpdate', 'TodoWrite', 'ToolSearch', 'WaitForMcpServers', 'WebFetch', 'WebSearch', 'Workflow', 'Write',
+  ];
+  assert.deepEqual([...turnedOff, ...kept].sort(), [...BUILTIN_TOOL_NAMES].sort());
 });
 
 const update = (over: object): PermissionUpdate => over as PermissionUpdate;
 
-test('only suggestions that stay inside this process (session) and only allow rules or the two allowed modes are kept', () => {
+test('only allow-rule suggestions that stay inside this process (session) are kept; a mode change, even to acceptEdits, is not', () => {
   const rule = update({ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'session' });
-  const mode = update({ type: 'setMode', mode: 'acceptEdits', destination: 'session' });
-  const defaultMode = update({ type: 'setMode', mode: 'default', destination: 'session' });
+  const other = update({ type: 'addRules', rules: [{ toolName: 'Read', ruleContent: '/x/**' }], behavior: 'allow', destination: 'session' });
   const rejected = [
     ...['localSettings', 'projectSettings', 'userSettings', 'cliArg'].map(destination => update({ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination })),
-    ...['localSettings', 'userSettings'].map(destination => update({ type: 'setMode', mode: 'acceptEdits', destination })),
+    ...['localSettings', 'userSettings', 'session'].map(destination => update({ type: 'setMode', mode: 'acceptEdits', destination })),
+    update({ type: 'setMode', mode: 'default', destination: 'session' }),
     update({ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'deny', destination: 'session' }),
     update({ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'ask', destination: 'session' }),
     ...['bypassPermissions', 'plan', 'auto', 'dontAsk'].map(modeName => update({ type: 'setMode', mode: modeName, destination: 'session' })),
@@ -161,7 +210,7 @@ test('only suggestions that stay inside this process (session) and only allow ru
     update({ type: 'replaceRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }),
     update({ type: 'removeRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }),
   ];
-  assert.deepEqual(sessionOnlyUpdates([...rejected, rule, mode, defaultMode]), [rule, mode, defaultMode]);
+  assert.deepEqual(sessionOnlyUpdates([...rejected, rule, other]), [rule, other]);
   assert.deepEqual(sessionOnlyUpdates(rejected), []);
   assert.deepEqual(sessionOnlyUpdates(undefined), []);
 });
@@ -173,6 +222,9 @@ test('answers: accept keeps the input as it is; accept_for_reply adds only the s
   assert.deepEqual(answerFor('accept', input, [rule, local]), { behavior: 'allow', updatedInput: input });
   assert.deepEqual(answerFor('accept_for_reply', input, [local, rule]), { behavior: 'allow', updatedInput: input, updatedPermissions: [rule] });
   assert.deepEqual(answerFor('accept_for_reply', input, [local]), { behavior: 'allow', updatedInput: input });
+  const mode = update({ type: 'setMode', mode: 'acceptEdits', destination: 'session' });
+  assert.deepEqual(answerFor('accept_for_reply', input, [mode]), { behavior: 'allow', updatedInput: input }, 'a mode change alone leaves a plain accept');
+  assert.deepEqual(answerFor('accept_for_reply', input, [mode, rule]), { behavior: 'allow', updatedInput: input, updatedPermissions: [rule] });
   assert.deepEqual(answerFor('accept_for_reply', input, undefined), { behavior: 'allow', updatedInput: input });
   assert.deepEqual(answerFor('decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
   assert.deepEqual(answerFor('cancel', input, [rule]), { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });

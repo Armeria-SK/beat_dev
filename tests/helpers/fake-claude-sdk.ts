@@ -45,6 +45,8 @@ export interface FakeSdkConfig {
   initError?: Error;
   // initializationResult() が返らない
   initHangs?: boolean;
+  // initializationResult() が返るまでの待ち（起動の途中で止められる場面の試験用）
+  initDelayMs?: number;
   childArgs?: string[];
 }
 
@@ -141,6 +143,7 @@ export class FakeQuery {
 
   async initializationResult(): Promise<unknown> {
     if (this.config.initHangs) return new Promise(() => undefined);
+    if (this.config.initDelayMs !== undefined) await new Promise(resolve => setTimeout(resolve, this.config.initDelayMs));
     if (this.config.initError) throw this.config.initError;
     if (this.spawnError) throw this.spawnError;
     return { claude_code_version: this.config.version ?? '2.1.331', account: this.config.apiKeySource === undefined ? {} : { apiKeySource: this.config.apiKeySource }, models: [] };

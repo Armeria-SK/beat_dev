@@ -3,12 +3,19 @@
 import { statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, extname, isAbsolute, join } from 'node:path';
-import { findExecutable } from '../../tools/shell/runner.ts';
+import { absolutePathEntries, findExecutable } from '../../tools/shell/runner.ts';
 
 const WINDOWS = process.platform === 'win32';
 const LAUNCHERS = new Set(['.cmd', '.bat', '.ps1']);
 
 export type Found = { path: string } | { reason: string };
+
+// PATH は絶対パスの項目だけで探す。空の項目と . は、探す側の作業フォルダ（ここでは一時フォルダ）を指してしまうので使わない。PATH が無い・絶対の項目が 1 つも無いなら探さない
+function absolutePathEnv(env: NodeJS.ProcessEnv): Record<string, string> | undefined {
+  const strings = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  const cleaned = Object.fromEntries(Object.entries(strings).map(([name, value]) => [name, name.toUpperCase() === 'PATH' ? absolutePathEntries(value) : value]));
+  return Object.entries(cleaned).some(([name, value]) => name.toUpperCase() === 'PATH' && value !== '') ? cleaned : undefined;
+}
 
 const isFile = (path: string): boolean => statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 
@@ -22,8 +29,8 @@ export function findClaudeExecutable(configured: string | undefined, env: NodeJS
   let path = configured?.trim() === '' ? undefined : configured?.trim();
   if (path !== undefined && !isAbsolute(path)) return { reason: 'The Claude Code path in the runtime settings must be an absolute path' };
   if (path === undefined) {
-    const strings = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-    path = findExecutable('claude', strings, tmpdir());
+    const searchEnv = absolutePathEnv(env);
+    path = searchEnv ? findExecutable('claude', searchEnv, tmpdir()) : undefined;
     if (path === undefined && WINDOWS) {
       const native = join(homedir(), '.local', 'bin', 'claude.exe');
       if (isFile(native)) path = native;

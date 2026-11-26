@@ -10,7 +10,7 @@ import type { CanUseTool, Options, PermissionResult, PermissionUpdate, Query, SD
 import type { RuntimeConfig } from '../../config/schema.ts';
 import { resolvePaths, type AppPaths } from '../../paths.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
-import { isInside, realish } from '../../tools/hooks/scope.ts';
+import { isInside, isRemotePath, realish, windowsHazard } from '../../tools/hooks/scope.ts';
 import { runtimeEnv, type LaunchRecord, type ProcessScope } from '../process-manager.ts';
 import type { RuntimeDeps } from '../registry.ts';
 import {
@@ -18,7 +18,7 @@ import {
   type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
 import { findClaudeExecutable } from './executable.ts';
-import { answerFor, claudeMode, disallowedTools, STOPPED_ANSWER, type ClaudePermissionMode } from './permissions.ts';
+import { answerFor, claudeMode, disallowedTools, isCodexPermission, STOPPED_ANSWER, type ClaudePermissionMode } from './permissions.ts';
 import { apiKeyInUse, EventTranslator, MIN_CLAUDE_CODE_VERSION, safeText, versionAtLeast, versionParts } from './protocol.ts';
 
 export interface ClaudeCodeSdk {
@@ -38,7 +38,7 @@ export interface ClaudeCodeOptions {
 }
 
 export class ClaudeCodeError extends Error {
-  readonly reason: 'cwd' | 'executable' | 'version' | 'auth' | 'aborted' | 'resume' | 'model' | 'startup' | 'busy' | 'input' | 'closed';
+  readonly reason: 'cwd' | 'permission' | 'executable' | 'version' | 'auth' | 'aborted' | 'resume' | 'model' | 'startup' | 'busy' | 'input' | 'closed';
   constructor(reason: ClaudeCodeError['reason'], message: string) {
     super(message);
     this.name = 'ClaudeCodeError';
@@ -231,8 +231,10 @@ class ClaudeCodeRuntime implements AgentRuntime {
 
   async start(request: RuntimeRequest): Promise<RuntimeSession> {
     if (request.signal.aborted) throw new ClaudeCodeError('aborted', 'The reply was stopped before Claude Code started');
-    // 受け取った許可の設定にも、Claude Code の一覧への絞りをもう一度かける（別の実行役〔Codex〕の値は default に倒れる）
+    // 別の実行役（Codex）の許可の値は、倒さずに断る（何も起こす前に）。それ以外の知らない値は、Claude Code の一覧への絞りで default に倒れる
+    if (isCodexPermission(request.permission)) throw new ClaudeCodeError('permission', 'This permission value belongs to another runtime. Choose a Claude Code permission');
     const permission = claudeMode(request.permission);
+    if (isRemotePath(request.cwd) || windowsHazard(request.cwd) !== undefined) throw new ClaudeCodeError('cwd', 'The working folder cannot be a network path or a device path');
     if (!isAbsolute(request.cwd) || !statSync(request.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new ClaudeCodeError('cwd', 'The working folder must be an existing folder given as an absolute path');
     const overlap = ownFolderOverlap(request.cwd, (this.#options.paths ?? resolvePaths)());
     if (overlap) throw new ClaudeCodeError('cwd', overlap);
@@ -291,6 +293,8 @@ class ClaudeCodeRuntime implements AgentRuntime {
       if (!versionAtLeast(initialized.claude_code_version)) throw new ClaudeCodeError('version', `Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer is needed. Update Claude Code`);
       // 契約のログインで動かすつもりなので、API キーが使われているなら発言を渡す前に止める
       if (apiKeyInUse(initialized.account.apiKeySource)) throw new ClaudeCodeError('auth', 'Claude Code is set to use an API key, not the Claude login, so the reply was not started');
+      // 起動の待ちのあいだに止められていたら、起こした本体を残さずに断る（止める合図は、まだ onAbort をつなぐ前なので、ここで見る）
+      if (request.signal.aborted) throw new ClaudeCodeError('aborted', 'The reply was stopped while Claude Code was starting');
     } catch (error) {
       input.end();
       try { query?.close(); } catch { /* 閉じるだけ */ }

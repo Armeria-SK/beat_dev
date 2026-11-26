@@ -5,14 +5,35 @@ import { PERMISSIONS, permissionFor, type ApprovalDecision } from '../types.ts';
 
 export type ClaudePermissionMode = (typeof PERMISSIONS)['claude-code'][number];
 
-// 無い・知らない値・別の実行役（Codex）の値は、既定の default に倒す。何でも通す側（bypassPermissions）・裏で判定する側（auto）・黙って断る側（dontAsk）・計画（plan）には倒れない
+// 無い・知らない値は、既定の default に倒す。何でも通す側（bypassPermissions）・裏で判定する側（auto）・黙って断る側（dontAsk）・計画（plan）には倒れない。
+// 別の実行役（Codex）の値は倒さずに断る（isCodexPermission。Codex 側の isClaudeCodePermission と同じ向き）
 export function claudeMode(value: string | undefined): ClaudePermissionMode {
   const mode = permissionFor('claude-code', value);
   return PERMISSIONS['claude-code'].find(allowed => allowed === mode) ?? PERMISSIONS['claude-code'][0];
 }
 
-// 質問を画面で受ける口が無いので外す（文で聞かせる）。AskUserQuestion はどの許可のモードでも聞かずには通らない道具
-export const DISALLOWED_TOOLS = ['AskUserQuestion'] as const;
+const claudeValues: readonly string[] = PERMISSIONS['claude-code'];
+const codexValues: readonly string[] = PERMISSIONS.codex;
+
+export function isCodexPermission(value: string | undefined): boolean {
+  return value !== undefined && !claudeValues.includes(value) && codexValues.includes(value);
+}
+
+// 外す道具（名前は SDK の BUILTIN_TOOL_NAMES の綴り）。外した道具は、どの許可のモードでも使えない。
+//  - AskUserQuestion: 質問を画面で受ける口が無いので外す（文で聞かせる）
+//  - CronCreate・CronDelete・CronList・ScheduleWakeup: あとで動く予定を作る・変える（1 回の返事で終わるプロセスの外に残る。SDK の文書: 「この会話をあとで起こす」予定）
+//  - RemoteTrigger: 遠くで動く仕事を起こす
+//  - Artifact・ClaudeDesign: claude.ai 側にページ・デザインを作って載せる（名前による。本物では動かしていない）
+//  - PushNotification・SendUserMessage・SendUserFile: 使う人の端末への通知・メッセージ・ファイルの送り出し（名前による。本物では動かしていない）
+//  - SendMessage: ほかの会話へ送る（SDK の文書: Remote Control で別のマシンの会話にも届く）
+//  - SendFeedback: 下書きのフィードバックを Anthropic へ送る
+//  - ShareOnboardingGuide: 名前が「共有」（外へ出す）。名前による。本物では動かしていない
+export const DISALLOWED_TOOLS = [
+  'AskUserQuestion',
+  'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger',
+  'Artifact', 'ClaudeDesign',
+  'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide',
+] as const;
 
 // beat の秘密の道の名前（scope.ts の SECRET_GLOBS）から作る、読む道具・書く道具の deny の決まり。deny の決まりは、許可のモードや使う人の allow の決まりより先に効く
 export function secretDenyRules(): string[] {
@@ -23,13 +44,12 @@ export function disallowedTools(): string[] {
   return [...DISALLOWED_TOOLS, ...secretDenyRules()];
 }
 
-const allowedModes: readonly string[] = PERMISSIONS['claude-code'];
-
-// 「この返事が終わるまで聞かない」で返してよい更新。destination が session（この Claude Code のプロセスの中だけ）の、聞かない決まり（allow）と、選べる許可のモードへの切り替えだけ。
-// localSettings・projectSettings・userSettings・cliArg への書き込み、ディレクトリを足す更新、決まりを消す・置き換える更新は、使う人の設定や決まりを書き換えるか、聞かれた範囲より広いので返さない
+// 「この返事が終わるまで聞かない」で返してよい更新。destination が session（この Claude Code のプロセスの中だけ）の、聞かない決まり（allow の addRules）だけ。
+// 許可のモードの切り替え（Write の求めに付いてくる acceptEdits など）は、残りの返事ぜんぶの編集を通すことになり、1 回の許しより広いので返さない。
+// localSettings・projectSettings・userSettings・cliArg への書き込み、ディレクトリを足す更新、決まりを消す・置き換える更新も、使う人の設定や決まりを書き換えるか、聞かれた範囲より広いので返さない。
+// 残るものが無ければ、ふつうの許し（accept）と同じ答えになる
 export function sessionOnlyUpdates(suggestions: readonly PermissionUpdate[] | undefined): PermissionUpdate[] {
-  return (suggestions ?? []).filter(update => update.destination === 'session'
-    && ((update.type === 'addRules' && update.behavior === 'allow') || (update.type === 'setMode' && allowedModes.includes(update.mode))));
+  return (suggestions ?? []).filter(update => update.destination === 'session' && update.type === 'addRules' && update.behavior === 'allow');
 }
 
 const DECLINED = 'The owner declined this request.';
