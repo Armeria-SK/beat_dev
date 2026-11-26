@@ -607,7 +607,7 @@ export const en = {
   'ui.slash.archive': 'Archive this session',
   'ui.slash.summary': 'Read the summary so far',
   'ui.slash.build': 'Review the plan before building',
-  'ui.slash.think': 'Start the thinking model now',
+  'ui.slash.propose': 'Ask for proposals now',
   'ui.cancel': 'Cancel',
   'ui.toast.undo': 'Undo',
   'ui.fail.replacedLost': (line: string) => `The earlier queued message was removed: “${line}”`,

@@ -524,7 +524,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       case 'archive': if (id) void api.archiveConversation(id).then(() => load(), changeFailed); return;
       case 'summary': setSummaryOpen(true); stick.current = false; scroller.current?.scrollTo({ top: 0 }); return;
       case 'build': panes?.onOpenPlan?.(true); return;
-      case 'think': if (product) void api.scoutRun(product.id).then(() => toast({ icon: 'refresh', title: t('ui.scout.started') }), error => reportOpError(error)); return;
+      case 'propose': if (product) void api.scoutRun(product.id).then(() => toast({ icon: 'refresh', title: t('ui.scout.started') }), error => reportOpError(error)); return;
       case 'rename': return;
     }
   };

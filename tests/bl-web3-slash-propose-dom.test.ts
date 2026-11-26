@@ -6,7 +6,7 @@ import type { Project } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { composerDrafts } from '../web/src/ui/composer-state.ts';
 
-// スラッシュの /think: 製品の会話で、考える役を今すぐ動かす（Think now と同じ POST /api/projects/:id/scout/run）。発言としては送らない。考える役が Off の製品・製品の外の会話では出さない。
+// スラッシュの /propose: 製品の会話で、考える役を今すぐ動かす（Think now と同じ POST /api/projects/:id/scout/run）。発言としては送らない。考える役が Off の製品・製品の外の会話では出さない。
 
 interface ConversationProps {
   id: string | null; listTitle: string | null; product?: Project; draft: undefined; notices: never[]; liveChecklist: undefined; revision: number;
@@ -41,7 +41,7 @@ const MODEL = { id: 'm1', label: 'M1', provider: 'p', model: 'm1', inChat: true,
 const shop = (scout_mode: Project['scout_mode']): Project => ({ id: 'p1', name: 'Shop', root: 'D:\\work\\shop', is_git: true, archived_at: null, has_plan: true, scout_mode } as unknown as Project);
 
 async function mount(product: Project | undefined, scoutRun: () => Response) {
-  const row = { id: CHAT, title: 'Think', created_at: 0, last_message_at: 0, permission_mode: 'auto', model_id: null, effort: null };
+  const row = { id: CHAT, title: 'Propose', created_at: 0, last_message_at: 0, permission_mode: 'auto', model_id: null, effort: null };
   globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(path), 'http://x');
     calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
@@ -63,38 +63,38 @@ async function mount(product: Project | undefined, scoutRun: () => Response) {
   return { field, menu, enter };
 }
 
-test('ui/Conversation（DOM）: /think は製品の会話で考える役を今すぐ動かし（POST scout/run）、「Started thinking」を出す。発言としては送らない', async () => {
+test('ui/Conversation（DOM）: /propose は製品の会話で考える役を今すぐ動かし（POST scout/run）、「Started thinking」を出す。発言としては送らない', async () => {
   const ui = await mount(shop('research'), () => json({ state: 'thinking', examined: 0, area: null, lastChangeAt: null, note: null }, 202));
-  await input(ui.field, '/th');
-  assert.deepEqual(ui.menu(), ['/thinkStart the thinking model now']);
+  await input(ui.field, '/pro');
+  assert.deepEqual(ui.menu(), ['/proposeAsk for proposals now']);
   await ui.enter();
   assert.deepEqual(calls.filter(c => c.startsWith('POST')), ['POST /api/projects/p1/scout/run']);
   assert.deepEqual(toasts.map(x => x.title), ['Started thinking']);
   assert.equal(ui.field.value, '', '入力欄は空に戻る（発言として残らない）');
 });
 
-test('ui/Conversation（DOM）: /think が断られたら（考える役が動けない）、「Started thinking」は出さず、理由を出す', async () => {
+test('ui/Conversation（DOM）: /propose が断られたら（考える役が動けない）、「Started thinking」は出さず、理由を出す', async () => {
   const ui = await mount(shop('research'), () => json({ error: { code: 'http.scout_busy', message: 'busy' } }, 409));
-  await input(ui.field, '/think');
+  await input(ui.field, '/propose');
   await ui.enter();
   assert.deepEqual(calls.filter(c => c.startsWith('POST')), ['POST /api/projects/p1/scout/run']);
   assert.equal(toasts.some(x => x.title === 'Started thinking'), false);
   assert.deepEqual(toasts.map(x => x.icon), ['alert']);
 });
 
-test('ui/Conversation（DOM）: 考える役が Off の製品・製品の外の会話では、/think は候補に出ず、押しても何も呼ばない', async () => {
+test('ui/Conversation（DOM）: 考える役が Off の製品・製品の外の会話では、/propose は候補に出ず、押しても何も呼ばない', async () => {
   const offProduct = await mount(shop('off'), () => json({}, 202));
-  await input(offProduct.field, '/th');
+  await input(offProduct.field, '/pro');
   assert.deepEqual(offProduct.menu(), []);
-  await input(offProduct.field, '/think');
+  await input(offProduct.field, '/propose');
   await offProduct.enter();
-  assert.deepEqual(calls.filter(c => c.startsWith('POST')), [], 'Off の製品では呼ばない（「/think は使えません」の知らせだけ）');
-  assert.deepEqual(toasts.map(x => x.title), ['/think is not available here · nothing was sent']);
+  assert.deepEqual(calls.filter(c => c.startsWith('POST')), [], 'Off の製品では呼ばない（「/propose は使えません」の知らせだけ）');
+  assert.deepEqual(toasts.map(x => x.title), ['/propose is not available here · nothing was sent']);
   await cleanup();
   off?.();
   calls = [];
   toasts = [];
   const none = await mount(undefined, () => json({}, 202));
-  await input(none.field, '/th');
+  await input(none.field, '/pro');
   assert.deepEqual(none.menu(), []);
 });
