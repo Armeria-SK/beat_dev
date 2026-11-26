@@ -298,6 +298,44 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   return [];
 }
 
+// ── R1.4 の札用: npm run x が動かすスクリプトの行（札に足す 1 枚の中身を選ぶだけ。判定にも bind にも使わない。package.json の全体の札は変えない） ──
+// npm run <名前>・npm test・npm start（pnpm・yarn・bun も）が動かすスクリプトの名前。名前のあとが無いか `--` で区切った引数だけのときに限る。
+// ほかの書き方（名前の前後の旗〔--prefix・-w・-C など〕・install・bun test など）は undefined
+export function packageScriptName(cmd: string, args: readonly string[]): string | undefined {
+  const [sub, name] = args;
+  const plain = (from: number): boolean => args.length <= from || args[from] === '--';
+  if (!PACKAGE_TOOLS.has(cmd) || sub === undefined) return undefined;
+  if (sub === 'test' || sub === 'start') return (cmd === 'bun' && sub === 'test') || !plain(1) ? undefined : sub;
+  return (sub === 'run' || sub === 'run-script') && name !== undefined && !name.startsWith('-') && plain(2) ? name : undefined;
+}
+
+const INVISIBLE = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
+
+// 札に出す文字。JSON.parse で本物になった制御文字・向きを変える文字・見えない文字を \uXXXX にして、行を見た目どおりに読めるようにする
+export const cardQuote = (text: string): string => JSON.stringify(text).replace(INVISIBLE, c => Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''));
+
+// 名前のスクリプトの行（前後のフック pre<名前>・post<名前> と、行の中の npm run・npm test・npm start が呼ぶスクリプトも）。package.json に有るものだけで、無ければ空。「動かしそうな行」を見せるだけで、全部だとは言わない（全体は別の札にある）
+export function packageScriptView(packageText: string, names: readonly string[]): string[] {
+  let table: unknown;
+  try { table = (JSON.parse(packageText) as { scripts?: unknown }).scripts; } catch { return []; }
+  if (typeof table !== 'object' || table === null) return [];
+  const scripts = table as Record<string, unknown>;
+  const lines = new Map<string, string>();
+  const add = (name: string): void => {
+    for (const key of [`pre${name}`, name, `post${name}`]) {
+      const value = Object.hasOwn(scripts, key) ? scripts[key] : undefined;
+      if (typeof value !== 'string' || lines.has(key)) continue;
+      lines.set(key, `${cardQuote(key)}: ${cardQuote(value)}`);
+      for (const seg of segments(value)) {
+        const called = packageScriptName(seg.cmd, seg.args);
+        if (called !== undefined) add(called);
+      }
+    }
+  };
+  names.forEach(add);
+  return [...lines.values()];
+}
+
 // ── R1.5 ほかのプロセスを起こす・残す ──
 export const WRAPPED_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
   xargs: new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--max-chars', '--process-slot-var']),
