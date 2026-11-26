@@ -51,6 +51,10 @@ const EXPECTED: Array<{ shell: 'powershell' | 'bash'; pattern: RegExp; why: stri
   { shell: 'bash', pattern: /^\s*\$[\w:?]+(?:\[[^\]]*\])*\s*(?:\?\?)?=/u, why: 'assign-guard: the code check reads the right side of an assignment shape' },
   // assign-guard: a hashtable value glued to its `=` (`@{a=Stop-Computer}`, `@{b=1;'a'=C}`, `@{a =C}`) is read as a statement (base dropped it)
   { shell: 'powershell', pattern: /@\{\s*(?:[^{}]*[;\n]\s*)?(?:[\w.-]+|'[^']*'|"[^"]*")\s*=\S/u, why: 'assign-guard: a hashtable value glued to = is read as a statement (base dropped the value)' },
+  // ps-guard-holes L188: Windows PowerShell 5.1 drops a double quote inside an argument it passes to a program, so a child powershell / pwsh (direct, via conhost, via Start-Process) with a " in an argument is refused (list.winargs)
+  { shell: 'powershell', pattern: /\b(?:powershell|pwsh)(?:\.exe)?\b[\s\S]*"/iu, why: 'ps-guard-holes: a child powershell / pwsh argument holding a double quote is refused (list.winargs), as Windows PowerShell 5.1 drops the quote' },
+  // ps-guard-holes L176: .Replace( on a value that may be a FileInfo (variable, paren result, hashtable member, $_) asks (shape.method); .Replace( on a known string (Name, a quoted string, ToString()) is unchanged
+  { shell: 'powershell', pattern: /\.Replace\(/iu, why: 'ps-guard-holes: .Replace( on a value that may be a file (FileInfo.Replace overwrites the destination and removes the source) asks (shape.method)' },
 ];
 
 // Looser rows accepted by the owner's ruling (plans/beat/steps/control-bodies/deviations.md, assign-guard): head reads them as PowerShell does.

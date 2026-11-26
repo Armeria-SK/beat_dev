@@ -693,6 +693,10 @@ const PS_METHOD_OK = new Set([
   'tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'replace', 'split', 'substring', 'startswith', 'endswith',
   'contains', 'indexof', 'lastindexof', 'padleft', 'padright', 'join', 'format',
 ]);
+// .Replace( は、呼ぶ先の値が文字列と分かるときだけ通す（FileInfo の Replace(先, 控え) は、先を上書きして元のファイルを消す）。
+// 結果が文字列のメソッド・値が文字列のプロパティ（Get-ChildItem の Name・FullName など）・引用符の文字列のあとの .Replace( は文字列の Replace。変数・括弧の値・ハッシュの中身には、値の種類が分からないので聞く
+const PS_TEXT_METHODS = new Set(['tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'substring', 'padleft', 'padright']);
+const PS_TEXT_MEMBERS = new Set(['name', 'fullname', 'basename', 'extension', 'directoryname', 'pschildname', 'pspath', 'psparentpath']);
 const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
 
 // 語の中の # が、コマンドの引数の中かを見分ける。本物の PowerShell は、コマンドの引数の中の # は語の一部と読むが、式の位置では数（1 -1 1,2 1..2 0x1F 1kb）や演算子と数（$x*2 $x..2）のすぐあとの # をコメントと読む。
@@ -1046,22 +1050,25 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
   };
 
   // 値のあとに続く .メンバー・.メソッド( … )・[添字] を読む。許していないメソッドの印を返す。calls が false なら、メソッドの呼び出しの ( の手前で止める（代入の左辺の試し読み用）
-  const chain = (depth: number, st: Statement, calls = true): LexFail | null => {
+  const chain = (depth: number, st: Statement, calls = true, from: 'text' | 'object' | 'hash' = 'object'): LexFail | null => {
+    let text = from === 'text';
     for (;;) {
       const t = peek();
       if (t?.t === 'member') {
         k++;
+        const name = t.v.toLowerCase();
         const open = peek();
         if (isP(open, '(') && !open!.sp) {
           if (!calls) return null;
-          if (!PS_METHOD_OK.has(t.v.toLowerCase())) st.shapes.push(`method:${t.v}`);
+          if (!PS_METHOD_OK.has(name) || (name === 'replace' && !text)) st.shapes.push(`method:${t.v}`);
+          text = PS_TEXT_METHODS.has(name) || (name === 'replace' && text);
           k++;
           const r = statements(')', depth + 1);
           if (r) return r;
-        }
+        } else text = from !== 'hash' && PS_TEXT_MEMBERS.has(name);
         continue;
       }
-      if (isP(t, '[') && !t!.sp) { k++; const r = statements(']', depth + 1); if (r) return r; continue; }
+      if (isP(t, '[') && !t!.sp) { text = false; k++; const r = statements(']', depth + 1); if (r) return r; continue; }
       return null;
     }
   };
@@ -1076,7 +1083,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const inner = stringSubs(t, depth);
       if (inner) return inner;
       const start = k;
-      const r = chain(depth, st);
+      const r = chain(depth, st, true, 'text');
       return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(t.v, { quoted: true, dynamic: t.dyn === true }));
     }
     if (t.t === 'p' && t.v === '(' || t.t === 'sub' || t.t === 'arr') {
@@ -1086,7 +1093,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const c = chain(depth, st);
       return c ?? plain('$(…)', { kind: 'paren', dynamic: true });
     }
-    if (t.t === 'hash') { k++; const h = hashtable(depth); if (isFail(h)) return h; const c = chain(depth, st); return c ?? h; }
+    if (t.t === 'hash') { k++; const h = hashtable(depth); if (isFail(h)) return h; const c = chain(depth, st, true, 'hash'); return c ?? h; }
     if (t.t === 'type') {
       k++;
       const s = peek();

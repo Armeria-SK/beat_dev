@@ -19,8 +19,8 @@ import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
-// L176: PowerShell の PS_METHOD_OK（src/tools/hooks/shell-lex.ts:692）は replace を「文字列の道具」として通すので、ファイルの .Replace(先, 控え)（先を上書きして元を消す。控えが $null の形は 5.1 では失敗するので、控えの名前を書く形）が聞かれずに動く。
-// 直す場所は shell-lex.ts の chain（呼ぶ先の値が文字列と分かるときだけ通す）で、この束の持ち場の外。ここでは、今の線（通る形・聞く形）と、直ったあとの目標を試験にしておく
+// L176: PowerShell の PS_METHOD_OK（src/tools/hooks/shell-lex.ts）は replace を「文字列の道具」として通していたので、ファイルの .Replace(先, 控え)（先を上書きして元を消す。控えが $null の形は 5.1 では失敗するので、控えの名前を書く形）が聞かれずに動いた。
+// shell-lex.ts の chain は、呼ぶ先の値が文字列と分かるときだけ Replace を通す。ここでは、通る形（文字列の Replace）・聞く形（静的な [IO.File]::Replace と、値が文字列か分からない Replace）を試験にする
 
 const psAvailable = process.platform === 'win32' && spawnSync('powershell.exe', ['-NoProfile', '-Command', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
 const SKIP = !psAvailable && 'Windows の PowerShell が無い';
@@ -93,7 +93,7 @@ const TEXT_REPLACE: readonly string[] = [
   `Write-Output ('a-b'.Replace('-','_'))`,
 ];
 
-test('L176 の今の線と、直っても変わらない形: 文字列と分かる値の Replace は確かめなしで通る（5.1・7）', t => {
+test('L176: 文字列と分かる値の Replace（Name・FullName・引用符の文字列・ToString() などのあと）は確かめなしで通る（5.1・7）', t => {
   const wrong: string[] = [];
   for (const shell of ['powershell', 'pwsh'] as const) for (const command of TEXT_REPLACE) {
     const v = verdictOf(command, shell, t);
@@ -102,7 +102,7 @@ test('L176 の今の線と、直っても変わらない形: 文字列と分か�
   assert.deepEqual(wrong, []);
 });
 
-test('L176 の今の線: 静的な [IO.File]::Replace は今も聞く（shape.static）', t => {
+test('L176: 静的な [IO.File]::Replace は今も聞く（shape.static）', t => {
   for (const command of [`[IO.File]::Replace('src.txt','dest.txt',$null)`, `[System.IO.File]::Replace('src.txt','dest.txt',$null)`]) {
     const v = verdictOf(command, 'powershell', t);
     assert.equal(v.decision, 'ask', command);
@@ -124,7 +124,7 @@ const MAYBE_FILE_REPLACE: readonly string[] = [
   `@{Name=(Get-Item a.txt)}.Name.Replace('victim.txt', 'victim.bak')`,
 ];
 
-test('L176 の目標（未着手: 根は shell-lex.ts の chain で、この束の持ち場の外）: 値が文字列か分からない Replace は聞く（shape.method）', { todo: 'この束の持ち場の外: src/tools/hooks/shell-lex.ts:692 の PS_METHOD_OK が replace を文字列の道具として通し、chain（:1049）は呼ぶ先の値の種類を見ない' }, t => {
+test('L176: 値が文字列か分からない Replace（変数・括弧の結果・ハッシュの中身・$_）は聞く（shape.method）', t => {
   const wrong: string[] = [];
   for (const shell of ['powershell', 'pwsh'] as const) for (const command of MAYBE_FILE_REPLACE) {
     const v = verdictOf(command, shell, t);
@@ -133,7 +133,7 @@ test('L176 の目標（未着手: 根は shell-lex.ts の chain で、この束�
   assert.deepEqual(wrong, []);
 });
 
-test('実機（Windows PowerShell 5.1）L176 の目標（未着手: 根は shell-lex.ts で、この束の持ち場の外）: ファイルの .Replace(先, 控え) は判定役が聞くと答えれば動かさず、文字列の Replace は動く', { skip: SKIP, todo: 'この束の持ち場の外: src/tools/hooks/shell-lex.ts:692' }, async t => {
+test('実機（Windows PowerShell 5.1）L176: ファイルの .Replace(先, 控え) は判定役が聞くと答えれば動かさず、文字列の Replace は動く', { skip: SKIP }, async t => {
   const s = setup(t, 'ask');
   s.seed();
   const parked = await s.call(THE_FILE_OP);
