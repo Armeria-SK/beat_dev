@@ -89,7 +89,8 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
 }
 
 // 実行役（Claude Code・Codex）を、はじめの設定の「つなぐもの」にする（AR-10）。その種類の実行役を入れ、モデルを 1 つ足す（同じモデルがあれば足さない）。
-// いま選んだ実行役のモデルを、いつも会話の順番の先頭に置く（実行役のモデルは先頭にだけ置ける。前に試した実行役が残っていても、先に試した提供元のモデルがあっても、「最後に選んだものが先頭」）。提供元のモデルが 1 つも無ければそれだけ、あれば後ろに提供元のモデルを続ける（順番が空だったときは全部）
+// 確かめる前の保存（1 回目）: 実行役を入れてモデルを足すだけで、会話の順番には触らない（確かめが通る前に、会話の既定を替えない）。例外は提供元のモデルが 1 つも無いとき: 実行役のモデルを先頭に置く形しか作れないので、そのモデルだけにする（前に試して使えなかったものも消える）。
+// 確かめが通ったあとの保存（2 回目）は putRuntimeFirst: 「最後に通ったものが会話の既定」
 export type RuntimeKindId = 'claude-code' | 'codex';
 export const runtimeIdOf = (config: Config, kind: RuntimeKindId): string => ((config.runtimes as Array<{ id: string; kind: string }> | undefined) ?? []).find(item => item.kind === kind)?.id ?? kind;
 
@@ -99,14 +100,20 @@ export function setupRuntimeConfig(config: Config, form: { kind: RuntimeKindId; 
   const turnedOn = updateRuntime(config, { id: runtimeId, kind: form.kind }, { enabled: true });
   const same = (turnedOn.models as Entry[]).find(m => m.runtime === runtimeId && m.model === entry);
   const added = same ? { config: turnedOn, id: same.id } : addRuntimeModel(turnedOn, runtimeId, { id: entry, label: entry, efforts: [] });
-  const routing = added.config.routing as { chat: string[]; background: string[] };
-  const models = added.config.models as Entry[];
+  const noOwn = !(added.config.models as Entry[]).some(m => !isRuntimeEntry({ runtime: m.runtime }));
+  return { config: noOwn ? putRuntimeFirst(added.config, added.id) : added.config, runtimeId, modelId: added.id };
+}
+
+// 確かめが通った実行役のモデルを、会話の順番の先頭に置く（実行役のモデルは先頭にだけ置ける）。前に通した実行役は外し、提供元のモデルが 1 つも無ければそれだけ、あれば後ろに提供元のモデルを続ける（順番が空だったときは全部）。裏の順番には触らない
+export function putRuntimeFirst(config: Config, modelId: string): Config {
+  const routing = config.routing as { chat: string[]; background: string[] };
+  const models = config.models as Entry[];
   const runtimeIds = new Set(models.filter(m => isRuntimeEntry({ runtime: m.runtime })).map(m => m.id));
+  if (!runtimeIds.has(modelId)) return config;
   const own = models.filter(m => !runtimeIds.has(m.id)).map(m => m.id);
   const rest = routing.chat.filter(id => !runtimeIds.has(id));
-  const chat = [added.id, ...(own.length === 0 ? [] : rest.length > 0 ? rest : own)];
-  const next = deepEqual(routing.chat, chat) ? routing : { ...routing, chat };
-  return { config: next === routing ? added.config : { ...added.config, routing: next }, runtimeId, modelId: added.id };
+  const chat = [modelId, ...(own.length === 0 ? [] : rest.length > 0 ? rest : own)];
+  return deepEqual(routing.chat, chat) ? config : { ...config, routing: { ...routing, chat } };
 }
 
 // 「モデルを読み込む」の前に、モデルの無いまま実行役だけを入れる（読み込みは入れた実行役にしか通らない）

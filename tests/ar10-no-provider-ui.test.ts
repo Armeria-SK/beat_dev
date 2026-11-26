@@ -5,7 +5,7 @@ import { parseConfig, defaultConfig } from '../src/config/store.ts';
 import type { ModelView, Project, Task, WaitReason } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
-import { setupModelConfig, setupRuntimeConfig } from '../web/src/onboarding.ts';
+import { putRuntimeFirst, setupModelConfig, setupRuntimeConfig } from '../web/src/onboarding.ts';
 import { noProviderNow, setNoProvider, subscribeNoProvider } from '../web/src/provider-state.ts';
 import { noProviderConfig } from '../web/src/settings/model.ts';
 import { buildAction } from '../web/src/ui/acceptance.ts';
@@ -42,15 +42,20 @@ test('setupRuntimeConfig: 提供元のモデルが無いとき、実行役を入
   assert.equal(bare().models.length, 0, 'the input is not changed');
 });
 
-test('setupRuntimeConfig: 提供元のモデルがあっても、いま選んだ実行役のモデルが会話の順番の先頭に来る（提供元のモデルは後ろ。裏の順番は触らない）。切ってあった実行役の行は同じ id のまま入れ直す', () => {
+test('setupRuntimeConfig: 提供元のモデルがあるときは、確かめる前の保存で会話の順番に触らない。確かめが通ったあとの putRuntimeFirst で、実行役のモデルが先頭に来る（提供元のモデルは後ろ。裏の順番は触らない）。切ってあった実行役の行は同じ id のまま入れ直す', () => {
   const owned = setupRuntimeConfig(withProvider(), { kind: 'codex', model: 'gpt-x' });
-  assert.deepEqual(owned.config.routing, { chat: [owned.modelId, 'm1'], background: ['m1'], retriesPerModel: 0 }, 'the runtime first, the provider models after it; the background order is not touched');
-  assert.doesNotThrow(() => parseConfig(owned.config));
+  assert.deepEqual(owned.config.routing, withProvider().routing, 'before the check passes the order is not touched');
+  const first = putRuntimeFirst(owned.config, owned.modelId);
+  assert.deepEqual(first.routing, { chat: [owned.modelId, 'm1'], background: ['m1'], retriesPerModel: 0 }, 'after the check passes: the runtime first, the provider models after it; the background order is not touched');
+  assert.doesNotThrow(() => parseConfig(first));
   const emptyOrder = setupRuntimeConfig({ ...withProvider(), routing: { chat: [], background: [], retriesPerModel: 0 } }, { kind: 'codex', model: 'gpt-x' });
-  assert.deepEqual(emptyOrder.config.routing.chat, [emptyOrder.modelId, 'm1'], 'an empty order meant "every provider model": it stays so, after the runtime');
-  const other = setupRuntimeConfig(owned.config, { kind: 'claude-code', model: 'sonnet' });
-  assert.deepEqual(other.config.routing.chat, [other.modelId, 'm1'], 'a second runtime choice replaces the first one at the head');
-  assert.deepEqual(setupRuntimeConfig(owned.config, { kind: 'codex', model: 'gpt-x' }).config, owned.config, 'choosing the same thing again changes nothing');
+  assert.deepEqual(emptyOrder.config.routing.chat, [], 'an empty order stays empty before the check');
+  assert.deepEqual(putRuntimeFirst(emptyOrder.config, emptyOrder.modelId).routing.chat, [emptyOrder.modelId, 'm1'], 'an empty order meant "every provider model": it stays so, after the runtime');
+  const other = setupRuntimeConfig(first, { kind: 'claude-code', model: 'sonnet' });
+  assert.deepEqual(other.config.routing.chat, [owned.modelId, 'm1'], 'a runtime that has not passed yet does not replace the one that did');
+  assert.deepEqual(putRuntimeFirst(other.config, other.modelId).routing.chat, [other.modelId, 'm1'], 'once it passes it replaces the first one at the head');
+  assert.deepEqual(putRuntimeFirst(first, owned.modelId), first, 'putting the same one first again changes nothing');
+  assert.equal(putRuntimeFirst(first, 'm1'), first, 'a provider model id is never put in front by this');
   assert.equal(owned.config.runtimes[0].enabled, true);
   const off = { ...bare(), runtimes: [{ id: 'cc', kind: 'claude-code', enabled: false, permission: 'acceptEdits' }] };
   const back = setupRuntimeConfig(off, { kind: 'claude-code', model: 'opus' });
@@ -85,16 +90,18 @@ test('はじめの設定の取り直し: 実行役を試したあとで提供元
   assert.deepEqual(second.config.routing.chat, [provider.modelId, second.modelId], 'with a provider model already there the order is kept and the new one goes last');
 });
 
-test('はじめの設定の取り直し（逆の順）: 先に提供元のモデルを試して、そのあと実行役を選んで通ると、会話の順番の先頭は実行役になる（提供元のモデルは後ろに残る）', () => {
+test('はじめの設定の取り直し（逆の順）: 先に提供元のモデルを試して、そのあと実行役を選んで確かめが通ると、会話の順番の先頭は実行役になる（提供元のモデルは後ろに残る）。通る前は先頭を替えない', () => {
   const provider = setupModelConfig(bare(), modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'rejected' }), null);
   assert.deepEqual(provider.config.routing.chat, [provider.modelId]);
   const runtime = setupRuntimeConfig(provider.config, { kind: 'claude-code', model: 'sonnet' });
-  assert.equal(runtime.config.routing.chat[0], runtime.modelId, 'the last choice is the default of the conversations');
-  assert.deepEqual(runtime.config.routing.chat, [runtime.modelId, provider.modelId]);
-  assert.deepEqual(runtime.config.routing.background, [provider.modelId], 'the background stays on the provider model');
-  assert.doesNotThrow(() => parseConfig(runtime.config));
-  const back = setupModelConfig(runtime.config, modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'k' }), provider.modelId);
-  assert.deepEqual(back.config.routing.chat, [runtime.modelId, provider.modelId], 'trying the same provider model again keeps the order (the runtime was chosen last)');
+  assert.deepEqual(runtime.config.routing.chat, [provider.modelId], 'the check has not passed: the default is not changed');
+  const passed = putRuntimeFirst(runtime.config, runtime.modelId);
+  assert.equal(passed.routing.chat[0], runtime.modelId, 'the last choice that passed is the default of the conversations');
+  assert.deepEqual(passed.routing.chat, [runtime.modelId, provider.modelId]);
+  assert.deepEqual(passed.routing.background, [provider.modelId], 'the background stays on the provider model');
+  assert.doesNotThrow(() => parseConfig(passed));
+  const back = setupModelConfig(passed, modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'k' }), provider.modelId);
+  assert.deepEqual(back.config.routing.chat, [runtime.modelId, provider.modelId], 'trying the same provider model again keeps the order (the runtime passed last)');
 });
 
 test('はじめの設定の入力: 選べる「つなぐもの」に実行役が入り、実行役はモデル名だけで足りる（鍵・URL・長さは要らない）', () => {
@@ -231,6 +238,30 @@ test('はじめの設定: 「Claude Code or Codex」を選び、モデル名を�
   assert.deepEqual(world.config.routing.chat, ['claude-code-sonnet']);
   assert.match(text(c), /Ready/u);
   assert.equal(next(c).disabled, false, 'the step can be passed with a usable runtime');
+});
+
+test('はじめの設定（提供元が動いている人がもう一度やり直す）: 実行役の確かめが通らなかったら、会話の順番は替えない。通ったときだけ、実行役が先頭に来る（提供元のモデルは後ろ）', async () => {
+  const failing = serve(withProvider(), { ...CHECKED, auth: 'login_required', usable: false });
+  const c = await onboard(failing);
+  await click(button(c, 'Claude Code or Codex'));
+  await input(c.querySelector('input[list="ui-ob-model-names"]'), 'sonnet');
+  await click(button(c, 'Test connection'));
+  await settle(); await settle();
+  assert.match(text(c), /Signed out/u);
+  assert.deepEqual(failing.config.routing.chat, ['m1'], 'a failed check leaves the order as it was: the conversations keep going to the provider');
+  assert.deepEqual(failing.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check'], 'one save before the check, none after it');
+  assert.equal(failing.config.models.some((m: Json) => m.runtime === 'claude-code'), true, 'the runtime and its model are saved (so that the check can run)');
+  assert.equal(next(c).disabled, true);
+
+  const passing = serve(withProvider());
+  const d = await onboard(passing);
+  await click(button(d, 'Claude Code or Codex'));
+  await input(d.querySelector('input[list="ui-ob-model-names"]'), 'sonnet');
+  await click(button(d, 'Test connection'));
+  await settle(); await settle();
+  assert.deepEqual(passing.config.routing, { chat: ['claude-code-sonnet', 'm1'], background: ['m1'], retriesPerModel: 0 }, 'the check passed: the runtime is first, the provider model follows, the background is untouched');
+  assert.deepEqual(passing.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check', 'PUT /api/settings'], 'the order is saved only after the check');
+  assert.equal(next(d).disabled, false);
 });
 
 test('はじめの設定: ログインが要る実行役は先へ進めず、ログインの案内（beat は代わりにしない）を出す。別の実行役を選び直すと、前の結果は消える', async () => {

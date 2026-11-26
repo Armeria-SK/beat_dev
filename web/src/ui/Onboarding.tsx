@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type Probe, type Profile, type RuntimeView } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { dropListed, keyEnvOf, plannedProviderId, runtimeIdOf, setupModelConfig, setupRuntimeConfig, turnOnRuntime, type RuntimeKindId } from '../onboarding.ts';
+import { dropListed, keyEnvOf, plannedProviderId, putRuntimeFirst, runtimeIdOf, setupModelConfig, setupRuntimeConfig, turnOnRuntime, type RuntimeKindId } from '../onboarding.ts';
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
 import { applyEdits, deepEqual, diffConfig } from '../settings/merge.ts';
 import type { Config } from '../settings/model.ts';
@@ -133,7 +133,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     finally { setBusy(false); }
   }
 
-  // 実行役: 入れる・モデルを足す・会話の順番の先頭に置く（提供元のモデルが無いとき）を保存してから、持ち主が押した確かめを 1 回だけ起こす
+  // 実行役: 入れる・モデルを足す（提供元のモデルが無いときは会話の順番の先頭にも置く）を保存してから、持ち主が押した確かめを 1 回だけ起こす。会話の順番の先頭に置くのは、確かめが通ったあと（2 回目の保存）だけ
   async function testRuntime() {
     const found = connectProblem(form, keySet);
     setProblem(found); setRuntimeView(null);
@@ -144,7 +144,12 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
       const latest = (await api.settings()).config;
       const built = setupRuntimeConfig(latest, { kind: runtimeKind, model: form.model });
       await saveTidy(latest, built.config);
-      setRuntimeView(await api.checkRuntime(built.runtimeId));
+      const view = await api.checkRuntime(built.runtimeId);
+      if (view.enabled && view.check?.usable === true) {
+        const passedConfig = (await api.settings()).config;
+        await saveTidy(passedConfig, putRuntimeFirst(passedConfig, built.modelId));
+      }
+      setRuntimeView(view);
     } catch (failure) { setError(errorText(failure, t('ui.ob.model.failed'))); }
     finally { setBusy(false); }
   }
