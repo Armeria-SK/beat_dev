@@ -363,7 +363,7 @@ export const ja = {
   'ui.set.runtime.versionOkDesc': (version: string) => `版 ${version}（beat が確かめた版です）`,
   'ui.set.runtime.versionNewDesc': (version: string) => `版 ${version}（beat が確かめていない版です。動くこともあります）`,
   'ui.set.runtime.issueTooOldDesc': (minimum: string) => `版 ${minimum} 以上が必要です。更新してください`,
-  'ui.set.runtime.issueSandboxDesc': (state: string) => `Windows の囲い（サンドボックス）が使える状態ではありません（${state}）。会話はまだ始めません。beat の外で Codex を一度自分で動かして、囲いを更新させてから「Check」を押してください`,
+  'ui.set.runtime.issueSandboxDesc': (state: string) => `Windows の囲い（サンドボックス）が使える状態ではありません（${state}）。会話はまだ始めません。beat の外で Codex を一度自分で動かし、Codex が求める囲いの準備や更新をすませてから「Check」を押してください`,
   'ui.set.runtime.issueScanFailedDesc': '囲い（サンドボックス）では守れないフォルダの確認が、最後まで終わりませんでした',
   'ui.set.runtime.readOnlyUnverifiedDesc': 'この版の Codex は beat が確かめていない版なので、上の設定にかかわらず「読むだけ」で起こします',
   'ui.set.runtime.issueWritableDesc': (folders: string) => `囲い（サンドボックス）では守れないフォルダがあります: ${folders}`,

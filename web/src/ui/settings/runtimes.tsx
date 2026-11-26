@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, type ModelView, type RuntimeIssue, type RuntimeIssueCode, type RuntimeView } from '../../api.ts';
+import { BLOCKING_ISSUES } from '../../../../src/runtimes/types.ts';
+import { api, ApiError, type ModelView, type RuntimeIssue, type RuntimeView } from '../../api.ts';
 import { formatRelative, useT } from '../../i18n/index.ts';
 import { addRuntimeModel, updateRuntime } from '../../settings/model.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -49,12 +50,11 @@ function authLine(t: T, check: NonNullable<RuntimeView['check']>): string {
   return check.auth === 'ok' ? t('ui.set.runtime.authOkDesc') : t('ui.set.runtime.authUnknownDesc');
 }
 
-// 会話を始められなくする注意（サーバーの BLOCKING_ISSUES を写した。tests/runtimes-settings-dom.test.ts が一致を見張る）
-const BLOCKING: ReadonlySet<RuntimeIssueCode> = new Set(['too_old', 'sandbox_not_ready']);
-
 function whyBlocked(view: Pick<RuntimeView, 'enabled' | 'check'>): RuntimeIssue | undefined {
-  return pillOf(view) === 'blocked' ? view.check?.issues.find(issue => BLOCKING.has(issue.code)) : undefined;
+  return pillOf(view) === 'blocked' ? view.check?.issues.find(issue => BLOCKING_ISSUES.has(issue.code)) : undefined;
 }
+
+const sameIssue = (a: RuntimeIssue, b: RuntimeIssue | undefined): boolean => b !== undefined && a.code === b.code && (a.detail ?? '') === (b.detail ?? '');
 
 // 状態の説明の 1 行: 入っているか・版（確かめた版か）・どの認証か・いつ確かめたか。札が Not ready なら、終わりにその理由
 export function stateLine(t: T, view: Pick<RuntimeView, 'enabled' | 'check'>): string {
@@ -120,7 +120,7 @@ function RuntimeRow({ view, onView }: { view: RuntimeView; onView: (view: Runtim
   const available: Option<string>[] = (view.models ?? []).filter(m => !taken.has(m.id)).map(m => ({ value: m.id, label: m.label === m.id ? m.id : `${m.label} (${m.id})` }));
   const addModel = (entry: { id: string; label: string; efforts: readonly string[] }) => void ctx.commit('runtime:add', c => addRuntimeModel(c, view.id, entry).config).then(ok => { if (ok) setTyped(''); });
   const why = whyBlocked(view);
-  const lines = [...(check?.issues ?? []).filter(issue => issue !== why), ...(check?.stop ? [check.stop] : [])];
+  const lines = [...(check?.issues ?? []).filter(issue => issue !== why), ...(check?.stop && !sameIssue(check.stop, why) ? [check.stop] : [])];
   const permission = view.permissions.includes(view.permission) ? view.permission : null;
 
   return (

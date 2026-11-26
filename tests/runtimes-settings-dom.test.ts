@@ -171,17 +171,18 @@ test('a runtime that is Not ready because of a blocking issue says why on its de
   const c = await open(world);
   const desc = (id: string) => text(row(c, `runtime:${id}`)!.querySelector('.bt-setting__desc'));
   const below = (id: string) => [...c.querySelectorAll(`[data-below="runtime:${id}"] [data-issue]`)].map(el => el.getAttribute('data-issue'));
-  assert.match(desc('codex'), /^Version 0\.172\.0 \(a version beat has checked\) · Signed in with your subscription · checked [^·]+ · The Windows sandbox is not ready \(updateRequired\), so beat will not start a conversation yet\. Run Codex once yourself, outside beat, so it can update its sandbox, then press Check$/u);
+  assert.match(desc('codex'), /^Version 0\.172\.0 \(a version beat has checked\) · Signed in with your subscription · checked [^·]+ · The Windows sandbox is not ready \(updateRequired\), so beat will not start a conversation yet\. Run Codex once yourself, outside beat, and finish the sandbox setup or update it asks for, then press Check$/u);
   assert.match(text(row(c, 'runtime:codex')!.querySelector('.bt-pill')), /^Not ready$/u);
   assert.deepEqual(below('codex'), ['too_old', 'world_writable'], 'only the first blocking issue moves up; the second blocking one and the non-blocking one stay below');
   assert.doesNotMatch(desc('claude-code'), /sandbox|needed/u, 'a Ready runtime has nothing to explain on its description line');
   assert.deepEqual(below('claude-code'), ['world_writable']);
 });
 
-test('which issue the description line carries follows the server rule for a blocked start (BLOCKING_ISSUES), for every issue code', () => {
+// 札が Not ready（usable false）のとき、説明の行に出る注意は、会話を始められなくする種類（BLOCKING_ISSUES）だけ。ほかの種類は、usable が false でも出さない（ログインが契約でないときなど、別の理由で Not ready のとき）
+test('on a Not ready runtime, the description line carries an issue iff its code is in BLOCKING_ISSUES, for every issue code', () => {
   const view = (code: RuntimeIssue['code']): RuntimeView => ({
     id: 'codex', kind: 'codex', configured: true, enabled: true, permission: 'read-only', permissions: ['read-only'], models: null,
-    check: { ...CHECKED, version: '0.172.0', issues: [{ code, detail: 'x' }], stop: null, usable: !BLOCKING_ISSUES.has(code) } as NonNullable<RuntimeView['check']>,
+    check: { ...CHECKED, version: '0.172.0', issues: [{ code, detail: 'x' }], stop: null, usable: false } as NonNullable<RuntimeView['check']>,
   });
   for (const code of RUNTIME_ISSUES) {
     const said = stateLine(t, view(code)).includes(issueLine(t, { code, detail: 'x' }));
@@ -189,11 +190,46 @@ test('which issue the description line carries follows the server rule for a blo
   }
 });
 
-test('the sandbox message tells the owner what to do, in English and in Japanese', () => {
-  for (const [table, asks] of [[en, /Run Codex once yourself, outside beat, so it can update its sandbox, then press Check$/u], [ja, /beat の外で Codex を一度自分で動かして、囲いを更新させてから「Check」を押してください$/u]] as const) {
-    const message = table['ui.set.runtime.issueSandboxDesc']('updateRequired');
-    assert.match(message, /updateRequired/u);
-    assert.match(message, asks);
+// 会話を断られたあと Settings を開く流れ: サーバーは、断った注意（始められなくする最初の 1 件）をそのまま stop にも覚える
+test('the stop that repeats the issue already on the description line is not said again below; a stop with another state is', async () => {
+  const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), {
+    checks: {
+      codex: { ...CHECKED, version: '0.172.0', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }], stop: { code: 'sandbox_not_ready', detail: 'updateRequired' }, usable: false },
+      'claude-code': { ...CHECKED, issues: [{ code: 'too_old', detail: '2.1.296' }], stop: { code: 'too_old', detail: '2.1.290' }, usable: false },
+    },
+  });
+  const c = await open(world);
+  const below = (id: string) => [...c.querySelectorAll(`[data-below="runtime:${id}"] [data-issue]`)].map(el => [el.getAttribute('data-issue'), text(el)]);
+  assert.match(text(row(c, 'runtime:codex')!.querySelector('.bt-setting__desc')), /The Windows sandbox is not ready \(updateRequired\)/u);
+  assert.deepEqual(below('codex'), [], 'the same code and state as the description line: said once');
+  assert.match(text(row(c, 'runtime:claude-code')!.querySelector('.bt-setting__desc')), /Version 2\.1\.296 or newer is needed\. Update it$/u);
+  assert.deepEqual(below('claude-code'), [['too_old', 'Version 2.1.290 or newer is needed. Update it']], 'a stop that names another state is still said below');
+});
+
+// 札が Signed out のときの理由は「ログインしていない」。ほかの注意（囲いの準備）を説明の行に混ぜず、下の行に残す
+test('a signed-out runtime says it is not signed in on the description line, and its sandbox issue stays below', async () => {
+  const world = serve(base({ runtimes: [{ id: 'codex', kind: 'codex', enabled: true }] }), {
+    checks: { codex: { ...CHECKED, version: '0.172.0', auth: 'login_required', login: null, issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }], usable: false } },
+  });
+  const c = await open(world);
+  const desc = text(row(c, 'runtime:codex')!.querySelector('.bt-setting__desc'));
+  assert.match(desc, /Not signed in/u);
+  assert.doesNotMatch(desc, /sandbox/u);
+  assert.match(text(row(c, 'runtime:codex')!.querySelector('.bt-pill')), /^Signed out$/u);
+  assert.deepEqual([...c.querySelectorAll('[data-below="runtime:codex"] [data-issue]')].map(el => el.getAttribute('data-issue')), ['sandbox_not_ready']);
+});
+
+test('the sandbox message tells the owner what to do for every non-ready state (set up, update, unknown), in English and in Japanese', () => {
+  const asks = [
+    [en, /Run Codex once yourself, outside beat, and finish the sandbox setup or update it asks for, then press Check$/u],
+    [ja, /beat の外で Codex を一度自分で動かし、Codex が求める囲いの準備や更新をすませてから「Check」を押してください$/u],
+  ] as const;
+  for (const [table, pattern] of asks) {
+    for (const state of ['updateRequired', 'notConfigured', 'unknown']) {
+      const message = table['ui.set.runtime.issueSandboxDesc'](state);
+      assert.ok(message.includes(`（${state}）`) || message.includes(`(${state})`), `${state} is shown`);
+      assert.match(message, pattern);
+    }
   }
 });
 
