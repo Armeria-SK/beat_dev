@@ -77,6 +77,8 @@ export interface RuntimeRequest {
   instructions?: string;
   // 続きの会話の ID（実行役が持つもの）
   resume?: string;
+  // beat 自身の待ち受けのポート。Claude Code には、このポートへの接続を含むシェルの命令を、使う人の許す決まりより先に断る決まりとして渡す（実行役のシェルから beat の API を呼ばせない）。無ければ決まりを足さない
+  beatPort?: number;
   // 起こすたびに必ず渡す。レジストリが設定から決めて入れる（無い・知らない値は既定）
   permission: RuntimePermission;
   signal: AbortSignal;

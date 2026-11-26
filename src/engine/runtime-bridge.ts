@@ -412,7 +412,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     const instructions = found.runtime.kind === 'claude-code' ? productInstructions(folder.root, log) : undefined;
     try {
       held.session = await deps.runtimes.registry.start(config, runtimeId, {
-        conversationId, cwd: folder.root, model: input.model, signal,
+        conversationId, cwd: folder.root, model: input.model, signal, beatPort: config.server.port,
         ...(effort !== undefined ? { effort } : {}), ...(cautious ? { cautious: true as const } : {}),
         ...(instructions !== undefined ? { instructions } : {}), ...(previous !== null ? { resume: previous } : {}),
       });

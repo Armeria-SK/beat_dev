@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, symlinkSync } from 'node:fs';
+import { request } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ChatMessage, RunEvent } from '../src/engine/types.ts';
@@ -24,8 +25,14 @@ const runtimeRows = (r: Rig) => r.s.app.db.prepare("SELECT * FROM pending_action
 const requestOf = (row: PendingRow): string => (JSON.parse(row.state ?? 'null') as { runtime: { request: string } }).runtime.request;
 const rowOf = (r: Rig, requestId: string): PendingRow => runtimeRows(r).find(row => requestOf(row) === requestId)!;
 const count = (r: Rig, table: string) => (r.s.app.db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
-const approve = (r: Rig, id: number, body?: unknown) => r.s.json(`/api/pending/${id}/approve`, 'POST', body);
-const reject = (r: Rig, id: number, reason?: string) => r.s.json(`/api/pending/${id}/reject`, 'POST', reason === undefined ? {} : { reason });
+// 画面のページが出す fetch と同じ印（ブラウザは Sec-Fetch-Site・Sec-Fetch-Mode を必ず付ける）。実行役の求めへの答えはこれが無いと受けない
+const PAGE = { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors' };
+const post = async (r: Rig, path: string, body: unknown, headers: Record<string, string>) => {
+  const res = await r.s.api(path, { method: 'POST', headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return { status: res.status, body: await res.json().catch(() => ({})) as any };
+};
+const approve = (r: Rig, id: number, body?: unknown, headers: Record<string, string> = PAGE) => post(r, `/api/pending/${id}/approve`, body, headers);
+const reject = (r: Rig, id: number, reason?: string, headers: Record<string, string> = PAGE) => post(r, `/api/pending/${id}/reject`, reason === undefined ? {} : { reason }, headers);
 const toolMessages = (r: Rig, conversation: string) => r.rows(conversation).filter((m): m is Extract<ChatMessage, { role: 'tool' }> => m.role === 'tool');
 const resultEvents = (r: Rig, runId: string) => r.events.filter((e): e is Extract<RunEvent, { type: 'tool.result' }> => e.type === 'tool.result' && e.runId === runId);
 
@@ -523,6 +530,62 @@ test('返事の終わりに待ちの片付け（closeRun）が落ちても、実
   assert.equal(r.runtime.closes, 1, 'the runtime session was closed although the cleanup before it failed');
   assert.equal(r.s.app.runs.get(runId)!.ok, 1, 'the reply still ended normally');
   assert.ok(r.s.logs.some(line => line.includes('Could not close the approval requests') && line.includes('the database is gone')), r.s.logs.join(' | '));
+});
+
+// 実行役のシェルが出す curl と同じ、素の HTTP の要求（Host と Origin だけ。ブラウザの印は無い）
+function plain(r: Rig, path: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+  const origin = new URL(r.s.origin);
+  return new Promise((resolve, reject) => {
+    const req = request({ host: origin.hostname, port: Number(origin.port), path, method: 'POST', headers: { Host: origin.host, Origin: r.s.origin, ...headers }, setHost: false }, res => {
+      let body = '';
+      res.on('data', chunk => { body += String(chunk); });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('実行役の求めへの答え（許す・断る）は、画面のページから出した要求だけ受ける。同じ PC の素の HTTP の要求（Host と Origin だけ）で、実行役が自分の求めを許せない', async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await r.product();
+  await r.check();
+  r.runtime.script = asking(r, [{ id: 'req-1', tool: 'Write', input: writeInput(root) }]);
+  const { runId } = await start(r, projectId);
+  await waitFor(() => runtimeRows(r).length === 1, 'the request reached Pending');
+  const row = runtimeRows(r)[0]!;
+  for (const action of ['approve', 'reject']) {
+    const path = `/api/pending/${row.id}/${action}`;
+    for (const headers of [{}, { 'Sec-Fetch-Site': 'none' }, { 'Sec-Fetch-Site': 'same-origin' }, { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' }, { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'no-cors' }, { 'Sec-Fetch-Mode': 'cors' }]) {
+      const res = await plain(r, path, headers);
+      assert.equal(res.status, 403, `${action} ${JSON.stringify(headers)}: ${res.body}`);
+    }
+  }
+  const refused = await plain(r, `/api/pending/${row.id}/approve`);
+  assert.deepEqual([JSON.parse(refused.body).error, JSON.parse(refused.body).code], ['forbidden', 'pending.runtime_page_only']);
+  assert.equal((await approve(r, row.id, undefined, {})).status, 403, 'a client that sends only the Origin header, like the test client before this check, is refused too');
+  assert.equal((await reject(r, row.id, undefined, {})).status, 403);
+  assert.equal(r.runtime.approvals.length, 0, 'nothing was relayed to the runtime');
+  assert.equal(r.s.app.pending.row(row.id)!.status, 'waiting');
+  assert.equal(r.s.app.runs.get(runId)!.ended_at, null);
+  assert.equal(r.s.app.runtimeApprovals.size, 1);
+
+  assert.equal((await plain(r, `/api/pending/${row.id}/approve`, { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'same-origin' })).status, 202, 'a request the page sends (fetch with mode same-origin) is accepted');
+  await settled(r.s.app, runId);
+  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'accept' }]);
+  assert.equal((await plain(r, '/api/pending/9999/approve')).status, 404, 'a row that does not exist is still not found, not forbidden');
+});
+
+test('実行役を起こすとき、beat 自身の待ち受けのポートを渡す（Claude Code はそのポートへの接続を含むシェルの命令を、使う人の許す決まりより先に断る）', async t => {
+  const r = await rig(t);
+  const { id: projectId } = await r.product();
+  await r.check();
+  r.runtime.script = async feed => { feed.push({ type: 'text', delta: 'ok' }); feed.done(); };
+  const { runId } = await start(r, projectId);
+  await settled(r.s.app, runId);
+  assert.equal(r.runtime.starts.length, 1);
+  assert.equal(r.runtime.starts[0]!.beatPort, r.s.app.config().server.port);
+  assert.ok(Number.isInteger(r.runtime.starts[0]!.beatPort));
 });
 
 test('返事が終わる・止められるとき閉じるのは、その返事の求めだけ。ほかの返事が待っている求めは残り、あとで答えられる', async t => {

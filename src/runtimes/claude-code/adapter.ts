@@ -283,7 +283,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
           settingSources: ['user'],
           systemPrompt: { type: 'preset', preset: 'claude_code', ...(request.instructions !== undefined && request.instructions !== '' ? { append: request.instructions } : {}) },
           tools: [...KEPT_TOOLS],
-          disallowedTools: disallowedTools(),
+          disallowedTools: disallowedTools(request.beatPort),
           hooks: toolHooks(),
           canUseTool,
           includePartialMessages: true,

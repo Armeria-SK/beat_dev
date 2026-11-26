@@ -11,6 +11,7 @@ export const pendingJa = {
   'invalid_remember': "remember は true か false にしてください",
   'invalid_reply': "reply は true か false にしてください（remember とは一緒に使えません）",
   'reply_unavailable': "Pending の項目 #{id} は、この返事が終わるまでの許可にできません: できるのは、その答えを持てる外の実行役からの求めだけです",
+  'runtime_page_only': "Pending の項目 #{id} は外の実行役からの求めです。答えられるのは、このサーバーのページからだけです（コマンドラインやスクリプトからは答えられません）",
   'not_rememberable': "Pending の項目 #{id} は決まりにできません: 決まりにできるのは、製品の実行で、beat がちょうど同じ形で照らせる項目だけです",
   'rule_not_found': "決まり #{id} が見つかりません",
   'invalid_rule_id': "決まりの id は正の整数にしてください",

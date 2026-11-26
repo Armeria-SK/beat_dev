@@ -9,6 +9,7 @@ const en = {
   'invalid_remember': 'remember must be true or false',
   'invalid_reply': 'reply must be true or false, and cannot be combined with remember',
   'reply_unavailable': 'Pending item #{id} cannot be allowed for the rest of the reply: only a request of an outside runtime that can hold that answer can',
+  'runtime_page_only': 'Pending item #{id} is a request of an outside runtime. It can only be answered from the page of this server, not by a command line or a script',
   'not_rememberable': 'Pending item #{id} cannot become a rule: only an item from a product\'s run, with a shape beat can match exactly, can',
   'rule_not_found': 'Rule #{id} was not found',
   'invalid_rule_id': 'A rule id must be a positive integer',

@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import type { App } from '../app.ts';
 import { transaction } from '../db/database.ts';
 import { parentOf } from '../pending/replay.ts';
@@ -17,7 +18,17 @@ function pendingProblem(error: unknown): never {
   throw error;
 }
 
+// ブラウザは、ページから出す fetch に Sec-Fetch-Site・Sec-Fetch-Mode を必ず付ける。curl や実行役のシェルの素の要求には付かない。
+// 実行役の求めへの答えは、このページから出した要求だけ受ける（実行役が自分のシェルから、自分の求めを許す口を塞ぐ。ヘッダーを自分で付ければ通るので、止めきる守りではない）
+const fromPage = (req: IncomingMessage): boolean => {
+  const mode = req.headers['sec-fetch-mode'];
+  return req.headers['sec-fetch-site'] === 'same-origin' && (mode === 'cors' || mode === 'same-origin');
+};
+
 export function registerPendingRoutes(router: Router, app: App): void {
+  const pageOnly = (req: IncomingMessage, id: number): void => {
+    if (app.pending.row(id)?.kind === 'runtime' && !fromPage(req)) throw domainProblem(403, 'forbidden', new PendingError('runtime_page_only', { id }));
+  };
   const today = (): number => {
     try { return startOfDayIn(app.config().timezone, app.now()); } catch { return startOfDayIn('UTC', app.now()); }
   };
@@ -53,6 +64,7 @@ export function registerPendingRoutes(router: Router, app: App): void {
   router.add('GET', '/api/pending/counts', ({ res }) => sendJson(res, 200, app.pending.counts(today())));
   router.add('POST', '/api/pending/:id/approve', async ({ req, res, params }) => {
     const id = idOf(params[0]);
+    pageOnly(req, id);
     const body = req.headers['content-type'] === undefined ? {} : requireObject(await readJson(req));
     if (body.remember !== undefined && typeof body.remember !== 'boolean') throw domainProblem(400, 'invalid_field', new PendingError('invalid_remember'));
     if (body.reply !== undefined && typeof body.reply !== 'boolean') throw domainProblem(400, 'invalid_field', new PendingError('invalid_reply'));
@@ -80,6 +92,7 @@ export function registerPendingRoutes(router: Router, app: App): void {
   });
   router.add('POST', '/api/pending/:id/reject', async ({ req, res, params }) => {
     const id = idOf(params[0]);
+    pageOnly(req, id);
     const body = requireObject(await readJson(req));
     if (body.reason !== undefined && typeof body.reason !== 'string') throw domainProblem(400, 'invalid_field', new PendingError('invalid_reason'));
     try { sendJson(res, 200, { item: app.pending.reject(id, body.reason as string | undefined) }); } catch (error) { pendingProblem(error); }

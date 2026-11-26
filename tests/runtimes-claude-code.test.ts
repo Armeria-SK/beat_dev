@@ -689,6 +689,22 @@ test('every secret-path deny rule goes through the command line check of the pro
   assert.deepEqual(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []), rules, 'the child received exactly the rules, in one comma-joined argument like the real SDK (nothing was redacted or split)');
 });
 
+test('beat の待ち受けのポートが渡されたとき、そのポートへの接続を含む Bash・PowerShell・Monitor の命令は deny の決まりで断る（使う人の allow より先に効く）。渡されなければ決まりを足さない', async t => {
+  const port = 47811;
+  const s = setup(t);
+  const session = await s.start({ beatPort: port });
+  const rules = s.sdk.last.ctx.options.disallowedTools ?? [];
+  const expected = ['Bash', 'PowerShell', 'Monitor'].flatMap(tool => ['127.0.0.1', 'localhost', '[::1]'].map(host => `${tool}(*${host}:${port}*)`));
+  assert.equal(expected.length, 9);
+  for (const rule of expected) assert.ok(rules.includes(rule), rule);
+  assert.ok(rules.every(rule => !/[,\s]/u.test(rule)), 'no rule holds a comma or a space, so the comma-joined argument stays whole');
+  assert.deepEqual(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []), rules, 'the child received exactly the rules');
+  for (const rule of expected) assert.ok(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []).includes(rule), `${rule} reached the child command line`);
+  const plain = setup(t);
+  await plain.start();
+  assert.ok((plain.sdk.last.ctx.options.disallowedTools ?? []).every(rule => !rule.includes('127.0.0.1') && !rule.includes('localhost')), 'no port, no rule');
+});
+
 // 本物の SDK は、外す道具と決まりを 1 つの引数 `--disallowedTools=a,b,c`（コンマでつなぐ）で渡す
 function commandLineRules(args: readonly string[]): string[] {
   const joined = args.filter(arg => arg.startsWith('--disallowedTools='));
