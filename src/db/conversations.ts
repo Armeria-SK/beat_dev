@@ -84,10 +84,11 @@ function shortTitle(text: string): string {
 
 export interface ReviewSource { conversationId?: string | null | undefined; taskId?: string | null | undefined }
 
-export interface SpeechRow { id: number; conversation_id: string; role: 'user' | 'assistant'; text: string; generated: number; created_at?: number }
+export interface SpeechRow { id: number; conversation_id: string; role: 'user' | 'assistant'; text: string; generated: number; created_at?: number; askAnswer?: number }
 
 export function ownerSpeech(db: DatabaseSync, projectId: string): SpeechRow[] {
-  return db.prepare(`SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, COALESCE(json_extract(m.parts, '$.generated'), 0) IS 1 AS generated
+  return db.prepare(`SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, COALESCE(json_extract(m.parts, '$.generated'), 0) IS 1 AS generated,
+      COALESCE(json_extract(m.parts, '$.askAnswer'), 0) AS askAnswer
     FROM conversations c JOIN messages m ON m.conversation_id = c.id
     WHERE c.project_id = ? AND c.kind = 'chat' AND c.parent_run_id IS NULL AND m.role = 'user'
     ORDER BY m.id`).all(projectId) as unknown as SpeechRow[];

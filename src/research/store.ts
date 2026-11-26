@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
-import { askedCardsIn, normalizeQuote, ownerTypedParts, prepareSpeech, verifySource, type OwnerPick } from '../projects/acceptance.ts';
+import { askedCardsIn, normalizeQuote, ownerTypedRows, prepareSpeech, verifySource, type OwnerPick } from '../projects/acceptance.ts';
 import type { SpeechRow } from '../db/conversations.ts';
-import { stripAttachments } from '../uploads/store.ts';
 import { normalizeUrl, quoteHasName, sourceKey, type PartKind } from './evidence.ts';
 import { checkLabel, ResearchError, type LabelKind } from './labels.ts';
 import { pickLine } from './confirm.ts';
@@ -235,18 +234,12 @@ export class ResearchStore {
   #markOwnerSaid(id: string): void {
     const run = this.get(id)!;
     if (!run.source_conversation_id) return;
-    const messages = this.#db.prepare(`SELECT id, conversation_id, role, text, 0 AS generated, COALESCE(json_extract(parts, '$.askAnswer'), 0) AS ask FROM messages
+    const messages = this.#db.prepare(`SELECT id, conversation_id, role, text, 0 AS generated, COALESCE(json_extract(parts, '$.askAnswer'), 0) AS askAnswer FROM messages
       WHERE conversation_id = ? AND role = 'user'
         AND COALESCE(json_extract(parts, '$.generated'), 0) IS NOT 1
         AND json_extract(parts, '$.note') IS NULL
-      ORDER BY id`).all(run.source_conversation_id) as unknown as Array<SpeechRow & { ask: number }>;
-    const cards = messages.some(row => row.ask === 1) ? askedCardsIn(this.#db, run.source_conversation_id) : [];
-    const rows: SpeechRow[] = [];
-    for (const { ask, ...row } of messages) {
-      if (ask !== 1) { rows.push(row); continue; }
-      const card = cards.filter(c => c.questionMessageId < row.id).at(-1);
-      if (card) for (const text of ownerTypedParts(stripAttachments(row.text), card)) rows.push({ ...row, text });
-    }
+      ORDER BY id`).all(run.source_conversation_id) as unknown as SpeechRow[];
+    const rows = ownerTypedRows(messages, messages.some(row => row.askAnswer === 1) ? askedCardsIn(this.#db, run.source_conversation_id) : []);
     if (!rows.length) return;
     const mark = this.#db.prepare("UPDATE research_items SET default_checked = 1, default_reason = 'owner_said' WHERE id = ?");
     for (const item of this.items(id)) {

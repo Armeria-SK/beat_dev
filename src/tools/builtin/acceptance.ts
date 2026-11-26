@@ -1,7 +1,7 @@
 import { Type, type Static } from '@sinclair/typebox';
 import { ownerSpeech } from '../../db/conversations.ts';
 import {
-  AcceptanceError, buildDraft, checkedSource, prepareSpeech, SCAN_BUDGET, type AcceptanceCheck, type ChangeOp, type ChangeOpKind, type ClaimedSource, type Speech,
+  AcceptanceError, askedCards, buildDraft, checkedSource, prepareSpeech, SCAN_BUDGET, type AcceptanceCheck, type ChangeOp, type ChangeOpKind, type ClaimedSource, type Speech,
 } from '../../projects/acceptance.ts';
 import { CHECK_COMMAND_MAX, languageTagOf } from '../../projects/store.ts';
 import { confirmedPicks } from '../../research/store.ts';
@@ -74,7 +74,7 @@ export const acceptanceChange: ToolDef<Static<typeof CHANGE_INPUT>> = {
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
     try {
-      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id), SCAN_BUDGET, confirmedPicks(services.db, ctx.project.id));
+      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id), SCAN_BUDGET, confirmedPicks(services.db, ctx.project.id), askedCards(services.db, ctx.project.id));
       const ops = input.changes.map(entry => changeOf(entry, speech));
       const row = services.acceptance.propose(ctx.project.id, ops, { language: tainted ? null : languageTagOf(input.language) ?? null, conversationId: ctx.conversationId, tainted });
       services.emit({ type: 'acceptance.changed', projectId: ctx.project.id, version: row.base_version, draft: false });
@@ -98,7 +98,7 @@ function unconfirmedText(changed: Partial<Record<string, number>>): string {
 
 export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
   name: 'acceptance_write',
-  description: "Replace this conversation's draft acceptance list (owner-facing documents language): one checkable result per item, not how to build it. source: owner_words with quote (the owner's exact words; never translate) or ai_added. check: a command that succeeds only when the item holds, whenever possible; else look or read (keep these few; split mixed items). notDoing: what the owner ruled out. Quotes are checked against what the owner said in this product's conversations.",
+  description: "Replace this conversation's draft acceptance list (owner-facing documents language): one checkable result per item, not how to build it. source: owner_words with quote (the owner's exact words; never translate) or ai_added. An option picked on an ask_owner card is owner_choice with the card's question and that option (typed text stays owner_words). check: a command that succeeds only when the item holds, whenever possible; else look or read (keep these few; split mixed items). notDoing: what the owner ruled out. Quotes are checked against what the owner said in this product's conversations.",
   input: INPUT,
   effect: 'meta',
   allowedIn: ['chat'],
@@ -112,7 +112,7 @@ export const acceptanceWrite: ToolDef<Static<typeof INPUT>> = {
     let tainted = ctx.taint.tainted;
     if (!tainted && ctx.conversationTainted) { try { tainted = ctx.conversationTainted(); } catch { tainted = true; } }
     try {
-      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id), SCAN_BUDGET, confirmedPicks(services.db, ctx.project.id));
+      const speech = prepareSpeech(ownerSpeech(services.db, ctx.project.id), SCAN_BUDGET, confirmedPicks(services.db, ctx.project.id), askedCards(services.db, ctx.project.id));
       const docLanguage = services.projects?.get(ctx.project.id)?.doc_language ?? null;
       const { doc, verified, changed } = buildDraft({ items: input.items.map(entry => ({ result: entry.result, source: claimOf(entry), check: checkOf(entry) })), notDoing: input.notDoing?.map(entry => ({ text: entry.text, source: claimOf(entry) })) }, speech, { language: docLanguage, taintedRuns: tainted ? [ctx.runId] : [] });
       services.acceptance.writeDraft(ctx.project.id, ctx.conversationId, doc);

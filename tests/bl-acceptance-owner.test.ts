@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { builtinTools } from '../src/app.ts';
 import { Conversations, ownerSpeech } from '../src/db/conversations.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import type { ChatMessage } from '../src/engine/types.ts';
+import type { ChatMessage, StopReason, ToolCall } from '../src/engine/types.ts';
 import { askedCards, buildDraft, coverageOf, prepareSpeech, SCAN_BUDGET, verifySource, type ClaimedSource } from '../src/projects/acceptance.ts';
 import { ResearchStore } from '../src/research/store.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
+import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
+import { reply, tempDir, withLoad, type Script } from './helpers.ts';
+import { researchApp } from './helpers/research-app.ts';
 
 const PROJECT = 'aaaaaaaa-0000-4000-8000-0000000000aa';
 const OTHER = 'bbbbbbbb-0000-4000-8000-0000000000bb';
@@ -151,21 +157,64 @@ test('ask_owner の答え（L803・反対の試験）: AI が文章に書いた�
   assert.deepEqual(f.check(choice(STORAGE, 'JSON files')), unverified(STORAGE, 'JSON files'), '見せていない札');
 });
 
-test('ask_owner の答え（L803）: 新しい札の答えを先に当て、古い札の答えも残る。持ち主の言葉（owner_words）の確かめは札があってもなくても同じ', () => {
+test('ask_owner の答え（L803）: 新しい札の答えを先に当て、古い札の答えも残る', () => {
   const f = fixture();
   const c = f.chat();
   const first = f.ask(c);
   const firstAnswer = f.owner(c, CARD_ANSWER('JSON files', 'List'), { askAnswer: true });
-  const typed = f.owner(c, 'Uploads must resume after a restart, please');
+  f.owner(c, 'Uploads must resume after a restart, please');
   const second = f.ask(c, { questions: [{ question: STORAGE, header: 'Storage', options: [{ label: 'SQLite' }, { label: 'JSON files' }] }] });
   const secondAnswer = f.owner(c, 'Answers:\n- Storage: JSON files', { askAnswer: true });
   assert.deepEqual(f.check(choice(STORAGE, 'JSON files')), { kind: 'owner_choice', question: STORAGE, questionMessageId: second, answer: 'JSON files', answerMessageId: secondAnswer, conversationId: c });
   assert.deepEqual(f.check(choice('Which screens come first?', 'List')), { kind: 'owner_choice', question: 'Which screens come first?', questionMessageId: first, answer: 'List', answerMessageId: firstAnswer, conversationId: c });
-  const withoutCards = prepareSpeech(ownerSpeech(f.db, PROJECT), SCAN_BUDGET);
-  for (const quote of ['uploads must resume after a restart', 'JSON files', 'Answers:\n- Storage: JSON files', 'nothing like this was said']) {
-    assert.deepEqual(verifySource(f.speech(), { kind: 'owner_words', quote }), verifySource(withoutCards, { kind: 'owner_words', quote }), quote);
+});
+
+const LONG_A = 'Keep every note in plain JSON files';
+const LONG_B = 'Use one SQLite database file';
+const ASK_LONG = {
+  questions: [
+    { question: STORAGE, header: 'Storage layout', options: [{ label: LONG_A }, { label: LONG_B }] },
+    { question: 'Which screens come first?', header: 'Screens', multiSelect: true, options: [{ label: 'List' }, { label: 'Detail' }] },
+  ],
+};
+const words = (quote: string): ClaimedSource => ({ kind: 'owner_words', quote });
+const notFound = (quote: string) => ({ kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote });
+
+test('札の答えの中の AI の文（P-R3-8）: 選択肢・見出しの文にしかない引用は owner_words として断り、選んだ選択肢としては owner_choice で認める', () => {
+  const f = fixture();
+  const c = f.chat();
+  const asked = f.ask(c, ASK_LONG);
+  const answer = f.owner(c, `Answers:\n- Storage layout: ${LONG_A}\n- Screens: List`, { askAnswer: true });
+  for (const quote of [LONG_A, 'keep every note in plain', 'Storage layout: Keep every note', 'Answers:\n- Storage layout: Keep every note in plain JSON files']) {
+    assert.deepEqual(f.check(words(quote)), notFound(quote), quote);
   }
-  assert.equal((verifySource(f.speech(), { kind: 'owner_words', quote: 'uploads must resume after a restart' }) as { messageId?: number }).messageId, typed);
+  assert.deepEqual(f.check(choice(STORAGE, LONG_A)), { kind: 'owner_choice', question: STORAGE, questionMessageId: asked, answer: LONG_A, answerMessageId: answer, conversationId: c });
+  assert.deepEqual(f.check(choice(STORAGE, LONG_B)), unverified(STORAGE, LONG_B), '選んでいない選択肢は、AI が足したのまま');
+});
+
+test('札の答えの中の AI の文（P-R3-8）: 持ち主が書いた文（Something else・札が開いている間の自由な返事）は、これまでどおり owner_words で当たる', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, ASK_LONG);
+  const typedAnswer = f.owner(c, 'Answers:\n- Storage layout: Postgres with a hosted backup\n- Screens: List, a map view of every note', { askAnswer: true });
+  const free = f.owner(c, 'Notes must stay readable offline, whatever happens', { askAnswer: true });
+  const hit = (quote: string) => { const source = f.check(words(quote)); return source.kind === 'owner_words' ? [source.quote, source.messageId] : source; };
+  assert.deepEqual(hit('postgres with a hosted backup'), ['Postgres with a hosted backup', typedAnswer]);
+  assert.deepEqual(hit('a map view of every note'), ['a map view of every note', typedAnswer]);
+  assert.deepEqual(hit('notes must stay readable offline'), ['Notes must stay readable offline', free]);
+  assert.deepEqual(f.check(words('a hosted backup of every note')), notFound('a hosted backup of every note'), '札の文を抜いた前後をつないだ引用は当てない');
+});
+
+test('札の答えの中の AI の文（P-R3-8）: 札が見つからない「答え」の印の発言は、持ち主の言葉に数えない。印の無い発言と、ふつうの持ち主の言葉は変わらない', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.owner(c, 'Uploads must resume after a restart, please');
+  f.owner(c, 'Exports must keep the original file names', { askAnswer: true });
+  const typed = f.owner(c, 'Notes must stay readable offline, whatever happens');
+  const hit = (quote: string) => { const source = f.check(words(quote)); return source.kind === 'owner_words' ? source.messageId : source; };
+  assert.deepEqual(f.check(words('exports must keep the original file names')), notFound('exports must keep the original file names'));
+  assert.equal(hit('notes must stay readable offline'), typed);
+  assert.equal(typeof hit('uploads must resume after a restart'), 'number');
 });
 
 test('ask_owner の答え（L803）: 下書きでは持ち主の選びとして数えられ、受け入れの一覧の「まだ引用されていない発言」から外れる', () => {
@@ -253,4 +302,127 @@ ${ATTACHMENT_OPEN}: notes.txt (text)>>>
 JSON files and Version history of notes
 ${storeText('en', 'attachment.close')}`, { askAnswer: true });
   assert.deepEqual(reasons(store, c, ['Version history of notes']), { 'Version history of notes': null });
+});
+
+test('札が開いている間の返事（L820・調べものの頼み）: 頼みに写す持ち主の文に、札の答えの中の持ち主が書いた部分と自由な返事が入り、AI が書いた選択肢・見出しの文は入らない', async t => {
+  const s = await researchApp(t);
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a Markdown notes app.');
+  const c = uuid(1);
+  s.app.conversations.append(c, { role: 'assistant', content: '', toolCalls: [{ id: 'call_card', name: 'ask_owner', arguments: ASK_LONG }] });
+  s.app.conversations.append(c, { role: 'tool', toolCallId: 'call_card', name: 'ask_owner', content: 'shown' });
+  s.app.conversations.append(c, { role: 'user', content: `Answers:\n- Storage layout: ${LONG_A}\n- Screens: List, a map view of every note`, askAnswer: true } as ChatMessage);
+  s.app.conversations.append(c, { role: 'user', content: 'ZQ-FREE reply typed while the card was open', askAnswer: true } as ChatMessage);
+  await s.settle();
+  const owner = s.app.research.ownerText(c);
+  assert.ok(owner.startsWith('I want a Markdown notes app.'));
+  for (const text of ['a map view of every note', 'ZQ-FREE reply typed while the card was open']) assert.ok(owner.includes(text), text);
+  for (const text of [LONG_A, 'Storage layout', 'Answers:', 'List']) assert.ok(!owner.includes(text), text);
+  assert.equal(owner.split('\n\n').length, 3, '句読点だけの切れ端は頼みに入らない');
+});
+
+const call = (name: string, args: unknown): Script => async function* (req) {
+  const toolCall: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
+  for (const c of withLoad(toolCall, req)) yield { type: 'tool_call', call: c };
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
+
+async function toolApp(t: Parameters<typeof startApp>[0]) {
+  const products = realpathSync.native(tempDir(t as never));
+  const s = await startApp(t, { models: [fakeModel('m1')], projectFolderExempt: [products], tools: builtinTools() });
+  const dir = join(products, 'shop');
+  mkdirSync(dir, { recursive: true });
+  const made = await s.json('/api/projects', 'POST', { root: dir });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const projectId = made.body.project.id as string;
+  const send = async (text: string) => {
+    const sent = await s.json(`/api/conversations/${uuid(1)}/messages`, 'POST', { text, projectId, permissionMode: 'plan' });
+    assert.equal(sent.status, 202, JSON.stringify(sent.body));
+    await settled(s.app, sent.body.runId);
+  };
+  const draft = () => (JSON.parse(readFileSync(join(s.paths.projects, projectId, 'conversation-plans', `${uuid(1)}.acceptance.json`), 'utf8')) as { items: Array<{ result: string; source: Record<string, unknown> }> }).items;
+  return { ...s, send, draft };
+}
+
+const row = (result: string, source: Record<string, unknown>) => ({ result, check: 'look', ...source });
+
+test('ask_owner の答え（L803・道具まで通し）: 札を出す → 持ち主が選ぶ → acceptance_write に owner_choice で書くと、AI が足したにならない。選んでいない選択肢と、選択肢の文を持ち主の言葉として引用したものは AI が足したのまま', async t => {
+  const s = await toolApp(t);
+  s.adapter().scripts = [call('ask_owner', ASK_LONG)];
+  await s.send('I want a notes app. Uploads must resume after a restart, please');
+  s.adapter().scripts = [
+    call('acceptance_write', {
+      items: [
+        row('Notes are kept in plain JSON files', { source: 'owner_choice', question: STORAGE, answer: LONG_A }),
+        row('Notes are kept in one SQLite file', { source: 'owner_choice', question: STORAGE, answer: LONG_B }),
+        row('Notes are stored as plain files, quoted from the option', { source: 'owner_words', quote: LONG_A }),
+        row('Uploads resume after a restart', { source: 'owner_words', quote: 'uploads must resume after a restart' }),
+      ],
+    }),
+    reply('saved'),
+  ];
+  await s.send(`Answers:\n- Storage layout: ${LONG_A}\n- Screens: List`);
+  const sources = s.draft().map(item => item.source);
+  assert.equal(sources[0]!['kind'], 'owner_choice', JSON.stringify(sources[0]));
+  assert.deepEqual([sources[0]!['question'], sources[0]!['answer']], [STORAGE, LONG_A]);
+  assert.deepEqual(sources[1], { kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: STORAGE, answer: LONG_B }, '選んでいない選択肢');
+  assert.deepEqual(sources[2], { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: LONG_A }, '選択肢の文は持ち主の言葉ではない');
+  assert.equal(sources[3]!['kind'], 'owner_words', 'ふつうの持ち主の言葉は変わらない');
+  const conversation = s.app.conversations.messages(uuid(1));
+  const answerRow = conversation.find(m => m.message.role === 'user' && (m.message as { askAnswer?: boolean }).askAnswer === true);
+  assert.ok(answerRow, '札が開いている間に届いた答えには、サーバーが askAnswer を付ける');
+  assert.equal(sources[0]!['answerMessageId'], answerRow!.id);
+  assert.match(s.adapter().calls.at(-1)!.messages.filter(m => m.role === 'tool').at(-1)!.content, /1 confirmed in the conversation|2 confirmed in the conversation/u);
+});
+
+test('ask_owner の答え（L803・道具まで通し）: 札が出ていない会話の owner_choice は、答えが「Answers:」の形をしていても AI が足したのまま', async t => {
+  const s = await toolApp(t);
+  s.adapter().scripts = [reply('Which storage do you want?')];
+  await s.send('I want a notes app');
+  s.adapter().scripts = [call('acceptance_write', { items: [row('Notes are kept in plain JSON files', { source: 'owner_choice', question: STORAGE, answer: LONG_A })] }), reply('saved')];
+  await s.send(`Answers:\n- Storage layout: ${LONG_A}\n- Screens: List`);
+  assert.deepEqual(s.draft().map(item => item.source), [{ kind: 'ai_added', claimed: 'owner_choice', reason: 'choice_unverified', question: STORAGE, answer: LONG_A }]);
+});
+
+test('ask_owner の答え（L803）: 札の読み込みは、札の答えの印がある会話だけを読む。答えが無い札だけの会話・別の製品の会話は読まない', () => {
+  const f = fixture();
+  const quiet = f.chat();
+  f.ask(quiet);
+  f.owner(quiet, 'I have not answered the card yet');
+  const answered = f.chat();
+  const asked = f.ask(answered);
+  const answer = f.owner(answered, CARD_ANSWER('JSON files', 'List'), { askAnswer: true });
+  const other = f.chat(OTHER);
+  f.ask(other);
+  f.owner(other, CARD_ANSWER('JSON files', 'List'), { askAnswer: true });
+  assert.deepEqual(askedCards(f.db, PROJECT).map(card => [card.conversationId, card.questionMessageId, card.answerMessageId]), [[answered, asked, answer]]);
+});
+
+test('札の答えの中の AI の文（P-R3-8）: 見出しの文字が違う答えは札の答えの形ではない。選んだことにならず、選択肢の文は持ち主の言葉にもならない', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, ASK_LONG);
+  f.owner(c, `Answers:\n- Storage layou7: ${LONG_A}\n- Screens: List`, { askAnswer: true });
+  assert.deepEqual(f.check(choice(STORAGE, LONG_A)), unverified(STORAGE, LONG_A));
+  assert.deepEqual(f.check(words(LONG_A)), notFound(LONG_A));
+});
+
+test('札の答えの中の AI の文（P-R3-8）: 札が何枚もあるとき、答えに当てるのは直前の札で、その札の選択肢の文を外す', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, ASK_LONG);
+  f.owner(c, `Answers:\n- Storage layout: ${LONG_A}\n- Screens: List`, { askAnswer: true });
+  const SECOND = 'Keep every note in a hosted database';
+  f.ask(c, { questions: [{ question: 'Where should notes live?', header: 'Hosting', options: [{ label: SECOND }, { label: 'Stay on this laptop' }] }] });
+  f.owner(c, `Answers:\n- Hosting: ${SECOND}`, { askAnswer: true });
+  for (const quote of [LONG_A, SECOND]) assert.deepEqual(f.check(words(quote)), notFound(quote), quote);
+});
+
+test('札の答えの中の AI の文（P-R3-8）: 札は同じ会話のものだけを使う。札の無い会話の「答え」の印の発言は、ほかの会話に札があっても持ち主の言葉に数えない', () => {
+  const f = fixture();
+  const withCard = f.chat();
+  f.ask(withCard, ASK_LONG);
+  f.owner(withCard, `Answers:\n- Storage layout: ${LONG_A}\n- Screens: List`, { askAnswer: true });
+  f.owner(f.chat(), 'Exports must keep the original file names', { askAnswer: true });
+  assert.deepEqual(f.check(words('exports must keep the original file names')), notFound('exports must keep the original file names'));
 });

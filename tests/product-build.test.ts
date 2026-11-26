@@ -175,10 +175,12 @@ test('3-2-s 毎回の system（本物の App）: 製品の計画モードの会�
   assert.match(s.dynamic(), /# Requirements interview \(compact\)\n/u);
 });
 
-test('3-2-s 量: 計画モードでは mesh_state_set を渡さない（自動承認のモードでは渡す）。acceptance_write の説明は短くし、選んだ答えの扱いを言わない', async t => {
+test('3-2-s 量: 計画モードでは mesh_state_set を渡さない（自動承認のモードでは渡す）。acceptance_write の説明は短く、札で選んだ答えの扱いは 1 文だけ言う', async t => {
   assert.notEqual(meshStateSet.planOk, true);
-  assert.ok(estimateTextTokens(acceptanceWrite.description) <= 135, String(estimateTextTokens(acceptanceWrite.description)));
-  assert.doesNotMatch(acceptanceWrite.description, /owner_choice|your answer/iu);
+  assert.ok(estimateTextTokens(acceptanceWrite.description) <= 175, String(estimateTextTokens(acceptanceWrite.description)));
+  assert.equal(acceptanceWrite.description.match(/owner_choice/gu)?.length, 1, '札で選んだ答えは 1 文だけ');
+  assert.match(acceptanceWrite.description, /An option picked on an ask_owner card is owner_choice with the card's question and that option \(typed text stays owner_words\)\./u);
+  assert.doesNotMatch(acceptanceWrite.description, /your answer/iu);
   for (const rule of [/never translate/iu, /command/u, /look/u, /notDoing/u, /checked against what the owner said in this product's conversations/u]) assert.match(acceptanceWrite.description, rule);
   const s = await setup(t);
   const shop = await s.product('shop');
