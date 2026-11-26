@@ -61,7 +61,7 @@ export const requestIdFor = (id: RequestId): string => (typeof id === 'number' ?
 const text = (value: unknown): string | null => asString(value) ?? null;
 
 // 閉じた一覧（ApprovalDecision の全部をここで写す。足りなければ tsc が落ちる）
-const COMMAND_DECISION: Record<ApprovalDecision, CommandDecision> = { accept: 'accept', accept_for_reply: 'acceptForSession', decline: 'decline', cancel: 'cancel' };
+const COMMAND_DECISION: Record<ApprovalDecision, CommandDecision> = { accept: 'accept', accept_for_reply: 'acceptForSession', decline: 'decline', decline_by_beat: 'decline', cancel: 'cancel' };
 
 function knownDecision(decision: unknown): ApprovalDecision {
   if (typeof decision !== 'string' || !Object.hasOwn(COMMAND_DECISION, decision)) throw new CodexRefused('protocol', 'That is not an answer beat can give to Codex');

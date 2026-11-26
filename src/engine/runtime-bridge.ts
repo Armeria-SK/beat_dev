@@ -250,11 +250,12 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     deps.bus.publish({ type: 'tool.result', runId, conversationId, callId: entry.callId, name: entry.name, ok: !isError, decision, preview: output.slice(0, 1500), gate, ...(entry.nested ? { nested: true as const } : {}) });
   };
   const guardMessage = (mark: Extract<GateMark, { kind: 'guard' }>): string => engineText(language, GUARD_TEXT[mark.code], { detail: mark.detail });
-  // 持ち主が決めた求めが通ったか。待ったままの行は、実行役が自分で終えた求め（答えを待たずに道具が終わった）なので、古くして閉じる
-  const ownerAllowed = (pendingId: number): boolean => {
+  // 持ち主が決めた求めの結末。許した（answered・running）か、断った（rejected）か、持ち主の答えが出ないまま閉じた（古くなった・取り消された）か。待ったままの行は、実行役が自分で終えた求め（答えを待たずに道具が終わった）なので、古くして閉じる
+  const ownerOutcome = (pendingId: number): { allowed: boolean; closed: boolean } => {
     const row = deps.pending?.row(pendingId);
     if (row?.status === 'waiting') deps.approvals?.release(pendingId, 'reply_closed');
-    return row?.status === 'answered' || row?.status === 'running';
+    const allowed = row?.status === 'answered' || row?.status === 'running';
+    return { allowed, closed: !allowed && row?.status !== 'rejected' };
   };
   // 実行役が終えた道具の行を書く。beat が断った求めは、実行役の結果の代わりに beat の文を 1 行だけ書く（実行役の「断られた」の結果と二重にしない）
   const finishTool = (rawId: string, entry: OpenTool, output: string, isError: boolean): void => {
@@ -262,8 +263,8 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     if (mark) mark.used = true;
     if (mark?.kind === 'guard') { writeTool(entry, guardMessage(mark), true, { by: 'guard', key: mark.code }, 'deny'); return; }
     if (mark?.kind === 'owner') {
-      const allowed = ownerAllowed(mark.pendingId);
-      writeTool(entry, output, isError, { by: 'owner', id: mark.pendingId, allowed }, allowed ? 'allow' : 'deny');
+      const { allowed, closed } = ownerOutcome(mark.pendingId);
+      writeTool(entry, output, isError, { by: 'owner', id: mark.pendingId, allowed, ...(closed ? { closed: true as const } : {}) }, allowed ? 'allow' : 'deny');
       return;
     }
     writeTool(entry, output, isError);
@@ -271,10 +272,10 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
 
   type ApprovalEvent = Extract<RuntimeEvent, { type: 'approval' }>;
   // 実行役への「断る・取り消す」の答え。答えない実行役のせいで、ここで止まらない
-  const answerNow = async (event: ApprovalEvent, decision: 'decline' | 'cancel'): Promise<void> => {
+  const answerNow = async (event: ApprovalEvent, decision: 'decline_by_beat' | 'cancel'): Promise<void> => {
     const { runtime, session } = held;
     if (!runtime || !session) return;
-    await bounded([[`${decision} the approval request`, () => runtime.approve(session.id, event.requestId, decision)]]);
+    await bounded([[`${decision === 'cancel' ? 'cancel' : 'decline'} the approval request`, () => runtime.approve(session.id, event.requestId, decision)]]);
   };
   // 道具の行と結ぶ ID: Claude Code の求めの ID は tool_use の id と同じ。Codex の求めの ID は別で、項目の id（itemId）が道具の行の id
   const gateKeyOf = (event: ApprovalEvent): string => {
@@ -290,7 +291,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     const refuseHere = async (code: RefusalCode | 'plan_mode', detail: string): Promise<void> => {
       gates.set(key, { kind: 'guard', code, detail, name: toolName(event.tool), input: shownInput(event.input), used: false });
       log(`[INFO] Runtime ${runtimeId} asked for approval (${tool}); beat declined it without asking the owner (${code})`);
-      await answerNow(event, 'decline');
+      await answerNow(event, 'decline_by_beat');
     };
     if (planMode || deps.conversations.modeOf(conversationId) === 'plan') { await refuseHere('plan_mode', ''); return; }
     const mapped = mapApproval({
@@ -300,7 +301,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     if (mapped.decision === 'refuse') { await refuseHere(mapped.code, clean(mapped.detail, 300)); return; }
     if (!deps.pending || !deps.approvals) {
       log(`[WARN] Runtime ${runtimeId} asked for approval (${tool}), but there is no Pending to ask the owner in, so it was declined`);
-      await answerNow(event, 'decline');
+      await answerNow(event, 'decline_by_beat');
       return;
     }
     let pendingId: number;
@@ -313,7 +314,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       }).id;
     } catch (error) {
       log(`[WARN] Could not put the approval request of runtime ${runtimeId} (${tool}) in Pending, so it was declined: ${clean((error as Error).message)}`);
-      await answerNow(event, 'decline');
+      await answerNow(event, 'decline_by_beat');
       return;
     }
     gates.set(key, { kind: 'owner', pendingId, used: false });
@@ -486,7 +487,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       finishTool(rawId, entry, '', true);
     }
   } catch (error) { log(`[WARN] Could not save the last part of the reply of run ${runId}: ${clean((error as Error).message)}`); }
-  deps.approvals?.closeRun(runId, !outcome.ok && outcome.cancelled === true ? 'stopped' : 'reply_closed');
+  try { deps.approvals?.closeRun(runId, !outcome.ok && outcome.cancelled === true ? 'stopped' : 'reply_closed'); } catch (error) { log(`[WARN] Could not close the approval requests of run ${runId}: ${clean((error as Error).message)}`); }
   const sessionEnd = held.session?.runtimeSession;
   if (held.session && held.runtime) {
     const closing = { runtime: held.runtime, session: held.session };

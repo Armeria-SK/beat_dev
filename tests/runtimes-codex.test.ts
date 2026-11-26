@@ -276,7 +276,7 @@ test('tool items become tool_start / tool_end; output is cut and secrets are hid
 });
 
 test('a command approval reaches the owner as an event, and only the closed answers go back', { timeout: 60_000 }, async t => {
-  const table: Array<[ApprovalDecision, string]> = [['accept', 'accept'], ['accept_for_reply', 'acceptForSession'], ['decline', 'decline'], ['cancel', 'cancel']];
+  const table: Array<[ApprovalDecision, string]> = [['accept', 'accept'], ['accept_for_reply', 'acceptForSession'], ['decline', 'decline'], ['decline_by_beat', 'decline'], ['cancel', 'cancel']];
   for (const [decision, expected] of table) {
     const r = rig(t, 'command-approval');
     const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
@@ -331,9 +331,9 @@ test('a file change approval gets its paths from the item that started it; witho
   const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
   await reply(r, {}, event => { seen.push(event); return 'accept'; });
   assert.deepEqual(seen.map(event => event.tool), ['fileChange', 'fileChange']);
-  assert.deepEqual(seen[0]?.input, { itemId: 'f1', reason: 'needs write', grantRoot: 'D:\\work', changes: [{ path: 'src/a.ts', kind: 'update', movePath: 'src/b.ts' }, { path: 'src/new.ts', kind: 'add' }] });
+  assert.deepEqual(seen[0]?.input, { itemId: 'f1', reason: 'needs write', grantRoot: 'D:\\work', changes: [{ path: 'src/a.ts', kind: 'update', movePath: 'src/b.ts', diff: '@@' }, { path: 'src/new.ts', kind: 'add', diff: '+x' }] });
   assert.deepEqual(seen[1]?.input, { itemId: 'ghost', reason: null, grantRoot: null, changes: null });
-  assert.ok(!JSON.stringify(seen).includes('@@'), 'the diff itself is not carried');
+  assert.ok(JSON.stringify(seen).includes('@@'), 'the diff of each change is carried, so the owner can see what would change');
 });
 
 test('a file change list that changed (patchUpdated) before the approval is not shown stale: the paths become unknown (null)', { timeout: 60_000 }, async t => {

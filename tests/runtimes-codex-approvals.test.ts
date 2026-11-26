@@ -5,7 +5,7 @@ import { CodexRefused } from '../src/runtimes/codex/app-server.ts';
 import type { ApprovalDecision } from '../src/runtimes/types.ts';
 
 const KINDS: ApprovalKind[] = ['command', 'writeStdin', 'fileChange', 'permissions'];
-const DECISIONS: ApprovalDecision[] = ['accept', 'accept_for_reply', 'decline', 'cancel'];
+const DECISIONS: ApprovalDecision[] = ['accept', 'accept_for_reply', 'decline', 'decline_by_beat', 'cancel'];
 const REQUESTED = { network: { enabled: true }, fileSystem: { read: null, write: ['D:\\other'] }, extra: 'never copied' };
 
 test('every answer beat can give is one of the closed set, for every kind and decision', () => {
@@ -28,7 +28,7 @@ test('every answer beat can give is one of the closed set, for every kind and de
 });
 
 test('a decision that is not accept never grants anything; accept grants exactly what was asked and nothing more', () => {
-  for (const decision of ['decline', 'cancel'] as const) assert.deepEqual(answerFor('permissions', decision, REQUESTED), { permissions: {}, scope: 'turn' });
+  for (const decision of ['decline', 'decline_by_beat', 'cancel'] as const) assert.deepEqual(answerFor('permissions', decision, REQUESTED), { permissions: {}, scope: 'turn' });
   assert.deepEqual(answerFor('permissions', 'accept', REQUESTED), { permissions: { network: { enabled: true }, fileSystem: { read: null, write: ['D:\\other'] } }, scope: 'turn' });
   assert.deepEqual(answerFor('permissions', 'accept', { network: { enabled: 'yes' } }), { permissions: {}, scope: 'turn' }, 'a malformed ask grants nothing');
   assert.deepEqual(answerFor('permissions', 'accept', undefined), { permissions: {}, scope: 'turn' });

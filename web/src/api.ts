@@ -131,7 +131,7 @@ export interface NewProject { root: string; name?: string; checkCommand?: string
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
-export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' } | { by: 'guard'; key: string } | { by: 'owner'; id: number; allowed: boolean };
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' } | { by: 'guard'; key: string } | { by: 'owner'; id: number; allowed: boolean; closed?: true };
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;

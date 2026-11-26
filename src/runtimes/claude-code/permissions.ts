@@ -106,6 +106,7 @@ export function sessionOnlyUpdates(suggestions: readonly PermissionUpdate[] | un
 }
 
 const DECLINED = 'The owner declined this request.';
+const DECLINED_BY_BEAT = "beat declined this request without asking the owner (one of beat's own guards, or plan mode).";
 const CANCELLED = 'The owner stopped the reply.';
 
 // 答えの作り方。許可は入力を書き換えず（updatedInput は元の入力）、閉じた一覧の外の答えは断りにする
@@ -117,6 +118,7 @@ export function answerFor(decision: ApprovalDecision, input: Record<string, unkn
       return { behavior: 'allow', updatedInput: input, ...(updatedPermissions.length > 0 ? { updatedPermissions } : {}) };
     }
     case 'cancel': return { behavior: 'deny', message: CANCELLED, interrupt: true };
+    case 'decline_by_beat': return { behavior: 'deny', message: DECLINED_BY_BEAT };
     default: return { behavior: 'deny', message: DECLINED };
   }
 }

@@ -198,7 +198,7 @@ test('守りに当たる求め（秘密・beat のデータ・製品の外・リ
     const before = count(r, 'pending_actions');
     const { conversation, runId } = await start(r, projectId);
     await settled(r.s.app, runId);
-    assert.equal(answerOf(r, id), 'decline', c.name);
+    assert.equal(answerOf(r, id), 'decline_by_beat', c.name);
     assert.equal(count(r, 'pending_actions'), before, `${c.name}: the owner was not asked`);
     assert.equal(r.s.app.runs.get(runId)!.ok, 1, c.name);
     const tools = toolMessages(r, conversation);
@@ -232,7 +232,7 @@ test('「外は許さない」設定の外を読む求め・Monitor の守りも
     const before = count(r, 'pending_actions');
     const { conversation, runId } = await start(r, projectId);
     await settled(r.s.app, runId);
-    assert.equal(answerOf(r, id), 'decline', c.name);
+    assert.equal(answerOf(r, id), 'decline_by_beat', c.name);
     assert.equal(count(r, 'pending_actions'), before, `${c.name}: the owner was not asked`);
     const tools = toolMessages(r, conversation);
     assert.equal(tools.length, 1, `${c.name}: exactly one tool row`);
@@ -328,7 +328,7 @@ test('Codex の求め: 道具の行は項目の ID と結ばれ、作業フォ�
   };
   const { conversation, runId } = await start(r, projectId);
   await waitFor(() => runtimeRows(r).length === 1);
-  assert.equal(answerOf(r, 'codex-n2'), 'decline', 'outside the product folder: declined at once');
+  assert.equal(answerOf(r, 'codex-n2'), 'decline_by_beat', 'outside the product folder: declined at once');
   assert.equal(answerOf(r, 'codex-n1'), undefined);
   const row = rowOf(r, 'codex-n1');
   assert.deepEqual(r.s.app.pending.view(row.id)!.runtime, { id: 'codex', reply: true });
@@ -351,7 +351,7 @@ test('計画モードの会話では、書く・動かす・読むのどの求�
   const { conversation, runId } = await start(r, projectId, { permissionMode: 'plan' });
   await settled(r.s.app, runId);
   assert.equal(r.runtime.starts[0]!.permission, 'default', 'started with the most careful permission, though the setting is looser');
-  assert.deepEqual(requests.map(q => answerOf(r, q.id)), ['decline', 'decline', 'decline', 'decline']);
+  assert.deepEqual(requests.map(q => answerOf(r, q.id)), ['decline_by_beat', 'decline_by_beat', 'decline_by_beat', 'decline_by_beat']);
   assert.equal(count(r, 'pending_actions'), 0, 'plan mode never asks the owner');
   assert.deepEqual(toolMessages(r, conversation).map(m => m.gate), requests.map(() => ({ by: 'guard', key: 'plan_mode' })));
   assert.match(toolMessages(r, conversation)[0]!.content, /plan mode.*You were not asked/u);
@@ -467,6 +467,7 @@ test('待っている求めを beat 側で取り下げると、実行役へは�
   await settled(r.s.app, runId);
   assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'cancel' }]);
   assert.equal(r.s.app.pending.row(runtimeRows(r)[0]!.id)!.status, 'cancelled');
+  assert.deepEqual(toolMessages(r, conversation)[0]!.gate, { by: 'owner', id: runtimeRows(r)[0]!.id, allowed: false, closed: true }, 'a request taken back by beat is shown as closed, not as declined by the owner');
 });
 
 test('答えが決まった時間のうちに来ないと、求めは取り消され、行は古くなり、返事は「待ちきれなかった」で終わる。あとから許しても何も起きない', async t => {
@@ -484,7 +485,7 @@ test('答えが決まった時間のうちに来ないと、求めは取り消�
   assert.match(run.error_message!, /waited more than 1 minutes for your answer.*Nothing was allowed/u);
   assert.equal((await approve(r, row.id)).status, 409);
   assert.equal(r.s.app.runtimeApprovals.size, 0);
-  assert.equal(toolMessages(r, conversation)[0]!.gate!.by, 'owner');
+  assert.deepEqual(toolMessages(r, conversation)[0]!.gate, { by: 'owner', id: row.id, allowed: false, closed: true }, 'a request nobody answered in time is shown as closed, not as declined by the owner');
 });
 
 test('答えを待たずに道具が終わった求め（実行役が自分で取り下げた）は、道具の行を「持ち主が断った」にせず、古くして閉じる', async t => {
@@ -504,9 +505,24 @@ test('答えを待たずに道具が終わった求め（実行役が自分で�
   const row = rowOf(r, 'req-1');
   assert.equal(r.s.app.runs.get(runId)!.ok, 1);
   assert.equal(row.status, 'stale');
-  assert.deepEqual(toolMessages(r, conversation)[0]!.gate, { by: 'owner', id: row.id, allowed: false });
+  assert.deepEqual(toolMessages(r, conversation)[0]!.gate, { by: 'owner', id: row.id, allowed: false, closed: true }, 'closed without an answer, not "declined"');
   assert.equal(r.runtime.approvals.length, 0);
   assert.equal(r.s.app.runtimeApprovals.size, 0);
+});
+
+test('返事の終わりに待ちの片付け（closeRun）が落ちても、実行役のセッションは必ず閉じられ、返事は終わる', async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await r.product();
+  await r.check();
+  r.s.app.runtimeApprovals.closeRun = () => { throw new Error('the database is gone'); };
+  r.runtime.script = asking(r, [{ id: 'req-1', tool: 'Write', input: writeInput(root) }]);
+  const { runId } = await start(r, projectId);
+  await waitFor(() => runtimeRows(r).length === 1, 'the request reached Pending');
+  assert.equal((await approve(r, runtimeRows(r)[0]!.id)).status, 202);
+  await settled(r.s.app, runId);
+  assert.equal(r.runtime.closes, 1, 'the runtime session was closed although the cleanup before it failed');
+  assert.equal(r.s.app.runs.get(runId)!.ok, 1, 'the reply still ended normally');
+  assert.ok(r.s.logs.some(line => line.includes('Could not close the approval requests') && line.includes('the database is gone')), r.s.logs.join(' | '));
 });
 
 test('返事が終わる・止められるとき閉じるのは、その返事の求めだけ。ほかの返事が待っている求めは残り、あとで答えられる', async t => {
@@ -578,7 +594,7 @@ test('Pending に積めなかった求めは、許さず断る。返事はその
   r.runtime.script = asking(r, [{ id: 'req-1', tool: 'Write', input: writeInput(root) }]);
   const { conversation, runId } = await start(r, projectId);
   await settled(r.s.app, runId);
-  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'decline' }]);
+  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'decline_by_beat' }]);
   assert.equal(runtimeRows(r).length, 0);
   assert.equal(r.s.app.runs.get(runId)!.ok, 1);
   assert.equal(r.s.app.runtimeApprovals.size, 0);
@@ -618,7 +634,7 @@ test('beat のシェルの検査が拒否するコマンド（取り返しのつ
     const before = count(r, 'pending_actions');
     const { conversation, runId } = await start(r, projectId);
     await settled(r.s.app, runId);
-    assert.equal(answerOf(r, id), 'decline', c.name);
+    assert.equal(answerOf(r, id), 'decline_by_beat', c.name);
     assert.equal(count(r, 'pending_actions'), before, `${c.name}: the owner was not asked`);
     assert.equal(r.s.app.runs.get(runId)!.ok, 1, c.name);
     const tools = toolMessages(r, conversation);

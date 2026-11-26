@@ -194,7 +194,7 @@ test('承認の求めは、計画モードの会話では何も許さず持ち�
   const runId = await r.turn(conversation, 'go', { projectId, modelId: 'cc' });
   const run = r.s.app.runs.get(runId)!;
   assert.deepEqual({ ok: run.ok, kind: run.error_kind, message: run.error_message }, { ok: 1, kind: null, message: null }, 'the reply is not failed any more');
-  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'decline' }], 'the request was declined by beat, never accepted');
+  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'decline_by_beat' }], 'the request was declined by beat, never accepted');
   assert.equal(r.runtime.interrupts, 0);
   assert.ok(!JSON.stringify(r.rows(conversation)).includes(SECRET));
   assert.equal((r.s.app.db.prepare('SELECT COUNT(*) AS c FROM pending_actions').get() as { c: number }).c, 0, 'a plan-mode conversation never asks the owner');

@@ -48,8 +48,8 @@ export type ChatMessage =
 
 // runtime: 外の実行役が自分の許可の設定で通した（beat は見ていない）
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' }
-  // guard: beat's own code refused a request of the runtime without asking the owner (key: the closed refusal reason). owner: the owner decided a request of the runtime in Pending (allowed: false = declined)
-  | { by: 'guard'; key: string } | { by: 'owner'; id: number; allowed: boolean };
+  // guard: beat's own code refused a request of the runtime without asking the owner (key: the closed refusal reason). owner: the owner decided a request of the runtime in Pending (allowed: false = declined; closed: the request ended without an answer from the owner, for example it timed out or the reply ended)
+  | { by: 'guard'; key: string } | { by: 'owner'; id: number; allowed: boolean; closed?: true };
 
 export interface Usage {
   inputTokens?: number;

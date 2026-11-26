@@ -258,6 +258,7 @@ test('answers: accept keeps the input as it is; accept_for_reply adds only the s
   assert.deepEqual(answerFor('accept_for_reply', input, undefined), { behavior: 'allow', updatedInput: input });
   assert.deepEqual(answerFor('decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
   assert.deepEqual(answerFor('cancel', input, [rule]), { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
+  assert.deepEqual(answerFor('decline_by_beat', input, [rule]), { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." });
   assert.deepEqual(answerFor('anything-else' as 'decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
   assert.deepEqual(STOPPED_ANSWER, { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
 });

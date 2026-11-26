@@ -95,7 +95,8 @@ export interface RuntimeInput {
 }
 
 // 返してよい答えは閉じた一覧だけ。使う人の設定や決まりを書き換える「許しを残す答え」は無い
-export type ApprovalDecision = 'accept' | 'accept_for_reply' | 'decline' | 'cancel';
+// decline は持ち主が断った答え、decline_by_beat は beat が持ち主に聞かずに断った答え（守りに当たった・計画モード・聞く先が無い）。実行役の側でも断りの理由が分かれる
+export type ApprovalDecision = 'accept' | 'accept_for_reply' | 'decline' | 'decline_by_beat' | 'cancel';
 
 // tool_start・tool_end の入力・出力と approval の入力は、実行役が言ってきたまま（伏せていない）。表示・保存する写しは、受け取った側（src/engine/runtime-bridge.ts）が伏せる。
 // nested: 子の担当（Claude Code のサブエージェント）が動かした道具。本筋の道具と区別して残す

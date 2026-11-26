@@ -74,7 +74,7 @@ function gateMeta(t: T, item: ToolItem, pending: PendingLink | undefined): React
   if (gate.by === 'owner') {
     const owner = gate;
     const open = pending ? (e: MouseEvent<HTMLAnchorElement>) => { e.preventDefault(); pending.open(owner.id); } : undefined;
-    return <><span className="ui-tool__why">{t(owner.allowed ? 'ui.tool.ownerAllowed' : 'ui.tool.ownerDeclined')}</span><a className="bt-tool__link ui-tool__open" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', owner.id)}</a></>;
+    return <><span className="ui-tool__why">{t(owner.allowed ? 'ui.tool.ownerAllowed' : owner.closed ? 'ui.tool.ownerClosed' : 'ui.tool.ownerDeclined')}</span><a className="bt-tool__link ui-tool__open" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', owner.id)}</a></>;
   }
   const open = pending ? (e: MouseEvent<HTMLAnchorElement>) => { e.preventDefault(); pending.open(gate.id); } : undefined;
   return <><Pill tone="warn">{t('ui.tool.parked')}</Pill><a className="bt-tool__link ui-tool__open" href={routeHash(pending?.route ?? { view: 'pending' })} onClick={open}>{t('ui.tool.openPending', gate.id)}</a></>;

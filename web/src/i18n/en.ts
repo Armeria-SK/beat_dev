@@ -455,6 +455,7 @@ export const en = {
   'ui.tool.guarded': 'Stopped by beat',
   'ui.tool.ownerAllowed': 'You allowed it',
   'ui.tool.ownerDeclined': 'You declined it',
+  'ui.tool.ownerClosed': 'Closed without your answer',
   'ui.tool.notRun': 'Not run',
   'ui.tool.notRunWhy': "Not run — needs your OK but can't wait in Pending",
   'ui.tool.exit': (code: string, seconds: string) => `exit ${code} · ${seconds}s`,

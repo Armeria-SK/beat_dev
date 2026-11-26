@@ -451,17 +451,18 @@ test('if the first message says an API key is in use, or a different permission 
 
 // ---------------------------------------------------------------- 承認
 
-test('decline and cancel are answered as denials (cancel also stops the reply); an unknown decision is a denial too', async t => {
+test('decline, a decline by beat and cancel are answered as denials (cancel also stops the reply; a decline by beat says beat did it, not the owner); an unknown decision is a denial too', async t => {
   const report: Report = { answers: [] };
-  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a' }, { toolUseID: 'b' }, { toolUseID: 'c' }]) });
+  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a' }, { toolUseID: 'b' }, { toolUseID: 'c' }, { toolUseID: 'd' }]) });
   const session = await s.start();
   await s.runtime.send(session.id, { text: 'go' });
-  const decisions: Record<string, string> = { a: 'decline', b: 'cancel', c: 'allow-everything' };
+  const decisions: Record<string, string> = { a: 'decline', b: 'cancel', c: 'allow-everything', d: 'decline_by_beat' };
   await collect(s.runtime, session.id, event => event.type === 'approval' ? s.runtime.approve(session.id, event.requestId, decisions[event.requestId] as 'decline') : undefined);
   assert.deepEqual(report.answers, [
     { behavior: 'deny', message: 'The owner declined this request.' },
     { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true },
     { behavior: 'deny', message: 'The owner declined this request.' },
+    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." },
   ]);
 });
 
