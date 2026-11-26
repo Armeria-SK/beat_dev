@@ -1,0 +1,263 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
+import { answerFor, claudeMode, DISALLOWED_TOOLS, disallowedTools, isCodexPermission, KEPT_TOOLS, REPORTED_ALIASES, secretDenyRules, sessionOnlyUpdates, STOPPED_ANSWER, unreviewedTools } from '../src/runtimes/claude-code/permissions.ts';
+import { apiKeyInUse, EventTranslator, failureKind, versionAtLeast, type TranslatorOptions } from '../src/runtimes/claude-code/protocol.ts';
+import { PERMISSIONS } from '../src/runtimes/types.ts';
+import { SECRET_GLOBS } from '../src/tools/hooks/scope.ts';
+import { initMessage, resultMessage, sdkMessage, textMessage } from './helpers/fake-claude-sdk.ts';
+
+function translator(over: Partial<TranslatorOptions> = {}) {
+  const sessions: string[] = [];
+  const translate = new EventTranslator({ expectedMode: 'default', interrupted: () => false, onSession: id => sessions.push(id), ...over });
+  return { sessions, translate };
+}
+
+const stream = (event: object, over: Record<string, unknown> = {}) => sdkMessage({ type: 'stream_event', parent_tool_use_id: null, event, ...over });
+const failed = (events: ReturnType<EventTranslator['translate']>) => events.find(event => event.type === 'failed');
+
+test('versionAtLeast compares numbers, not text, and treats an unreadable version as too old', () => {
+  for (const version of ['2.1.296', '2.1.331', '2.2.0', '3.0.0', '2.10.0', '10.0.0', '2.1.296 (Claude Code)']) assert.equal(versionAtLeast(version), true, version);
+  for (const version of ['2.1.295', '2.0.999', '1.99.99', '2.1.29', 'garbage', '', undefined]) assert.equal(versionAtLeast(version), false, String(version));
+});
+
+test('the API key source: only "none" or nothing is acceptable', () => {
+  assert.equal(apiKeyInUse(undefined), false);
+  assert.equal(apiKeyInUse('none'), false);
+  for (const source of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'apiKeyHelper', 'project', '/login managed key', '']) assert.equal(apiKeyInUse(source), true, source);
+});
+
+test('failure kinds: login problems are auth, limits are rate_limit, everything else is process', () => {
+  for (const error of ['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'cloud_credential_error']) assert.equal(failureKind(error), 'auth', error);
+  for (const error of ['rate_limit', 'billing_error', 'overloaded']) assert.equal(failureKind(error), 'rate_limit', error);
+  for (const error of ['server_error', 'unknown', 'something-new', undefined]) assert.equal(failureKind(error), 'process', String(error));
+});
+
+test('text that was streamed in pieces is not repeated by the finished message; text that was not streamed is shown once; sub-agent text is left out', () => {
+  const { translate } = translator();
+  translate.translate(initMessage());
+  const streamed = [
+    stream({ type: 'message_start', message: { id: 'm1' } }),
+    stream({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hel' } }),
+    stream({ type: 'content_block_delta', delta: { type: 'text_delta', text: '' } }),
+    stream({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'lo' } }),
+    stream({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{}' } }),
+    textMessage('m1', 'Hello'),
+  ].flatMap(message => translate.translate(message));
+  assert.deepEqual(streamed, [{ type: 'text', delta: 'Hel' }, { type: 'text', delta: 'lo' }]);
+  assert.deepEqual(translate.translate(textMessage('m2', 'Whole')), [{ type: 'text', delta: 'Whole' }]);
+  assert.deepEqual(translate.translate(textMessage('m3', 'inner', { parent_tool_use_id: 'toolu_x' })), []);
+  assert.deepEqual(translate.translate(stream({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'inner' } }, { parent_tool_use_id: 'toolu_x' })), []);
+});
+
+test('tool use becomes tool_start, and a tool result becomes tool_end with its error flag; images are not copied', () => {
+  const { translate } = translator();
+  const start = translate.translate(sdkMessage({ type: 'assistant', parent_tool_use_id: null, message: { id: 'm1', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: 'a.txt' } }] } }));
+  assert.deepEqual(start, [{ type: 'tool_start', id: 'toolu_1', name: 'Read', input: { file_path: 'a.txt' } }]);
+  const content = [{ type: 'text', text: 'line one' }, { type: 'image', source: { data: 'AAAA' } }];
+  const end = translate.translate(sdkMessage({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content, is_error: true }, { type: 'tool_result', tool_use_id: 'toolu_2', content: 'plain' }] } }));
+  assert.deepEqual(end, [{ type: 'tool_end', id: 'toolu_1', output: 'line one\n[image]', isError: true }, { type: 'tool_end', id: 'toolu_2', output: 'plain', isError: false }]);
+  assert.deepEqual(translate.translate(sdkMessage({ type: 'user', message: { content: 'a plain string' } })), []);
+});
+
+test('a tool result has secrets removed (a string, text blocks, and anything else), keeps its lines, and is cut at a long cap', () => {
+  const { translate } = translator();
+  const result = (content: unknown) => translate.translate(sdkMessage({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content }] } }));
+  const output = (events: ReturnType<EventTranslator['translate']>): string => {
+    const event = events[0];
+    assert.ok(event?.type === 'tool_end');
+    return event.output;
+  };
+  const key = 'sk-ant-api03-ABCDEFGHIJKLMNOP';
+  const text = output(result(`bad ${key}`));
+  assert.ok(!text.includes('ABCDEFGHIJKLMNOP') && text.startsWith('bad '), text);
+  const blocks = output(result([{ type: 'text', text: `first\nANTHROPIC_API_KEY=${key}\nthird` }, { type: 'text', text: `again ${key}` }]));
+  assert.ok(!blocks.includes('ABCDEFGHIJKLMNOP'), blocks);
+  assert.deepEqual(blocks.split('\n').length, 4, 'the lines of a result are kept');
+  assert.ok(blocks.startsWith('first\n') && blocks.includes('\nthird\n'));
+  assert.ok(!output(result({ note: key })).includes('ABCDEFGHIJKLMNOP'));
+  const long = output(result(`${'line of output\n'.repeat(2000)}${key}`));
+  assert.ok(long.length > 2001 && long.length < 20_100, String(long.length));
+  assert.ok(long.endsWith('[output cut at 20000 characters]'));
+  assert.ok(!long.includes('ABCDEFGHIJKLMNOP'));
+  const tailKey = output(result(`${'x'.repeat(19_990)} ${key}`));
+  assert.ok(!tailKey.includes('ABCDEFGHIJKLMNOP') && !tailKey.includes('sk-ant'), 'a key that straddles the cap is removed before the cut, not left as a fragment');
+});
+
+test('a message of a kind we do not know is kept as unknown with secrets removed; known side messages are dropped', () => {
+  const { translate } = translator();
+  const events = translate.translate(sdkMessage({ type: 'brand_new_kind', note: 'key sk-ant-api03-ABCDEFGHIJKLMNOP' }));
+  assert.equal(events.length, 1);
+  assert.ok(events[0]?.type === 'unknown' && events[0].raw.includes('brand_new_kind') && !events[0].raw.includes('ABCDEFGHIJKLMNOP'));
+  const long = translate.translate(sdkMessage({ type: 'another', blob: 'x'.repeat(10_000) }));
+  assert.ok(long[0]?.type === 'unknown' && long[0].raw.length <= 4001);
+  for (const type of ['rate_limit_event', 'tool_progress', 'auth_status', 'tool_use_summary', 'prompt_suggestion', 'keep_alive']) assert.deepEqual(translate.translate(sdkMessage({ type })), [], type);
+  assert.deepEqual(translate.translate(sdkMessage({ type: 'system', subtype: 'status' })), []);
+});
+
+test('the first message: a login with no API key passes; an API key, a missing source or a different permission mode stops the reply', () => {
+  const ok = translator();
+  assert.deepEqual(ok.translate.translate(initMessage({ session_id: 'abc' })), []);
+  assert.equal(ok.translate.guarded, false);
+  assert.deepEqual(ok.sessions, ['abc']);
+  const missing = translator();
+  const missingEvents = missing.translate.translate(initMessage({ apiKeySource: undefined }));
+  assert.ok(failed(missingEvents)?.type === 'failed' && (failed(missingEvents) as { kind: string }).kind === 'auth', 'no API key source reported is not proof of a login');
+  assert.equal(missing.translate.guarded, true);
+
+  const key = translator();
+  const keyEvents = key.translate.translate(initMessage({ apiKeySource: 'ANTHROPIC_API_KEY' }));
+  assert.ok(failed(keyEvents)?.type === 'failed' && (failed(keyEvents) as { kind: string }).kind === 'auth');
+  assert.equal(key.translate.guarded, true);
+
+  const mode = translator({ expectedMode: 'default' });
+  const modeEvents = mode.translate.translate(initMessage({ permissionMode: 'bypassPermissions' }));
+  assert.equal((failed(modeEvents) as { kind: string }).kind, 'process');
+  assert.equal(mode.translate.guarded, true);
+  const edits = translator({ expectedMode: 'acceptEdits' });
+  assert.deepEqual(edits.translate.translate(initMessage({ permissionMode: 'acceptEdits' })), []);
+  assert.equal(edits.translate.guarded, false);
+  assert.equal((failed(edits.translate.translate(initMessage({ permissionMode: 'default' }))) as { kind: string }).kind, 'process', 'a mode that is narrower than asked for is also not what was asked');
+});
+
+test('a result is judged by is_error, not by its subtype; the failure kind comes from the error seen just before', () => {
+  const login = translator();
+  login.translate.translate(initMessage());
+  login.translate.translate(sdkMessage({ type: 'assistant', parent_tool_use_id: null, error: 'authentication_failed', message: { id: 'm1', content: [{ type: 'text', text: 'Not logged in' }] } }));
+  const authFailed = login.translate.translate(resultMessage({ is_error: true, subtype: 'success', result: 'Not logged in · Please run /login' }));
+  assert.deepEqual(authFailed, [{ type: 'failed', kind: 'auth', message: 'Not logged in · Please run /login' }]);
+
+  const limit = translator();
+  limit.translate.translate(initMessage());
+  limit.translate.translate(sdkMessage({ type: 'system', subtype: 'api_retry', error: 'rate_limit' }));
+  assert.equal((failed(limit.translate.translate(resultMessage({ is_error: true, result: 'slow down' }))) as { kind: string }).kind, 'rate_limit');
+
+  const plain = translator();
+  plain.translate.translate(initMessage());
+  assert.deepEqual(plain.translate.translate(resultMessage({ is_error: true, subtype: 'error_max_turns', errors: ['too many turns', 'second'] })), [{ type: 'failed', kind: 'process', message: 'too many turns; second' }]);
+  const empty = plain.translate.translate(resultMessage({ is_error: true, subtype: 'error_during_execution', errors: [] }));
+  assert.ok(empty[0]?.type === 'failed' && empty[0].message.length > 0);
+  const secret = translator();
+  secret.translate.translate(initMessage());
+  const redacted = secret.translate.translate(resultMessage({ is_error: true, result: `bad ${'x'.repeat(5000)} sk-ant-api03-ABCDEFGHIJKLMNOP` }));
+  assert.ok(redacted[0]?.type === 'failed' && redacted[0].message.length <= 2001 && !redacted[0].message.includes('ABCDEFGHIJKLMNOP'));
+
+  assert.deepEqual(translator().translate.translate(resultMessage()), [{ type: 'failed', kind: 'process', message: 'Claude Code ended the reply before it reported how it started.' }], 'a reply that never reported how it started is not a success');
+  const fine = translator();
+  fine.translate.translate(initMessage());
+  assert.deepEqual(fine.translate.translate(resultMessage()), [{ type: 'done' }]);
+});
+
+test('an error result after we asked to stop is done, not a failure', () => {
+  let stopping = false;
+  const { translate } = translator({ interrupted: () => stopping });
+  translate.translate(initMessage());
+  stopping = true;
+  assert.deepEqual(translate.translate(resultMessage({ is_error: true, subtype: 'error_during_execution', errors: [] })), [{ type: 'done' }]);
+});
+
+test('claudeMode keeps the two allowed values and turns everything else into default', () => {
+  assert.deepEqual([...PERMISSIONS['claude-code']], ['default', 'acceptEdits']);
+  assert.equal(claudeMode('default'), 'default');
+  assert.equal(claudeMode('acceptEdits'), 'acceptEdits');
+  for (const value of ['bypassPermissions', 'plan', 'auto', 'dontAsk', 'workspace-write', 'read-only', 'acceptedits', '', undefined]) assert.equal(claudeMode(value), 'default', String(value));
+});
+
+test('Codex permission values are recognised so the adapter can refuse them; Claude Code values and unknown values are not', () => {
+  for (const value of PERMISSIONS.codex) assert.equal(isCodexPermission(value), !(PERMISSIONS['claude-code'] as readonly string[]).includes(value), value);
+  for (const value of ['workspace-write', 'read-only']) assert.equal(isCodexPermission(value), true, value);
+  for (const value of ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'something-else', '', undefined]) assert.equal(isCodexPermission(value), false, String(value));
+});
+
+test('deny rules cover every secret path for both Read and Edit', () => {
+  const rules = secretDenyRules();
+  assert.equal(rules.length, SECRET_GLOBS.length * 2);
+  for (const glob of SECRET_GLOBS) assert.ok(rules.includes(`Read(${glob})`) && rules.includes(`Edit(${glob})`), glob);
+  assert.deepEqual(disallowedTools(), [...DISALLOWED_TOOLS, ...rules]);
+});
+
+test('the tools that ask a question, schedule later work, start remote work, publish or notify are all turned off, by the SDK\'s own names', async () => {
+  const { BUILTIN_TOOL_NAMES } = await import('@anthropic-ai/claude-agent-sdk');
+  const turnedOff: readonly string[] = DISALLOWED_TOOLS;
+  for (const name of ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide', 'EnterWorktree', 'ExitWorktree', 'Workflow', 'Projects']) {
+    assert.ok(turnedOff.includes(name), `${name} must be turned off`);
+    assert.ok(disallowedTools().includes(name), `${name} must reach the --disallowedTools list`);
+  }
+  for (const name of turnedOff) assert.ok((BUILTIN_TOOL_NAMES as readonly string[]).includes(name), `${name} is not a built-in tool name of this SDK (renamed?)`);
+  assert.ok(disallowedTools().every(rule => !/[,\s]/u.test(rule)), 'the SDK joins the list with commas into one argument, so no rule may hold a comma or a space');
+  // 外していない道具は KEPT_TOOLS に名前を挙げて「意図して残した」ことを残す（起こすときの tools にもこの一覧を渡す）。SDK が新しい道具を足したら、この試験が止まって、外すか残すかを決めさせる。
+  // Agent は残す（部下の作業役は使う）が、isolation を付けた呼び出しはフックで断る（runtimes-claude-code.test.ts）
+  const kept: readonly string[] = KEPT_TOOLS;
+  assert.deepEqual(turnedOff.filter(name => kept.includes(name)), [], 'no tool is both turned off and kept');
+  assert.equal(new Set(kept).size, kept.length, 'no name is listed twice');
+  assert.deepEqual([...turnedOff, ...kept].sort(), [...BUILTIN_TOOL_NAMES].sort());
+});
+
+test('the init message is trusted only when every built-in tool it lists was reviewed; MCP tools do not count, and a missing list is not trusted', () => {
+  assert.deepEqual(unreviewedTools([...KEPT_TOOLS]), []);
+  assert.deepEqual(unreviewedTools(['Task']), [], 'a real Claude Code 2.1.331 lists the Agent tool as Task in its init message');
+  assert.deepEqual(unreviewedTools(['Task', 'Agent', 'Read']), []);
+  assert.deepEqual([...REPORTED_ALIASES], ['Task']);
+  assert.deepEqual([...REPORTED_ALIASES].filter(name => (KEPT_TOOLS as readonly string[]).includes(name) || (DISALLOWED_TOOLS as readonly string[]).includes(name)), [], 'an alias is a spelling of a kept tool, not a tool of its own');
+  assert.deepEqual(unreviewedTools(['Read', 'mcp__server__tool', 'mcp__plugin_x__y']), []);
+  assert.deepEqual(unreviewedTools([]), []);
+  assert.deepEqual(unreviewedTools(['Read', 'BrandNewTool', 'Artifact', 'mcp__a__b']), ['BrandNewTool', 'Artifact'], 'a turned-off tool that shows up anyway is not reviewed either');
+  assert.deepEqual(unreviewedTools(['read']), ['read'], 'names are compared exactly');
+  assert.deepEqual(unreviewedTools([42, null]), ['42', 'null']);
+  for (const missing of [undefined, null, 'Read', { 0: 'Read' }]) assert.equal(unreviewedTools(missing), undefined, JSON.stringify(missing));
+
+  const ok = translator();
+  assert.deepEqual(ok.translate.translate(initMessage({ tools: ['Read', 'Bash', 'mcp__server__tool'] })), []);
+  assert.equal(ok.translate.guarded, false);
+  const extra = translator();
+  const extraEvents = extra.translate.translate(initMessage({ tools: ['Read', 'BrandNewTool', 'mcp__server__tool'] }));
+  const event = failed(extraEvents);
+  assert.ok(event?.type === 'failed' && event.kind === 'process' && event.message.includes('BrandNewTool') && !event.message.includes('mcp__'), JSON.stringify(extraEvents));
+  assert.equal(extra.translate.guarded, true);
+  const many = translator();
+  const manyEvent = failed(many.translate.translate(initMessage({ tools: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'] })));
+  assert.ok(manyEvent?.type === 'failed' && manyEvent.message.includes('A5') && !manyEvent.message.includes('A6') && manyEvent.message.includes('...'), 'at most five names are shown');
+  const none = translator();
+  const noneEvent = failed(none.translate.translate(initMessage({ tools: undefined })));
+  assert.ok(noneEvent?.type === 'failed' && noneEvent.kind === 'process' && /did not report/u.test(noneEvent.message));
+  assert.equal(none.translate.guarded, true);
+});
+
+const update = (over: object): PermissionUpdate => over as PermissionUpdate;
+
+test('only allow-rule suggestions that stay inside this process (session) are kept; a mode change, even to acceptEdits, is not', () => {
+  const rule = update({ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'session' });
+  const other = update({ type: 'addRules', rules: [{ toolName: 'Read', ruleContent: '/x/**' }], behavior: 'allow', destination: 'session' });
+  const rejected = [
+    ...['localSettings', 'projectSettings', 'userSettings', 'cliArg'].map(destination => update({ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination })),
+    ...['localSettings', 'userSettings', 'session'].map(destination => update({ type: 'setMode', mode: 'acceptEdits', destination })),
+    update({ type: 'setMode', mode: 'default', destination: 'session' }),
+    update({ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'deny', destination: 'session' }),
+    update({ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'ask', destination: 'session' }),
+    ...['bypassPermissions', 'plan', 'auto', 'dontAsk'].map(modeName => update({ type: 'setMode', mode: modeName, destination: 'session' })),
+    update({ type: 'addDirectories', directories: ['/x'], destination: 'session' }),
+    update({ type: 'removeDirectories', directories: ['/x'], destination: 'session' }),
+    update({ type: 'replaceRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }),
+    update({ type: 'removeRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }),
+  ];
+  assert.deepEqual(sessionOnlyUpdates([...rejected, rule, other]), [rule, other]);
+  assert.deepEqual(sessionOnlyUpdates(rejected), []);
+  assert.deepEqual(sessionOnlyUpdates(undefined), []);
+});
+
+test('answers: accept keeps the input as it is; accept_for_reply adds only the session-only updates; the rest are denials', () => {
+  const input = { command: 'echo hi' };
+  const rule = update({ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'session' });
+  const local = update({ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'localSettings' });
+  assert.deepEqual(answerFor('accept', input, [rule, local]), { behavior: 'allow', updatedInput: input });
+  assert.deepEqual(answerFor('accept_for_reply', input, [local, rule]), { behavior: 'allow', updatedInput: input, updatedPermissions: [rule] });
+  assert.deepEqual(answerFor('accept_for_reply', input, [local]), { behavior: 'allow', updatedInput: input });
+  const mode = update({ type: 'setMode', mode: 'acceptEdits', destination: 'session' });
+  assert.deepEqual(answerFor('accept_for_reply', input, [mode]), { behavior: 'allow', updatedInput: input }, 'a mode change alone leaves a plain accept');
+  assert.deepEqual(answerFor('accept_for_reply', input, [mode, rule]), { behavior: 'allow', updatedInput: input, updatedPermissions: [rule] });
+  assert.deepEqual(answerFor('accept_for_reply', input, undefined), { behavior: 'allow', updatedInput: input });
+  assert.deepEqual(answerFor('decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
+  assert.deepEqual(answerFor('cancel', input, [rule]), { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
+  assert.deepEqual(answerFor('anything-else' as 'decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
+  assert.deepEqual(STOPPED_ANSWER, { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
+});

@@ -271,6 +271,8 @@ export interface SdkSpawnOptions {
 }
 
 export interface SdkSpawnedProcess {
+  // 実行の記録に残す、起こしたものの控え（SDK は読まない）
+  readonly record: LaunchRecord;
   stdin: Writable;
   stdout: Readable;
   readonly killed: boolean;
@@ -355,6 +357,7 @@ export class ProcessScope {
       (child[method] as (name: string, handler: (...args: unknown[]) => void) => ChildProcess).call(child, event, listener as (...args: unknown[]) => void);
     };
     return {
+      record: managed.record,
       stdin: child.stdin as Writable,
       stdout: managed.stdout,
       get killed() { return managed.killed; },

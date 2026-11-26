@@ -271,3 +271,10 @@ SOFTWARE.
    See the License for the specific language governing permissions and
    limitations under the License.
 ```
+
+## Claude Agent SDK (npm `@anthropic-ai/claude-agent-sdk` 0.3.331)
+
+- Source: https://github.com/anthropics/claude-agent-sdk-typescript. Installed from npm, not modified. Used only by `src/runtimes/claude-code/`, loaded when a Claude Code runtime is turned on and a reply starts.
+- License: not an open-source license. The package's `LICENSE.md` says: "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance." Use of Claude Code itself follows the user's own agreement with Anthropic.
+- The bundled Claude Code program (about 400 MB per platform) is not installed. `package.json` `overrides` points every `@anthropic-ai/claude-agent-sdk-<os>-<cpu>` platform package to the non-existent version `0.0.0-none`, so npm keeps optional placeholders only. beat starts the Claude Code program the user installed and signed in to, by its path (`pathToClaudeCodeExecutable`), through `src/runtimes/process-manager.ts`. Nothing of Claude Code is bundled, copied or changed.
+- `zod` 4.6.7 (MIT, Copyright (c) 2025 Colin McDonnell) is a peer dependency of the SDK and is pinned in `package.json`.

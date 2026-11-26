@@ -501,9 +501,9 @@ test('a Codex that never answers initialize is a timeout error, with the process
   assert.equal(alive(r.pid()), false);
 });
 
-test('registered for codex only, off unless enabled: a turned-off runtime starts nothing; the permission from settings is applied by the registry and again by the adapter', { timeout: 90_000 }, async t => {
+test('registered as the codex factory, off unless enabled: a turned-off runtime starts nothing; the permission from settings is applied by the registry and again by the adapter', { timeout: 90_000 }, async t => {
   assert.equal(FACTORIES.codex, createCodexRuntime);
-  assert.equal(FACTORIES['claude-code'], undefined, 'claude-code is not touched by this step');
+  assert.equal(typeof FACTORIES['claude-code'], 'function', 'claude-code is registered too (AR-5); this test builds only the codex one');
   const r = rig(t);
   const registry = new RuntimeRegistry(r.deps, { 'claude-code': undefined, codex: (config, deps) => new CodexRuntime(config, deps, { launch: r.launch }) });
   const off = { runtimes: [{ id: 'cx', kind: 'codex' as const, enabled: false }] };
