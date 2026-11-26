@@ -8,6 +8,7 @@ import { personaTexts, styleText } from '../src/engine/persona.ts';
 import { compactPrompt } from '../src/engine/prompts.ts';
 import { isNoProposal, reviewPrompt } from '../src/memory/review.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
+import { ResearchSession } from '../src/research/evidence.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { buildDynamic, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { resolvePaths } from '../src/paths.ts';
@@ -100,6 +101,24 @@ test('説明の言語: ja・en にすると、タスクの実行の動的な部�
     const gap = `${REPLY_DIRECTIVE}\n\n`;
     assert.equal(dynamics.get(choice), base.replace(gap, `${gap}${sentence}\n\n`), `${choice}: auto の文に、文を 1 つ足しただけ`);
   }
+});
+
+test('説明の言語: 調べる実行には、ja・en でも持ち主が読む言語の指示が付かず、auto と同じ動的な部分になる', async t => {
+  const dynamics = new Map<string, string>();
+  for (const choice of ['ja', 'en', 'auto'] as const) {
+    const s = await startApp(t, { configure: c => { c.ui.explainLanguage = choice; } });
+    s.adapter().scripts = [say('done')];
+    const task = s.app.tasks.create({ title: 'Research', origin: 'self', actor: 'worker', scoutRun: true });
+    const conversationId = s.app.conversations.create({ kind: 'task', title: 'Research' }).id;
+    const session = new ResearchSession({ researchId: 'r-1', part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 } });
+    const started = s.app.engine.runResearch(task, conversationId, { prompt: 'Find similar products for a notes app.' }, { pinned: null, session });
+    assert.ok(started.ok, choice);
+    await started.done;
+    dynamics.set(choice, s.adapter().calls.at(-1)!.system.dynamic);
+  }
+  for (const [choice, dynamic] of dynamics) assert.doesNotMatch(dynamic, /The owner reads/u, choice);
+  assert.equal(dynamics.get('ja'), dynamics.get('auto'));
+  assert.equal(dynamics.get('en'), dynamics.get('auto'));
 });
 
 test('古い設定: language（ja でも fr でも）は落とすだけで読め、ファイルは書き換えない', t => {
