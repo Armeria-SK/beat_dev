@@ -597,7 +597,7 @@ export const en = {
   'mode.autoDesc': 'The judge checks each action; sending out, deleting for good and anything it cannot clear wait in Pending for you',
   'mode.planDesc': 'Changes nothing: investigates and writes a plan only. Only tools that read, and reading the web, are available (text in a URL can leave this PC when reading the web)',
   'mode.runtimeAutoDesc': 'The runtime works with the permission you set for it in the runtime settings. beat does not judge its actions; what it asks approval for is checked by beat (secrets, protected files, places outside the product are declined) and the rest waits for you in Pending',
-  'mode.runtimePlanDesc': 'The runtime is started with its most careful permission, whatever the runtime settings say: it can read, but anything that needs approval is declined without asking you',
+  'mode.runtimePlanDesc': 'The runtime is started with its most careful permission, whatever the runtime settings say: it can read and write the plan and the acceptance items through beat, but any other request that needs approval is declined without asking you',
   'ui.composer.send': 'Send',
   'ui.composer.queue': 'Queue',
   'ui.composer.queueHint': 'Send at the next natural break',

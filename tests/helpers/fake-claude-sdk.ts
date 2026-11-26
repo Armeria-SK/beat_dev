@@ -28,7 +28,7 @@ export interface FakeContext {
   // 子に 1 行書いて、1 行返してもらう
   ask(message: unknown): Promise<any>;
   // 本物の SDK が canUseTool を呼ぶのと同じ呼び方
-  requestPermission(tool: string, input: Record<string, unknown>, extra?: { toolUseID?: string; suggestions?: PermissionUpdate[]; suppressAlwaysAllowRule?: boolean }): Promise<PermissionResult | null>;
+  requestPermission(tool: string, input: Record<string, unknown>, extra?: { toolUseID?: string; suggestions?: PermissionUpdate[]; suppressAlwaysAllowRule?: boolean; mcpServer?: { name: string; source: string } }): Promise<PermissionResult | null>;
   // requestPermission に渡す信号（試験が abort すると、本物の SDK が求めを取り下げるのと同じ）
   readonly permissionAbort: AbortController;
   // interrupt() が呼ばれたら解ける
@@ -122,7 +122,7 @@ export class FakeQuery {
         const canUseTool = options.canUseTool;
         if (!canUseTool) throw new Error('no canUseTool');
         const toolUseID = extra.toolUseID ?? `toolu_${tool}`;
-        return canUseTool(tool, input, { signal: permissionAbort.signal, toolUseID, requestId: `req_${toolUseID}`, ...(extra.suggestions ? { suggestions: extra.suggestions } : {}), ...(extra.suppressAlwaysAllowRule ? { suppressAlwaysAllowRule: true } : {}) });
+        return canUseTool(tool, input, { signal: permissionAbort.signal, toolUseID, requestId: `req_${toolUseID}`, ...(extra.suggestions ? { suggestions: extra.suggestions } : {}), ...(extra.suppressAlwaysAllowRule ? { suppressAlwaysAllowRule: true } : {}), ...(extra.mcpServer ? { mcpServer: extra.mcpServer } : {}) });
       },
     };
     this.#generator = script(this.ctx);

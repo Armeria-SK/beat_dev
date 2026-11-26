@@ -17,6 +17,7 @@ import {
   PERMISSIONS, type AgentRuntime, type ApprovalDecision, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeModel,
   type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
+import { BEAT_SERVER, beatToolName, buildBeatServer } from './beat-tools.ts';
 import { findClaudeExecutable } from './executable.ts';
 import { answerFor, claudeMode, disallowedTools, isCodexPermission, KEPT_TOOLS, sessionOnlyUpdates, STOPPED_ANSWER, toolHooks, type ClaudePermissionMode } from './permissions.ts';
 import { apiKeyInUse, EventTranslator, MIN_CLAUDE_CODE_VERSION, safeText, VERIFIED_CLAUDE_CODE_VERSION, versionAtLeast, versionParts } from './protocol.ts';
@@ -99,6 +100,8 @@ interface Session {
   events: AsyncQueue<RuntimeEvent>;
   translator: EventTranslator;
   pending: Map<string, Pending>;
+  // beat が計画の道具として渡した MCP の道具の名前（mcp__beat__<道具>）→ その道具の名前。計画モードの会話だけ
+  beatTools: ReadonlyMap<string, string>;
   launch: ClaudeCodeLaunch;
   sent: boolean;
   terminal: boolean;
@@ -252,6 +255,9 @@ class ClaudeCodeRuntime implements AgentRuntime {
     if (request.model !== undefined && !MODEL_NAME.test(request.model)) throw new ClaudeCodeError('model', 'The Claude Code model name is not valid');
     const executable = await this.#executable();
     const sdk = await this.#loadSdk();
+    // 計画モードの会話だけ、beat 自身の計画の道具を MCP の道具として見せる（渡された分だけ）。組み込みの道具の一覧（KEPT_TOOLS・disallowedTools）は変えない
+    const beatServer = request.planTools && request.planTools.specs.length > 0 ? await buildBeatServer(request.planTools) : undefined;
+    const beatTools: ReadonlyMap<string, string> = new Map((beatServer ? request.planTools?.specs ?? [] : []).map(spec => [beatToolName(spec.name), spec.name] as const));
     const scope = await this.#deps.processes.open();
     const id = `claude-code-${this.#next += 1}`;
     const input = new AsyncQueue<SDKUserMessage>();
@@ -269,7 +275,10 @@ class ClaudeCodeRuntime implements AgentRuntime {
       const suggestions = options.suppressAlwaysAllowRule === true ? undefined : options.suggestions;
       session.pending.set(requestId, { input: toolInput, suggestions, resolve });
       options.signal.addEventListener('abort', () => { if (session.pending.delete(requestId)) resolve(STOPPED_ANSWER); }, { once: true });
-      session.events.push({ type: 'approval', requestId, tool: toolName, input: toolInput, ...(sessionOnlyUpdates(suggestions).length > 0 ? { forReply: true as const } : {}) });
+      // beat が渡した計画の道具の呼び出しか: SDK が「beat が登録した、中で動くサーバー」と言い（source が sdk）、名前が渡した道具と同じときだけ。名前だけでは見分けない（設定にある同名のサーバーに化けられないように）。
+      // ここは印を付けるだけで、許すかどうかは beat の橋が決める
+      const beatTool = options.mcpServer?.source === 'sdk' && options.mcpServer.name === BEAT_SERVER ? session.beatTools.get(toolName) : undefined;
+      session.events.push({ type: 'approval', requestId, tool: toolName, input: toolInput, ...(sessionOnlyUpdates(suggestions).length > 0 ? { forReply: true as const } : {}), ...(beatTool !== undefined ? { beatTool } : {}) });
     });
     let query: Query | undefined;
     try {
@@ -284,6 +293,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
           systemPrompt: { type: 'preset', preset: 'claude_code', ...(request.instructions !== undefined && request.instructions !== '' ? { append: request.instructions } : {}) },
           tools: [...KEPT_TOOLS],
           disallowedTools: disallowedTools(request.beatPort),
+          ...(beatServer ? { mcpServers: { [BEAT_SERVER]: beatServer } } : {}),
           hooks: toolHooks(),
           canUseTool,
           includePartialMessages: true,
@@ -299,7 +309,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
         },
       });
       session = {
-        id, info, scope, query, input, launch, events: new AsyncQueue<RuntimeEvent>(), pending: new Map(),
+        id, info, scope, query, input, launch, events: new AsyncQueue<RuntimeEvent>(), pending: new Map(), beatTools,
         translator: new EventTranslator({ expectedMode: permission, interrupted: () => session.interrupting, onSession: reported => { info.runtimeSession = reported; } }),
         sent: false, terminal: false, closed: false, interrupting: false, tripped: false, detach: () => undefined,
       };
@@ -378,12 +388,12 @@ class ClaudeCodeRuntime implements AgentRuntime {
     await session.query.interrupt();
   }
 
-  async approve(sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> {
+  async approve(sessionId: string, requestId: string, decision: ApprovalDecision, note?: string): Promise<void> {
     const session = this.#session(sessionId);
     const pending = session.pending.get(requestId);
     if (!pending) throw new ClaudeCodeError('busy', 'There is no waiting approval with that id (it was already answered or is no longer waiting)');
     session.pending.delete(requestId);
-    pending.resolve(answerFor(decision, pending.input, pending.suggestions));
+    pending.resolve(answerFor(decision, pending.input, pending.suggestions, note));
   }
 
   events(sessionId: string): AsyncIterable<RuntimeEvent> { return this.#session(sessionId).events; }

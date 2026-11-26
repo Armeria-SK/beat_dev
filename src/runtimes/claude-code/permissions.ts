@@ -119,8 +119,9 @@ const DECLINED = 'The owner declined this request.';
 const DECLINED_BY_BEAT = "beat declined this request without asking the owner (one of beat's own guards, or plan mode).";
 const CANCELLED = 'The owner stopped the reply.';
 
-// 答えの作り方。許可は入力を書き換えず（updatedInput は元の入力）、閉じた一覧の外の答えは断りにする
-export function answerFor(decision: ApprovalDecision, input: Record<string, unknown>, suggestions: readonly PermissionUpdate[] | undefined): PermissionResult {
+// 答えの作り方。許可は入力を書き換えず（updatedInput は元の入力）、閉じた一覧の外の答えは断りにする。
+// note: beat が断る理由（decline_by_beat のときだけ使う）。計画モードなのか、どの守りなのかを、実行役のモデルへそのまま返す
+export function answerFor(decision: ApprovalDecision, input: Record<string, unknown>, suggestions: readonly PermissionUpdate[] | undefined, note?: string): PermissionResult {
   switch (decision) {
     case 'accept': return { behavior: 'allow', updatedInput: input };
     case 'accept_for_reply': {
@@ -128,7 +129,7 @@ export function answerFor(decision: ApprovalDecision, input: Record<string, unkn
       return { behavior: 'allow', updatedInput: input, ...(updatedPermissions.length > 0 ? { updatedPermissions } : {}) };
     }
     case 'cancel': return { behavior: 'deny', message: CANCELLED, interrupt: true };
-    case 'decline_by_beat': return { behavior: 'deny', message: DECLINED_BY_BEAT };
+    case 'decline_by_beat': return { behavior: 'deny', message: note !== undefined && note.trim() !== '' ? note : DECLINED_BY_BEAT };
     default: return { behavior: 'deny', message: DECLINED };
   }
 }
