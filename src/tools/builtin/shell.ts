@@ -427,15 +427,15 @@ function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>):
 }
 
 const CD_PROGRAMS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
-const flatStatements = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatStatements(st.inner ?? st.unknownInner ?? [])]);
+const flatStatements = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatStatements(st.inner ?? [])]);
 
 // cd・pushd・Set-Location の行き先は入るだけのフォルダで、中を読むのは、あとの文が自分のパスで名前を出すものだけ。
 // 行き先を読むパスに数えると、積んだあとに行き先の中へ新しいファイルができただけで、cd sub && git push が「変わった」で止まる。
-// 数えないのは、行き先が 1 つの素直な語（変数・ワイルドカード・~ ・旗でない）と決まる cd だけ。同じ場所を別の文が読んでいるなら、その分は残す
+// 数えないのは、行き先が 1 つの素直な語（変数・ワイルドカード・~ ・旗でない）と決まり、その cd 自身の行き先が paths に足された cd だけ（許可の表に載らない書き方・行き先の分からない cd のあとの中身は足されない）。同じ場所を別の文が読んでいるなら、その分は残す
 function readPathsOf(paths: readonly CheckedPath[], statements: readonly StatementFacts[]): string[] {
   const entered: string[] = [];
   for (const st of flatStatements(statements)) {
-    if (!CD_PROGRAMS.has(st.program) || st.programDynamic || st.programOdd || st.inner || st.env.length) continue;
+    if (!CD_PROGRAMS.has(st.program) || st.programDynamic || st.programOdd || st.inner || st.env.length || st.reasonKeys.includes('list.command')) continue;
     const args = st.words.slice(1);
     const rest = args[0] && /^-(?:path|literalpath)$/iu.test(args[0].text) ? args.slice(1) : args;
     const target = rest.length === 1 ? rest[0]! : undefined;

