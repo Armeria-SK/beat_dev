@@ -61,7 +61,7 @@ export function escStops(e: { key: string; composing: boolean }, running: boolea
 
 const usable = (m: ModelView): boolean => m.probe?.status === 'ok';
 
-export function modelInEffect(models: readonly ModelView[], chatOrder: readonly string[], modelId: string | null, use: RuntimeUse = NO_RUNTIME): ModelView | undefined {
+export function modelInEffect(models: readonly ModelView[], chatOrder: readonly string[], modelId: string | null, use: RuntimeUse): ModelView | undefined {
   if (modelId) return models.find(m => m.id === modelId);
   const ordered = chatOrder.map(id => models.find(m => m.id === id)).filter((m): m is ModelView => m !== undefined);
   const firstSend = use.bound === null && use.allowed;

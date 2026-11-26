@@ -79,12 +79,12 @@ test('ui/composer-state: Enter は送信、Shift+Enter は改行、作成中の 
 
 test('ui/composer-state: 深さはモデルに efforts があるときだけ。モデルを選んでいなければ、設定の順の先頭の使えるモデルで決める', () => {
   const models = [model('a', { probe: null }), model('b', { efforts: ['low', 'high'] }), model('c')];
-  assert.equal(modelInEffect(models, ['a', 'b', 'c'], null)?.id, 'b', '使えない a は飛ばす');
-  assert.equal(modelInEffect(models, ['a'], null)?.id, 'a', '使えるものが無ければ先頭');
-  assert.equal(modelInEffect(models, ['a', 'b'], 'c')?.id, 'c');
-  assert.equal(modelInEffect(models, [], null), undefined);
-  assert.deepEqual(depthOptions(modelInEffect(models, ['a', 'b', 'c'], null)), ['low', 'high']);
-  assert.deepEqual(depthOptions(modelInEffect(models, ['a', 'b', 'c'], 'c')), []);
+  assert.equal(modelInEffect(models, ['a', 'b', 'c'], null, NO_RUNTIME)?.id, 'b', '使えない a は飛ばす');
+  assert.equal(modelInEffect(models, ['a'], null, NO_RUNTIME)?.id, 'a', '使えるものが無ければ先頭');
+  assert.equal(modelInEffect(models, ['a', 'b'], 'c', NO_RUNTIME)?.id, 'c');
+  assert.equal(modelInEffect(models, [], null, NO_RUNTIME), undefined);
+  assert.deepEqual(depthOptions(modelInEffect(models, ['a', 'b', 'c'], null, NO_RUNTIME)), ['low', 'high']);
+  assert.deepEqual(depthOptions(modelInEffect(models, ['a', 'b', 'c'], 'c', NO_RUNTIME)), []);
   assert.deepEqual(depthOptions(undefined), []);
 });
 
@@ -95,7 +95,7 @@ test('ui/composer-state（#266）: 発言の無い製品の会話の「自動」
   const first: RuntimeUse = { bound: null, allowed: true };
   const pick = (models: ModelView[], order: string[], use: RuntimeUse) => modelInEffect(runtimeShown(models, use), order, null, use);
 
-  assert.equal(modelInEffect([unchecked, provider], ['cc', 'a'], null)?.id, 'a', 'with no use given, the old rule: the first usable one');
+  assert.equal(modelInEffect([unchecked, provider], ['cc', 'a'], null, NO_RUNTIME)?.id, 'a', 'with NO_RUNTIME, the old rule: the first usable one');
   assert.equal(pick([unchecked, provider], ['cc', 'a'], first)?.id, 'cc', 'the first send goes to the runtime model the server picks, though it is not checked yet');
   assert.deepEqual(depthOptions(pick([unchecked, provider], ['cc', 'a'], first)), ['low', 'high'], 'so the depths are the runtime model\'s, the ones the server accepts');
   assert.equal(pick([unchecked, provider], ['cc', 'a'], NO_RUNTIME)?.id, 'a', 'a conversation that is not a fresh product one never goes to a runtime');

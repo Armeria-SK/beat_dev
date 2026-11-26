@@ -12,7 +12,7 @@ const en = {
   'not_finished': 'The research is still running. Confirm it when it has ended',
   'changed': 'The research list changed after it was shown. Reload it and choose again',
   'conversation_running': 'The conversation is still answering. Press again when the reply has ended',
-  'runtime_source': 'This conversation runs through an external runtime, and beat cannot answer the research picks there. Nothing was changed. Start a new conversation in the product to go on',
+  'runtime_source': 'The conversation this research is for runs through an external runtime, and beat cannot answer the research picks there. Nothing was changed. Start a new conversation in the product to go on',
   'too_long': 'The picked names come to {length} characters, more than {max}. Pick fewer',
   'bad_choice': 'Row {id} cannot take the choice {decision}',
   'setup_title': 'Install and set up {name}',
