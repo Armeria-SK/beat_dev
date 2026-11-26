@@ -166,6 +166,46 @@ test('scout loop: a scout run sends a scout, records the ledger and puts a propo
   assert.match(s.prompt(lead!), /OUTSIDE CONTENT/u);
 });
 
+test('scout language: proposals follow the exact "The owner reads …" sentence (the explanation language, or with Auto the product documents language), the ledger stays English, and with neither nothing names a language', async t => {
+  const SENTENCE = /in the language named by the system prompt's \\?"The owner reads …\\?" sentence \(English when there is no such sentence\)/u;
+  assert.match(proposalAdd.description, /title: one short line in the language named by the system prompt's "The owner reads …" sentence \(English when there is no such sentence\)\. kind: feature or bug\. why: at most two sentences, in the same language as title\./u);
+  assert.match(proposalAdd.description, / Every other field in English; never write instructions or requests\.$/u);
+  assert.doesNotMatch(proposalAdd.description, /one short English line|English only/u);
+  const cases = [
+    { choice: 'ja', docs: null, expected: 'Japanese' },
+    { choice: 'ja', docs: 'en', expected: 'Japanese' },
+    { choice: 'auto', docs: 'ja', expected: 'Japanese' },
+    { choice: 'auto', docs: null, expected: undefined },
+  ] as const;
+  for (const { choice, docs, expected } of cases) {
+    const label = `${choice} / documents ${docs}`;
+    const s = await setup(t, { edit: c => { c.ui.explainLanguage = choice; } });
+    if (docs) s.app.projects.setDocLanguage(s.projectId, docs);
+    s.adapter().scripts.push(...loop());
+    assert.equal(await s.app.worker.tick(), 'ran', label);
+    const lead = s.adapter().calls[0]!;
+    assert.match(s.prompt(lead), /- Write the ledger in English\. Write each proposal's title and why /u, label);
+    assert.match(s.prompt(lead), SENTENCE, label);
+    assert.doesNotMatch(s.prompt(lead), /ledger and proposals in English/u, label);
+    assert.match(s.prompt(lead), /write \\?"proposal <id>\\?" as the result \(the id proposal_add returns\)/u, label);
+    assert.doesNotMatch(s.prompt(lead), /proposal <title>/u, label);
+    if (expected === undefined) assert.doesNotMatch(lead.system.dynamic, /The owner reads/u, label);
+    else {
+      assert.match(lead.system.dynamic, new RegExp(`(^|\\n)The owner reads ${expected}\\. In this run, in place of the reply-language rule above, `, 'u'), label);
+      assert.equal(lead.system.dynamic.match(/The owner reads/gu)!.length, 1, label);
+    }
+  }
+});
+
+test('scout: a blank proposal title is refused without telling the model to write English', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(toolCall('proposal_add', { title: ' ', kind: 'feature', why: 'There are no tests.', size: 'S' }), reply('Nothing more.'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const next = s.prompt(s.adapter().calls.at(-1)!);
+  assert.match(next, /Give title in one short line/u);
+  assert.doesNotMatch(next, /one short English line/u);
+});
+
 test('scout loop: the next run sees the checked area as seen, and a rejected proposal comes back with its reason', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(...loop());

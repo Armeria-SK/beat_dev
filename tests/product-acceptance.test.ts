@@ -479,7 +479,7 @@ test('3-1b 守り: ふつうのファイルの道具とシェルからは accept
 
 test('3-1b 毎回の system: 製品の文書の言語があれば、製品の行のあとに言語の 1 行。無ければ入らない', () => {
   const at = new Date('2026-11-12T00:00:00Z');
-  const line = 'Owner-facing documents of this product (plan, acceptance items, questions, deviation notes) are written in ja.';
+  const line = 'Owner-facing documents of this product (plan, acceptance items, deviation notes) are written in ja.';
   assert.ok(buildDynamic('UTC', 'en', at, 'auto', { name: 'Shop', root: 'C:/shop', docLanguage: 'ja' }).split('\n').includes(line));
   assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'auto', { name: 'Shop', root: 'C:/shop', docLanguage: null }), /Owner-facing/u);
   assert.doesNotMatch(buildDynamic('UTC', 'en', at, 'auto'), /Owner-facing/u);
@@ -649,7 +649,7 @@ test('3-1b 言語（本物の App）: 製品の会話・タスク・子の担当
   const s = await setup(t, { configure: c => { c.tools.agent.enabled = true; c.tools.policies = { agent_run: 'allow' }; } });
   const shop = await s.product('shop');
   await s.json(`/api/projects/${shop.id}`, 'PATCH', { docLanguage: 'ja' });
-  const LINE = /Owner-facing documents of this product \(plan, acceptance items, questions, deviation notes\) are written in ja\./u;
+  const LINE = /Owner-facing documents of this product \(plan, acceptance items, deviation notes\) are written in ja\./u;
   s.adapter().scripts = [call('agent_run', { task: 'look' }), reply('child'), reply('parent'), reply('plain')];
   await s.send(uuid(1), { text: 'delegate', projectId: shop.id, permissionMode: 'auto' });
   assert.match(s.adapter().calls.at(-3)!.system.dynamic, LINE, '会話');

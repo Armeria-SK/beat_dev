@@ -8,6 +8,7 @@ import { personaTexts, styleText } from '../src/engine/persona.ts';
 import { compactPrompt } from '../src/engine/prompts.ts';
 import { isNoProposal, reviewPrompt } from '../src/memory/review.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
+import { ResearchSession } from '../src/research/evidence.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { buildDynamic, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { resolvePaths } from '../src/paths.ts';
@@ -72,6 +73,52 @@ test('返事の言語: 新しい会話の固定の system は英語のルール�
   assert.match(call.system.frozen, /^# beat's basic rules/u);
   assert.ok(call.system.dynamic.includes(REPLY_DIRECTIVE));
   assert.deepEqual(s.app.db.prepare(LANGUAGE_KV).all(), []);
+});
+
+test('説明の言語: ja・en にすると、タスクの実行の動的な部分に持ち主が読む言語の指示が付く。auto と、会話の実行には付かない', async t => {
+  const dynamics = new Map<string, string>();
+  for (const [choice, name] of [['ja', 'Japanese'], ['en', 'English'], ['auto', undefined]] as const) {
+    const s = await startApp(t, { configure: c => { c.ui.explainLanguage = choice; } });
+    s.adapter().scripts = [say('done'), say('こんにちは')];
+    const task = s.app.tasks.create({ title: 'Build the shop', origin: 'user', actor: 'user' });
+    const started = s.app.engine.runTask(task, s.app.conversations.create({ kind: 'task' }).id, 'Build the product as planned.');
+    assert.ok(started.ok, choice);
+    await started.done;
+    const dynamic = s.adapter().calls.at(-1)!.system.dynamic;
+    dynamics.set(choice, dynamic);
+    assert.ok(dynamic.includes(REPLY_DIRECTIVE), choice);
+    if (name === undefined) assert.doesNotMatch(dynamic, /The owner reads/u, choice);
+    else assert.match(dynamic, new RegExp(`^The owner reads ${name}\\. In this run, in place of the reply-language rule above, write the progress text between tool calls, the task_complete summary, notes and questions in ${name}, even if the task, the files or these instructions are in another language\\. The product's documents \\(plan, acceptance items, deviation notes\\) keep the language named for them\\. Code, commands and quoted text stay as they are\\.$`, 'mu'), choice);
+
+    const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'こんにちは' });
+    await settled(s.app, sent.body.runId);
+    assert.doesNotMatch(s.adapter().calls.at(-1)!.system.dynamic, /The owner reads/u, `${choice}: 会話の返事は持ち主が書いた言語のまま`);
+  }
+  const base = dynamics.get('auto')!;
+  for (const [choice, name] of [['ja', 'Japanese'], ['en', 'English']] as const) {
+    const sentence = /^The owner reads .*$/mu.exec(dynamics.get(choice)!)![0];
+    assert.ok(sentence.startsWith(`The owner reads ${name}.`), choice);
+    const gap = `${REPLY_DIRECTIVE}\n\n`;
+    assert.equal(dynamics.get(choice), base.replace(gap, `${gap}${sentence}\n\n`), `${choice}: auto の文に、文を 1 つ足しただけ`);
+  }
+});
+
+test('説明の言語: 調べる実行には、ja・en でも持ち主が読む言語の指示が付かず、auto と同じ動的な部分になる', async t => {
+  const dynamics = new Map<string, string>();
+  for (const choice of ['ja', 'en', 'auto'] as const) {
+    const s = await startApp(t, { configure: c => { c.ui.explainLanguage = choice; } });
+    s.adapter().scripts = [say('done')];
+    const task = s.app.tasks.create({ title: 'Research', origin: 'self', actor: 'worker', scoutRun: true });
+    const conversationId = s.app.conversations.create({ kind: 'task', title: 'Research' }).id;
+    const session = new ResearchSession({ researchId: 'r-1', part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 } });
+    const started = s.app.engine.runResearch(task, conversationId, { prompt: 'Find similar products for a notes app.' }, { pinned: null, session });
+    assert.ok(started.ok, choice);
+    await started.done;
+    dynamics.set(choice, s.adapter().calls.at(-1)!.system.dynamic);
+  }
+  for (const [choice, dynamic] of dynamics) assert.doesNotMatch(dynamic, /The owner reads/u, choice);
+  assert.equal(dynamics.get('ja'), dynamics.get('auto'));
+  assert.equal(dynamics.get('en'), dynamics.get('auto'));
 });
 
 test('古い設定: language（ja でも fr でも）は落とすだけで読め、ファイルは書き換えない', t => {
@@ -205,7 +252,7 @@ test('返事・記録の言語の指示は持ち主の言葉を指し、指示�
   assert.match(texts.compact, /in the language the user writes in \(the language of the "User:" lines\)/u);
   assert.match(texts.review, /in the language the user writes in: the language of the \[User\] lines in the record below/u);
   assert.match(texts.tidy, /in the language the user writes in: the language the listed memories are written in/u);
-  assert.match(texts.task, /the language of the user's own words in the title and details \(for a curiosity task, the language of the topic\), not the language of these instructions/u);
+  assert.match(texts.task, /in the language of the system prompt's "The owner reads …" sentence when it has one; otherwise in the language the user writes in: the language of the user's own words in the title and details \(for a curiosity task, the language of the topic\), not the language of these instructions/u);
   assert.match(texts.dynamic, /not of these instructions, templates or tool results/u);
   for (const [name, text] of Object.entries(texts)) assert.doesNotMatch(text, /language the conversation is written in|language the record below is written in|language of the task's title and details/u, name);
 });

@@ -37,7 +37,7 @@ const en = {
   'unusable': '{file} in the product notes is not a plain file or folder, so the ledger is left as it is',
   'bad_id': 'No ledger entry {id}. Leave id out to add a new entry',
   'ids_used_up': 'The ledger has no free entry id left (L-99999999 is taken). Rewrite an existing entry by its id instead',
-  'empty': 'Give {field} in one short English line',
+  'empty': 'Give {field} in one short line',
   'recorded': 'Recorded {id} in scout/ledger.md (commit {commit})',
   'rewritten': 'Rewrote {id} in scout/ledger.md (commit {commit})',
   'paths_dropped': 'Not kept: {count} area paths that are not relative paths inside the product folder ({paths})',

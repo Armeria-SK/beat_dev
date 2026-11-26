@@ -22,7 +22,7 @@ function acceptanceOf(ctx: ToolContext, projectId: string): AcceptanceDoc | unde
 
 export const deviationAdd: ToolDef<DeviationAddInput> = {
   name: 'deviation_add',
-  description: "Record where your work differs from the plan or the acceptance list, and why; the owner sees it next to the plan. item: the acceptance item it is about (such as A-3), if any. Write in the product's owner-facing language.",
+  description: "Record where your work differs from the plan or the acceptance list, and why; the owner sees it next to the plan. item: the acceptance item it is about (such as A-3), if any. Write in the owner-facing documents language.",
   input: Type.Object({
     item: Type.Optional(Type.String({ maxLength: 20 })),
     what: Type.String({ minLength: 1, maxLength: DEVIATION_TEXT_MAX }),

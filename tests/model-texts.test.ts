@@ -13,6 +13,8 @@ import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts'
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, fenceTail, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { PLACEHOLDER_NONCE } from '../src/shared/fence.ts';
+import { MESH_FIRST_LINE, wrapMeshIndex } from '../src/mesh/index.ts';
+import { deviationAdd } from '../src/tools/builtin/deviations.ts';
 import { bookPressureText, reviewLabel, reviewPrompt, reviewWindow, TRIGGER_TEXT, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
@@ -70,8 +72,23 @@ async function say(s: Awaited<ReturnType<typeof startApp>>, conversationId: stri
 
 test('テンプレート: PowerShell の制限モードで動かない書き方を避けるよう、基本ルールとシェルの道具の説明に書いてある', t => {
   const real = paths(t);
-  assert.match(readTemplate(real, 'rules'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## What you do not do/u);
+  assert.match(readTemplate(real, 'rules'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n/u);
   assert.match(shellRun.description, /constrained mode, so do not use \.NET type syntax \([^)]*\[pscustomobject\]/u);
+});
+
+test('テンプレート: PowerShell では rm -rf が引数のエラーになるので、Remove-Item -Recurse -Force を使うと基本ルールの「When you use the shell」に書いてある', t => {
+  const shell = /## When you use the shell\r?\n\r?\n((?:- [^\r\n]*\r?\n)+)/u.exec(readTemplate(paths(t), 'rules'))?.[1] ?? '';
+  assert.match(shell, /^- In PowerShell, `rm -rf <path>` fails with an argument error: delete with `Remove-Item -Recurse -Force <path>`\r?$/mu);
+});
+
+test('製品の目次の案内: 記憶は製品のフォルダのファイルでなく、file_list や file_read でなく mesh_read で読むと書いてある（基本ルールには書かない。調べる実行の system に目次の文が入らないため）', t => {
+  assert.match(MESH_FIRST_LINE, /If a memory note may cover the task, read it with mesh_read before acting \(memory is not in the product folder, so file_list and file_read do not find it\)\. Answer the owner in the owner's language\.$/u);
+  assert.ok(wrapMeshIndex('body', PLACEHOLDER_NONCE).includes('memory is not in the product folder, so file_list and file_read do not find it'));
+  assert.doesNotMatch(readTemplate(paths(t), 'rules'), /mesh_read|MESH/u);
+});
+
+test('テンプレート: deviation_add の説明は、メモの言語を「持ち主が読む言語」でなく製品の文書の言語と書く', () => {
+  assert.match(deviationAdd.description, /Write in the owner-facing documents language\.$/u);
 });
 
 test('テンプレート: 基本ルールの「How you speak」に、道具を使う前に何をするかを 1 文で言い、長く使ったあとは見つけたことを 1 行で言うと書いてある', t => {
@@ -258,7 +275,7 @@ const EN_TASK_HOW = [
   '- If something is unclear, record it with question_add and keep going with the option you assume. Set blocking only when no assumption is safe',
   '- You do not need to wait for a call held in Pending for the user to decide: keep going with whatever else you can do. beat resumes the task as soon as the user decides, so there is no need to check on it. If the rest of the task depends on its result, call task_checkpoint; call task_complete only when nothing left in the task depends on that call',
   '- While a call of this task waits in Pending, task_complete does not finish the task: the task waits for the owner to decide, then continues. Withdraw a waiting call you no longer need with pending_withdraw',
-  "- Write notes, questions and the summary in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
+  "- Write notes, questions and the summary in the language of the system prompt's \"The owner reads …\" sentence when it has one; otherwise in the language the user writes in: the language of the user's own words in the title and details (for a curiosity task, the language of the topic), not the language of these instructions",
 ];
 const EN_REVIEW_POLICY = [
   '',
