@@ -83,6 +83,7 @@ export const UI_SLASH = [
   { name: 'build', desc: 'ui.slash.build' },
   { name: 'task', desc: 'ui.slash.task' },
   { name: 'tasks', desc: 'ui.slash.tasks' },
+  { name: 'propose', desc: 'ui.slash.propose' },
   { name: 'skills', desc: 'ui.slash.skills' },
   { name: 'log', desc: 'ui.slash.log' },
   { name: 'memory', desc: 'ui.slash.memory' },
@@ -90,12 +91,12 @@ export const UI_SLASH = [
   { name: 'rename', desc: 'ui.slash.rename' },
   { name: 'archive', desc: 'ui.slash.archive' },
   { name: 'summary', desc: 'ui.slash.summary' },
-] as const satisfies ReadonlyArray<{ name: (typeof SLASH_COMMANDS)[number]['name'] | 'plan' | 'build'; desc: string }>;
+] as const satisfies ReadonlyArray<{ name: (typeof SLASH_COMMANDS)[number]['name'] | 'plan' | 'build' | 'propose'; desc: string }>;
 
 export type UiSlash = (typeof UI_SLASH)[number];
 export type UiSlashName = UiSlash['name'];
 
-export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean }
+export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean; scout?: boolean }
 
 export function slashAvailable(ctx: SlashContext): UiSlash[] {
   return UI_SLASH.filter(c => {
@@ -105,6 +106,7 @@ export function slashAvailable(ctx: SlashContext): UiSlash[] {
       case 'archive': return ctx.hasConversation && !ctx.archived;
       case 'summary': return ctx.hasConversation && ctx.hasSummary;
       case 'build': return ctx.product === true;
+      case 'propose': return ctx.scout === true;
       default: return true;
     }
   });

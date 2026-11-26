@@ -23,6 +23,7 @@ import { newSessionHash, sendOptions } from './product-nav.ts';
 import type { LiveDraft, RunNotice } from './live-state.ts';
 import { PanesButton, type PanesToggle } from './Panes.tsx';
 import { Button, EmptyState, Icon, Notice } from './parts.tsx';
+import { reportOpError } from './task-ops.ts';
 import { notePath } from './memory-notes.ts';
 import { messageTarget, parseRoute, routeHash } from './routes.ts';
 import { SessionMenu } from './SessionMenu.tsx';
@@ -49,7 +50,7 @@ export interface ConversationProps {
   buildLive?: BuildLive | undefined;
 }
 
-export interface BuildLive { toolOf: (build: ChatBuild) => ToolItem | undefined; questions: (taskId: string) => number; pending: (taskId: string) => number }
+export interface BuildLive { toolOf: (build: ChatBuild) => ToolItem | undefined; checklistOf: (build: ChatBuild) => ChecklistItem[] | undefined; questions: (taskId: string) => number; pending: (taskId: string) => number }
 
 interface Loaded { conversation: ConversationRow; messages: Message[]; pending: PendingMessage[]; builds: ChatBuild[] }
 interface Choice { modelId: string | null; effort: string | null; permissionMode: PermissionMode }
@@ -382,7 +383,10 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
   const conversation = loaded?.conversation ?? null;
   const messages = loaded?.messages ?? [];
   const pending = loaded?.pending ?? [];
-  const builds = loaded?.builds ?? [];
+  const builds = (loaded?.builds ?? []).map(b => {
+    const live = b.status === 'running' ? buildLive?.checklistOf(b) : undefined;
+    return live ? { ...b, checklist: { ...b.checklist, items: live } } : b;
+  });
   const items = threadItems({ messages, draft, notices, builds });
   const runningBuild = builds.find(b => b.status === 'running' && b.checklist.items.length > 0);
   const unfinished = useRef(new Set<string>());
@@ -520,6 +524,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       case 'archive': if (id) void api.archiveConversation(id).then(() => load(), changeFailed); return;
       case 'summary': setSummaryOpen(true); stick.current = false; scroller.current?.scrollTo({ top: 0 }); return;
       case 'build': panes?.onOpenPlan?.(true); return;
+      case 'propose': if (product) void api.scoutRun(product.id).then(() => toast({ icon: 'refresh', title: t('ui.scout.started') }), error => reportOpError(error)); return;
       case 'rename': return;
     }
   };
@@ -648,7 +653,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         <Composer
           draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}
           models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
-          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1, product: Boolean(product && panes?.onOpenPlan) }}
+          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1, product: Boolean(product && panes?.onOpenPlan), scout: Boolean(product && product.scout_mode !== 'off') }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}
           onStop={() => { if (draft) void api.stop(draft.runId).catch(changeFailed); }}
           onChoose={next => void choose(next)} onCancelPending={pendingId => void cancelPending(pendingId)} onSlash={runSlash}

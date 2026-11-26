@@ -101,7 +101,7 @@ test('ui/composer-state: スラッシュコマンド: 今の一覧を 1 つも�
   for (const command of UI_SLASH) assert.equal(typeof t(command.desc), 'string');
   const none = { hasConversation: false, running: false, hasSummary: false, archived: false, product: false };
   assert.deepEqual(slashAvailable(none).map(c => c.name), ['new', 'plan', 'task', 'tasks', 'skills', 'log', 'memory']);
-  const all = { hasConversation: true, running: true, hasSummary: true, archived: false, product: true };
+  const all = { hasConversation: true, running: true, hasSummary: true, archived: false, product: true, scout: true };
   assert.deepEqual(slashAvailable(all).map(c => c.name), names);
   assert.ok(!slashAvailable({ ...all, archived: true }).some(c => c.name === 'archive'));
   assert.deepEqual(slashItems('/ta', all).map(c => c.name), ['task', 'tasks']);
@@ -119,6 +119,21 @@ test('ui/composer-state: /build は製品の会話でだけ出る（欄を開い
   assert.equal(bareCommand('/build')?.name, 'build');
   assert.equal(t('ui.slash.build'), 'Review the plan before building');
   assert.equal(UI_SLASH.find(c => c.name === 'build')?.desc, 'ui.slash.build');
+});
+
+test('ui/composer-state: /propose（考える役を今すぐ動かす）は、考える役が Off でない製品の会話でだけ出る。/p + Enter は今までどおり /plan、/t は /task と /tasks だけ', () => {
+  const ctx = { hasConversation: true, running: false, hasSummary: false, archived: false };
+  assert.ok(slashAvailable({ ...ctx, scout: true }).some(c => c.name === 'propose'));
+  assert.ok(!slashAvailable({ ...ctx, scout: false }).some(c => c.name === 'propose'));
+  assert.ok(!slashAvailable(ctx).some(c => c.name === 'propose'), '製品の会話かどうか分からないときは出さない');
+  assert.ok(slashAvailable({ ...ctx, hasConversation: false, scout: true }).some(c => c.name === 'propose'), '新しい製品の会話でも出す');
+  assert.equal(bareCommand('/propose')?.name, 'propose');
+  assert.equal(t('ui.slash.propose'), 'Ask for proposals now');
+  const on = { ...ctx, scout: true };
+  assert.deepEqual(slashItems('/p', on).map(c => c.name), ['plan', 'propose'], '/p + Enter で開くのは今までどおり最初の /plan');
+  assert.deepEqual(slashItems('/p', ctx).map(c => c.name), ['plan']);
+  assert.deepEqual(slashItems('/pr', on).map(c => c.name), ['propose']);
+  assert.deepEqual(slashItems('/t', on).map(c => c.name), ['task', 'tasks'], '/t には /propose は混ざらない');
 });
 
 test('ui/composer-state: 待たせる発言は 1 つ: もう一度 Queue するとき取り消すのは、割り込みでない待ちの発言の全部', () => {

@@ -239,8 +239,8 @@ test('ui/Panes（DOM）: Plan の欄は今の会話の id を Build に渡す。
 
 const TASK_CONV = 'bbbbbbbb-0000-4000-8000-000000000002';
 const liveDraft = (extra: Partial<LiveDraft> = {}): LiveDraft => ({ runId: 'tr', conversationId: TASK_CONV, modelId: 'm', text: '', ...extra });
-const buildLive = (drafts: LiveDraft[], counts: { questions?: number; pending?: number } = {}) => ({
-  toolOf: (b: ChatBuild) => buildToolItem(drafts, b), questions: () => counts.questions ?? 0, pending: () => counts.pending ?? 0,
+const buildLive = (drafts: LiveDraft[], counts: { questions?: number; pending?: number } = {}, lists: Record<string, ChecklistItem[]> = {}) => ({
+  toolOf: (b: ChatBuild) => buildToolItem(drafts, b), checklistOf: (b: ChatBuild) => lists[b.id], questions: () => counts.questions ?? 0, pending: () => counts.pending ?? 0,
 });
 const running = (extra: Partial<ChatBuild> = {}) => build('running', { conversation_id: TASK_CONV, checklist: { items: STEPS, tainted: false }, ...extra });
 const toolsAfter = (container: HTMLElement) => { const next = row(container)?.nextElementSibling; return next?.matches('.bt-tools') ? next : null; };
@@ -399,4 +399,30 @@ test('ui/Conversation（DOM・build-in-chat）: 道具の行は動いている B
     assert.equal(container.querySelector('.ui-build__session'), null, b.status);
     await cleanup();
   }
+});
+
+test('ui/Conversation（DOM・build-in-chat）: 動いている Build の Checklist は、渡された表（checklistOf）で描き直す。会話は読み直さない。動いていない Build は読み出しの表のまま', async () => {
+  const lists: Record<string, ChecklistItem[]> = {};
+  const empty = () => running({ checklist: { items: [], tainted: false } });
+  const { container, next } = await renderChat([empty()], { buildLive: buildLive([], {}, lists) });
+  assert.equal(container.querySelector('.ui-pinned'), null, '読み出しの表がまだ空で、渡された表も無い');
+  const base = globalThis.fetch;
+  let loads = 0;
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    if (String(path) === `/api/conversations/${CHAT}/messages`) loads += 1;
+    return base(path, init);
+  }) as typeof fetch;
+  lists['b1'] = STEPS;
+  await next([empty()], 0);
+  const pinned = () => container.querySelector('.bt-checklist.ui-pinned');
+  assert.equal(pinned()?.querySelector('.bt-check--doing')?.textContent, 'Write the parser', '表が渡されただけで出る');
+  assert.equal(pinned()?.querySelector('.bt-checklist__head .bt-meta')?.textContent, '1 / 3');
+  lists['b1'] = STEPS.map(s => ({ ...s, status: 'done' as const }));
+  await next([empty()], 0);
+  assert.equal(pinned()?.querySelector('.bt-checklist__head .bt-meta')?.textContent, '3 / 3', '次の更新でも描き直す');
+  assert.equal(loads, 0, '会話の読み直しはしない');
+  await cleanup();
+  const waiting = (await renderChat([build('waiting', { waiting_kind: 'approval', conversation_id: TASK_CONV, checklist: { items: STEPS, tainted: false } })], { buildLive: buildLive([], {}, { b1: [{ text: 'Other', status: 'pending' }] }) })).container;
+  assert.equal(waiting.querySelector('.ui-pinned'), null);
+  assert.equal(listAfter(waiting)?.querySelector('.bt-checklist__head .bt-meta')?.textContent, '1 / 3', '止まっている Build は読み出しの表（渡された表では上書きしない）');
 });
