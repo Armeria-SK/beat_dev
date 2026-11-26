@@ -153,6 +153,26 @@ test('0 件で 1 つでも empty なら、失敗ではなく 0 件の結果', as
   assert.deepEqual(result, { hits: [], engines: [] });
 });
 
+test('1 つのサイトだけを探す先（narrow）の empty は、0 件の結果の根拠にしない。ふつうの先が使えなかったなら失敗にする', async () => {
+  const c = clock();
+  const wiki = () => engine('wiki', { narrow: true });
+  const net = fakeNet({ a: { status: 202 }, b: { state: 'unknown', urls: [] }, wiki: { state: 'empty' } });
+  const error = await run([engine('a'), engine('b'), wiki()], net, new EngineHealth(c.now), c).then(() => undefined, (e: unknown) => e);
+  assert.deepEqual(net.gets, ['a', 'b', 'wiki']);
+  assert.ok(error instanceof SearchFailure && error.key === 'search.all_unavailable', String(error));
+  assert.match(error.text('en'), /A: refused as automated access/u);
+  assert.match(error.text('en'), /B: the result page could not be read/u);
+
+  const health = new EngineHealth(c.now);
+  health.record(engine('a'), 'blocked');
+  const resting = await run([engine('a'), wiki()], fakeNet({ wiki: { state: 'empty' } }), health, c).then(() => undefined, (e: unknown) => e);
+  assert.ok(resting instanceof SearchFailure && resting.key === 'search.all_unavailable', String(resting));
+  assert.match(resting.text('en'), /A: resting after a refusal/u);
+
+  assert.deepEqual(await run([engine('a'), wiki()], fakeNet({ a: { state: 'empty' }, wiki: { state: 'empty' } }), new EngineHealth(c.now), c), { hits: [], engines: [] }, 'ふつうの先が empty なら 0 件の結果');
+  assert.deepEqual(await run([wiki()], fakeNet({ wiki: { state: 'empty' } }), new EngineHealth(c.now), c), { hits: [], engines: [] }, 'narrow の先しか選ばれていないなら、その empty を使う');
+});
+
 test('同じ URL が 2 つの先から出たら 1 件にまとめ、並びが上になる。抜き書きは長い方', async () => {
   const c = clock();
   const net = fakeNet({ a: ok('https://one.example.org/', 'https://Shared.example.org/page/?utm_source=a'), b: ok('https://two.example.org/', 'https://three.example.org/', 'https://shared.example.org/page#x') });

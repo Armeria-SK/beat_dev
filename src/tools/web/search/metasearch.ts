@@ -120,7 +120,8 @@ export async function metasearch(options: MetasearchOptions): Promise<Metasearch
   const hits = [...merged.values()]
     .sort((a, b) => b.count - a.count || a.group - b.group || a.position - b.position || a.order - b.order)
     .slice(0, limit).map(x => x.hit);
-  if (hits.length || attempts.some(a => a.outcome === 'empty')) {
+  const onlyNarrow = options.engines.every(engine => engine.narrow);
+  if (hits.length || attempts.some(a => a.outcome === 'empty' && (!a.engine.narrow || onlyNarrow))) {
     const engines = [...new Set(attempts.filter(a => a.hits.length).map(a => a.engine.label))];
     return { hits, engines };
   }

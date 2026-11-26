@@ -487,3 +487,22 @@ test('調べる実行（R）: 検索先の転送のリンクは行き先へ戻�
   assert.equal(research.saw('http://10.0.0.1/admin'), false);
   assert.ok(!output.content.includes('bing.com/ck'), output.content);
 });
+
+test('既定の検索先で、DuckDuckGo が止められ・Bing の頁が読めず・Wikipedia だけが 0 件でも、「0 件」ではなく検索できなかった失敗になり、調べる実行では failed に数える', async () => {
+  const wikiEmpty = readFileSync(new URL('./fixtures/search/wikipedia-empty.json', import.meta.url));
+  const net = fakeNetwork({ 'html.duckduckgo.com': ['52.142.124.215'], 'www.bing.com': ['13.107.21.200'], 'ja.wikipedia.org': ['103.102.166.224'] }, {
+    'https://html.duckduckgo.com/html/?q=notes&kl=jp-jp': { status: 202 },
+    'https://www.bing.com/search?q=notes&setlang=ja&mkt=ja-JP': { body: Buffer.from('<html><body>layout changed</body></html>') },
+    'https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=notes&srprop=snippet&srlimit=10&format=json&utf8=1': { contentType: 'application/json', body: wikiEmpty },
+  });
+  const config = testConfig();
+  config.tools.web.engines = ['duckduckgo-html', 'bing', 'wikipedia'];
+  const research = new ResearchSession({ researchId: 'r1', part: 'first', budget: { fetches: 0, searches: 0, started: Date.now() }, limits: { candidates: 8, searches: 15, fetches: 30, minutes: 20 } });
+  const ctx = { config, signal: new AbortController().signal, research, services: { web: { network: net, throttle: new SearchThrottle(steppingClock()), health: new EngineHealth() } } } as unknown as ToolContext;
+  const output = await webSearch.execute({ query: 'notes' }, ctx);
+  assert.equal(net.gets.length, 3, '3 つの先すべてへ送った');
+  assert.equal(output.isError, true, output.content);
+  assert.match(output.content, /^No search site could be used right now \(DuckDuckGo: refused as automated access/u);
+  assert.doesNotMatch(output.content, /no search results/iu);
+  assert.deepEqual([research.budget.answered ?? 0, research.budget.failed], [0, 1]);
+});

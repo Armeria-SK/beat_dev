@@ -13,6 +13,7 @@ export const wikipedia: SearchEngine = {
   id: 'wikipedia',
   label: 'Wikipedia',
   provider: 'wikipedia',
+  narrow: true,
   hosts: region => [`${languageOf(region)}.wikipedia.org`],
   minIntervalMs: DEFAULT_INTERVAL_MS,
   maxPerHour: DEFAULT_PER_HOUR,
