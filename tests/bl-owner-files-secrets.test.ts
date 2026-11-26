@@ -34,7 +34,7 @@ const SECRET_SAMPLES = [
   'prod.tfvars', 'prod.tfvars.json', 'terraform.tfstate', 'terraform.tfstate.backup', '.config/gh/hosts.yml',
   'secret/a.txt', 'secrets/token.txt',
 ];
-// 片付けだけが止める名前（HELD_NAME か service-account*.json。beat の道具の読み書きは断らない）
+// 片付けと仕上げのコミットだけが止める名前（HELD_NAME。beat の道具の読み書きは断らない）
 const CLEANUP_ONLY_SAMPLES = ['app.env', 'credentials.json', 'secrets.yaml', 'service-account-prod.json', 'infra/Service-Account.json'];
 
 const specOf = (glob: string): string => `:(glob,icase)${glob}`;
@@ -135,4 +135,20 @@ test('L166: git が無視している service-account-prod.json があれば、�
   assert.equal(existsSync(join(keyed.row.path!, 'service-account-prod.json')), true);
   const marked = await s.json(`/api/tasks/${keyed.task.id}/merged`, 'POST', {});
   assert.deepEqual([marked.status, marked.body.code], [409, 'http.branch_dirty']);
+});
+
+test('L166 の残り: 仕上げのコミット（finishWorktree）は service-account*.json を入れず作業コピーに残す。名前に service-account を含むだけの別の種類のファイルは入れる', { skip: !gitAvailable }, async t => {
+  const s = await rig(t);
+  const p = await s.product('shop', 'notes.log\n');
+  const task = s.app.tasks.create({ title: 'Keyed', origin: 'user', actor: 'user', projectId: p.id, ownerRequest: true });
+  const made = await s.app.worktrees.createWorktree({ projectId: p.id, root: p.root, kind: 'task', taskId: task.id, title: 'Keyed' });
+  assert.ok(made.ok, JSON.stringify(made));
+  const copy = made.row.path!;
+  for (const name of ['service-account-prod.json', 'infra/Service-Account.json', 'docs/service-account.md', 'service-accounts.ts', 'work.txt']) put(copy, name);
+  const done = await s.app.worktrees.finishWorktree(made.row.id, { commitLeftovers: true, message: 'Keyed' });
+  assert.ok(done.ok && done.committed, JSON.stringify(done));
+  assert.deepEqual(done.held?.sort(), ['infra/Service-Account.json', 'service-account-prod.json']);
+  const tree = git(p.root, 'ls-tree', '-r', '--name-only', made.row.branch).split('\n').filter(Boolean);
+  assert.deepEqual(tree.filter(name => !['a.txt', '.gitignore'].includes(name)).sort(), ['docs/service-account.md', 'service-accounts.ts', 'work.txt']);
+  assert.equal(existsSync(join(copy, 'service-account-prod.json')), true, '止めたファイルは作業コピーに残る');
 });

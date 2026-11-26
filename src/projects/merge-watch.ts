@@ -21,9 +21,8 @@ const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 // git が無視するファイルのうち、鍵らしい名前（scope.ts の SECRET_GLOBS。beat の isSecretPath と同じ名前の一覧）を探す pathspec。見つけた名前は heldSecret で確かめ直す。
 // node_modules の中は除く（依存パッケージは試験用の鍵を同梱することがあり、npm で入れ直せる。isSecretPath の歩きも node_modules では止めない）
 const SECRET_SPECS = SECRET_GLOBS.map(glob => `:(glob,icase)${glob}`).concat(':(exclude,glob,icase)**/node_modules/**');
-// 片付けだけが止める名前（isSecretPath には入れない。読む・書くのを断ると持ち主の作業が止まる）
-const CLEANUP_ONLY = /(?:^|\/)service-account[^/]*\.json$/iu;
-const heldSecret = (name: string): boolean => !inDependencies(name) && (isSecretPath(name) || HELD_NAME.test(name) || CLEANUP_ONLY.test(name));
+// service-account*.json は HELD_NAME 側の名前（片付けと仕上げのコミットだけが止める。isSecretPath には入れない。読む・書くのを断ると持ち主の作業が止まる）
+const heldSecret = (name: string): boolean => !inDependencies(name) && (isSecretPath(name) || HELD_NAME.test(name));
 
 // merged = 取り込まれて作業コピーとブランチを片づけた。kept = Mark merged（squash など）で作業コピーだけ片づけブランチを残した
 // copy_removed = 取り込まれた先端より先にブランチが進んでいたので、作業コピーだけ片づけてブランチを残した（まだ取り込み待ち）

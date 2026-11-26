@@ -65,12 +65,24 @@ test('L798: 会話を消すとき、道具の画像は「ほかの発言が使�
   const shots = [1, 2, 3].map(n => uploads.save({ name: 'browser_screenshot', mime: 'image/png', body: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from(`shot ${n}`)]) }));
   for (const [n, shot] of shots.entries()) conversations.append(conversation.id, { role: 'tool', toolCallId: `c${n}`, name: 'browser_screenshot', content: '写した', imageIds: [shot.id] });
 
-  const sqls: string[] = [];
+  // 文を用意した回数ではなく、文を実行した回数（.get・.all・.run）を数える。用意をループの外へ出して画像ごとに実行する形でも気づける
+  const executed: string[] = [];
   const spy = new Proxy(db, {
     get(target, key) {
       const value = Reflect.get(target, key);
       if (typeof value !== 'function') return value;
-      return key === 'prepare' ? (sql: string) => { sqls.push(sql); return target.prepare(sql); } : value.bind(target);
+      if (key !== 'prepare') return value.bind(target);
+      return (sql: string) => {
+        const statement = target.prepare(sql);
+        return new Proxy(statement, {
+          get(inner, method) {
+            const member = Reflect.get(inner, method);
+            if (typeof member !== 'function') return member;
+            const counted = method === 'get' || method === 'all' || method === 'run';
+            return (...args: unknown[]) => { if (counted) executed.push(sql); return member.apply(inner, args); };
+          },
+        });
+      };
     },
   });
   const erased = eraseConversation({ db: spy, uploadsDir: dir, toolOutputsDir: dir }, conversation.id);
@@ -81,8 +93,8 @@ test('L798: 会話を消すとき、道具の画像は「ほかの発言が使�
     assert.equal(uploads.get(id), undefined, `uploads の行が消える: ${id}`);
     assert.equal(existsSync(join(dir, id)), false, `ファイルが消える: ${id}`);
   }
-  const sharedUseChecks = sqls.filter(sql => /role = 'user' AND instr\(parts/u.test(sql));
-  assert.equal(sharedUseChecks.length, 1, '「ほかの発言が使っているか」の検索は、添付 1 つ分だけ（画像の 3 枚分は無い）');
+  const sharedUseChecks = executed.filter(sql => /role = 'user' AND instr\(parts/u.test(sql));
+  assert.equal(sharedUseChecks.length, 1, '「ほかの発言が使っているか」の検索の実行は、添付 1 つ分だけ（画像の 3 枚分は無い。文の用意がループの外でも数えられる）');
 });
 
 test('L798: ファイルが無くなった画像は、モデルに渡さず、知らせは画像ごとに 1 回だけ（返事のあいだに assemble が何度動いても、実行を重ねても）', async t => {
