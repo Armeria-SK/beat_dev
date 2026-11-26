@@ -25,7 +25,7 @@ import { tempDir, testConfig } from './helpers.ts';
 // macOS diskutil/newfs*/gpt destroy/asr --erase, and aliases to a hard-deny name (Set-Alias, Set-Item / New-Item Alias:).
 // Array / hash / splat / paren arguments in a control body make the head dynamic, so a wrapper called that way goes to owner approval.
 // Repo scripts (.ps1/.cmd/.bat, ./x.sh) are not the system tool of the same name.
-// Accepted residuals: a name built at run time, -ArgumentList @(...) arrays and stdin-fed code (these go to owner approval, not hard deny);
+// Accepted residuals: a name built at run time and stdin-fed code (these go to owner approval, not hard deny); a Start-Process -ArgumentList @(...) / (...) for a child powershell (refused as list.winargs, not hard deny);
 // device writes through > / cp / tee (need root/admin); unknown precommand wrappers (flock, chrt, taskset, systemd-run, ...).
 // Control bodies are also read as statements (control-bodies step), so every other rule sees them too; the heads are still collected for every body.
 // Every case here goes through the guard only (checkShellCommand / preCheck, or the pipeline with a counting execute stub); nothing is executed.
@@ -293,7 +293,12 @@ test('disk wipe: a computed call target inside a control body waits for the owne
   const top = await w.run({ command: "& ('Format-Volume') -DriveLetter Z" });
   assert.equal(top.decidedBy, 'pending', `top level: ${top.output.content}`);
   // control-bodies: `Start-Process @p` inside try is now read as at top level, where it is refused (list.winargs), which is stricter than Pending
-  const refusedAtTop = new Set(['try { Start-Process @p } catch {}']);
+  // a nested powershell started through Start-Process with an @( ) or ( ) -ArgumentList is refused outright too (list.winargs): what the child receives cannot be checked
+  const refusedAtTop = new Set([
+    'try { Start-Process @p } catch {}',
+    "try { Start-Process -FilePath powershell -ArgumentList @('-NoProfile','-Command','Clear-Disk -Number 1 -RemoveData') -Wait } catch {}",
+    "try { Start-Process -FilePath powershell -ArgumentList ('-NoProfile','-Command','Clear-Disk -Number 1 -RemoveData') -Wait } catch {}",
+  ]);
   for (const command of [...COMPUTED_CALL, ...PENDING_PS_R3, ...PENDING_PS_R4]) {
     for (const args of [{ command }, { command, background: true }]) {
       const outcome = await w.run(args);
