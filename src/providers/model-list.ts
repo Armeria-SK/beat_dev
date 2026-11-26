@@ -60,7 +60,8 @@ export async function listProviderModels(provider: ProviderConfig, env: Env, fet
   const data = (body as { data?: unknown } | null)?.data;
   if (!Array.isArray(data)) throw providerError('provider_error', 'models.unreadable', {}, { retryable: false });
   const names = [...new Set(data.map(entry => (entry as { id?: unknown } | null)?.id)
-    .filter((id): id is string => typeof id === 'string' && id.trim() !== '' && id.length <= MODEL_NAME_MAX))];
+    .filter((id): id is string => typeof id === 'string' && id.trim() !== '' && id.length <= MODEL_NAME_MAX)
+    .map(id => (provider.server === 'gemini' ? id.replace(/^models\//u, '') : id)))];
   const more = (body as { has_more?: unknown }).has_more === true;
   return { models: names.slice(0, MODEL_LIST_MAX), truncated: more || names.length > MODEL_LIST_MAX };
 }

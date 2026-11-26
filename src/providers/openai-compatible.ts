@@ -241,7 +241,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
         const max = entry.top_provider?.context_length ?? entry.context_length;
         return evaluateContext({ ...facts, modelMax: typeof max === 'number' ? max : undefined, maxOutput: serverNumber(entry.top_provider?.max_completion_tokens), hint: contextHint(language, 'hosted', required) });
       }
-      if (server === 'openai') {
+      if (server === 'openai' || server === 'gemini') {
         return evaluateContext({ ...facts, hint: contextHint(language, 'hosted', required), unmeasuredNote: 'probe.note.use_config' });
       }
       // generic: サーバーの種類が分からなくても、/v1/models によく載る欄（vLLM・TabbyAPI・llama.cpp など）があれば使う

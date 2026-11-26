@@ -7,7 +7,7 @@ import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, GEMINI_URL, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -27,7 +27,7 @@ const REACH: Record<ModelReach, { tone: PillTone; key: 'ui.set.reach.ok' | 'ui.s
 
 const KEY_LINE = { set: 'ui.set.key.set', os: 'ui.set.key.os', none: 'ui.set.key.none', loading: 'ui.set.key.loading', failed: 'ui.set.key.failed' } as const;
 
-const SERVER_KINDS =['generic', 'lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'openrouter', 'openai'] as const;
+const SERVER_KINDS =['generic', 'lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'openrouter', 'openai', 'gemini'] as const;
 
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
 
@@ -202,7 +202,7 @@ function ProviderRow({ provider, open, onToggle, onRenamed }: { provider: Json; 
 function AddProvider({ onDone }: { onDone: () => void }) {
   const t = useT();
   const ctx = useSet();
-  const [kind, setKind] = useState<'anthropic' | 'openai' | 'custom'>('custom');
+  const [kind, setKind] = useState<'anthropic' | 'openai' | 'gemini' | 'custom'>('custom');
   const [url, setUrl] = useState('http://127.0.0.1:8000/v1');
   const add = async () => {
     const ok = await ctx.commit('provider:add', c => {
@@ -211,14 +211,16 @@ function AddProvider({ onDone }: { onDone: () => void }) {
         ? newAnthropicProvider(c)
         : kind === 'openai'
           ? { id: uniqueId('openai', taken), kind: 'openai_compatible', baseUrl: OPENAI_URL, server: 'openai', maxParallel: 2, timeoutMs: 600_000 }
-          : { id: uniqueId('local', taken), kind: 'openai_compatible', baseUrl: url.trim(), server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
+          : kind === 'gemini'
+            ? { id: uniqueId('gemini', taken), kind: 'openai_compatible', baseUrl: GEMINI_URL, server: 'gemini', maxParallel: 2, timeoutMs: 600_000 }
+            : { id: uniqueId('local', taken), kind: 'openai_compatible', baseUrl: url.trim(), server: 'generic', maxParallel: 1, timeoutMs: 600_000 };
       return { ...c, providers: [...(c.providers as Json[]), entry] };
     });
     if (ok) onDone();
   };
   return (
     <div className="ui-set__form">
-      <Seg value={kind} label={t('ui.set.provider.kind')} options={[{ value: 'anthropic', label: t('ui.set.kind.anthropic') }, { value: 'openai', label: 'OpenAI' }, { value: 'custom', label: t('ui.set.kind.custom') }]} onChange={setKind} />
+      <Seg value={kind} label={t('ui.set.provider.kind')} options={[{ value: 'anthropic', label: t('ui.set.kind.anthropic') }, { value: 'openai', label: 'OpenAI' }, { value: 'gemini', label: 'Gemini' }, { value: 'custom', label: t('ui.set.kind.custom') }]} onChange={setKind} />
       {kind === 'custom' && <input className="bt-field bt-field--mono" aria-label={t('ui.set.provider.url')} value={url} spellCheck={false} onChange={e => setUrl(e.target.value)} />}
       <Button small variant="primary" disabled={ctx.busy !== null || (kind === 'custom' && !/^https?:\/\/\S+$/iu.test(url.trim()))} onClick={() => void add()}>{t('ui.set.add')}</Button>
       <Button small variant="ghost" onClick={() => { ctx.cancel(); onDone(); }}>{t('ui.cancel')}</Button>
