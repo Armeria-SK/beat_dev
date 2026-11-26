@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ChatMessage } from '../src/engine/types.ts';
+import { runtimePlanTools } from '../src/engine/runtime-plan-tools.ts';
 import { frozenHash } from '../src/projects/acceptance.ts';
 import { settled, uuid, waitFor } from './app-setup.ts';
 import { rig } from './helpers/runtime-rig.ts';
@@ -119,6 +120,8 @@ test('計画モードで通すのは beat の計画の道具だけ: ほかの書
     const note = r.runtime.notes.get(q.id)!;
     assert.match(note, /plan mode/u, `${q.id}: the runtime is told it is plan mode`);
     assert.match(note, /switch this conversation to Normal mode/u);
+    assert.match(note, /reading outside the product folder or reading protected paths/u, 'a declined read is covered by the same note');
+    assert.doesNotMatch(note, /you can read files/u, 'the note does not promise reads it may be declining');
     assert.doesNotMatch(note, /You were not asked|you were not asked/u, 'the owner-facing wording is not given to the model');
   }
   assert.equal(count(r, 'SELECT COUNT(*) AS c FROM pending_actions'), 0, 'plan mode never asks the owner');
@@ -174,7 +177,7 @@ test('Codex の計画モード: 返事の中の計画・受け入れの塊を be
   assert.equal('planTools' in begun, false, 'no tools are offered to Codex');
   assert.match(begun.instructions!, /<beat-plan language="en">/u);
   assert.doesNotMatch(begun.instructions!, /mcp__beat__/u);
-  assert.equal(begun.permission, 'default'.length > 0 ? begun.permission : undefined);
+  assert.equal(begun.permission, 'read-only', 'Codex too is started with its most careful permission');
 
   assert.equal(r.s.app.plans.view(projectId, conversation).content, PLAN.trimEnd());
   assert.equal(r.s.app.plans.view(projectId, conversation).updated_by, 'ai');
@@ -208,11 +211,96 @@ test('Codex の塊が読めない・beat の道具が断る（秘密の文字列
   assert.equal(count(r, 'SELECT COUNT(*) AS c FROM tool_calls'), 0);
   assert.equal(r.s.app.runs.get(runId)!.ok, 1);
 
-  const leak = await start(r, projectId);
   r.runtime.script = feed => { feed.push({ type: 'text', delta: `<beat-plan language="en">\n# Plan\nUse the key sk-ant-api03-${'a1B2c3D4'.repeat(6)} to log in.\n</beat-plan>` }); feed.done(); };
   const second = await start(r, projectId);
-  await settled(r.s.app, leak.runId);
   await settled(r.s.app, second.runId);
   assert.equal(r.s.app.plans.view(projectId, second.conversation).content, null, 'a secret-looking plan is refused by the same check as beat\'s own plan tool');
   assert.equal(toolRows(r, second.conversation)[0]!.isError, true);
+});
+
+const BLOCK = (plan: string) => `<beat-plan language="en">\n${plan}\n</beat-plan>`;
+const textOf = (feed: { push(event: { type: 'text'; delta: string; boundary?: true }): void }, delta: string, boundary = false) => feed.push({ type: 'text', delta, ...(boundary ? { boundary: true as const } : {}) });
+
+test('Codex の塊は、その返事の最後の発言からだけ取り出す。前の発言（切れ目の前・道具の前）に書いた塊は、保存しない', async t => {
+  const r = await rig(t, { kind: 'codex' });
+  const { id: projectId } = await r.product();
+  await r.check();
+
+  r.runtime.script = feed => { textOf(feed, `Earlier draft:\n${BLOCK('# Draft')}`); textOf(feed, '\n\n', true); textOf(feed, 'I will think about it more first.'); feed.done(); };
+  const split = await start(r, projectId);
+  await settled(r.s.app, split.runId);
+  assert.equal(r.s.app.plans.view(projectId, split.conversation).content, null, 'a block in an earlier message of the same turn is not saved');
+  assert.equal(toolRows(r, split.conversation).length, 0);
+
+  r.runtime.script = feed => {
+    textOf(feed, `Earlier draft:\n${BLOCK('# Draft')}`);
+    feed.push({ type: 'tool_start', id: 'ls', name: 'commandExecution', input: { command: 'ls' } });
+    feed.push({ type: 'tool_end', id: 'ls', output: 'a.txt', isError: false });
+    textOf(feed, 'Nothing else to add.');
+    feed.done();
+  };
+  const tooled = await start(r, projectId);
+  await settled(r.s.app, tooled.runId);
+  assert.equal(r.s.app.plans.view(projectId, tooled.conversation).content, null, 'a block before a tool call is not saved either');
+
+  r.runtime.script = feed => { textOf(feed, `Draft:\n${BLOCK('# Draft')}`); feed.push({ type: 'tool_start', id: 'open', name: 'commandExecution', input: { command: 'ls' } }); textOf(feed, 'Waiting for it.'); feed.done(); };
+  const started = await start(r, projectId);
+  await settled(r.s.app, started.runId);
+  assert.equal(r.s.app.plans.view(projectId, started.conversation).content, null, 'a tool that has started but not ended already closes the message before it');
+
+  r.runtime.script = feed => { textOf(feed, `Draft:\n${BLOCK('# Draft')}`); feed.push({ type: 'tool_end', id: 'late', output: 'a.txt', isError: false }); textOf(feed, 'Nothing else.'); feed.done(); };
+  const ended = await start(r, projectId);
+  await settled(r.s.app, ended.runId);
+  assert.equal(r.s.app.plans.view(projectId, ended.conversation).content, null, 'a tool result that arrives without a start closes the message before it too');
+
+  r.runtime.script = feed => { textOf(feed, `First try:\n${BLOCK('# Draft')}`); textOf(feed, '\n\n', true); textOf(feed, `The final plan:\n${BLOCK(PLAN.trimEnd())}`); feed.done(); };
+  const last = await start(r, projectId);
+  await settled(r.s.app, last.runId);
+  assert.equal(r.s.app.plans.view(projectId, last.conversation).content, PLAN.trimEnd(), 'the block of the last message is the one saved');
+  assert.deepEqual(toolRows(r, last.conversation).map(m => m.name), ['codex:plan_write']);
+});
+
+test('Codex の返事がテンプレートの例をコードの囲いで引用していても、それは保存しない。本物の塊だけを保存する', async t => {
+  const r = await rig(t, { kind: 'codex' });
+  const { id: projectId } = await r.product();
+  await r.check();
+  const quote = `The format is:\n\`\`\`\n<beat-plan language="en">\n(the whole plan, Markdown)\n</beat-plan>\n<beat-acceptance>\n${JSON.stringify(ITEMS)}\n</beat-acceptance>\n\`\`\``;
+  r.runtime.script = feed => { textOf(feed, quote); feed.done(); };
+  const quoted = await start(r, projectId);
+  await settled(r.s.app, quoted.runId);
+  assert.equal(r.s.app.plans.view(projectId, quoted.conversation).content, null);
+  assert.equal(r.s.app.acceptance.read(projectId, quoted.conversation), undefined, 'the acceptance list is not replaced by a quoted example');
+  assert.equal(toolRows(r, quoted.conversation).length, 0);
+
+  r.runtime.script = feed => { textOf(feed, `${quote}\n\nMy plan:\n${BLOCK(PLAN.trimEnd())}`); feed.done(); };
+  const both = await start(r, projectId);
+  await settled(r.s.app, both.runId);
+  assert.equal(r.s.app.plans.view(projectId, both.conversation).content, PLAN.trimEnd());
+  assert.equal(r.s.app.acceptance.read(projectId, both.conversation), undefined);
+});
+
+test('計画の道具は、会話の「外を読んだ」の印とは別に、実行役の実行そのものを「外を読んだ」として書く（会話の印が無くても計画に印が付く）', async t => {
+  const r = await rig(t);
+  const { id: projectId } = await r.product();
+  await r.check();
+  r.runtime.script = feed => feed.done();
+  const { conversation, runId } = await start(r, projectId);
+  await settled(r.s.app, runId);
+  const app = r.s.app;
+  const conversations = new Proxy(app.conversations, {
+    get(target, prop) {
+      if (prop === 'everTainted') return () => false;
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const tools = runtimePlanTools({
+    tools: { registry: app.tools, approvals: app.approvals, pending: app.pending }, config: () => app.config(), paths: app.paths, conversations, projects: app.projects,
+    acceptance: app.acceptance, bus: app.bus, services: () => app.engine.toolServices(), modeOf: id => app.conversations.modeOf(id),
+  }, { runId, conversationId: conversation, projectId, signal: new AbortController().signal })!;
+  assert.equal(app.conversations.everTainted(conversation), true, 'the real conversation is marked, so the stub is what hides it');
+  assert.equal((await tools.call('plan_write', { content: PLAN })).isError, false);
+  const view = app.plans.view(projectId, conversation);
+  assert.equal(view.content, PLAN);
+  assert.equal(view.tainted, true, 'the plan carries the mark from the run itself');
 });

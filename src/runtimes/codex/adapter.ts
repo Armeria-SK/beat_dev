@@ -244,7 +244,7 @@ class CodexSession {
     const id = asString(item?.id);
     if (!item || type === undefined || id === undefined) { this.#unknownEvent(JSON.stringify({ method: 'item/started', item: item ?? null })); return; }
     if (type === 'agentMessage') {
-      if (this.#last === 'text') this.#push({ type: 'text', delta: '\n\n' });
+      if (this.#last === 'text') this.#push({ type: 'text', delta: '\n\n', boundary: true });
       return;
     }
     if (TOOL_ITEM_TYPES.has(type)) {

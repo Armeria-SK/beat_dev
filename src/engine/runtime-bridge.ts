@@ -160,7 +160,7 @@ const GUARD_TEXT: Record<RefusalCode | 'plan_mode', EngineMessageKey> = {
 };
 
 // 実行役のモデルへ返す、beat が断った理由（英語）。持ち主に見せる行の文（GUARD_TEXT）とは別にしてある: あちらの「あなたには聞いていません」は持ち主へ向けた言い方で、実行役のモデルが読むと取り違える
-const PLAN_MODE_NOTE = "beat declined this request: this conversation is in plan mode. In plan mode you can read files and the web, and write the plan and the acceptance items through beat's plan tools; changing files and running commands are not allowed. If the owner wants that, they can switch this conversation to Normal mode. Do not look for another way around this; tell the owner. The owner was not asked.";
+const PLAN_MODE_NOTE = "beat declined this request: this conversation is in plan mode, where every request that needs approval is declined: changing files, running commands, and reading outside the product folder or reading protected paths such as secrets. Reading inside the product folder and writing the plan and the acceptance items through beat's plan tools are allowed. If the owner wants more than that, they can switch this conversation to Normal mode. Do not look for another way around this; tell the owner. The owner was not asked.";
 const GUARD_NOTE: Record<RefusalCode, string> = {
   secret: 'it touches a path that may hold secrets or that beat protects',
   outside_write: 'it writes outside the product folder and the folders the owner allowed',
@@ -227,6 +227,8 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   let unknownCount = 0;
   let paragraph = '';
   let text = '';
+  // 返事の文のうち、いちばん後ろの発言（実行役の 1 つのまとまり）が始まる位置。道具の前後と、実行役が発言の切れ目と言ったところで進む（AR-9b。計画の塊は、この最後の発言からだけ取り出す）
+  let messageFrom = 0;
   const open = new Map<string, OpenTool>();
   const usedIds = new Set<string>();
   const gates = new Map<string, GateMark>();
@@ -371,11 +373,13 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
         const delta = redactExact(event.delta, secrets, true);
         paragraph += event.delta;
         if (delta !== '') deps.bus.publish({ type: 'text.delta', runId, conversationId, text: delta });
+        if (event.boundary) messageFrom = text.length + redactExact(paragraph, secrets, true).length;
         return undefined;
       }
       case 'tool_start': {
         if (open.has(event.id)) return undefined;
         flushText();
+        messageFrom = text.length;
         const entry: OpenTool = { callId: callIdFor(event.id), name: toolName(event.name), input: shownInput(event.input), nested: event.nested === true };
         open.set(event.id, entry);
         toolCount += 1;
@@ -384,6 +388,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       }
       case 'tool_end': {
         flushText();
+        messageFrom = text.length;
         const started = open.get(event.id);
         open.delete(event.id);
         const entry: OpenTool = started ?? { callId: callIdFor(event.id), name: toolName('unknown'), input: {}, nested: event.nested === true };
@@ -551,7 +556,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   // 計画の道具を MCP で渡せなかった実行役（Codex）: 返事の中の決まった塊を取り出し、実行役が道具を呼んだのと同じ形（行と結果）で、beat の道具に書かせる
   if (outcome.ok && planSurface && planChannel === 'text') {
     const surface = planSurface;
-    for (const block of planBlocksOf(text)) {
+    for (const block of planBlocksOf(text.slice(messageFrom))) {
       try {
         const entry: OpenTool = { callId: callIdFor(`beat_${block.tool}`), name: toolName(block.tool), input: shownInput('input' in block ? block.input : {}), nested: false };
         toolCount += 1;

@@ -114,7 +114,8 @@ export type ApprovalDecision = 'accept' | 'accept_for_reply' | 'decline' | 'decl
 // tool_start・tool_end の入力・出力と approval の入力は、実行役が言ってきたまま（伏せていない）。表示・保存する写しは、受け取った側（src/engine/runtime-bridge.ts）が伏せる。
 // nested: 子の担当（Claude Code のサブエージェント）が動かした道具。本筋の道具と区別して残す
 export type RuntimeEvent =
-  | { type: 'text'; delta: string }
+  // boundary: 実行役が「ここから次の発言」と言った切れ目（Codex の agentMessage の変わり目）。beat は計画の塊を最後の発言からだけ取り出す（AR-9b）
+  | { type: 'text'; delta: string; boundary?: true }
   | { type: 'tool_start'; id: string; name: string; input: unknown; nested?: true }
   | { type: 'tool_end'; id: string; output: string; isError: boolean; nested?: true }
   // forReply: 実行役がこの求めに「この返事が終わるまで聞かない」の答えを返せる（Claude Code は session だけの聞かない決まりの提案があるとき、Codex は acceptForSession が効く求めのとき）

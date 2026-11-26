@@ -31,10 +31,38 @@ test('同じ塊が複数あれば、いちばん後ろのもの（言い直し�
 
 test('JSON の塊は ``` の囲いを外して読む。読めない・オブジェクトでない・空の計画は、書かずに理由つきの結果にする', () => {
   assert.deepEqual(planBlocksOf(`<beat-acceptance>\n\`\`\`json\n${JSON.stringify(ITEMS)}\n\`\`\`\n</beat-acceptance>`), [{ tool: 'acceptance_write', input: ITEMS }]);
-  const broken = planBlocksOf('<beat-acceptance>{items: nope</beat-acceptance><beat-acceptance-change>[1, 2]</beat-acceptance-change><beat-plan>\n  \n</beat-plan>');
+  const broken = planBlocksOf('<beat-acceptance>{items: nope</beat-acceptance>\n<beat-acceptance-change>[1, 2]</beat-acceptance-change>\n<beat-plan>\n  \n</beat-plan>');
   assert.deepEqual(broken.map(block => [block.tool, 'error' in block]), [['plan_write', true], ['acceptance_write', true], ['acceptance_change', true]]);
   assert.match((broken[2] as { error: string }).error, /not a JSON object/u);
   assert.match((broken[0] as { error: string }).error, /plan is empty/u);
+});
+
+test('前置きの文の中の印の言及は塊の開き・閉じに読まない。本物の塊は言語も含めて取り出す', () => {
+  assert.deepEqual(planBlocksOf('I put it in the `<beat-plan>` block below.\n\n<beat-plan language="ja">\n# Plan\n</beat-plan>'), [{ tool: 'plan_write', input: { content: '# Plan', language: 'ja' } }]);
+  const prose = `The list goes in a \`<beat-acceptance>\` block and the closing \`</beat-acceptance>\` ends it.\n<beat-acceptance>\n${JSON.stringify(ITEMS)}\n</beat-acceptance>\nThe \`</beat-acceptance>\` tag above closes it.`;
+  assert.deepEqual(planBlocksOf(prose), [{ tool: 'acceptance_write', input: ITEMS }]);
+  assert.deepEqual(planBlocksOf('<beat-plan> is the tag I use.\n\n<beat-plan language="en">\n# Plan\n</beat-plan>'), [{ tool: 'plan_write', input: { content: '# Plan', language: 'en' } }], 'the nearest opener before the closing tag wins');
+  assert.deepEqual(planBlocksOf('Text <beat-plan language="en">\n# Plan\n</beat-plan>'), [], 'an opening tag in the middle of a line is not a block');
+});
+
+test('コードの囲い（```・~~~）の中の塊は読まない。計画の中のコードの例は、そのまま計画に入る', () => {
+  const quoted = '```\n<beat-plan language="en">\n# Example\n</beat-plan>\n<beat-acceptance>\n{"items":[]}\n</beat-acceptance>\n```';
+  assert.deepEqual(planBlocksOf(quoted), []);
+  assert.deepEqual(planBlocksOf(quoted.split('```').join('~~~')), []);
+  assert.deepEqual(planBlocksOf(`${quoted}\n<beat-plan language="en">\n# Real\n</beat-plan>`), [{ tool: 'plan_write', input: { content: '# Real', language: 'en' } }], 'the real block after the quote is read');
+  const withCode = '<beat-plan language="en">\n# Plan\n```bash\nnpm test\n```\n</beat-plan>';
+  assert.deepEqual(planBlocksOf(withCode), [{ tool: 'plan_write', input: { content: '# Plan\n```bash\nnpm test\n```', language: 'en' } }]);
+});
+
+test('閉じていない開きの印が大量にあっても、時間をかけず、本物の塊だけを取り出す', () => {
+  const noise = '<beat-plan>\n'.repeat(16_000);
+  const started = Date.now();
+  const blocks = planBlocksOf(`${noise}<beat-plan language="en">\n# Real\n</beat-plan>\n${'<beat-acceptance>\n'.repeat(8_000)}`);
+  assert.deepEqual(blocks, [{ tool: 'plan_write', input: { content: '# Real', language: 'en' } }]);
+  assert.ok(Date.now() - started < 300, `took ${Date.now() - started} ms`);
+  const lone = Date.now();
+  assert.deepEqual(planBlocksOf('<beat-plan>'.repeat(20_000)), []);
+  assert.ok(Date.now() - lone < 300);
 });
 
 test('言語の印に余計な文字が混ざった開きの印は塊として読まない（印の中へ別の欄を差し込めない）', () => {
@@ -65,8 +93,13 @@ test('実行役向けの計画モードの指示: Claude Code 向けは MCP の�
     assert.doesNotMatch(body, /<!--|\{build_button\}|ask_owner/u, 'no marker, no unreplaced name, no tool the runtime does not have');
     assert.match(body, /^# Plan mode/u);
     assert.match(body, new RegExp(`"${PLAN_BUTTON.git}"`, 'u'));
-    assert.doesNotMatch(body, /\r/u);
   }
+  const paste = /Do not paste the plan into the conversation/u;
+  assert.match(tools, paste);
+  assert.doesNotMatch(text, paste, 'Codex has to put the plan in the conversation, so the tools-only line is not given to it');
+  assert.match(text, /last message of your turn/u);
+  assert.doesNotMatch(tools, /last message of your turn/u);
+  assert.doesNotMatch(tools + text, /\r/u);
   assert.match(runtimeRequirementsText(paths, plain, 'tools'), new RegExp(`"${PLAN_BUTTON.other}"`, 'u'), 'a folder without git has the other button name');
 });
 

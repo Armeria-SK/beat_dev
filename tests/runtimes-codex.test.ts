@@ -70,6 +70,7 @@ test('a normal reply: text, tools, no experimental API, and every request carrie
   const { session, events } = await reply(r);
   assert.deepEqual(events.filter(event => event.type === 'text').map(event => (event as { delta: string }).delta), ['Hel', 'lo', '\n\n', 'Second without deltas'], 'streamed text is not repeated from the final item; a message without deltas is used; messages are separated');
   assert.equal(events.at(-1)?.type, 'done');
+  assert.deepEqual(events.filter(event => event.type === 'text' && event.boundary === true).map(event => (event as { delta: string }).delta), ['\n\n'], 'the change from one message to the next is marked, so beat can tell which message is the last');
   assert.equal(events.filter(event => event.type === 'done').length, 1, 'a turn of another conversation is not ours');
   assert.equal(events.filter(event => event.type === 'unknown').length, 1, 'only the truly new notification is kept');
   assert.ok(r.lines.some(line => line.includes('Codex said (configWarning)') && !line.includes(SECRET)), 'a warning is logged with secrets hidden');
