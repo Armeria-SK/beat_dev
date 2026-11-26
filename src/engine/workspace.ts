@@ -102,7 +102,7 @@ const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOpt
     },
     product: (name, root) => `This conversation belongs to the product "${name}". Product folder: ${root} (relative paths start here).`,
     worktree: (branch, productRoot) => `This task works in a separate working copy on branch ${branch}; the product folder is ${productRoot} and is not writable here.`,
-    docLanguage: tag => `Owner-facing documents of this product (plan, acceptance items, questions, deviation notes) are written in ${tag}.`,
+    docLanguage: tag => `Owner-facing documents of this product (plan, acceptance items, deviation notes) are written in ${tag}.`,
     locale: 'en-US',
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     dateFormat: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short' },

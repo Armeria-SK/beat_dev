@@ -75,6 +75,7 @@ test('返事の言語: 新しい会話の固定の system は英語のルール�
 });
 
 test('説明の言語: ja・en にすると、タスクの実行の動的な部分に持ち主が読む言語の指示が付く。auto と、会話の実行には付かない', async t => {
+  const dynamics = new Map<string, string>();
   for (const [choice, name] of [['ja', 'Japanese'], ['en', 'English'], ['auto', undefined]] as const) {
     const s = await startApp(t, { configure: c => { c.ui.explainLanguage = choice; } });
     s.adapter().scripts = [say('done'), say('こんにちは')];
@@ -83,13 +84,21 @@ test('説明の言語: ja・en にすると、タスクの実行の動的な部�
     assert.ok(started.ok, choice);
     await started.done;
     const dynamic = s.adapter().calls.at(-1)!.system.dynamic;
+    dynamics.set(choice, dynamic);
     assert.ok(dynamic.includes(REPLY_DIRECTIVE), choice);
     if (name === undefined) assert.doesNotMatch(dynamic, /The owner reads/u, choice);
-    else assert.match(dynamic, new RegExp(`^The owner reads ${name}: write everything the owner will read in ${name}, even if the task, the files or these instructions are in another language\\. That is the progress text between tool calls, the task_complete summary, notes and questions\\.`, 'mu'), choice);
+    else assert.match(dynamic, new RegExp(`^The owner reads ${name}\\. In this run, in place of the reply-language rule above, write the progress text between tool calls, the task_complete summary, notes and questions in ${name}, even if the task, the files or these instructions are in another language\\. The product's documents \\(plan, acceptance items, deviation notes\\) keep the language named for them\\. Code, commands and quoted text stay as they are\\.$`, 'mu'), choice);
 
     const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'こんにちは' });
     await settled(s.app, sent.body.runId);
     assert.doesNotMatch(s.adapter().calls.at(-1)!.system.dynamic, /The owner reads/u, `${choice}: 会話の返事は持ち主が書いた言語のまま`);
+  }
+  const base = dynamics.get('auto')!;
+  for (const [choice, name] of [['ja', 'Japanese'], ['en', 'English']] as const) {
+    const sentence = /^The owner reads .*$/mu.exec(dynamics.get(choice)!)![0];
+    assert.ok(sentence.startsWith(`The owner reads ${name}.`), choice);
+    const gap = `${REPLY_DIRECTIVE}\n\n`;
+    assert.equal(dynamics.get(choice), base.replace(gap, `${gap}${sentence}\n\n`), `${choice}: auto の文に、文を 1 つ足しただけ`);
   }
 });
 

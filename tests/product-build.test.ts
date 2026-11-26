@@ -295,9 +295,9 @@ test('3-2-s Build: 一覧が無くても Build でき、空の v1 と acceptance
   assert.equal(built.status, 201, JSON.stringify(built.body));
   assert.deepEqual(JSON.parse(built.body.task.acceptance_items), []);
   assert.equal(built.body.task.body, BUILD_BODY('ja'));
-  assert.match(BUILD_BODY('ja'), /Owner-facing notes go in Japanese\.$/u);
-  assert.match(BUILD_BODY('zh-Hant'), /Owner-facing notes go in Traditional Chinese\.$/u);
-  assert.match(BUILD_BODY('as-HMA'), /Owner-facing notes go in as-HMA\.$/u, 'a tag that cannot be turned into a name is kept as it is');
+  assert.match(BUILD_BODY('ja'), /Owner-facing documents, such as deviation notes, go in Japanese\.$/u);
+  assert.match(BUILD_BODY('zh-Hant'), /Owner-facing documents, such as deviation notes, go in Traditional Chinese\.$/u);
+  assert.match(BUILD_BODY('as-HMA'), /Owner-facing documents, such as deviation notes, go in as-HMA\.$/u, 'a tag that cannot be turned into a name is kept as it is');
   assert.equal(languageName('en'), 'English');
   assert.match(BUILD_BODY(null), /mesh_read\("plan\.md"\).*mesh_read\("acceptance\.json"\)/u);
   assert.doesNotMatch(BUILD_BODY(null), /Owner-facing/u);

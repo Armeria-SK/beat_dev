@@ -10,7 +10,7 @@ const en = {
   'run.preempted': 'Paused to give priority to the conversation with the user',
   'run.restart_interrupted': 'Interrupted by an app restart',
   'run.internal': 'Internal error: {detail}',
-  'run.owner_language': 'The owner reads {language}: write everything the owner will read in {language}, even if the task, the files or these instructions are in another language. That is the progress text between tool calls, the task_complete summary, notes and questions. Code, commands and quoted text stay as they are.',
+  'run.owner_language': "The owner reads {language}. In this run, in place of the reply-language rule above, write the progress text between tool calls, the task_complete summary, notes and questions in {language}, even if the task, the files or these instructions are in another language. The product's documents (plan, acceptance items, deviation notes) keep the language named for them. Code, commands and quoted text stay as they are.",
   'run.place_changed': "Not started: the task's working copy changed between choosing where it runs and starting the run",
   'run.no_model': 'There was no model that could run',
   'run.no_provider': 'There is no provider "{id}"',

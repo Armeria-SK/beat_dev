@@ -22,7 +22,7 @@ export function languageName(tag: string): string {
 export const BUILD_BODY = (docLanguage: string | null, only?: readonly string[], language?: string | null): string => [
   'Build the product as planned. Read the plan with mesh_read("plan.md") and the acceptance items with mesh_read("acceptance.json").',
   ...(only ? [`This build covers only the new or changed acceptance items ${only.join(', ')}.`] : []),
-  ...(docLanguage ? [`Owner-facing notes go in ${languageName(docLanguage)}.`] : []),
+  ...(docLanguage ? [`Owner-facing documents, such as deviation notes, go in ${languageName(docLanguage)}.`] : []),
   ...(language ? [`Use ${language} for the product (the owner picked it before building; see DECISIONS.md).`] : []),
 ].join(' ');
 

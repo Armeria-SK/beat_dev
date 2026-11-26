@@ -13,6 +13,8 @@ import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts'
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, fenceTail, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { PLACEHOLDER_NONCE } from '../src/shared/fence.ts';
+import { MESH_FIRST_LINE, wrapMeshIndex } from '../src/mesh/index.ts';
+import { deviationAdd } from '../src/tools/builtin/deviations.ts';
 import { bookPressureText, reviewLabel, reviewPrompt, reviewWindow, TRIGGER_TEXT, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
@@ -79,9 +81,14 @@ test('テンプレート: PowerShell では rm -rf が引数のエラーにな�
   assert.match(shell, /^- In PowerShell, `rm -rf <path>` fails with an argument error: delete with `Remove-Item -Recurse -Force <path>`\r?$/mu);
 });
 
-test('テンプレート: 製品の記憶は製品のフォルダのファイルではなく、file_list や file_read でなく mesh_read で読むと基本ルールの「What you remember」に書いてある', t => {
-  const remember = /## What you remember\r?\n\r?\n((?:- [^\r\n]*\r?\n)+)/u.exec(readTemplate(paths(t), 'rules'))?.[1] ?? '';
-  assert.match(remember, /^- In a product, its memory notes are not files in the product folder, so file_list and file_read do not find them: read one with mesh_read \(memory\/<name>\.md, the names in the MESH index\)\r?$/mu);
+test('製品の目次の案内: 記憶は製品のフォルダのファイルでなく、file_list や file_read でなく mesh_read で読むと書いてある（基本ルールには書かない。調べる実行の system に目次の文が入らないため）', t => {
+  assert.match(MESH_FIRST_LINE, /If a memory note may cover the task, read it with mesh_read before acting \(memory is not in the product folder, so file_list and file_read do not find it\)\. Answer the owner in the owner's language\.$/u);
+  assert.ok(wrapMeshIndex('body', PLACEHOLDER_NONCE).includes('memory is not in the product folder, so file_list and file_read do not find it'));
+  assert.doesNotMatch(readTemplate(paths(t), 'rules'), /mesh_read|MESH/u);
+});
+
+test('テンプレート: deviation_add の説明は、メモの言語を「持ち主が読む言語」でなく製品の文書の言語と書く', () => {
+  assert.match(deviationAdd.description, /Write in the owner-facing documents language\.$/u);
 });
 
 test('テンプレート: 基本ルールの「How you speak」に、道具を使う前に何をするかを 1 文で言い、長く使ったあとは見つけたことを 1 行で言うと書いてある', t => {
