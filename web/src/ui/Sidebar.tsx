@@ -9,7 +9,7 @@ import type { UiIconName } from './icons.ts';
 import { memoryHash, productNav } from './product-nav.ts';
 import { moreCount } from './products.ts';
 import { parseRoute, routeHash, type Route } from './routes.ts';
-import { searchView, type SearchState } from './search-state.ts';
+import { SearchModal } from './SearchModal.tsx';
 import { SessionMenu } from './SessionMenu.tsx';
 
 export interface SidebarProps {
@@ -58,38 +58,6 @@ function footText(t: ReturnType<typeof useT>, foot: FootLine): string {
     case 'running': return foot.title ? t('ui.foot.running', foot.title) : t('ui.foot.runningPlain');
     default: return t('ui.foot.idle');
   }
-}
-
-function SessionSearch({ onClose }: { onClose: () => void }) {
-  const t = useT();
-  const [query, setQuery] = useState('');
-  const [search, setSearch] = useState<SearchState>({ kind: 'idle' });
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) { setSearch({ kind: 'idle' }); return undefined; }
-    let live = true;
-    const timer = setTimeout(() => { void api.history(q).then(r => { if (live) setSearch({ kind: 'loaded', hits: r.hits }); }).catch(() => { if (live) setSearch({ kind: 'failed' }); }); }, 250);
-    return () => { live = false; clearTimeout(timer); };
-  }, [query]);
-  const view = searchView(search);
-  return (
-    <div className="ui-search">
-      <div className="ui-search__row">
-        <input className="bt-field" type="text" autoFocus value={query} aria-label={t('ui.search.field')} placeholder={t('ui.search.field')}
-          onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }} />
-        <button type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.close')} onClick={onClose}><Icon name="x" /></button>
-      </div>
-      <div role="status" className="ui-search__status">
-        {view.note === 'none' && <span className="bt-meta ui-search__none">{t('ui.search.none')}</span>}
-        {view.note === 'failed' && <span className="bt-meta ui-search__none ui-danger">{t('ui.kanban.loadFailed')}</span>}
-      </div>
-      {view.hits.map(h => (
-        <a key={h.conversationId} className="bt-side bt-side--session ui-search__hit" href={routeHash({ view: 'chat', id: h.conversationId })}>
-          <span className="bt-side__name">{h.title || t('ui.session.untitled')}<span className="bt-meta ui-search__snippet">{h.snippet}</span></span>
-        </a>
-      ))}
-    </div>
-  );
 }
 
 function SessionRow({ conversation: c, route, running, pending }: { conversation: Conversation; route: Route; running: ReadonlySet<string>; pending: ReadonlyMap<string, number> }) {
@@ -198,10 +166,11 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
   const t = useT();
   const { extra, rest, expand } = useMoreSessions(conversations);
   const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra, rest), [projects, conversations, conversationsMore, extra, rest]);
-  const [searching, setSearching] = useState(false);
-  const searchButton = useRef<HTMLButtonElement>(null);
+  const [finding, setFinding] = useState(false);
+  const findButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
-  useEffect(() => { if (!searching && refocus.current) { refocus.current = false; searchButton.current?.focus(); } }, [searching]);
+  useEffect(() => { if (!finding && refocus.current) { refocus.current = false; findButton.current?.focus(); } }, [finding]);
+  const products = useMemo(() => nav.rows.map(row => row.project), [nav]);
   const navRef = useRef<HTMLElement>(null);
   const landing = useRef<{ id: string; seen: ReadonlySet<string> } | null>(null);
   useEffect(() => {
@@ -228,6 +197,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <button className="bt-mode__opt" type="button" role="radio" aria-checked="false" aria-disabled="true" tabIndex={-1} title={t('ui.mode.botLater')}><Icon name="msg" />{t('ui.mode.bot')}</button>
       </div>
       <div className="bt-sidebar__scroll">
+        <button ref={findButton} type="button" className="bt-side ui-side-find" aria-haspopup="dialog" aria-expanded={finding} onClick={() => setFinding(true)}><Icon name="search" /><span className="bt-side__name">{t('ui.search.open')}</span></button>
         {setupPending && <button type="button" className="bt-side ui-side-setup" onClick={onSetup}><Icon name="person" /><span className="bt-side__name">{t('ui.ob.resume')}</span></button>}
         <span className="bt-label bt-sidebar__label">{t('ui.section.workspace')}</span>
         <SideLink href="#/overview" icon="grid" name={t('ui.nav.overview')} active={at('overview')} />
@@ -272,9 +242,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <div className="ui-sidebar__labelrow">
           <span className="bt-label bt-sidebar__label">{t('ui.section.noProduct')}</span>
           <SideAdd href="#/" label={t('ui.session.new')} active={at('new')} />
-          {!searching && <button ref={searchButton} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.open')} onClick={() => setSearching(true)}><Icon name="search" /></button>}
         </div>
-        {searching && <SessionSearch onClose={() => { refocus.current = true; setSearching(false); }} />}
         {nav.none.map(c => <SessionRow key={c.id} conversation={c} route={route} running={running} pending={sessionPending} />)}
 
         <span className="bt-label bt-sidebar__label">{t('ui.section.library')}</span>
@@ -283,6 +251,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <SideLink href="#/runs" icon="menu" name={t('ui.nav.runs')} active={at('runs')} />
         <SideLink href="#/archived" icon="archive" name={t('ui.nav.archived')} active={at('archived')} />
       </div>
+      {finding && <SearchModal products={products} conversations={conversations} onClose={opened => { refocus.current = !opened; setFinding(false); }} />}
       <div className="bt-sidebar__foot">
         <span className="bt-side__name bt-meta">{footText(t, foot)}</span>
         <a className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost bt-bell" href="#/notifications" aria-label={t('ui.bell', unread)} aria-current={at('notifications') ? 'page' : undefined}>

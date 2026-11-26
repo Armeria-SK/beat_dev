@@ -51,14 +51,27 @@
 .ui-sidebar__labelrow > .bt-label { flex: 1; min-width: 0; }
 .ui-leave { position: fixed; top: var(--space-3); left: 50%; transform: translateX(-50%); z-index: 40; padding: var(--space-2) var(--space-4); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-float); }
 .ui-side-setup { width: 100%; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; flex: none; }
-.ui-search { display: flex; flex-direction: column; gap: 2px; flex: none; padding-bottom: var(--space-1); }
-.ui-search__row { display: flex; align-items: center; gap: var(--space-1); padding-left: var(--space-2); }
-.ui-search__row .bt-field { flex: 1; min-width: 0; }
-.ui-search__status:empty { position: absolute; }
-.ui-search__status .ui-search__none { display: block; }
-.ui-search__none { padding: var(--space-1) var(--space-2) var(--space-1) var(--space-6); }
-.ui-search__hit { height: auto; min-height: 32px; padding-top: var(--space-1); padding-bottom: var(--space-1); }
-.ui-search__snippet { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-side-find { width: 100%; border: 0; background: none; font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; flex: none; }
+.ui-find__scrim { align-items: start; padding-top: min(14vh, 120px); }
+.bt-modal.ui-find { display: flex; flex-direction: column; width: min(640px, 100%); height: auto; max-height: min(560px, 100%); }
+.ui-find__bar { display: flex; align-items: center; gap: var(--space-2); flex: none; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); }
+.ui-find__bar > .bt-icon { color: var(--ink-mute); }
+.ui-find__bar .bt-field { flex: 1; min-width: 0; }
+.ui-find__tabs { padding: 0 var(--space-3); }
+.ui-find__status:empty { position: absolute; }
+.ui-find__none { display: block; padding: var(--space-3) var(--space-4); }
+.ui-find__list { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-height: 0; padding: var(--space-2); overflow-y: auto; }
+.ui-find__label { display: block; padding: var(--space-2) var(--space-2) var(--space-1); }
+.ui-find__row { flex: none; height: auto; min-height: 36px; padding-block: var(--space-1); }
+.ui-find__row[aria-selected="true"] { background: var(--surface-sunk); color: var(--ink); }
+.ui-find__snippet { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-find__meta { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-find kbd { padding: 0 var(--space-1); border: 1px solid var(--line-strong); border-radius: var(--radius-xs); background: var(--surface-sunk); color: var(--ink-soft); font: 500 11px/16px var(--font-mono); }
+.ui-find__keys { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); flex: none; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); }
+.ui-find__keys > span { display: inline-flex; align-items: center; gap: var(--space-1); }
+@media (max-width: 760px) { .ui-find__scrim { padding: var(--space-3); } }
+@media (pointer: coarse) { .ui-find__keys { display: none; } }
+@media (pointer: coarse), (max-width: 760px) { .ui-find__row { min-height: 44px; } }
 
 .ui-overlay { position: fixed; inset: 0; z-index: 40; }
 
@@ -193,7 +206,6 @@ div.bt-stat:hover { box-shadow: none; transform: none; }
   .ui-frame > .bt-app > .bt-sidebar, .ui-frame > .bt-shell > .bt-sidebar { display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 22; width: min(288px, 86vw); height: auto; visibility: hidden; transform: translateX(-104%); transition: transform var(--dur-base) var(--ease-soft), visibility 0s linear var(--dur-base); }
   .ui-frame.is-drawer-open > .bt-app > .bt-sidebar, .ui-frame.is-drawer-open > .bt-shell > .bt-sidebar { visibility: visible; transform: none; transition: transform var(--dur-base) var(--ease-soft); }
   .ui-frame .bt-side { height: 44px; }
-  .ui-frame .bt-side.ui-search__hit { height: auto; min-height: 44px; }
   .ui-navveil { position: fixed; inset: 0; z-index: 21; background: var(--surface-sunk); opacity: 0.72; }
   .ui-tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); flex: none; border-top: 1px solid var(--line); background: var(--surface); }
   .ui-tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 56px; color: var(--ink-soft); font: 500 11px/14px var(--font-sans); text-decoration: none; }

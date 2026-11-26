@@ -70,7 +70,7 @@ test('ui/Sidebar（DOM）: 製品ごとの「New session」の行と、末尾の
   ].sort());
 });
 
-test('ui/Sidebar（DOM）: Products の見出しの + は New product（#/products/new）、No product の見出しの + は New session（#/）。検索を開いても + は残る', async () => {
+test('ui/Sidebar（DOM）: Products の見出しの + は New product（#/products/new）、No product の見出しの + は New session（#/）。どちらの見出しの横も + だけ（検索の虫めがねは置かない。検索は上の列の行）', async () => {
   const { container } = await render(sidebarOf({ view: 'new' }));
   const products = headingOf(container, en['ui.product.section']);
   const productAdd = products.querySelector<HTMLAnchorElement>('a.ui-side-add')!;
@@ -82,10 +82,8 @@ test('ui/Sidebar（DOM）: Products の見出しの + は New product（#/produc
   const sessionAdd = noProduct.querySelector<HTMLAnchorElement>('a.ui-side-add')!;
   assert.equal(sessionAdd.getAttribute('href'), '#/');
   assert.equal(sessionAdd.getAttribute('aria-label'), en['ui.session.new']);
-  assert.ok(noProduct.querySelector(`button[aria-label="${en['ui.search.open']}"]`), '検索の虫めがねは今までどおり');
-  await click(noProduct.querySelector(`button[aria-label="${en['ui.search.open']}"]`));
-  assert.ok(container.querySelector('.ui-search'), '検索が開く');
-  assert.ok(headingOf(container, en['ui.section.noProduct']).querySelector('a.ui-side-add'), '検索を開いている間も + は残る');
+  assert.equal(noProduct.querySelectorAll('a, button').length, 1, 'No product の見出しの横も + だけ（製品の側と製品でない側の見た目が同じ）');
+  assert.equal(container.querySelectorAll('.ui-sidebar__labelrow button').length, 0, '見出しの横に検索のボタンは無い');
 });
 
 test('ui/Sidebar（DOM）: 開いている画面の + だけに選んでいる印（is-active・aria-current）が付く。ほかの画面では誰にも付かない', async () => {
