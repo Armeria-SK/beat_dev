@@ -42,7 +42,8 @@ export type ChatMessage =
   | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true; note?: 'pending' | 'continue'; fetched?: true; tail?: string; askAnswer?: true }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[]; thinking?: ThinkingRecord }
   // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
-  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; gate?: ToolGate; tail?: string };
+  // imageIds: 保存した発言だけが持つ。images の中身（base64）の代わりに、添付と同じ置き場（uploads の行とファイル）の id を残す。モデルに渡すときに images へ戻す。DB の大きさを増やさないため。以前の保存分は images に base64 のまま入っている
+  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; imageIds?: string[]; gate?: ToolGate; tail?: string };
 
 export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
 

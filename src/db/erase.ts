@@ -32,7 +32,7 @@ function backgroundLogs(dir: string, id: string): string[] {
 }
 
 // 会話を消す（元に戻せない）。消すもの: 会話・発言（検索の索引も）・要約と固定の system（会話の行にある）・承認の記録・
-// 会話ごとの kv（`<名前>:<会話ID>` の形のもの全部）・待っている振り返り・その会話だけが使う添付（行とファイル）と長い出力の全文ファイル・
+// 会話ごとの kv（`<名前>:<会話ID>` の形のもの全部）・待っている振り返り・その会話だけが使う添付・道具の結果の画像（行とファイル）と長い出力の全文ファイル・
 // この会話で notify_owner が出した通知（題と本文に会話の内容を写していることがあるため。タスクの実行が出した通知は、残すタスクのものとして残す）。
 // 数字だけ残すもの: 実行の記録（会話との結び付きと本文を消す）と道具の記録（種類・結果・時間は残し、入力と出力の本文・結び付きを消す）。
 // 残すもの: 記憶・スキルの下書き・その会話から作ったタスク（結び付きだけ外す）。
@@ -65,13 +65,14 @@ export function eraseConversation(deps: EraseDeps, id: string): EraseResult {
 // 会話 1 つ分を消す（トランザクションの中で呼ぶ。消すファイルは files に足すだけで、ここでは消さない）
 function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: number; uploads: number } {
   const { db } = deps;
-  // この会話の発言に付いていた添付の ID
+  // この会話の発言に付いていた添付の ID と、道具の結果の画像（imageIds）の ID
   const attachmentIds = new Set<string>();
-  const rows = db.prepare("SELECT parts FROM messages WHERE conversation_id = ? AND role = 'user'").all(id) as Array<{ parts: string }>;
+  const rows = db.prepare("SELECT parts FROM messages WHERE conversation_id = ? AND role IN ('user', 'tool')").all(id) as Array<{ parts: string }>;
   for (const row of rows) {
     try {
-      const parts = JSON.parse(row.parts) as { attachments?: Array<{ id?: unknown }> };
+      const parts = JSON.parse(row.parts) as { attachments?: Array<{ id?: unknown }>; imageIds?: unknown[] };
       for (const a of parts.attachments ?? []) if (typeof a.id === 'string') attachmentIds.add(a.id);
+      for (const imageId of parts.imageIds ?? []) if (typeof imageId === 'string') attachmentIds.add(imageId);
     } catch { }
   }
   const refs = db.prepare('SELECT full_ref FROM tool_calls WHERE conversation_id = ? AND full_ref IS NOT NULL').all(id) as Array<{ full_ref: string }>;
