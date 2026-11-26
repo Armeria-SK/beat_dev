@@ -154,6 +154,13 @@ test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のとき�
   writeFileSync(join(u.root, '.npmrc'), 'prefix=.\n');
   for (const command of forms) {
     const check = shellPreCheck({ command }, u.ctx());
+    const versionOnly = command === 'npm -v' || command === 'npm --version';
+    assert.equal(check.decision, versionOnly ? 'allow' : 'ask', `項目が prefix だけの .npmrc: ${command}（-v と --version だけは、コードを動かす項目が無ければ確かめない）`);
+    if (!versionOnly) assert.equal(check.askKinds?.includes('code'), true, command);
+  }
+  writeFileSync(join(u.root, '.npmrc'), 'script-shell=./x.sh\n');
+  for (const command of forms) {
+    const check = shellPreCheck({ command }, u.ctx());
     assert.equal(check.decision, 'ask', command);
     assert.equal(check.askKinds?.includes('code'), true, command);
   }
@@ -166,7 +173,7 @@ test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のとき�
   mkdirSync(join(u.root, 'sub', 'package.json'));
   assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', 'package.json という名前のフォルダで止まらない');
   rmSync(join(u.root, '.npmrc'));
-  writeFileSync(join(u.root, '.npmrc'), `${'#'.repeat(1_100_000)}\nprefix=.\n`);
+  writeFileSync(join(u.root, '.npmrc'), `${'#'.repeat(1_100_000)}\nregistry=https://example.com/\n`);
   assert.equal(shellPreCheck({ command: 'npm -v' }, u.ctx()).decision, 'ask', '上限より大きい .npmrc は、中身を読み切らずに数える');
   rmSync(join(u.root, '.npmrc'));
   assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow');
@@ -181,12 +188,12 @@ test('npm の .npmrc（3 回目の審査 3）: 持ち主のホームの .npmrc �
   const home = join(u.base, 'h');
   const cwd = join(home, 'proj');
   mkdirSync(cwd, { recursive: true });
-  writeFileSync(join(home, '.npmrc'), 'registry=https://example.com/\n');
-  const npm = (env: Record<string, string | undefined>) => checkShellCommand('npm -v', cwd, { policy: u.policy, outsideRoots: 'ask', env }).decision;
+  writeFileSync(join(home, '.npmrc'), 'script-shell=./x.sh\n');
+  const npm =(env: Record<string, string | undefined>) => checkShellCommand('npm -v', cwd, { policy: u.policy, outsideRoots: 'ask', env }).decision;
   assert.equal(npm({ ...process.env, HOME: home }), 'allow', 'HOME の .npmrc は持ち主のもの');
   assert.equal(npm({ ...process.env, HOME: home.toUpperCase() }), WINDOWS ? 'allow' : 'ask', 'Windows では大文字小文字を区別しない');
   assert.equal(npm({ ...process.env, HOME: '' }), 'ask', 'HOME が空ならこの PC のホームで比べる');
-  writeFileSync(join(u.base, '.npmrc'), 'prefix=.\n');
+  writeFileSync(join(u.base, '.npmrc'), 'script-shell=./x.sh\n');
   assert.equal(npm({ ...process.env, HOME: home }), 'ask', 'ホームの上の階の .npmrc は数える');
 });
 

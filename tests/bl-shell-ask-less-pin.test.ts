@@ -7,6 +7,7 @@ import { ownerKeysOf, REASON_ORDER } from '../src/tools/hooks/decision-order.ts'
 import { outboundOf, type OutboundEnv } from '../src/tools/hooks/outbound.ts';
 import { realish } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
+import { npmRcRunsCode } from '../src/tools/hooks/tool-config.ts';
 import { tempDir } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -58,7 +59,7 @@ test('L72 の今の線: 設定が変なリポジトリ（core.fsmonitor）での
   assert.deepEqual(ownerKeysOf(v.keys), ['list.git_config']);
 });
 
-test('L72 の今の線: 製品の外の .npmrc があると npm -v は list.npm_rc（今回だけ・code）で判定役の段。.npmrc が無ければ許す', t => {
+test('L72 の今の線: コードを動かす項目のある .npmrc があると npm -v は list.npm_rc（今回だけ・code）で判定役の段。.npmrc が無ければ、無害な .npmrc だけでも許す', t => {
   const root = realish(tempDir(t));
   mkdirSync(join(root, 'sub'));
   const verdict = (command: string) => {
@@ -67,20 +68,106 @@ test('L72 の今の線: 製品の外の .npmrc があると npm -v は list.npm_
   };
   assert.equal(verdict('npm -v').decision, 'allow');
   writeFileSync(join(root, '.npmrc'), 'registry=https://registry.npmjs.org/\n');
-  const harmless = verdict('npm -v');
-  assert.equal(harmless.decision, 'ask');
-  assert.deepEqual(harmless.keys, ['list.npm_rc']);
-  assert.ok(harmless.kinds.includes('code'));
-  assert.equal(REASON_ORDER.get('list.npm_rc'), 5);
+  assert.equal(verdict('npm -v').decision, 'allow', '無害な .npmrc（registry だけ）');
   writeFileSync(join(root, '.npmrc'), 'script-shell=./evil.sh\nnode-options=--require ./evil.js\n');
   const dangerous = verdict('npm -v');
   assert.equal(dangerous.decision, 'ask');
   assert.deepEqual(dangerous.keys, ['list.npm_rc']);
+  assert.ok(dangerous.kinds.includes('code'));
+  assert.equal(REASON_ORDER.get('list.npm_rc'), 5);
 });
 
-test('L72 (b) の目標（未着手: 根は allowlist-tools.ts と tool-config.ts で、B5 の持ち場の外）: コードを動かす項目の無い .npmrc では npm -v を聞かない', { todo: 'B5 の持ち場の外: src/tools/hooks/allowlist-tools.ts:620 の langInfo が .npmrc の中身を読まずに聞いている' }, t => {
+const npmVerdict = (root: string, command: string, cwd: string = root) => {
+  const checked = checkShellCommand(command, cwd, { shell: 'bash', windows: false, outsideRoots: 'ask', policy: { roots: [{ path: root, mode: 'write' }], deny: [] } });
+  return { decision: checked.decision, keys: checked.reasonKeys, kinds: checked.askKinds, text: JSON.stringify(checked) };
+};
+
+// A project .npmrc that only has registry, auth lines and comments does not make `npm -v` ask. The token value is never read into a reason
+const HARMLESS_RC: Record<string, string> = {
+  registry: 'registry=https://registry.npmjs.org/\n',
+  scoped: '@acme:registry=https://npm.example.com/\n//npm.example.com/:_authToken=npm_SECRETVALUE123\nalways-auth=true\n',
+  flags: 'save-exact=true\nengine-strict = true\nlegacy-peer-deps=true\nfund=false\n',
+  comments: '# nothing here\n; nor here\nregistry=https://registry.npmjs.org/\r\n',
+};
+// Every form that names a program or a module npm would run, or that is not a plain key, keeps asking
+const CODE_RC: Record<string, string> = {
+  'script-shell': 'script-shell=./evil.sh\n',
+  'node-options': 'node-options=--require ./evil.js\n',
+  'onload-script': 'onload-script=./evil.js\n',
+  'with a harmless line': 'registry=https://r.example/\nscript-shell=./evil.sh\n',
+  'upper case and underscore': 'Script_Shell=./evil.sh\n',
+  'spaces around': '   script-shell   =   ./evil.sh\n',
+  'no value': 'script-shell\n',
+  'quoted key': '"script-shell"=./evil.sh\n',
+  'section header': '[x]\nscript-shell=./evil.sh\n',
+  'array key': 'script-shell[]=./evil.sh\n',
+  'expanded key': '${KEY}=./evil.sh\n',
+  'byte order mark': '﻿node-options=--require ./evil.js\n',
+};
+
+test('L72 (b): コードを動かす項目の無い .npmrc（registry・認証・コメントだけ）では npm -v・npm --version を聞かない。トークンの値は理由にも出ない', t => {
+  for (const [name, body] of Object.entries(HARMLESS_RC)) {
+    const root = realish(tempDir(t));
+    writeFileSync(join(root, '.npmrc'), body);
+    for (const command of ['npm -v', 'npm --version']) {
+      const v = npmVerdict(root, command);
+      assert.equal(v.decision, 'allow', `${name}: ${command}: ${v.keys.join(',')}`);
+      assert.ok(!v.text.includes('SECRETVALUE'), name);
+    }
+  }
+});
+
+test('L72 (b): コードを動かす項目（script-shell・node-options・onload-script）や、素直な名前でない行がある .npmrc では npm -v を今も聞く（list.npm_rc・今回だけ・code）', t => {
+  for (const [name, body] of Object.entries(CODE_RC)) {
+    const root = realish(tempDir(t));
+    writeFileSync(join(root, '.npmrc'), body);
+    for (const command of ['npm -v', 'npm --version']) {
+      const v = npmVerdict(root, command);
+      assert.equal(v.decision, 'ask', `${name}: ${command}`);
+      assert.deepEqual(v.keys, ['list.npm_rc'], `${name}: ${command}`);
+      assert.ok(v.kinds.includes('code'), name);
+    }
+    assert.equal(npmRcRunsCode(join(root, '.npmrc')), true, name);
+  }
+  for (const [name, body] of Object.entries(HARMLESS_RC)) {
+    const root = realish(tempDir(t));
+    writeFileSync(join(root, '.npmrc'), body);
+    assert.equal(npmRcRunsCode(join(root, '.npmrc')), false, name);
+  }
+});
+
+test('L72 (b): 緩めるのは npm -v・npm --version だけ。ほかの npm（ls・view・test・install・-v に別の語）は、無害な .npmrc でも今のまま list.npm_rc で聞く', t => {
   const root = realish(tempDir(t));
-  writeFileSync(join(root, '.npmrc'), 'registry=https://registry.npmjs.org/\n');
-  const checked = checkShellCommand('npm -v', root, { shell: 'bash', windows: false, outsideRoots: 'ask', policy: { roots: [{ path: root, mode: 'write' }], deny: [] } });
-  assert.equal(checked.decision, 'allow');
+  writeFileSync(join(root, '.npmrc'), HARMLESS_RC.scoped!);
+  writeFileSync(join(root, 'package.json'), '{"scripts":{"test":"node t.js"}}');
+  for (const command of ['npm ls', 'npm view left-pad', 'npm outdated', 'npm test', 'npm run test', 'npm install', 'npm -v --json', 'npm --version --foo']) {
+    const v = npmVerdict(root, command);
+    assert.equal(v.decision, 'ask', command);
+    assert.ok(v.keys.includes('list.npm_rc'), `${command}: ${v.keys.join(',')}`);
+  }
+});
+
+test('L72 (b): 近くの .npmrc が無害でも、上のフォルダの .npmrc にコードを動かす項目があれば、npm -v を聞く（npm がどの .npmrc を読むか決めきれない）', t => {
+  const root = realish(tempDir(t));
+  const child = join(root, 'child');
+  mkdirSync(child);
+  writeFileSync(join(root, '.npmrc'), 'script-shell=./evil.sh\n');
+  writeFileSync(join(child, '.npmrc'), 'registry=https://r.example/\n');
+  const near = npmVerdict(root, 'npm -v', child);
+  assert.equal(near.decision, 'ask');
+  assert.deepEqual(near.keys, ['list.npm_rc']);
+  assert.equal(npmVerdict(root, 'cd child && npm -v').decision, 'ask');
+  writeFileSync(join(root, '.npmrc'), 'registry=https://r.example/\n');
+  assert.equal(npmVerdict(root, 'npm -v', child).decision, 'allow');
+});
+
+test('L72 (b): .npmrc を読めない・決められない形は聞く（行き先が変数の cd・同じコマンドで先に .npmrc を書く・大きすぎる）', t => {
+  const root = realish(tempDir(t));
+  writeFileSync(join(root, '.npmrc'), 'registry=https://r.example/\n');
+  assert.equal(npmVerdict(root, 'npm -v').decision, 'allow');
+  assert.deepEqual(npmVerdict(root, 'cd $WHERE; npm -v').keys.filter(k => k.startsWith('list.npm_rc')), ['list.npm_rc_unknown']);
+  assert.deepEqual(npmVerdict(root, 'echo x > .npmrc; npm -v').keys.filter(k => k.startsWith('list.npm_rc')), ['list.npm_rc_unknown']);
+  writeFileSync(join(root, '.npmrc'), `registry=https://r.example/\n#${'x'.repeat(1_100_000)}\n`);
+  assert.deepEqual(npmVerdict(root, 'npm -v').keys, ['list.npm_rc']);
+  assert.equal(npmRcRunsCode(join(realish(tempDir(t)), 'missing', '.npmrc')), false, '.npmrc がどこにも無ければ、コードを動かすとは言わない');
 });

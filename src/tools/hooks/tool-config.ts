@@ -142,6 +142,37 @@ export function npmProjectConfigFile(cwd: string, env: Env, allowed: readonly st
   }
 }
 
+// npm -v が読む .npmrc が、コードを動かす項目（script-shell・node-options・onload-script）を持つか。見るのは項目の名前だけで、値は読まない（トークンなどが入る）。
+// 名前が素直な形でない行（引用符・[ ] の節・環境変数の展開など）、読めない・大きすぎるファイル、リンクの先を決められない場合は、持つ側に倒す。
+// npm が読むのは 1 つの .npmrc だが、どれかを決めきれないので、見つかった .npmrc から上のフォルダまですべて見る
+const NPM_CODE_KEYS: ReadonlySet<string> = new Set(['script-shell', 'node-options', 'onload-script']);
+const NPM_PLAIN_KEY = /^[@A-Za-z0-9/:._-]+$/u;
+
+function npmRcFileRunsCode(file: string): boolean {
+  if (isRemotePath(file)) return true;
+  try {
+    const target = withoutLinks(file);
+    if (target === undefined) return true;
+    const st = statSync(target);
+    if (!st.isFile() || st.size > MAX_RC_BYTES) return true;
+    return readFileSync(target, 'utf8').split(/\r?\n/u).some(line => {
+      const text = line.trim();
+      if (text === '' || text.startsWith('#') || text.startsWith(';')) return false;
+      const key = (text.includes('=') ? text.slice(0, text.indexOf('=')) : text).trim().toLowerCase().replaceAll('_', '-');
+      return !NPM_PLAIN_KEY.test(key) || NPM_CODE_KEYS.has(key);
+    });
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT' && (e as NodeJS.ErrnoException).code !== 'ENOTDIR';
+  }
+}
+
+export function npmRcRunsCode(file: string): boolean {
+  for (let dir = dirname(file); ; dir = dirname(dir)) {
+    if (npmRcFileRunsCode(join(dir, '.npmrc'))) return true;
+    if (dirname(dir) === dir) return false;
+  }
+}
+
 // wget が設定として読むファイルのうち、設定が書かれているもの（最初の 1 つ）
 export function wgetConfigFile(env: Env): string | undefined {
   const files = [...(env.WGETRC ? [env.WGETRC] : []), ...homesOf(env).map(h => join(h, '.wgetrc'))];

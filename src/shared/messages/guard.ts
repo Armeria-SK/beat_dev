@@ -144,7 +144,7 @@ const en = {
   'code.self_hint': 'The code mentions {markers}. A product often has its own of these, but beat uses the same names (its API, config.json, skills folder, a local server)',
   'code.preview_missing':'This file does not exist yet (the command creates it). Its contents cannot be shown',
   'code.preview_unreadable': 'The contents cannot be shown',
-  'card.likely': 'Likely to run (from the scripts in package.json; the whole file is below)',
+  'card.likely': 'Some of the lines likely to run, from the scripts in package.json. Other lines can run too (install hooks, tools that pick a script, other folders). The file itself is the next card',
   'code.limits': 'This command also runs code from files it loads and from parts it installs, beyond the files shown. Only the files shown were checked',
 
   'hard.fs_create': 'Creating a filesystem',
