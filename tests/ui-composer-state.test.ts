@@ -5,7 +5,7 @@ import { SLASH_COMMANDS } from '../web/src/chat-logic.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, nextDepth, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
+  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
   slashAvailable, slashItems,
   submitMessage, toastLift, UI_SLASH,
   type ComposerInput, type SubmitDeps, type SubmitInput,
@@ -101,7 +101,7 @@ test('ui/composer-state: スラッシュコマンド: 今の一覧を 1 つも�
   for (const command of UI_SLASH) assert.equal(typeof t(command.desc), 'string');
   const none = { hasConversation: false, running: false, hasSummary: false, archived: false, product: false };
   assert.deepEqual(slashAvailable(none).map(c => c.name), ['new', 'plan', 'task', 'tasks', 'skills', 'log', 'memory']);
-  const all = { hasConversation: true, running: true, hasSummary: true, archived: false, product: true, depth: true };
+  const all = { hasConversation: true, running: true, hasSummary: true, archived: false, product: true, scout: true };
   assert.deepEqual(slashAvailable(all).map(c => c.name), names);
   assert.ok(!slashAvailable({ ...all, archived: true }).some(c => c.name === 'archive'));
   assert.deepEqual(slashItems('/ta', all).map(c => c.name), ['task', 'tasks']);
@@ -121,20 +121,16 @@ test('ui/composer-state: /build は製品の会話でだけ出る（欄を開い
   assert.equal(UI_SLASH.find(c => c.name === 'build')?.desc, 'ui.slash.build');
 });
 
-test('ui/composer-state: /think は、選べる考える深さがあるモデルのときだけ出る。押すたびに default → 深さの並び → default と巡る', () => {
+test('ui/composer-state: /think（考える役を今すぐ動かす）は、考える役が Off でない製品の会話でだけ出る。/t + Enter は今までどおり /task を開く', () => {
   const ctx = { hasConversation: true, running: false, hasSummary: false, archived: false };
-  assert.ok(slashAvailable({ ...ctx, depth: true }).some(c => c.name === 'think'));
-  assert.ok(!slashAvailable({ ...ctx, depth: false }).some(c => c.name === 'think'));
-  assert.ok(!slashAvailable(ctx).some(c => c.name === 'think'), '深さの有無が分からないときは出さない');
-  assert.ok(slashAvailable({ ...ctx, hasConversation: false, depth: true }).some(c => c.name === 'think'), '新しい会話でも選べる');
+  assert.ok(slashAvailable({ ...ctx, scout: true }).some(c => c.name === 'think'));
+  assert.ok(!slashAvailable({ ...ctx, scout: false }).some(c => c.name === 'think'));
+  assert.ok(!slashAvailable(ctx).some(c => c.name === 'think'), '製品の会話かどうか分からないときは出さない');
+  assert.ok(slashAvailable({ ...ctx, hasConversation: false, scout: true }).some(c => c.name === 'think'), '新しい製品の会話でも出す');
   assert.equal(bareCommand('/think')?.name, 'think');
-  assert.equal(t('ui.slash.think'), 'Cycle the thinking depth');
-  const efforts = ['low', 'medium', 'high'];
-  assert.equal(nextDepth(efforts, null), 'low');
-  assert.equal(nextDepth(efforts, 'low'), 'medium');
-  assert.equal(nextDepth(efforts, 'high'), null, '最後の次は default に戻る');
-  assert.equal(nextDepth(efforts, 'gone'), null, 'いまの値がこのモデルに無ければ default に戻す');
-  assert.equal(nextDepth([], null), null, '選べる深さが無ければ動かない');
+  assert.equal(t('ui.slash.think'), 'Start the thinking model now');
+  assert.deepEqual(slashItems('/t', { ...ctx, scout: true }).map(c => c.name), ['task', 'tasks', 'think'], '/t + Enter で開くのは今までどおり最初の /task');
+  assert.equal(slashItems('/t', ctx)[0]?.name, 'task');
 });
 
 test('ui/composer-state: 待たせる発言は 1 つ: もう一度 Queue するとき取り消すのは、割り込みでない待ちの発言の全部', () => {

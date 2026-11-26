@@ -66,11 +66,6 @@ export function modelInEffect(models: readonly ModelView[], chatOrder: readonly 
 
 export const depthOptions = (model: ModelView | undefined): string[] => [...(model?.efforts ?? [])];
 
-export function nextDepth(options: readonly string[], current: string | null): string | null {
-  const ring = [null, ...options];
-  return ring[ring.indexOf(current) + 1] ?? null;
-}
-
 export const modelName = (model: ModelView): string => model.model || model.label || model.id;
 
 export interface ModelOption { id: string | null; name: string | null; hint: string; checked: boolean; disabled: boolean }
@@ -86,9 +81,9 @@ export const UI_SLASH = [
   { name: 'new', desc: 'ui.slash.new' },
   { name: 'plan', desc: 'ui.slash.plan' },
   { name: 'build', desc: 'ui.slash.build' },
-  { name: 'think', desc: 'ui.slash.think' },
   { name: 'task', desc: 'ui.slash.task' },
   { name: 'tasks', desc: 'ui.slash.tasks' },
+  { name: 'think', desc: 'ui.slash.think' },
   { name: 'skills', desc: 'ui.slash.skills' },
   { name: 'log', desc: 'ui.slash.log' },
   { name: 'memory', desc: 'ui.slash.memory' },
@@ -101,7 +96,7 @@ export const UI_SLASH = [
 export type UiSlash = (typeof UI_SLASH)[number];
 export type UiSlashName = UiSlash['name'];
 
-export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean; depth?: boolean }
+export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean; scout?: boolean }
 
 export function slashAvailable(ctx: SlashContext): UiSlash[] {
   return UI_SLASH.filter(c => {
@@ -111,7 +106,7 @@ export function slashAvailable(ctx: SlashContext): UiSlash[] {
       case 'archive': return ctx.hasConversation && !ctx.archived;
       case 'summary': return ctx.hasConversation && ctx.hasSummary;
       case 'build': return ctx.product === true;
-      case 'think': return ctx.depth === true;
+      case 'think': return ctx.scout === true;
       default: return true;
     }
   });
