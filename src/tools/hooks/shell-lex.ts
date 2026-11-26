@@ -694,9 +694,9 @@ const PS_METHOD_OK = new Set([
   'contains', 'indexof', 'lastindexof', 'padleft', 'padright', 'join', 'format',
 ]);
 // .Replace( は、呼ぶ先の値が文字列と分かるときだけ通す（FileInfo の Replace(先, 控え) は、先を上書きして元のファイルを消す）。
-// 結果が文字列のメソッド・値が文字列のプロパティ（Get-ChildItem の Name・FullName、Get-Location の Path など）・環境変数 $env:名前（値がいつも文字列）・引用符の文字列のあとの .Replace( は文字列の Replace。変数・括弧の値・ハッシュの中身には、値の種類が分からないので聞く
+// 結果が文字列のメソッド・値が文字列のプロパティ（Get-ChildItem の Name・FullName など）・環境変数 $env:名前（値がいつも文字列）・引用符の文字列のあとの .Replace( は文字列の Replace。変数・括弧の値・ハッシュの中身には、値の種類が分からないので聞く
 const PS_TEXT_METHODS = new Set(['tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'substring', 'padleft', 'padright']);
-const PS_TEXT_MEMBERS = new Set(['name', 'fullname', 'basename', 'extension', 'directoryname', 'pschildname', 'pspath', 'psparentpath', 'path']);
+const PS_TEXT_MEMBERS = new Set(['name', 'fullname', 'basename', 'extension', 'directoryname', 'pschildname', 'pspath', 'psparentpath']);
 const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
 
 // 語の中の # が、コマンドの引数の中かを見分ける。本物の PowerShell は、コマンドの引数の中の # は語の一部と読むが、式の位置では数（1 -1 1,2 1..2 0x1F 1kb）や演算子と数（$x*2 $x..2）のすぐあとの # をコメントと読む。

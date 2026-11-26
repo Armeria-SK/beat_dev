@@ -165,6 +165,9 @@ test('実機（Windows PowerShell 5.1）L176: 辞書の中のファイルを $d.
 
 // 文字列と分からない値は、今も聞く（括弧の結果・変数・文字列を返さない呼び出しのあと）。.Replace は文字列の道具なので、文字列と分かる値にだけ許す
 const STILL_ASK: readonly string[] = [
+  `$PWD.Path.Replace('\\','/')`,
+  `(Get-Location).Path.Replace('\\','/')`,
+  `$d = @{Path=(Get-Item a.txt)}; $d.Path.Replace('victim.txt','victim.bak')`,
   `$s.Replace('a','b')`,
   `(Get-Content a.txt -Raw).Replace('a','b')`,
   `$x.Split(',').Replace('a','b')`,
@@ -179,7 +182,7 @@ const STILL_ASK: readonly string[] = [
   `$env:TEMP.Replace('victim.txt','victim.bak'); (Get-Item a.txt).Replace('victim.txt','victim.bak')`,
 ];
 
-test('L176: 変数・括弧の結果・Split() など文字列を返さない呼び出しのあとの Replace は、文字列と分からないので聞く（shape.method）。$env: や .Path を通しても、この形は今のまま', t => {
+test('L176: $PWD.Path・(Get-Location).Path・変数・括弧の結果・Split() など文字列と分からない値のあとの Replace は聞く（shape.method）。変数に入れたハッシュの Path がファイルのこともある。$env: を通しても、この形は今のまま', t => {
   const wrong: string[] = [];
   for (const shell of ['powershell', 'pwsh'] as const) for (const command of STILL_ASK) {
     const v = verdictOf(command, shell, t);
@@ -188,22 +191,19 @@ test('L176: 変数・括弧の結果・Split() など文字列を返さない呼
   assert.deepEqual(wrong, []);
 });
 
-// $env:名前 の値はいつも文字列。.Path は $PWD・Get-Location の PathInfo の値（文字列）で、Name・FullName と同じ扱いにする
-const ENV_AND_PATH_TEXT: readonly string[] = [
+// $env:名前 の値はいつも文字列。.Path は通さない（変数に入れたハッシュの Path がファイルのことがあり、値の種類が分からない）
+const ENV_TEXT: readonly string[] = [
   `$env:USERPROFILE.Replace('\\','/')`,
   `$env:Path.Replace(';', ',')`,
   `$env:Path.Trim().Replace(';', ',')`,
   `$env:Path.ToLower().Replace(';', ',')`,
   `$ENV:TEMP.Replace('\\','/')`,
   `Write-Output $env:USERPROFILE.Replace('\\','/')`,
-  `$PWD.Path.Replace('\\','/')`,
-  `(Get-Location).Path.Replace('\\','/')`,
-  `$PWD.Path.Trim().Replace('\\','/')`,
 ];
 
-test('L176: $env:名前（値がいつも文字列）と .Path（$PWD・Get-Location の値）のあとの Replace は確かめなしで通る（5.1・7）', t => {
+test('L176: $env:名前（値がいつも文字列）のあとの Replace は確かめなしで通る（5.1・7）', t => {
   const wrong: string[] = [];
-  for (const shell of ['powershell', 'pwsh'] as const) for (const command of ENV_AND_PATH_TEXT) {
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of ENV_TEXT) {
     const v = verdictOf(command, shell, t);
     if (v.decision !== 'allow') wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
   }
@@ -224,18 +224,18 @@ test('L176: $env: を通しても、同じ文にあるファイルの Replace・
   assert.deepEqual(wrong, []);
 });
 
-test('実機（Windows PowerShell 5.1）L176: 通すことにした $env:名前 と $PWD.Path・(Get-Location).Path はどれも System.String で、Replace は文字を置き換えるだけ（ファイルは何も変わらない）', { skip: SKIP }, t => {
+test('実機（Windows PowerShell 5.1）L176: 通すことにした $env:名前 は System.String で、Replace は文字を置き換えるだけ（ファイルは何も変わらない）。変数に入れたハッシュの Path は FileInfo で、Replace がファイルの Replace になる', { skip: SKIP }, t => {
   const s = setup(t, 'ask');
   s.seed();
   const before = readdirSync(s.cwd).sort().join(',');
   const run = (command: string) => spawnSync('powershell.exe', ['-NoProfile', '-Command', command], { cwd: s.cwd, encoding: 'utf8', env: { ...process.env, BL_PROBE: 'a\\b;c' } });
-  for (const command of [`$env:BL_PROBE.GetType().FullName`, `$PWD.Path.GetType().FullName`, `(Get-Location).Path.GetType().FullName`]) {
-    const ran = run(command);
-    assert.equal(ran.stdout.trim(), 'System.String', `${command}: ${ran.stderr}`);
-  }
-  const replaced = run(`$env:BL_PROBE.Replace('\\','/'); $PWD.Path.Replace('\\','/'); (Get-Location).Path.Replace('\\','/')`);
+  const typed = run(`$env:BL_PROBE.GetType().FullName`);
+  assert.equal(typed.stdout.trim(), 'System.String', typed.stderr);
+  const replaced = run(`$env:BL_PROBE.Replace('\\','/')`);
   assert.equal(replaced.status, 0, replaced.stderr);
   assert.equal(replaced.stdout.split(/\r?\n/u)[0], 'a/b;c');
+  const held = run(`$d = @{Path=(Get-Item src.txt)}; $d.Path.GetType().FullName`);
+  assert.equal(held.stdout.trim(), 'System.IO.FileInfo', `前提: 変数に入れたハッシュの Path はファイルのことがある。${held.stderr}`);
   assert.equal(readdirSync(s.cwd).sort().join(','), before, '文字の置き換えだけで、フォルダの中は何も変わらない');
   assert.equal(readFileSync(s.file('src.txt'), 'utf8'), 'S');
   assert.equal(readFileSync(s.file('dest.txt'), 'utf8'), 'D');
