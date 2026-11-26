@@ -539,6 +539,8 @@ export const EXPLAIN_KEYS = [
   'ui.acc.edit.noCommand',
   'ui.acc.edit.longCommand',
   'ui.acc.edit.stale',
+  'ui.acc.edit.lost',
+  'ui.acc.edit.lostText',
   'ui.acc.edit.failed',
   'ui.acc.ask.title',
   'ui.acc.ask.failed',

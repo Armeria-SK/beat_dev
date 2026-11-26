@@ -540,6 +540,8 @@ export const ja = {
   'ui.acc.edit.noCommand': 'コマンドを書いてください',
   'ui.acc.edit.longCommand': 'コマンドが 1000 文字を超えています',
   'ui.acc.edit.stale': 'その間に一覧が変わりました。編集は保存していません。もう一度 Edit を開いてください',
+  'ui.acc.edit.lost': (id: string) => `一覧が変わりました。${id} は、直しているあいだに消えました`,
+  'ui.acc.edit.lostText': (text: string) => `保存していない文: ${text}`,
   'ui.acc.edit.failed': '項目を保存できませんでした',
   'ui.acc.ask.title': '計画が変わりました。受け入れ項目も更新しますか？',
   'ui.acc.ask.failed': 'beat に頼めませんでした',

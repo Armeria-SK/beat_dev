@@ -3,6 +3,8 @@ import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import type { Acceptance, AcceptanceItem } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { setExplainLanguage } from '../web/src/i18n/index.ts';
+import { ja } from '../web/src/i18n/ja.ts';
 import { byText, cleanup, click, input, loadTsx, render, update } from './helpers/dom.ts';
 
 // bl-ui-small2（backlog 元 L274）: 直す欄を開いている項目を AI が消すと、打ちかけの文が黙って消えた。
@@ -25,6 +27,7 @@ afterEach(async () => {
   globalThis.fetch = realFetch;
   window.location.hash = '';
   localStorage.clear();
+  setExplainLanguage('en');
 });
 
 const item = (id: string, result: string, over: Partial<AcceptanceItem> = {}): AcceptanceItem => ({
@@ -130,4 +133,19 @@ test('bl-ui-small2/plan-lost: 知らせを出さない場合 — 何も打って
   await settleAll();
   assert.ok(editor(third.container), '項目が残っているので、直す欄は開いたまま');
   assert.ok(!lostNotice(third.container), '項目が残っているなら知らせない');
+});
+
+test('bl-ui-small2/plan-lost: 説明の言語を日本語にすると、知らせも日本語で出る（打った文はそのまま）', async () => {
+  setExplainLanguage('ja');
+  const state = { current: acceptance(2, [item('A-1', 'It opens'), item('A-2', 'It closes')]) };
+  const pane = open(state);
+  const rendered = await render(pane.element('0'));
+  await settleAll();
+  await openEditor(rendered.container);
+  await input(editor(rendered.container), 'It opens fast');
+  await aiRemovesFirst(rendered, pane, state);
+  const text = rendered.container.textContent ?? '';
+  assert.ok(text.includes(ja['ui.acc.edit.lost']('A-1')), '知らせの題が日本語');
+  assert.ok(text.includes(ja['ui.acc.edit.lostText']('It opens fast')), '打ちかけの文の前置きが日本語で、文はそのまま');
+  assert.ok(!text.includes(en['ui.acc.edit.lost']('A-1')), '英語の題は出ない');
 });
