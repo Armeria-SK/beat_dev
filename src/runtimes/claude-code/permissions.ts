@@ -28,11 +28,13 @@ export function isCodexPermission(value: string | undefined): boolean {
 //  - SendMessage: ほかの会話へ送る（SDK の文書: Remote Control で別のマシンの会話にも届く）
 //  - SendFeedback: 下書きのフィードバックを Anthropic へ送る
 //  - ShareOnboardingGuide: 名前が「共有」（外へ出す）。名前による。本物では動かしていない
+//  - EnterWorktree・ExitWorktree: 作業の木（git worktree）を作って入る。木の置き場は beat が決めて守るので、Claude Code に作らせない（beat の守りは Claude Code の作る木を見ず、木は返事が終わっても残る）
 export const DISALLOWED_TOOLS = [
   'AskUserQuestion',
   'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger',
   'Artifact', 'ClaudeDesign',
   'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide',
+  'EnterWorktree', 'ExitWorktree',
 ] as const;
 
 // beat の秘密の道の名前（scope.ts の SECRET_GLOBS）から作る、読む道具・書く道具の deny の決まり。deny の決まりは、許可のモードや使う人の allow の決まりより先に効く

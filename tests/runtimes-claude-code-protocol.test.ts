@@ -179,14 +179,14 @@ test('deny rules cover every secret path for both Read and Edit', () => {
 test('the tools that ask a question, schedule later work, start remote work, publish or notify are all turned off, by the SDK\'s own names', async () => {
   const { BUILTIN_TOOL_NAMES } = await import('@anthropic-ai/claude-agent-sdk');
   const turnedOff: readonly string[] = DISALLOWED_TOOLS;
-  for (const name of ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback']) {
+  for (const name of ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide', 'EnterWorktree', 'ExitWorktree']) {
     assert.ok(turnedOff.includes(name), `${name} must be turned off`);
     assert.ok(disallowedTools().includes(name), `${name} must reach the --disallowedTools list`);
   }
   for (const name of turnedOff) assert.ok((BUILTIN_TOOL_NAMES as readonly string[]).includes(name), `${name} is not a built-in tool name of this SDK (renamed?)`);
   // 外していない道具は、ここに名前を挙げて「意図して残した」ことを残す。SDK が新しい道具を足したら、この試験が止まって、外すか残すかを決めさせる
   const kept = [
-    'Agent', 'Bash', 'Edit', 'EndConversation', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Glob', 'Grep', 'ListAgents', 'ListMcpResourcesTool', 'LSP', 'Monitor',
+    'Agent', 'Bash', 'Edit', 'EndConversation', 'EnterPlanMode', 'ExitPlanMode', 'Glob', 'Grep', 'ListAgents', 'ListMcpResourcesTool', 'LSP', 'Monitor',
     'NotebookEdit', 'OfferChromeSetup', 'PowerShell', 'Projects', 'propose_skills', 'Read', 'ReadMcpResourceDirTool', 'ReadMcpResourceTool', 'ReadNotifications', 'ReportFindings', 'SetGoal',
     'ShowOnboardingRolePicker', 'Skill', 'SubagentHandback', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskStop', 'TaskUpdate', 'TodoWrite', 'ToolSearch', 'WaitForMcpServers', 'WebFetch', 'WebSearch', 'Workflow', 'Write',
   ];

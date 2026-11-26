@@ -641,7 +641,7 @@ test('every secret-path deny rule goes through the command line check of the pro
 });
 
 test('the tools that ask a question, schedule later work, start remote work, publish or notify are turned off for a reply, for the model list, and on the child command line', async t => {
-  const turnedOff = ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide'];
+  const turnedOff = ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide', 'EnterWorktree', 'ExitWorktree'];
   const s = setup(t);
   const session = await s.start();
   const reply = s.sdk.last.ctx.options.disallowedTools ?? [];
