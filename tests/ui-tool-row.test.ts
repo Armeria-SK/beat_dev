@@ -358,3 +358,16 @@ test('ui/tool-row: 断られた道具の行では、AI に向けた一文（Thin
   for (let i = 0; i < 50; i++) shownOutput(big);
   assert.ok(performance.now() - started < 100, '長い出力でも描くたびに遅くならない');
 });
+
+test('ui/tool-row（AR-7）: 実行役が動かした道具（<種類>:<道具>）は、道具の名前をそのまま見出しにし、入力の中の道を対象にし、道具に合う絵を付ける', () => {
+  assert.equal(toolLabel('claude-code:Bash'), 'Bash');
+  assert.equal(toolLabel('codex:commandExecution'), 'commandExecution');
+  assert.equal(toolLabel('claude-code:mcp__server__tool'), 'mcp__server__tool');
+  const read = toolRow('claude-code:Read', JSON.stringify({ file_path: 'src/a.ts' }), { text: 'x', isError: false });
+  assert.deepEqual({ verb: read.verb, icon: read.icon, target: read.target, meta: read.meta }, { verb: 'tool', icon: 'search', target: 'src/a.ts', meta: null });
+  const bash = toolRow('claude-code:Bash', JSON.stringify({ command: 'ls -la' }), { text: 'x', isError: true });
+  assert.deepEqual({ icon: bash.icon, target: bash.target, meta: bash.meta }, { icon: 'terminal', target: 'ls -la', meta: { kind: 'failed' } });
+  assert.equal(toolRow('claude-code:Grep', JSON.stringify({ pattern: 'TODO' }), null).target, 'TODO');
+  assert.equal(toolRow('claude-code:Unheard', JSON.stringify({}), null).icon, 'wrench');
+  assert.equal(toolVerb('claude-code:Bash'), 'tool', 'a runtime tool never counts as one of beat\'s own tools (no edit link, no run summary)');
+});

@@ -71,6 +71,10 @@ export interface RuntimeRequest {
   // 製品のフォルダ
   cwd: string;
   model?: string;
+  // 考える深さ（そのモデルの一覧にある値。呼ぶ側が一覧と突き合わせて渡す。実行役の作り手は、知らない形の値を渡さない）
+  effort?: string;
+  // 製品の CLAUDE.md の全文（持ち主の決め Q-AR-13。beat が読んで渡す。Claude Code だけが system の文への追加として使い、ほかの実行役は使わない）
+  instructions?: string;
   // 続きの会話の ID（実行役が持つもの）
   resume?: string;
   // 起こすたびに必ず渡す。レジストリが設定から決めて入れる（無い・知らない値は既定）
@@ -82,6 +86,8 @@ export interface RuntimeSession {
   id: string;
   // 実行役が付けた会話の ID（続きに使う）
   runtimeSession?: string;
+  // 実行役のプロセスを、孫まで止められる入れ物（Windows のジョブ）に入れられなかった理由。入れられていれば無い（画面に出す）
+  containReason?: string;
 }
 
 export interface RuntimeInput {
@@ -91,13 +97,18 @@ export interface RuntimeInput {
 // 返してよい答えは閉じた一覧だけ。使う人の設定や決まりを書き換える「許しを残す答え」は無い
 export type ApprovalDecision = 'accept' | 'accept_for_reply' | 'decline' | 'cancel';
 
+// tool_start・tool_end の入力・出力と approval の入力は、実行役が言ってきたまま（伏せていない）。表示・保存する写しは、受け取った側（src/engine/runtime-bridge.ts）が伏せる。
+// nested: 子の担当（Claude Code のサブエージェント）が動かした道具。本筋の道具と区別して残す
 export type RuntimeEvent =
   | { type: 'text'; delta: string }
-  | { type: 'tool_start'; id: string; name: string; input: unknown }
-  | { type: 'tool_end'; id: string; output: string; isError: boolean }
+  | { type: 'tool_start'; id: string; name: string; input: unknown; nested?: true }
+  | { type: 'tool_end'; id: string; output: string; isError: boolean; nested?: true }
   | { type: 'approval'; requestId: string; tool: string; input: unknown }
+  // 会話の途中で来た、状態の行に出す注意（Codex の windows/worldWritableWarning など）。会話は止まらない
+  | { type: 'issue'; issue: RuntimeIssue }
   | { type: 'done' }
-  | { type: 'failed'; kind: 'auth' | 'rate_limit' | 'process'; message: string }
+  // issue: この失敗の理由を、状態の行に覚えさせる注意（見直していない道具が出たときなど）
+  | { type: 'failed'; kind: 'auth' | 'rate_limit' | 'process'; message: string; issue?: RuntimeIssue }
   // 知らない出来事は捨てずに残す（版が上がって形が変わったとき）
   | { type: 'unknown'; raw: string };
 

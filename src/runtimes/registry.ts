@@ -10,6 +10,8 @@ import { createClaudeCodeRuntime } from './claude-code/adapter.ts';
 export interface RuntimeDeps {
   processes: ProcessManager;
   log: (line: string) => void;
+  // いま環境に入っている API キーの値（提供元の secrets() と同じ出どころ）。実行役が言ってきた文・入力・出力から、鍵そのものを伏せるために使う
+  secrets?: () => readonly string[];
 }
 
 export type RuntimeFactory = (config: RuntimeConfig, deps: RuntimeDeps) => AgentRuntime;
@@ -47,6 +49,9 @@ export class RuntimeRegistry {
 
   kinds(): readonly RuntimeKind[] { return RUNTIME_KINDS; }
 
+  // 実行役が言ってきたものから伏せる鍵の値（出どころが無ければ空）
+  secrets(): readonly string[] { return this.#deps.secrets?.() ?? []; }
+
   find(config: Pick<AppConfig, 'runtimes'>, id: string): RuntimeLookup {
     const runtime = config.runtimes?.find(candidate => candidate.id === id);
     if (!runtime) return { ok: false, reason: 'unknown', detail: `Runtime "${id}" is not in the settings` };
@@ -74,9 +79,11 @@ export class RuntimeRegistry {
   }
 
   // 起こすたびに、設定から決めた許可の設定を必ず渡す（呼ぶ側は許可の設定を決めない。無い・知らない値は既定）
-  async start(config: Pick<AppConfig, 'runtimes'>, id: string, request: Omit<RuntimeRequest, 'permission'>): Promise<RuntimeSession> {
+  // cautious: 設定の許可より厳しい側へ（実行役ごとの一覧の先頭。設定の値が先頭より緩くても、先頭で起こす）。計画モードの会話に使う
+  async start(config: Pick<AppConfig, 'runtimes'>, id: string, request: Omit<RuntimeRequest, 'permission'> & { cautious?: true }): Promise<RuntimeSession> {
     const found = this.find(config, id);
     if (!found.ok) throw new RuntimeUnavailable(found.reason, found.detail);
-    return found.runtime.start({ ...request, permission: found.permission });
+    const { cautious, ...rest } = request;
+    return found.runtime.start({ ...rest, permission: cautious ? permissionFor(found.runtime.kind, undefined) : found.permission });
   }
 }

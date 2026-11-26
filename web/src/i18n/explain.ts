@@ -210,6 +210,8 @@ export const EXPLAIN_KEYS = [
   'ui.ask.consequenceStep',
   'mode.autoDesc',
   'mode.planDesc',
+  'mode.runtimeAutoDesc',
+  'mode.runtimePlanDesc',
   'ui.composer.queueHint',
   'ui.composer.forceHint',
   'ui.composer.queuedHint',

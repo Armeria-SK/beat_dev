@@ -41,6 +41,8 @@ export interface FakeSdkConfig {
   version?: string;
   // initializationResult().account.apiKeySource。本物はキーを使っていないとき付けない
   apiKeySource?: string;
+  // initializationResult().account.apiProvider（送り先の種類。本物は firstParty・bedrock・vertex など。付けないときは言ってこない）
+  apiProvider?: string;
   // initializationResult() が落ちる
   initError?: Error;
   // initializationResult() が返らない
@@ -146,7 +148,7 @@ export class FakeQuery {
     if (this.config.initDelayMs !== undefined) await new Promise(resolve => setTimeout(resolve, this.config.initDelayMs));
     if (this.config.initError) throw this.config.initError;
     if (this.spawnError) throw this.spawnError;
-    return { claude_code_version: this.config.version ?? '2.1.331', account: this.config.apiKeySource === undefined ? {} : { apiKeySource: this.config.apiKeySource }, models: [] };
+    return { claude_code_version: this.config.version ?? '2.1.331', account: { ...(this.config.apiKeySource === undefined ? {} : { apiKeySource: this.config.apiKeySource }), ...(this.config.apiProvider === undefined ? {} : { apiProvider: this.config.apiProvider }) }, models: [] };
   }
 
   async supportedModels(): Promise<unknown> {

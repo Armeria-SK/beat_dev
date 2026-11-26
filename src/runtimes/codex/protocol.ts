@@ -69,6 +69,7 @@ export interface TurnStartParams extends Pick<PermissionParams, 'approvalPolicy'
   input: UserInputText[];
   cwd: string;
   model?: string;
+  effort?: string;
 }
 
 export interface ClientMethods {

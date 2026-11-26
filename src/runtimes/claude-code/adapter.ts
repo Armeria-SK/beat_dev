@@ -110,6 +110,7 @@ interface Session {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/u;
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -130,7 +131,7 @@ export function ownFolderOverlap(cwd: string, paths: AppPaths): string | undefin
   const own: Array<[string, string]> = [[resolve(paths.templates, '..'), 'the folder beat is installed in'], [paths.data, 'the beat data folder']];
   for (const [folder, name] of own) {
     const real = realish(resolve(folder));
-    if (isInside(real, target) || isInside(target, real)) return `The working folder overlaps ${name}, so Claude Code is not started there`;
+    if (isInside(real, target) || isInside(target, real)) return `The working folder overlaps ${name}, so the runtime is not started there`;
   }
   return undefined;
 }
@@ -242,6 +243,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
     // 別の実行役（Codex）の許可の値は、倒さずに断る（何も起こす前に）。それ以外の知らない値は、Claude Code の一覧への絞りで default に倒れる
     if (isCodexPermission(request.permission)) throw new ClaudeCodeError('permission', 'This permission value belongs to another runtime. Choose a Claude Code permission');
     const permission = claudeMode(request.permission);
+    const effort = EFFORT_LEVELS.find(level => level === request.effort);
     if (isRemotePath(request.cwd) || windowsHazard(request.cwd) !== undefined) throw new ClaudeCodeError('cwd', 'The working folder cannot be a network path or a device path');
     if (!isAbsolute(request.cwd) || !statSync(request.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new ClaudeCodeError('cwd', 'The working folder must be an existing folder given as an absolute path');
     const overlap = ownFolderOverlap(request.cwd, (this.#options.paths ?? resolvePaths)());
@@ -256,7 +258,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
     const childEnv = this.#childEnv();
     // 新しい会話は beat が付けた ID で始める（続きに使う ID を、最初の知らせより前に持てる）。続きの会話は渡された ID
     const runtimeSession = request.resume ?? randomUUID();
-    const info: RuntimeSession = { id, runtimeSession };
+    const info: RuntimeSession = { id, runtimeSession, ...(scope.containReason !== undefined ? { containReason: safeText(scope.containReason, 300) } : {}) };
     const launch: ClaudeCodeLaunch = { record: undefined, claudeCodeVersion: undefined, permission, settingSources: ['user'], model: request.model, resumed: request.resume !== undefined };
     let session: Session;
     const canUseTool: CanUseTool = (toolName, toolInput, options) => new Promise<PermissionResult>(resolve => {
@@ -278,6 +280,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
           env: childEnv.env,
           permissionMode: permission,
           settingSources: ['user'],
+          systemPrompt: { type: 'preset', preset: 'claude_code', ...(request.instructions !== undefined && request.instructions !== '' ? { append: request.instructions } : {}) },
           tools: [...KEPT_TOOLS],
           disallowedTools: disallowedTools(),
           hooks: toolHooks(),
@@ -290,6 +293,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
             return spawned;
           },
           ...(request.model !== undefined ? { model: request.model } : {}),
+          ...(effort !== undefined ? { effort } : {}),
           ...(request.resume !== undefined ? { resume: request.resume } : { sessionId: runtimeSession }),
         },
       });
@@ -303,6 +307,8 @@ class ClaudeCodeRuntime implements AgentRuntime {
       if (!versionAtLeast(initialized.claude_code_version)) throw new ClaudeCodeError('version', `Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer is needed. Update Claude Code`);
       // 契約のログインで動かすつもりなので、API キーが使われているなら発言を渡す前に止める
       if (apiKeyInUse(initialized.account.apiKeySource)) throw new ClaudeCodeError('auth', 'Claude Code is set to use an API key, not the Claude login, so the reply was not started');
+      // 送り先が契約のログインの firstParty 以外（Bedrock・Vertex・ゲートウェイなど）と言ってきたら、発言を渡す前に止める。言ってこないとき（読めない）は、apiKeySource の確かめだけで通す
+      if (initialized.account.apiProvider !== undefined && initialized.account.apiProvider !== 'firstParty') throw new ClaudeCodeError('auth', 'Claude Code is not sending the conversation to Anthropic with the Claude login, so the reply was not started');
       // 起動の待ちのあいだに止められていたら、起こした本体を残さずに断る（止める合図は、まだ onAbort をつなぐ前なので、ここで見る）
       if (request.signal.aborted) throw new ClaudeCodeError('aborted', 'The reply was stopped while Claude Code was starting');
     } catch (error) {

@@ -171,6 +171,18 @@ test('a permission value of the other runtime (Codex) is refused before anything
   assert.equal(s.sdk.queries.length, 1);
 });
 
+test('the thinking depth is passed to the SDK only when it is one of the levels the SDK knows; anything else is left out', async t => {
+  const s = setup(t);
+  for (const given of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    await s.start({ effort: given });
+    assert.equal(s.sdk.last.ctx.options.effort, given);
+  }
+  for (const given of [undefined, '', 'ultra', 'HIGH', 'high\nlow']) {
+    await s.start(given === undefined ? {} : { effort: given });
+    assert.equal('effort' in s.sdk.last.ctx.options, false, JSON.stringify(given));
+  }
+});
+
 test('a session continues with the saved id (resume, no sessionId); a bad id or model name is refused before the SDK is called', async t => {
   const s = setup(t);
   const saved = '99999999-8888-4777-8666-555555555555';
@@ -838,4 +850,39 @@ test('a reply started through the registry carries the permission mode chosen fr
     assert.equal(s.sdk.last.ctx.options.permissionMode, expected);
     await s.runtime.close(session.id);
   }
+});
+
+test('the system prompt is the Claude Code preset; the product instructions are appended to it, never replace it, and an empty text appends nothing', async t => {
+  const plain = setup(t);
+  await plain.start();
+  assert.deepEqual(plain.sdk.last.ctx.options.systemPrompt, { type: 'preset', preset: 'claude_code' });
+  const withText = setup(t);
+  await withText.start({ instructions: 'Always run the tests.' });
+  assert.deepEqual(withText.sdk.last.ctx.options.systemPrompt, { type: 'preset', preset: 'claude_code', append: 'Always run the tests.' });
+  const empty = setup(t);
+  await empty.start({ instructions: '' });
+  assert.deepEqual(empty.sdk.last.ctx.options.systemPrompt, { type: 'preset', preset: 'claude_code' });
+});
+
+test('start refuses before any message when Claude Code says the conversation goes to a provider other than Anthropic (Bedrock, Vertex, a gateway); "firstParty" and no answer pass', async t => {
+  const other = setup(t, { sdkConfig: { apiProvider: 'bedrock' } });
+  await assert.rejects(other.start(), refused('auth'));
+  assert.ok(other.sdk.last.closed);
+  await until(() => other.sdk.last.ctx.child!.killed);
+  await setup(t, { sdkConfig: { apiProvider: 'firstParty' } }).start();
+  await setup(t).start();
+});
+
+test('a process that could not be put in a job is told to the caller with its reason cut at 300 characters, and a contained one says nothing', async t => {
+  const s = setup(t);
+  const open = s.processes.open.bind(s.processes);
+  s.processes.open = async () => {
+    const scope = await open();
+    Object.defineProperty(scope, 'containReason', { value: `the job could not be made ${'x'.repeat(1000)}` });
+    return scope;
+  };
+  const session = await s.start();
+  assert.match(session.containReason!, /^the job could not be made/u);
+  assert.equal(session.containReason!.length, 301, 'cut at 300 characters, plus the mark that it was cut');
+  assert.equal((await setup(t).start()).containReason, undefined);
 });

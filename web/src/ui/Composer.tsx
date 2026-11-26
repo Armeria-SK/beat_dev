@@ -1,13 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { PERMISSION_MODES, type PermissionMode } from '../../../src/shared/permission-mode.ts';
 import { api, type ModelChoice, type ModelView, type PendingMessage, type UploadView } from '../api.ts';
 import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
 import {
-  ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, PLACEHOLDER,
-  queuedLine, queueRow, slashAvailable, slashItems, toastLift,
-  type SlashContext, type SubmitKind, type UiSlash,
+  ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_LABEL, modeHint, modelInEffect, modelName, modelOptions, NO_RUNTIME, PLACEHOLDER,
+  queuedLine, queueRow, runtimeInEffect, runtimeShown, slashAvailable, slashItems, toastLift,
+  type RuntimeUse, type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
 import { menuLeft, menuStep } from './menu.ts';
 import { Icon } from './parts.tsx';
@@ -27,6 +27,7 @@ export interface ComposerProps {
   modelId: string | null;
   effort: string | null;
   mode: PermissionMode;
+  runtime?: RuntimeUse;
   slash: SlashContext;
   onSubmit: (kind: SubmitKind, text: string, attachments: UploadView[]) => Promise<boolean>;
   onStop: () => void;
@@ -89,8 +90,10 @@ export function Composer(props: ComposerProps) {
   const depthButton = useRef<HTMLButtonElement>(null);
   const submitting = useRef(false);
 
+  const use = props.runtime ?? NO_RUNTIME;
+  const current = modelInEffect(runtimeShown(models ?? [], use), chatOrder, modelId);
+  const byRuntime = runtimeInEffect(use, current);
   const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
-  const current = modelInEffect(models ?? [], chatOrder, modelId);
   const depths = depthOptions(current);
   const commands = slashClosed ? [] : slashItems(text, props.slash, slashForced);
   const active = Math.min(slashIndex, Math.max(0, commands.length - 1));
@@ -208,9 +211,12 @@ export function Composer(props: ComposerProps) {
       )}
       {pop === 'model' && (
         <PopMenu label={t('ui.composer.model')} opener={modelButton} onClose={closePop} onLeave={() => setPop(null)}>
-          {modelOptions(models ?? [], modelId).map(option => (
-            <PopItem key={option.id ?? ''} name={option.name ?? t('ui.composer.auto')} hint={option.id === null ? t('ui.composer.autoHint') : option.disabled ? t('ui.composer.unavailable') : option.hint}
-              checked={option.checked} disabled={option.disabled} onPick={() => { closePop(); if (option.id !== modelId) props.onChoose({ modelId: option.id }); }} />
+          {modelOptions(models ?? [], modelId, use).map((option, i, all) => (
+            <Fragment key={option.id ?? ''}>
+              {option.runtime !== null && all[i - 1]?.runtime == null && <li role="presentation" className="bt-label ui-pop__group">{t('ui.composer.runtimeGroup')}</li>}
+              <PopItem name={option.name ?? t('ui.composer.auto')} hint={option.id === null ? t('ui.composer.autoHint') : option.disabled ? t('ui.composer.unavailable') : option.runtime !== null ? t('ui.composer.viaRuntime', option.runtime) : option.hint}
+                checked={option.checked} disabled={option.disabled} onPick={() => { closePop(); if (option.id !== modelId) props.onChoose({ modelId: option.id }); }} />
+            </Fragment>
           ))}
         </PopMenu>
       )}
@@ -269,7 +275,7 @@ export function Composer(props: ComposerProps) {
         <span className="bt-composer__spacer" />
         <span className="bt-seg" role="group" aria-label={t('ui.composer.mode')}>
           {PERMISSION_MODES.map(value => (
-            <button key={value} type="button" className="bt-seg__opt" title={t(MODE_HINT[value])} aria-pressed={mode === value} disabled={view.disabled} onClick={() => { if (value !== mode) props.onChoose({ permissionMode: value }); }}>{t(MODE_LABEL[value])}</button>
+            <button key={value} type="button" className="bt-seg__opt" title={t(modeHint(value, byRuntime))} aria-pressed={mode === value} disabled={view.disabled} onClick={() => { if (value !== mode) props.onChoose({ permissionMode: value }); }}>{t(MODE_LABEL[value])}</button>
           ))}
         </span>
         {view.actions === 'busy' ? (

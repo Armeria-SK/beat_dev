@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join, resolve, sep } from 'node:path';
-import { DEFAULT_LANGUAGE, isRuntimeModel, providerModels, providerOf, type AppConfig, type Language, type ModelConfig, type ProviderConfig, type ProviderModelConfig } from '../config/schema.ts';
-import type { Conversations, StoredMessage } from '../db/conversations.ts';
+import { DEFAULT_LANGUAGE, isRuntimeModel, providerModels, providerOf, type AppConfig, type Language, type ModelConfig, type ProviderConfig, type ProviderModelConfig, type RuntimeModelConfig } from '../config/schema.ts';
+import type { ConversationRow, Conversations, StoredMessage } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
 import type { KV } from '../db/kv.ts';
 import { fileReadLog } from '../tools/builtin/files.ts';
@@ -48,6 +48,9 @@ import type { PendingStore } from '../pending/store.ts';
 import { pendingText } from '../shared/messages/pending.ts';
 import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
+import type { RuntimeChecks } from '../runtimes/checks.ts';
+import type { RuntimeRegistry } from '../runtimes/registry.ts';
+import { runRuntimeTurn, runtimeFolder, runtimePreflight, type RuntimeRefusal, type RuntimeTurnDeps } from './runtime-bridge.ts';
 import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_TOOL_RESULTS, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, clearFloor, compactOutputTokens, contextAvailable, ownerWordsTokens, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
@@ -249,6 +252,10 @@ export interface ChatEngineDeps {
   pendingWaitMs?: number | undefined;
   // 最初の出来事が来ないモデルを「黙っている」と知らせるまでの時間（ミリ秒）。試験で短くするためだけの上書き。ふつうは 60 秒
   modelSilentMs?: number | undefined;
+  // 外の実行役（AR-7）。無ければ、実行役のモデルは会話で使えない
+  runtimes?: { registry: RuntimeRegistry; checks: RuntimeChecks } | undefined;
+  // 止めると言ってから、実行役の終わりの知らせを待つ時間（ミリ秒）。試験で短くするためだけの上書き。ふつうは 15 秒
+  runtimeStopGraceMs?: number | undefined;
 }
 
 
@@ -420,6 +427,7 @@ export class ChatEngine {
     const running = this.#byConversation.get(conversationId);
     if (running === undefined) return this.#beginChat(conversationId, [item], choice, options.projectId);
     if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
+    if (images.length > 0 && this.#runtimeConversation(this.#d.conversations.get(conversationId))) return this.#refuse({ key: 'runtime.no_images' });
     const queue = this.#pending.get(conversationId) ?? [];
     if (queue.length >= MAX_PENDING_MESSAGES) {
       return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), 'send.queue_full', { max: MAX_PENDING_MESSAGES }), errorCode: 'engine.send.queue_full', errorParams: { max: MAX_PENDING_MESSAGES } };
@@ -441,7 +449,9 @@ export class ChatEngine {
   // beat R (R3.13 の 1): 新しい発言を足さずに、会話の最後の発言へ返事の実行を始める。会話が動いていれば断る（呼ぶ側は確かめてから同期で呼ぶ）
   reply(conversationId: string): SendOutcome {
     if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
-    if (!this.#d.conversations.get(conversationId)) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: 'conversation not found' };
+    const row = this.#d.conversations.get(conversationId);
+    if (!row) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: 'conversation not found' };
+    if (this.#runtimeConversation(row)) return this.#refuse({ key: 'runtime.no_retry' });
     return this.#beginChat(conversationId, [], {});
   }
 
@@ -465,6 +475,11 @@ export class ChatEngine {
     const existing = this.#d.conversations.get(conversationId);
     const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
     const effort = choice.effort !== undefined ? choice.effort : existing?.effort ?? null;
+    const route = this.#runtimeRoute(conversationId, existing, pinned);
+    if (route && 'refused' in route) return route.refused;
+    // 自動（モデルを選んでいない）で先頭が実行役のモデルでも、製品の無い会話は、使える提供元のモデルがあればそちらで返す（実行役の会話は製品の会話だけ）
+    const noProduct = (existing ? existing.project_id : projectId ?? null) === null;
+    if (route && !(route.auto && noProduct && this.#chain('chat', pinned).usable.length)) return this.#beginRuntimeChat(conversationId, items, choice, projectId, existing, route);
     const chain = this.#chain('chat', pinned);
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     const preempted = this.#preemptFor(chain.usable);
@@ -704,6 +719,7 @@ export class ChatEngine {
     const last = this.#d.conversations.messages(conversationId, 1).at(-1);
     if (!last || last.role === 'assistant') return { ok: false, httpStatus: 409, errorKind: 'not_found', errorMessage: engineText(languageOf(this.#d.config()), 'send.nothing_to_retry'), errorCode: 'engine.send.nothing_to_retry' };
     const conversation = this.#d.conversations.get(conversationId);
+    if (this.#runtimeConversation(conversation)) return this.#refuse({ key: 'runtime.no_retry' });
     const chain = this.#chain('chat', conversation?.model_id ?? null);
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     const preempted = this.#preemptFor(chain.usable);
@@ -902,9 +918,11 @@ export class ChatEngine {
   }
 
   // 会話で使うモデル（選んでいればそれ。自動なら使える先頭、使えるものが無ければ候補の先頭）で選べる考える深さ。画面の検査と一覧に使う
-  effortChoices(pinned: string | null): { modelId: string | undefined; efforts: string[] } {
+  // 実行役に結ばれた会話（boundRuntime）でモデルを選んでいないときは、その実行役のモデルで決める（提供元の先頭のモデルではなく）
+  effortChoices(pinned: string | null, boundRuntime: string | null = null): { modelId: string | undefined; efforts: string[] } {
     const config = this.#d.config();
-    const id = pinned ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
+    const runtimeFirst = pinned === null && boundRuntime !== null ? config.models.find(m => isRuntimeModel(m) && m.runtime === boundRuntime)?.id : undefined;
+    const id = pinned ?? runtimeFirst ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
     const model = config.models.find(m => m.id === id);
     return { modelId: model?.id, efforts: model ? modelEfforts(model, this.#d.status.get(model.id)) : [] };
   }
@@ -1015,12 +1033,21 @@ export class ChatEngine {
   }
 
   #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl }; place?: string | null; fix?: FixPlace }, forbid?: ReadonlySet<string>, effort: string | null = null, agent?: AgentLink): void {
+    this.#track(
+      { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), primary: chain[0]!.provider.id },
+      signal => this.#execute(runId, conversationId, chain, signal, kind, task, forbid, effort, agent),
+    );
+  }
+
+  // 実行を「いま動いている」ものとして載せ、終わったら片付けて、待たせた発言を引き取る。提供元の実行（#execute）も外の実行役の実行（runRuntimeTurn）も、ここを通る
+  #track(info: { runId: string; conversationId: string; kind: RunKind; taskId?: string; providers: Set<string>; primary: string }, execute: (signal: AbortSignal) => Promise<EngineResult>): void {
+    const { runId, conversationId, kind } = info;
     const controller = new AbortController();
     this.#hardStops.set(runId, new AbortController());
     this.#byConversation.set(conversationId, runId);
     if (kind === 'chat') { this.#runModel.set(runId, this.#d.conversations.get(conversationId)?.model_id ?? null); this.#runMode.set(runId, this.#d.conversations.modeOf(conversationId)); }
     let ended: EngineResult | undefined;
-    const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid, effort, agent)
+    const done = execute(controller.signal)
       .catch((error): EngineResult => {
         const detail = redactSecrets((error as Error).message, this.#d.registry.secrets());
         this.#d.log?.(`[ERROR] run ${runId}: ${redactSecrets(String((error as Error).stack ?? error), this.#d.registry.secrets())}`);
@@ -1060,7 +1087,81 @@ export class ChatEngine {
         }
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
-    this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), primary: chain[0]!.provider.id, controller, done });
+    this.#active.set(runId, { runId, conversationId, kind, ...(info.taskId !== undefined ? { taskId: info.taskId } : {}), providers: info.providers, primary: info.primary, controller, done });
+  }
+
+  // 外の実行役（AR-7）。会話が実行役に結ばれているか、選んだモデルが実行役のモデルなら、提供元の鎖を通さず、実行役の道へ分ける。
+  // 実行役の会話は、最初の 1 回で行き先が決まって替わらない。提供元の会話に発言があれば実行役へは替えられず、実行役の会話から提供元・別の実行役へも替えられない
+  #runtimeRoute(conversationId: string, existing: ConversationRow | undefined, pinned: string | null): { runtimeId: string; model: RuntimeModelConfig; auto?: true } | { refused: Extract<SendOutcome, { ok: false }> } | undefined {
+    const d = this.#d;
+    const bound = d.conversations.runtimeOf(conversationId).runtimeId;
+    if (!d.runtimes) return bound === null ? undefined : { refused: this.#refuse({ key: 'runtime.unavailable', params: { id: bound, reason: 'beat was started without runtime support' } }) };
+    const config = d.config();
+    const pinnedModel = pinned !== null ? config.models.find(m => m.id === pinned) : undefined;
+    if (bound !== null) {
+      if (pinned !== null && !(pinnedModel && isRuntimeModel(pinnedModel) && pinnedModel.runtime === bound)) return { refused: this.#refuse({ key: 'runtime.fixed', params: { id: bound } }) };
+      const model = pinnedModel ?? config.models.find(m => isRuntimeModel(m) && m.runtime === bound);
+      if (!model || !isRuntimeModel(model)) return { refused: this.#refuse({ key: 'runtime.no_model', params: { id: bound } }) };
+      return { runtimeId: bound, model };
+    }
+    const fresh = !existing || d.conversations.messages(conversationId, 1).length === 0;
+    if (pinned !== null) {
+      if (!pinnedModel || !isRuntimeModel(pinnedModel)) return undefined;
+      if (!fresh) return { refused: this.#refuse({ key: 'runtime.not_fresh', params: { id: pinnedModel.runtime } }) };
+      return { runtimeId: pinnedModel.runtime, model: pinnedModel };
+    }
+    const first = config.models.find(m => m.id === candidateModelIds(config, 'chat')[0]);
+    return fresh && first && isRuntimeModel(first) ? { runtimeId: first.runtime, model: first, auto: true } : undefined;
+  }
+
+  #runtimeConversation(conversation: ConversationRow | undefined): boolean {
+    if (!conversation) return false;
+    if (conversation.runtime_id !== null) return true;
+    const model = conversation.model_id === null ? undefined : this.#d.config().models.find(m => m.id === conversation.model_id);
+    return model !== undefined && isRuntimeModel(model);
+  }
+
+  #refuse(refusal: RuntimeRefusal): Extract<SendOutcome, { ok: false }> {
+    return {
+      ok: false, httpStatus: 409, errorKind: 'provider_error', errorMessage: engineText(languageOf(this.#d.config()), refusal.key, refusal.params), errorCode: `engine.${refusal.key}`,
+      ...(refusal.params ? { errorParams: refusal.params } : {}),
+    };
+  }
+
+  #bridge(): RuntimeTurnDeps {
+    const d = this.#d;
+    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs };
+  }
+
+  // 実行役の道で、発言を保存して返事を始める。何かを書く前に、製品・作業フォルダ・実行役の確かめを見て、断れるものは断る（何も保存しない）
+  #beginRuntimeChat(conversationId: string, items: ChatItem[], choice: SendChoice, projectId: string | undefined, existing: ConversationRow | undefined, route: { runtimeId: string; model: RuntimeModelConfig }): SendOutcome {
+    const d = this.#d;
+    if (items.some(item => item.images.length > 0)) return this.#refuse({ key: 'runtime.no_images' });
+    const bridge = this.#bridge();
+    const product = existing ? existing.project_id : projectId ?? null;
+    const folder = runtimeFolder(bridge, product);
+    if (!folder.ok) return this.#refuse(folder.refusal);
+    const refusal = runtimePreflight(bridge, d.config(), route.runtimeId);
+    if (refusal) return this.#refuse(refusal);
+    this.lastUserActivity = d.now?.().getTime() ?? Date.now();
+    d.conversations.reopen(conversationId);
+    if (existing) {
+      if (hasChoice(choice)) d.conversations.setChoice(conversationId, choice);
+    } else d.conversations.ensure(conversationId, { projectId, modelId: choice.modelId, effort: choice.effort, permissionMode: choice.permissionMode ?? 'auto' });
+    if (!d.conversations.bindRuntime(conversationId, route.runtimeId)) return this.#refuse({ key: 'runtime.fixed', params: { id: d.conversations.runtimeOf(conversationId).runtimeId ?? route.runtimeId } });
+    const runId = randomUUID();
+    let firstId: number | undefined;
+    for (const item of items) {
+      const saved = d.conversations.append(conversationId, userMessage(item));
+      firstId ??= saved.id;
+      d.conversations.autoTitle(conversationId, item.attachments.length ? ownWords(item.content) || item.attachments[0]!.name : item.content);
+      d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
+    this.#track(
+      { runId, conversationId, kind: 'chat', providers: new Set(), primary: `runtime:${route.runtimeId}` },
+      signal => runRuntimeTurn(bridge, { runId, conversationId, projectId: product, runtimeId: route.runtimeId, modelId: route.model.id, model: route.model.model, signal }),
+    );
+    return { ok: true, runId, ...(firstId !== undefined ? { messageId: firstId } : {}) };
   }
 
   #frozen(projectId: string | undefined): boolean {
@@ -1938,6 +2039,7 @@ export class ChatEngine {
     const language = languageOf(config);
     let model: ProviderModelConfig | undefined;
     const existing = d.conversations.get(conversationId);
+    if (existing?.runtime_id) return this.#refuse({ key: 'usage.runtime' });
     // 数えるモデル: 指定されたもの → 会話で選んだもの → 設定の順番の先頭の使えるもの。選んだモデルが使えなくても、ほかのモデルで数えない
     const wanted = modelId ?? existing?.model_id ?? undefined;
     if (wanted !== undefined) {
@@ -1946,7 +2048,7 @@ export class ChatEngine {
         if (modelId === undefined) return this.#noUsableModel(this.#chain('chat', wanted).problems);
         return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: wanted }), errorCode: 'engine.usage.model_missing', errorParams: { id: wanted } };
       }
-      if (isRuntimeModel(found)) return this.#noUsableModel(this.#chain('chat', wanted).problems);
+      if (isRuntimeModel(found)) return this.#refuse({ key: 'usage.runtime' });
       model = found;
       if (!(d.status.limits(model).capacity > 0)) {
         return this.#noUsableModel([{ modelId: model.id, status: 'unknown', message: engineText(language, 'problem.unchecked'), messageCode: 'engine.problem.unchecked' }]);

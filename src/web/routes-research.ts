@@ -10,7 +10,7 @@ import { domainProblem, problem, readJson, requireObject, sendJson, type Router 
 const ID = /^[0-9a-f-]{36}$/u;
 const PICKS_MAX = 80;
 
-const STATUS: Partial<Record<string, number>> = { not_found: 404, not_owner: 403, running: 409, not_finished: 409, finished: 409, source_gone: 409, no_model: 409, not_confirmed: 409, changed: 409, conversation_running: 409, too_long: 400, bad_choice: 400 };
+const STATUS: Partial<Record<string, number>> = { not_found: 404, not_owner: 403, running: 409, not_finished: 409, finished: 409, source_gone: 409, runtime_source: 409, no_model: 409, not_confirmed: 409, changed: 409, conversation_running: 409, too_long: 400, bad_choice: 400 };
 
 export function researchProblem(error: unknown): never {
   if (error instanceof ResearchError) throw domainProblem(STATUS[error.code] ?? 400, 'research', error);

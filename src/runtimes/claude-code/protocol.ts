@@ -135,6 +135,7 @@ export class EventTranslator {
         message: unreviewed === undefined
           ? 'Claude Code did not report its list of tools, so the reply was stopped.'
           : `Claude Code reported tools that beat has not reviewed (${safeText(unreviewed.slice(0, 5).join(', '), 200)}${unreviewed.length > 5 ? ', ...' : ''}), so the reply was stopped. This version of Claude Code needs a newer beat.`,
+        ...(unreviewed !== undefined ? { issue: { code: 'tools_unreviewed' as const, detail: safeText(unreviewed.slice(0, 5).join(', '), 200) } } : {}),
       }];
     }
     return [];
@@ -157,7 +158,7 @@ export class EventTranslator {
     const id = message.message.id;
     for (const block of message.message.content) {
       if (block.type === 'text' && message.parent_tool_use_id === null && !this.#streamed.has(id) && block.text !== '') events.push({ type: 'text', delta: block.text });
-      else if (block.type === 'tool_use') events.push({ type: 'tool_start', id: block.id, name: block.name, input: block.input });
+      else if (block.type === 'tool_use') events.push({ type: 'tool_start', id: block.id, name: block.name, input: block.input, ...(typeof message.parent_tool_use_id === 'string' ? { nested: true as const } : {}) });
     }
     return events;
   }
@@ -167,7 +168,7 @@ export class EventTranslator {
     if (!Array.isArray(content)) return [];
     const events: RuntimeEvent[] = [];
     for (const block of content) {
-      if (block.type === 'tool_result') events.push({ type: 'tool_end', id: block.tool_use_id, output: resultText(block.content), isError: block.is_error === true });
+      if (block.type === 'tool_result') events.push({ type: 'tool_end', id: block.tool_use_id, output: resultText(block.content), isError: block.is_error === true, ...(typeof message.parent_tool_use_id === 'string' ? { nested: true as const } : {}) });
     }
     return events;
   }

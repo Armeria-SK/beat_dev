@@ -261,3 +261,22 @@ test('answers: accept keeps the input as it is; accept_for_reply adds only the s
   assert.deepEqual(answerFor('anything-else' as 'decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
   assert.deepEqual(STOPPED_ANSWER, { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
 });
+
+test('a tool of a sub-agent carries the nested mark on both its start and its end; the top-level agent does not', () => {
+  const { translate } = translator();
+  const inner = translate.translate(sdkMessage({ type: 'assistant', parent_tool_use_id: 'toolu_parent', message: { id: 'm1', content: [{ type: 'tool_use', id: 'toolu_c', name: 'Read', input: {} }] } }));
+  assert.deepEqual(inner, [{ type: 'tool_start', id: 'toolu_c', name: 'Read', input: {}, nested: true }]);
+  const innerEnd = translate.translate(sdkMessage({ type: 'user', parent_tool_use_id: 'toolu_parent', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_c', content: 'x' }] } }));
+  assert.deepEqual(innerEnd, [{ type: 'tool_end', id: 'toolu_c', output: 'x', isError: false, nested: true }]);
+  const top = translate.translate(sdkMessage({ type: 'assistant', parent_tool_use_id: null, message: { id: 'm2', content: [{ type: 'tool_use', id: 'toolu_p', name: 'Agent', input: {} }] } }));
+  assert.equal('nested' in top[0]!, false);
+});
+
+test('the stop for tools beat has not reviewed carries the issue with the names (at most five); a missing tool list carries none', () => {
+  const some = failed(translator().translate.translate(initMessage({ tools: ['Read', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'mcp__x__y'] })));
+  assert.ok(some?.type === 'failed');
+  assert.deepEqual(some.issue, { code: 'tools_unreviewed', detail: 'A1, A2, A3, A4, A5' });
+  const none = failed(translator().translate.translate(initMessage({ tools: undefined })));
+  assert.ok(none?.type === 'failed');
+  assert.equal(none.issue, undefined);
+});

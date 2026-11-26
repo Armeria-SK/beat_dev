@@ -57,6 +57,7 @@ const MODEL_PAGES = 20;
 
 const clip = (value: string, limit = TEXT_LIMIT): string => (value.length > limit ? `${value.slice(0, limit)}\n[output cut at ${limit} characters]` : value);
 const short = (value: string, limit = 300): string => redactSecrets(value).slice(0, limit);
+const EFFORT_NAME = /^[a-z][a-z0-9_-]{0,19}$/u;
 
 class EventQueue implements AsyncIterable<RuntimeEvent> {
   readonly #items: RuntimeEvent[] = [];
@@ -142,6 +143,7 @@ class CodexSession {
   turnId: string | undefined;
   cwd = '';
   model: string | undefined;
+  effort: string | undefined;
   wire!: PermissionParams;
   record!: CodexRunRecord;
   turnStarted = false;
@@ -225,7 +227,12 @@ class CodexSession {
         return;
       }
       default:
-        if (WARNING_NOTIFICATIONS.has(method)) { this.#log(`[WARN] Codex said (${method}): ${short(JSON.stringify(p ?? {}))}`); return; }
+        if (WARNING_NOTIFICATIONS.has(method)) {
+          this.#log(`[WARN] Codex said (${safeLabel(method)}): ${safeLabel(JSON.stringify(p ?? {}), 300)}`);
+          const issue = method === 'windows/worldWritableWarning' ? worldWritableIssue(p) : undefined;
+          if (issue && !this.finished) this.queue.push({ type: 'issue', issue });
+          return;
+        }
         if (!IGNORED_NOTIFICATIONS.has(method)) this.#unknownEvent(JSON.stringify({ method, params: p ?? null }));
     }
   }
@@ -498,6 +505,7 @@ export class CodexRuntime implements AgentRuntime {
       session.threadId = threadId;
       session.cwd = request.cwd;
       session.model = request.model;
+      session.effort = request.effort !== undefined && EFFORT_NAME.test(request.effort) ? request.effort : undefined;
       session.wire = wire;
       const launched: LaunchRecord = opened.proc.record;
       session.record = {
@@ -507,7 +515,7 @@ export class CodexRuntime implements AgentRuntime {
       };
       this.#sessions.set(session.id, session);
       this.#deps.log(`[INFO] Codex ${opened.version ?? 'unknown version'} ${resumed ? 'resumed' : 'started'} a conversation (account ${account.type}, ${wire.sandbox}, ${wire.approvalPolicy})`);
-      return { id: session.id, runtimeSession: threadId, record: session.record };
+      return { id: session.id, runtimeSession: threadId, record: session.record, ...(opened.proc.containReason !== undefined ? { containReason: short(opened.proc.containReason, 300) } : {}) };
     } catch (error) {
       session.end();
       await opened.scope.abort();
@@ -523,7 +531,7 @@ export class CodexRuntime implements AgentRuntime {
     try {
       const reply = asRecord(await session.conn.request('turn/start', {
         threadId: session.threadId, input: [{ type: 'text', text: input.text, text_elements: [] }], cwd: session.cwd,
-        approvalPolicy, approvalsReviewer, sandboxPolicy, ...(session.model ? { model: session.model } : {}),
+        approvalPolicy, approvalsReviewer, sandboxPolicy, ...(session.model ? { model: session.model } : {}), ...(session.effort ? { effort: session.effort } : {}),
       }, START_TIMEOUT_MS));
       session.turnId = asString(asRecord(reply?.turn)?.id);
     } catch (error) {

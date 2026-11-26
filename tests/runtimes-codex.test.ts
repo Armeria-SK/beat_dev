@@ -73,6 +73,8 @@ test('a normal reply: text, tools, no experimental API, and every request carrie
   assert.equal(events.filter(event => event.type === 'done').length, 1, 'a turn of another conversation is not ours');
   assert.equal(events.filter(event => event.type === 'unknown').length, 1, 'only the truly new notification is kept');
   assert.ok(r.lines.some(line => line.includes('Codex said (configWarning)') && !line.includes(SECRET)), 'a warning is logged with secrets hidden');
+  assert.ok(r.lines.some(line => line.includes('Codex said (configWarning)') && line.includes('a warning? with')), 'the direction-changing character in a warning is replaced, not logged as it came');
+  assert.ok(r.lines.every(line => !line.includes('‮')), 'no log line carries a direction-changing character from Codex');
   assert.ok(r.lines.some(line => line.includes('Codex said (windows/worldWritableWarning)') && line.includes('D:/open-folder')), 'the folders the sandbox cannot protect are logged, not dropped');
   const requests = r.requests();
   const init = requests.find(message => message.method === 'initialize');
@@ -101,6 +103,19 @@ test('a normal reply: text, tools, no experimental API, and every request carrie
   assert.equal(session.runtimeSession, 'thr-1');
   const everything = JSON.stringify([record, events, r.lines]);
   for (const identifier of [ACCOUNT_EMAIL, 'user-secret-id', 'acct-secret']) assert.ok(!everything.includes(identifier), `${identifier} leaked`);
+});
+
+test('the thinking depth is sent with every turn only when it has the shape of a depth name; anything else is left out', { timeout: 120_000 }, async t => {
+  const given = rig(t);
+  await reply(given, { effort: 'high', model: 'm-one' });
+  const turn = given.requests().find(message => message.method === 'turn/start');
+  assert.equal(turn.params.effort, 'high');
+  assert.equal(turn.params.model, 'm-one');
+  for (const value of [undefined, '', 'HIGH!', 'x'.repeat(30), '1high', 'high\nlow']) {
+    const r = rig(t);
+    await reply(r, { ...(value !== undefined ? { effort: value } : {}) });
+    assert.equal('effort' in r.requests().find(message => message.method === 'turn/start').params, false, JSON.stringify(value));
+  }
 });
 
 test('the permission setting is applied on every start: garbage, missing and everything-allowed values become read-only + on-request', { timeout: 120_000 }, async t => {
@@ -596,4 +611,27 @@ test('registered as the codex factory, off unless enabled: a turned-off runtime 
   const real = new RuntimeRegistry({ processes: new ProcessManager({}), log: () => undefined });
   const missing = { runtimes: [{ id: 'cx', kind: 'codex' as const, enabled: true, executablePath: join(r.dir, 'missing', 'codex.exe') }] };
   await assert.rejects(real.start(missing, 'cx', { conversationId: 'c', cwd: r.work, signal: new AbortController().signal }), refused('not_installed'));
+});
+
+test('the world-writable warning also reaches the caller as an issue event while the reply goes on, and a process that could not be put in a job is told at start', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'text');
+  const { events } = await reply(r);
+  const issues = events.filter(event => event.type === 'issue');
+  assert.deepEqual(issues, [{ type: 'issue', issue: { code: 'world_writable', detail: 'D:/open-folder (+2)' } }]);
+  assert.equal(events.at(-1)?.type, 'done', 'a warning does not end the reply');
+
+  const open = r.processes.open.bind(r.processes);
+  r.processes.open = async () => {
+    const scope = await open();
+    Object.defineProperty(scope, 'containReason', { value: `the job could not be made ${'x'.repeat(1000)}` });
+    return scope;
+  };
+  const session = await r.runtime.start(r.request());
+  assert.match(session.containReason!, /^the job could not be made/u);
+  assert.equal(session.containReason!.length, 300);
+  await r.runtime.close(session.id);
+  const plain = rig(t, 'text');
+  const normal = await plain.runtime.start(plain.request());
+  assert.equal(normal.containReason, undefined);
+  await plain.runtime.close(normal.id);
 });
