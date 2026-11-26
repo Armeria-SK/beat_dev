@@ -369,7 +369,7 @@ test('比べる: 中身が同じなら出さず、比べられないものは数
   const gone: Print = { present: false, id: '-' };
   const snap = (dirty: Record<string, Print>, extra: { later?: Record<string, Print>; headDiff?: Record<string, string>; codes?: Record<string, string> } = {}): Snapshot => ({
     head: 'h', dirty: new Map(Object.entries(dirty).map(([path, print]) => [path, { code: extra.codes?.[path] ?? ' M', print }])),
-    later: new Map(Object.entries(extra.later ?? {})), headDiff: new Map(Object.entries(extra.headDiff ?? {})), nested: new Set(), gitlinks: new Map(),
+    later: new Map(Object.entries(extra.later ?? {})), headDiff: new Map(Object.entries(extra.headDiff ?? {})), nested: new Set(), gitlinks: new Map(), flagged: new Map(),
   });
   const before = snap({ same: sha('1'), edited: sha('1'), vanished: sha('1'), 'link-a': { present: true, id: null, link: true }, 'link-b': { present: true, id: null, link: true }, 'secret.key': { present: true, id: 'stat:1:1' } });
   const after = snap({ same: sha('1'), edited: sha('2'), 'link-a': { present: true, id: null, link: true }, 'link-b': gone, fresh: sha('9'), 'secret.key': { present: true, id: 'stat:2:2' } }, { later: { vanished: gone }, headDiff: { committed: 'M', same: 'M' }, codes: { fresh: '??' } });
@@ -622,7 +622,7 @@ test('M4: 無視されている秘密の名前のファイルも、書きかけ�
 test('M4: 変わったパスが多いときは、守りに当たるか確かめる数に上限を置き、名前で分かる守り（秘密の名前）を先に確かめる。残りは確かめられないものとして数える', () => {
   let inspected = 0;
   const guard: Guard = { realRoot: '/r', inspect: rel => { inspected += 1; return rel.includes('secret') ? { marks: ['protected'], readable: false } : { marks: [], readable: true }; } };
-  const empty = (headDiff: Record<string, string> = {}): Snapshot => ({ head: 'h', dirty: new Map(), later: new Map(), headDiff: new Map(Object.entries(headDiff)), nested: new Set(), gitlinks: new Map() });
+  const empty = (headDiff: Record<string, string> = {}): Snapshot => ({ head: 'h', dirty: new Map(), later: new Map(), headDiff: new Map(Object.entries(headDiff)), nested: new Set(), gitlinks: new Map(), flagged: new Map() });
   const diff = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`src/f${String(i).padStart(4, '0')}.ts`, 'M']));
   diff['zzz/secret.key'] = 'M';
   const result = compareSnapshots(guard, empty(), empty(diff));
@@ -724,4 +724,129 @@ test('V1: git が使えなくなって変更の一覧が 409 で失敗しても�
     assert.deepEqual(runs.find(x => x.runId === poisoned.runId)?.state, 'git_unusable');
     assert.deepEqual(names(runs.find(x => x.runId === first.runId)!), ['a.txt:modified']);
   }
+});
+
+// ---- 安全審査の 2 回目の指摘（commondir・modules の入れ子・切ったときの印・フック名の読み方・印の付いたファイルの変更） ----
+
+test('審査 1: .git/commondir が書かれて、別のリポジトリ（クローン）のフックと設定が使われる形になったら、フック・設定の変化として守りに当たる', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  const clone = join(r.products, 'clone');
+  git(r.products, 'clone', '-q', root, clone);
+  await r.check();
+  const { runId, run } = await change(r, projectId, () => {
+    writeFileSync(join(clone, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho planted\n');
+    writeFileSync(join(root, '.git', 'commondir'), `${join(clone, '.git')}\n`);
+  });
+  assert.ok(run.git.includes('hooks') && run.git.includes('config'), `git: ${run.git.join(',')}`);
+  assert.equal(run.alert, true);
+  assert.ok(warned(r, runId, 'runtime_git_hooks'));
+  assert.ok(warned(r, runId, 'runtime_git_config'));
+});
+
+test('審査 1 の対: commondir が git と同じ読み方で読まれる（先がネットワークの先なら見ない）。普通の製品の指紋は commondir が無くても取れる', { skip: !gitAvailable }, async t => {
+  const { root, dir } = await plainRepo(t);
+  const plain = await readGitPrint(root, dir);
+  assert.ok(plain && plain.git, 'a plain repository is read');
+  if (!WINDOWS) return;
+  writeFileSync(join(root, '.git', 'commondir'), '\\\\evil-host\\share\\repo\n');
+  const touched = watchFs(t, ['openSync', 'lstatSync', 'readdirSync', 'readlinkSync', 'statSync', 'readFileSync']);
+  assert.equal(await readGitPrint(root, dir), undefined);
+  assert.deepEqual(touched.filter(entry => /^\w+ [\\/]{2}/u.test(entry)), []);
+});
+
+test('審査 2: サブモジュールのフォルダの名前がパス（lib/sub）で何段にもなっていても、中のフック・設定の変化を見る。サブモジュールの中の modules も', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  const modules = join(root, '.git', 'modules');
+  const module = (...parts: string[]): string => {
+    const dir = join(modules, ...parts);
+    mkdirSync(join(dir, 'hooks'), { recursive: true });
+    writeFileSync(join(dir, 'HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(dir, 'config'), '[core]\n\tbare = false\n');
+    return dir;
+  };
+  const sub = module('lib', 'sub');
+  const inner = module('outer', 'modules', 'inner');
+  writeFileSync(join(modules, 'outer', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(modules, 'outer', 'config'), '[core]\n\tbare = false\n');
+  await r.check();
+  const hook = await change(r, projectId, () => writeFileSync(join(sub, 'hooks', 'pre-commit'), '#!/bin/sh\necho hi\n'));
+  assert.deepEqual({ git: hook.run.git, alert: hook.run.alert }, { git: ['modules'], alert: true });
+  const deep = await change(r, projectId, () => writeFileSync(join(inner, 'hooks', 'commit-msg'), '#!/bin/sh\necho hi\n'));
+  assert.deepEqual({ git: deep.run.git, alert: deep.run.alert }, { git: ['modules'], alert: true });
+  const config = await change(r, projectId, () => appendFileSync(join(sub, 'config'), '[core]\n\teditor = vim\n'));
+  assert.deepEqual({ git: config.run.git, alert: config.run.alert }, { git: ['modules'], alert: true });
+  const quiet = await change(r, projectId, () => undefined);
+  assert.deepEqual(quiet.run.git, []);
+});
+
+test('審査 3: 確かめる数の上限で切ったときは、切った分に印が付くかどうか分からないので、必ず alert にする。リンクを通る変更は、切る前に先に確かめる', () => {
+  const guard: Guard = { realRoot: '/r', inspect: () => ({ marks: [], readable: true }) };
+  const sha = (id: string): Print => ({ present: true, id });
+  const snap = (dirty: Record<string, Print>): Snapshot => ({
+    head: 'h', dirty: new Map(Object.entries(dirty).map(([path, print]) => [path, { code: ' M', print }])),
+    later: new Map(), headDiff: new Map(), nested: new Set(), gitlinks: new Map(), flagged: new Map(),
+  });
+  const paths = Array.from({ length: INSPECT_MAX + 1 }, (_, i) => `src/f${String(i).padStart(4, '0')}.ts`);
+  const before = snap(Object.fromEntries(paths.map(path => [path, sha('a')])));
+  const plain = compareSnapshots(guard, before, snap(Object.fromEntries(paths.map(path => [path, sha('b')]))));
+  assert.equal(plain.unchecked, 1);
+  assert.equal(plain.alert, true, 'a cut is never silent');
+  const justUnder = compareSnapshots(guard, snap(Object.fromEntries(paths.slice(1).map(path => [path, sha('a')]))), snap(Object.fromEntries(paths.slice(1).map(path => [path, sha('b')]))));
+  assert.deepEqual({ unchecked: justUnder.unchecked, alert: justUnder.alert }, { unchecked: 0, alert: false }, 'nothing cut, nothing marked: no alarm');
+  const lastIsLink = compareSnapshots(guard, before, snap(Object.fromEntries([...paths.slice(0, -1).map(path => [path, sha('b')]), [paths.at(-1)!, { present: true, id: 'b', link: true } as Print]])));
+  const linked = lastIsLink.files.find(file => file.path === paths.at(-1));
+  assert.deepEqual(linked?.marks, ['link'], 'the changed file that went through a link is looked at before the cut');
+  assert.equal(lastIsLink.alert, true);
+});
+
+test('審査 4: フックの決まった名前を上限と別に読むのはこの製品の .git/hooks だけ。サブモジュールのフックは上限の中だけ', { skip: !gitAvailable }, async t => {
+  const { root, dir } = await plainRepo(t);
+  const hooks = join(root, '.git', 'modules', 'm', 'hooks');
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(join(root, '.git', 'modules', 'm', 'HEAD'), 'ref: refs/heads/main\n');
+  for (let i = 0; i < 500; i += 1) writeFileSync(join(hooks, `a${String(i).padStart(3, '0')}`), 'x');
+  writeFileSync(join(hooks, 'pre-commit'), '#!/bin/sh\n');
+  const opened = watchFs(t, ['openSync']);
+  const print = await readGitPrint(root, dir);
+  assert.ok(print);
+  const inModule = opened.filter(entry => entry.startsWith(`openSync ${hooks}`));
+  assert.ok(inModule.length < 450, `${inModule.length} files of the module hooks were opened`);
+  assert.ok(!inModule.includes(`openSync ${join(hooks, 'pre-commit')}`), 'a fixed hook name behind the padding of a submodule is not read outside the cap');
+});
+
+test('審査 5: すでに skip-worktree・assume-unchanged の印が付いていたファイルを返事が書き換えたら、一覧に出る（印そのものは変わらないので index の変化は出ない）。書き換えなければ出ない', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n', 'b.txt': 'b\n', 'c.txt': 'c\n' });
+  git(root, 'update-index', '--skip-worktree', 'a.txt');
+  git(root, 'update-index', '--assume-unchanged', 'b.txt');
+  writeFileSync(join(root, 'c.txt'), 'c by the owner\n');
+  await r.check();
+  const quiet = await change(r, projectId, () => undefined);
+  assert.deepEqual({ files: names(quiet.run), git: quiet.run.git, alert: quiet.run.alert }, { files: [], git: [], alert: false });
+  const edited = await change(r, projectId, () => {
+    writeFileSync(join(root, 'a.txt'), 'a edited behind skip-worktree\n');
+    writeFileSync(join(root, 'b.txt'), 'b edited behind assume-unchanged\n');
+  });
+  assert.deepEqual({ files: names(edited.run), git: edited.run.git }, { files: ['a.txt:modified', 'b.txt:modified'], git: [] });
+  const again = await change(r, projectId, () => undefined);
+  assert.deepEqual(names(again.run), [], 'what was already written before this reply is not listed again');
+});
+
+test('審査 1: commondir ファイルそのものも設定の指紋に入れる（もとから commondir があり、同じ中身の写しから別の写しへ向け直されても、変化として分かる）', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  const twins = ['twin-a', 'twin-b'].map(name => {
+    const clone = join(r.products, name);
+    git(r.products, 'clone', '-q', root, clone);
+    writeFileSync(join(clone, '.git', 'config'), readFileSync(join(root, '.git', 'config')));
+    return join(clone, '.git');
+  });
+  writeFileSync(join(root, '.git', 'commondir'), `${twins[0]}\n`);
+  await r.check();
+  const { run } = await change(r, projectId, () => writeFileSync(join(root, '.git', 'commondir'), `${twins[1]}\n`));
+  assert.ok(run.git.includes('config'), `git: ${run.git.join(',')}`);
+  assert.ok(!run.git.includes('hooks'), 'the hooks of the twins are the same');
+  assert.equal(run.alert, true);
 });

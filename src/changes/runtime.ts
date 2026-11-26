@@ -138,7 +138,8 @@ export function fingerprint(realRoot: string, rel: string, readable: boolean, bu
 // ---- 取る ----
 
 interface Dirty { code: string; print: Print }
-// nested: 中に別の .git があるフォルダ（git は中を見ない）。gitlinks: サブモジュールの指紋（索引のコミットと、中の今の HEAD）
+// nested: 中に別の .git があるフォルダ（git は中を見ない）。gitlinks: サブモジュールの指紋（索引のコミットと、中の今の HEAD）。
+// flagged: skip-worktree・assume-unchanged の印が付いている追跡中のファイルの指紋（git status は変更を出さないので、書きかけの一覧に無いまま変わりうる）
 export interface Snapshot {
   head: string | null;
   dirty: Map<string, Dirty>;
@@ -146,6 +147,7 @@ export interface Snapshot {
   headDiff: Map<string, string>;
   nested: ReadonlySet<string>;
   gitlinks: ReadonlyMap<string, string>;
+  flagged: ReadonlyMap<string, Print>;
 }
 type Captured = { ok: true; snapshot: Snapshot } | { ok: false; state: Exclude<RunChangeState, 'ok' | 'unknown' | 'too_many_after'> };
 
@@ -170,6 +172,17 @@ function parseGitlinks(raw: string): Map<string, string> {
   for (const line of raw.split('\0')) {
     const match = /^160000 ([0-9a-f]+) \d\t(.+)$/su.exec(line);
     if (match && out.size < GITLINK_CAP) out.set(match[2]!, match[1]!);
+  }
+  return out;
+}
+
+const FLAG_CAP = 200;
+// git ls-files -v -z の行（<印> <path>）のうち、印が小文字（assume-unchanged）か S（skip-worktree）のもの。多いときは先の FLAG_CAP 個だけ
+function parseFlagged(raw: string): string[] {
+  const out: string[] = [];
+  for (const entry of raw.split('\0')) {
+    if (out.length >= FLAG_CAP) break;
+    if (/^[a-zS] /u.test(entry)) out.push(entry.slice(2));
   }
   return out;
 }
@@ -202,6 +215,8 @@ export async function captureSnapshot(guard: Guard, dataDir: string, options: { 
     if (entries.size > MAX_DIRTY) return 'too_many' as const;
     const staged = await git(['ls-files', '-s', '-z']);
     if (!staged) return 'failed' as const;
+    const tagged = await git(['ls-files', '-v', '-z']);
+    if (!tagged) return 'failed' as const;
     const headDiff = new Map<string, string>();
     if (options.since !== undefined && OID.test(head) && head !== options.since) {
       const diff = options.since === null
@@ -211,7 +226,7 @@ export async function captureSnapshot(guard: Guard, dataDir: string, options: { 
       if (options.since === null) for (const path of diff.toString('utf8').split('\0')) { if (path) headDiff.set(path, 'A'); }
       else for (const entry of parseNameStatus(diff.toString('utf8'))) if (entry.path) headDiff.set(entry.path, entry.status);
     }
-    return { head: OID.test(head) ? head : null, entries, nested, headDiff, gitlinks: parseGitlinks(staged.toString('utf8')) };
+    return { head: OID.test(head) ? head : null, entries, nested, headDiff, gitlinks: parseGitlinks(staged.toString('utf8')), flagged: parseFlagged(tagged.toString('utf8')) };
   });
   if (listed === undefined) return { ok: false, state: gitFolder(realRoot) ? 'git_unusable' : 'no_git' };
   if (listed === 'failed' || listed === 'too_many') return { ok: false, state: listed };
@@ -232,12 +247,17 @@ export async function captureSnapshot(guard: Guard, dataDir: string, options: { 
     if (await late()) return { ok: false, state: 'timeout' };
     if (!dirty.has(path)) later.set(path, fingerprint(realRoot, path, guard.inspect(path).readable, budget));
   }
+  const flagged = new Map<string, Print>();
+  for (const path of listed.flagged) {
+    if (await late()) return { ok: false, state: 'timeout' };
+    if (!dirty.has(path) && !later.has(path)) flagged.set(path, fingerprint(realRoot, path, guard.inspect(path).readable, budget));
+  }
   const gitlinks = new Map<string, string>();
   for (const [path, oid] of listed.gitlinks) {
     if (await late()) return { ok: false, state: 'timeout' };
     gitlinks.set(path, `${oid}:${submoduleHead(realRoot, path)}`);
   }
-  return { ok: true, snapshot: { head: listed.head, dirty, later, headDiff: listed.headDiff, nested: listed.nested, gitlinks } };
+  return { ok: true, snapshot: { head: listed.head, dirty, later, headDiff: listed.headDiff, nested: listed.nested, gitlinks, flagged } };
 }
 
 // ---- 比べる ----
@@ -253,14 +273,15 @@ export const INSPECT_MAX = 1000;
 const nameFirst = (path: string): number => (isSecretPath(path) || !safeRel(path) ? 0 : 1);
 
 export function compareSnapshots(guard: Guard, before: Snapshot, after: Snapshot): Compared {
-  const paths = new Set<string>([...before.dirty.keys(), ...after.dirty.keys(), ...after.headDiff.keys()]);
+  const paths = new Set<string>([...before.dirty.keys(), ...before.flagged.keys(), ...after.dirty.keys(), ...after.headDiff.keys()]);
   const changed: Array<{ path: string; status: RuntimeChangeFile['status']; link: boolean }> = [];
   let unchecked = 0;
   for (const path of paths) {
-    const was = before.dirty.get(path);
+    const flagged = before.flagged.get(path);
+    const was = before.dirty.get(path) ?? (flagged ? { code: '  ', print: flagged } : undefined);
     const is = after.dirty.get(path);
     if (was) {
-      const now = is?.print ?? after.later.get(path);
+      const now = is?.print ?? after.later.get(path) ?? after.flagged.get(path);
       if (!now) continue;
       if (was.print.id === null || now.id === null) {
         if (was.print.present !== now.present) changed.push({ path, status: statusOf(was.print.present, now.present), link: Boolean(was.print.link || now.link) });
@@ -278,9 +299,12 @@ export function compareSnapshots(guard: Guard, before: Snapshot, after: Snapshot
   // 中に別の .git があるフォルダ・サブモジュールは、中を見ない。現れた・消えた・指す先が変わったことだけ、確かめられないものとして数える
   for (const path of new Set([...before.nested, ...after.nested])) if (before.nested.has(path) !== after.nested.has(path)) unchecked += 1;
   for (const path of new Set([...before.gitlinks.keys(), ...after.gitlinks.keys()])) if (before.gitlinks.get(path) !== after.gitlinks.get(path)) unchecked += 1;
+  // 切ったときは、切った分に守りの印が付くかどうか分からないので、必ず守りの印（alert）にする（黙って切らない）
   let inspected = changed;
-  if (changed.length > INSPECT_MAX) {
-    inspected = [...changed].sort((a, b) => nameFirst(a.path) - nameFirst(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, INSPECT_MAX);
+  const cut = changed.length > INSPECT_MAX;
+  if (cut) {
+    const first = (entry: { path: string; link: boolean }): number => (entry.link ? 0 : nameFirst(entry.path));
+    inspected = [...changed].sort((a, b) => first(a) - first(b) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, INSPECT_MAX);
     unchecked += changed.length - inspected.length;
   }
   const named = inspected.map(entry => {
@@ -294,7 +318,7 @@ export function compareSnapshots(guard: Guard, before: Snapshot, after: Snapshot
   const marked = (m: { marks: RunMark[] }): number => (m.marks.length ? 0 : 1);
   named.sort((a, b) => marked(a) - marked(b) || (a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0));
   const files = named.slice(0, MAX_FILES).map(({ path, status, marks }) => ({ path, status, marks }));
-  const alert = named.some(entry => entry.marks.some(mark => ALERT_MARKS.has(mark)));
+  const alert = cut || named.some(entry => entry.marks.some(mark => ALERT_MARKS.has(mark)));
   return { files, more: Math.max(0, named.length - MAX_FILES), unchecked, alert };
 }
 
@@ -345,7 +369,7 @@ export async function endWatch(watch: RunWatch, options: { stillRunning?: boolea
   if (options.stillRunning) return unseen('unknown');
   const before = watch.before.snapshot;
   try {
-    const got = await timed(captureSnapshot(watch.guard, watch.dataDir, { since: before.head, also: before.dirty.keys() }), WATCH_TIMEOUT_MS);
+    const got = await timed(captureSnapshot(watch.guard, watch.dataDir, { since: before.head, also: [...before.dirty.keys(), ...before.flagged.keys()] }), WATCH_TIMEOUT_MS);
     if (got === 'timeout') return unseen('timeout');
     if (!got.ok) return unseen(got.state === 'too_many' ? 'too_many_after' : got.state);
     const compared = compareSnapshots(watch.guard, before, got.snapshot);

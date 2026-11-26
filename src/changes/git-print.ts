@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readlinkSync, type Stats } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { withGit } from '../mesh/folders.ts';
+import { findGitDir } from '../tools/hooks/git-repo.ts';
 import { isRemotePath } from '../tools/hooks/remote-path.ts';
 import { ownName, readUpTo } from './diff.ts';
 
@@ -29,6 +30,9 @@ const FILE_CAP = 1024 * 1024;
 const SMALL_CAP = 4096;
 const ENTRY_CAP = 400;
 const MODULE_CAP = 50;
+const MODULE_DIRS_CAP = 200;
+const MODULE_DEPTH_CAP = 6;
+const CHILD_CAP = 200;
 const WORKTREE_CAP = 100;
 const DEPTH_CAP = 3;
 // 変わったら守りに当たる印にする所: 後でコマンドを動かせる（config・hooks・modules）、変わったファイルを隠せる（exclude・index・link）
@@ -108,10 +112,11 @@ function treeDigest(dir: string, label: string, links: string[], budget: Budget,
   return out.join('\n');
 }
 
-function hooksDigest(base: string, parts: readonly string[], links: string[], budget: Budget): string {
+// fixed: 決まった名前のフックを数の上限と別に必ず見る（この製品の .git/hooks だけ。サブモジュールごとに 24 個 × 1MiB を同期で読ませないため、サブモジュールのフックは上限の中だけ）
+function hooksDigest(base: string, parts: readonly string[], links: string[], budget: Budget, fixed: boolean): string {
   const seen = walk(base, parts);
   if (seen.kind !== 'dir') return digestOf(seen, parts.join('/'), links);
-  const named = HOOK_NAMES.map(name => `${name} ${digestOf(walk(seen.path, [name]), `${parts.join('/')}/${name}`, links)}`).join('\n');
+  const named = fixed ? HOOK_NAMES.map(name => `${name} ${digestOf(walk(seen.path, [name]), `${parts.join('/')}/${name}`, links)}`).join('\n') : '';
   return sha(`${named}\n${treeDigest(seen.path, parts.join('/'), links, budget, 0, true)}`);
 }
 
@@ -126,13 +131,36 @@ function worktreesDigest(common: string, links: string[]): string {
   return sha(`${parts.join('\n')}${names.length > WORKTREE_CAP ? '\nmany' : ''}`);
 }
 
+// .git/modules の下。サブモジュールのフォルダの名前は、ふつうそのパス（vendor/x）なので、何段にもなる。HEAD か config を持つフォルダをサブモジュールのフォルダとして、その config とフック（と、その中の modules）を見る。
+// それ以外のフォルダは中へ進む。見るフォルダの数・サブモジュールの数・深さ・1 つのフォルダで見る名前の数に上限を置き、超えたら「many」を指紋に入れる
 function modulesDigest(common: string, links: string[], budget: Budget): string {
-  const seen = walk(common, ['modules']);
-  if (seen.kind !== 'dir') return digestOf(seen, 'modules', links);
-  const names = sortedNames(seen.path);
-  if (!names) return 'unreadable';
-  const parts = names.slice(0, MODULE_CAP).map(name => [name, digestOf(walk(common, ['modules', name, 'config']), `modules/${name}/config`, links), hooksDigest(common, ['modules', name, 'hooks'], links, budget)].join(' '));
-  return sha(`${parts.join('\n')}${names.length > MODULE_CAP ? '\nmany' : ''}`);
+  const top = walk(common, ['modules']);
+  if (top.kind !== 'dir') return digestOf(top, 'modules', links);
+  const out: string[] = [];
+  const count = { dirs: 0, modules: 0, many: false };
+  const visit = (rel: readonly string[]): void => {
+    if (count.dirs >= MODULE_DIRS_CAP) { count.many = true; return; }
+    count.dirs += 1;
+    const names = sortedNames(join(common, 'modules', ...rel));
+    if (!names) { out.push(`${rel.join('/')} unreadable`); return; }
+    if (names.length > CHILD_CAP) count.many = true;
+    for (const name of names.slice(0, CHILD_CAP)) {
+      const here = [...rel, name];
+      const label = here.join('/');
+      const entry = walk(common, ['modules', ...here]);
+      if (entry.kind !== 'dir') { out.push(`${label} ${digestOf(entry, `modules/${label}`, links)}`); continue; }
+      if (!['config', 'HEAD'].some(file => walk(common, ['modules', ...here, file]).kind === 'file')) {
+        if (here.length < MODULE_DEPTH_CAP) visit(here); else out.push(`${label} deep`);
+        continue;
+      }
+      if (count.modules >= MODULE_CAP) { count.many = true; continue; }
+      count.modules += 1;
+      out.push([label, digestOf(walk(common, ['modules', ...here, 'config']), `modules/${label}/config`, links), hooksDigest(common, ['modules', ...here, 'hooks'], links, budget, false)].join(' '));
+      if (here.length < MODULE_DEPTH_CAP && walk(common, ['modules', ...here, 'modules']).kind === 'dir') visit([...here, 'modules']);
+    }
+  };
+  visit([]);
+  return sha(`${out.join('\n')}${count.many ? '\nmany' : ''}`);
 }
 
 // skip-worktree・assume-unchanged の印の付いた索引の項目（git status が見ないので、付くと変わったファイルが隠れる）。印の付いたものだけを指紋にする
@@ -143,19 +171,15 @@ function flagDigest(buffer: Buffer): string {
 
 interface GitDirs { gitdir: string; common: string }
 
-// .git のフォルダ、または gitdir: の行（と commondir）。ネットワークの先を指していたら見ない
+// .git のフォルダ、または gitdir: の行のファイル。どちらも commondir を含めて、git と beat 自身の確かめ（findGitDir。withGit が通すもの）と同じ読み方をする（読み方が違うと、git が使う先と別の所を見てしまう）。
+// 壊れている・ネットワークの先・リンクを通る形なら見ない
 function gitDirs(root: string): GitDirs | undefined {
   const dot = lstatOf(join(root, '.git'));
-  if (!dot) return undefined;
-  if (dot.isDirectory()) { const dir = join(root, '.git'); return { gitdir: dir, common: dir }; }
-  if (!dot.isFile()) return undefined;
-  const line = /^gitdir:\s*(.+?)\s*$/mu.exec(smallText({ kind: 'file', path: join(root, '.git'), size: dot.size, mtimeMs: dot.mtimeMs, ctimeMs: dot.ctimeMs, ino: dot.ino }));
-  if (!line) return undefined;
-  const gitdir = resolve(root, line[1]!);
-  if (isRemotePath(line[1]!) || isRemotePath(gitdir)) return undefined;
-  const sub = smallText(walk(gitdir, ['commondir']));
-  const common = sub ? resolve(gitdir, sub) : gitdir;
-  return isRemotePath(common) ? undefined : { gitdir, common };
+  if (!dot || !(dot.isDirectory() || dot.isFile())) return undefined;
+  const found = findGitDir(root);
+  if (!found || found.broken) return undefined;
+  if (dot.isDirectory() && resolve(found.gitDir) !== resolve(root, '.git')) return undefined;
+  return { gitdir: found.gitDir, common: found.commonDir };
 }
 
 export async function readGitPrint(root: string, dataDir: string): Promise<GitPrint | undefined> {
@@ -178,8 +202,9 @@ export async function readGitPrint(root: string, dataDir: string): Promise<GitPr
     digestOf(walk(common, ['config']), 'config', links),
     digestOf(walk(gitdir, ['config.worktree']), 'config.worktree', links),
     gitdir === common ? '' : digestOf(walk(common, ['config.worktree']), 'config.worktree', links),
+    digestOf(walk(gitdir, ['commondir']), 'commondir', links),
   ].join('|'));
-  const hooks = hooksDigest(common, ['hooks'], links, budget);
+  const hooks = hooksDigest(common, ['hooks'], links, budget, true);
   const exclude = digestOf(walk(common, ['info', 'exclude']), 'info/exclude', links);
   const worktrees = worktreesDigest(common, links);
   const modules = modulesDigest(common, links, budget);
