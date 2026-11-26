@@ -72,3 +72,12 @@ test('a child started through the process manager sees none of the dropped names
   assert.deepEqual(child.record.droppedEnv, Object.keys(DROPPED).sort());
   assert.deepEqual([...child.record.keptEnv].sort(), [...KEPT_ENV].sort());
 });
+
+test('the runtime-name filter is a second wall: even when the allow list is widened to CLAUDECODE and ANTHROPIC_BASE_URL, they never reach the child', () => {
+  const source = sourceWith({ ...DROPPED, ...KEPT });
+  const widened = runtimeEnv(source, [...KEPT_ENV, 'CLAUDECODE', 'ANTHROPIC_BASE_URL']);
+  assert.equal('CLAUDECODE' in widened.env, false, 'CLAUDECODE must be dropped by the prefix filter');
+  assert.equal('ANTHROPIC_BASE_URL' in widened.env, false, 'ANTHROPIC_BASE_URL must be dropped by the prefix filter');
+  assert.deepEqual(Object.keys(widened.env).filter(name => /^(CLAUDE|ANTHROPIC_|CODEX_|OPENAI_)/iu.test(name)).sort(), [...KEPT_ENV].sort());
+  assert.ok(widened.dropped.includes('CLAUDECODE') && widened.dropped.includes('ANTHROPIC_BASE_URL'), 'both are listed as dropped');
+});

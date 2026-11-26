@@ -1,8 +1,9 @@
 // 外の実行役の置き場。種類（claude-code・codex）の名前は先に両方置いてあり、AR-4（Codex）・AR-5（Claude Code）は FACTORIES の自分の 1 行を埋めるだけ
 // 1 つの実行役が止まっていても・作れなくても、ほかの実行役と提供元の道には触らない（Approach 9）
 import { RUNTIME_KINDS, type AppConfig, type RuntimeConfig, type RuntimeKind } from '../config/schema.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import type { ProcessManager } from './process-manager.ts';
-import { permissionFor, type AgentRuntime, type RuntimeRequest, type RuntimeSession } from './types.ts';
+import { permissionFor, type AgentRuntime, type RuntimePermission, type RuntimeRequest, type RuntimeSession } from './types.ts';
 
 export interface RuntimeDeps {
   processes: ProcessManager;
@@ -18,7 +19,7 @@ export const FACTORIES: Readonly<Record<RuntimeKind, RuntimeFactory | undefined>
 };
 
 export type RuntimeLookup =
-  | { ok: true; runtime: AgentRuntime; permission: string }
+  | { ok: true; runtime: AgentRuntime; permission: RuntimePermission }
   | { ok: false; reason: 'unknown' | 'disabled' | 'not_built' | 'failed'; detail: string };
 
 export class RuntimeUnavailable extends Error {
@@ -60,7 +61,7 @@ export class RuntimeRegistry {
         this.#built.set(id, built);
         this.#failed.delete(id);
       } catch (error) {
-        const detail = `Runtime "${id}" could not be set up: ${(error as Error).message}`;
+        const detail = redactSecrets(`Runtime "${id}" could not be set up: ${(error as Error).message}`);
         this.#built.delete(id);
         this.#failed.set(id, { key, detail });
         this.#deps.log(`[ERROR] ${detail}`);

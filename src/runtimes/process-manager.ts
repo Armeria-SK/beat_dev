@@ -28,14 +28,15 @@ export function keepRuntimeNames(env: Record<string, string>): Record<string, st
 
 // 子の環境。scrubEnv（許可した名前だけ・鍵らしい名前は落とす）に、実行役の名前の絞りを足す。
 // dropped は、落とした名前のうち記録に値するもの（鍵らしい名前と、4 つの接頭辞で始まる名前）。名前だけで、値は持たない
-export function runtimeEnv(source: NodeJS.ProcessEnv = process.env): { env: Record<string, string>; dropped: string[] } {
-  const env = keepRuntimeNames(scrubEnv(KEPT_ENV, source));
+// allow は試験のための口（既定は残す 3 つだけ）。広げても、keepRuntimeNames が 3 つ以外の実行役の名前を落とす
+export function runtimeEnv(source: NodeJS.ProcessEnv = process.env, allow: readonly string[] = KEPT_ENV): { env: Record<string, string>; dropped: string[] } {
+  const env = keepRuntimeNames(scrubEnv(allow, source));
   const dropped = Object.keys(source).filter(name => source[name] !== undefined && !(name in env) && (isDroppedPrefix(name) || isSecretName(name))).sort();
   return { env, dropped };
 }
 
 export class ProcessRefused extends Error {
-  readonly reason: 'args' | 'relative' | 'not_found' | 'launcher' | 'cwd' | 'aborted' | 'closed' | 'spawn';
+  readonly reason: 'args' | 'relative' | 'not_found' | 'launcher' | 'cwd' | 'aborted' | 'closed' | 'spawn' | 'line';
   constructor(reason: ProcessRefused['reason'], message: string) {
     super(message);
     this.name = 'ProcessRefused';
@@ -211,7 +212,9 @@ class ManagedProcess implements RuntimeProcess {
     })();
   }
 
+  // 1 行 1 メッセージ。改行を含む文字列は、別のメッセージ（承認の返事など）を作れてしまうので書かない
   writeLine(line: string): boolean {
+    if (/[\r\n]/u.test(line)) throw new ProcessRefused('line', 'A line written to a runtime cannot contain a line break');
     const stdin = this.child.stdin;
     return stdin !== null && stdin.writable ? stdin.write(`${line}\n`) : false;
   }
@@ -293,6 +296,8 @@ export class ProcessScope {
   spawn(spec: SpawnSpec): RuntimeProcess {
     if (this.#closed) throw new ProcessRefused('closed', 'The process scope is already closed');
     if (spec.signal?.aborted) throw new ProcessRefused('aborted', 'The process was stopped before it started');
+    // 作業フォルダは必ず呼ぶ側が絶対パスで決める。既定（beat 自身のフォルダ）に倒れない
+    if (typeof spec.cwd !== 'string' || !isAbsolute(spec.cwd)) throw new ProcessRefused('cwd', 'The working folder must be given as an absolute path');
     const { env, dropped } = runtimeEnv(spec.env ?? this.#options.env ?? process.env);
     const args = [...(spec.args ?? [])];
     checkArgs(args);
@@ -323,7 +328,9 @@ export class ProcessScope {
   }
 
   spawnForSdk(options: SdkSpawnOptions): SdkSpawnedProcess {
-    const managed = this.spawn({ file: options.command, args: options.args, cwd: options.cwd ?? process.cwd(), env: options.env, signal: options.signal }) as ManagedProcess;
+    // SDK は cwd を省けるが、省いた子が beat 自身のフォルダで動かないよう、省いた起動は断る
+    if (options.cwd === undefined) throw new ProcessRefused('cwd', 'The SDK did not give a working folder, so the runtime was not started');
+    const managed = this.spawn({ file: options.command, args: options.args, cwd: options.cwd, env: options.env, signal: options.signal }) as ManagedProcess;
     const child = managed.child;
     const listen = (method: 'on' | 'once' | 'off') => (event: 'exit' | 'error', listener: (...args: never[]) => void): void => {
       (child[method] as (name: string, handler: (...args: unknown[]) => void) => ChildProcess).call(child, event, listener as (...args: unknown[]) => void);

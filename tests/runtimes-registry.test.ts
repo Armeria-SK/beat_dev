@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { RUNTIME_KINDS, type RuntimeConfig, type RuntimeKind } from '../src/config/schema.ts';
-import { ProcessManager } from '../src/runtimes/process-manager.ts';
+import { ProcessManager, ProcessRefused } from '../src/runtimes/process-manager.ts';
 import { FACTORIES, RuntimeRegistry, RuntimeUnavailable, type RuntimeFactory } from '../src/runtimes/registry.ts';
-import { PERMISSIONS, permissionFor } from '../src/runtimes/types.ts';
+import { PERMISSIONS, permissionFor, type AgentRuntime, type RuntimeRequest } from '../src/runtimes/types.ts';
 import { FakeRuntime } from './helpers/fake-runtime.ts';
 import { tempDir } from './helpers.ts';
 
@@ -131,4 +132,44 @@ test('the window onto a runtime (fake runtime on a real child process): status, 
   assert.deepEqual(events, [{ type: 'text', delta: 'echo: hello' }, { type: 'done' }]);
   await fake.close(session.id);
   await assert.rejects(fake.approve(session.id, 'r1', 'accept'));
+});
+
+test('a factory that fails with a key in its message neither logs nor returns the key', () => {
+  const secret = 'sk-ant-api03-abcdef0123456789abcdef0123456789';
+  const s = setup({ codex: () => { throw new Error(`could not start with ${secret}`); } });
+  const found = s.registry.find({ runtimes: [runtime('cx', 'codex')] }, 'cx');
+  assert.equal(found.ok ? undefined : found.reason, 'failed');
+  assert.match(found.ok ? '' : found.detail, /could not be set up/u, 'the message is still useful');
+  assert.equal(found.ok ? '' : found.detail.includes(secret), false, 'the returned detail has no key');
+  assert.ok(s.lines.some(line => line.startsWith('[ERROR]') && line.includes('could not be set up')), 'the failure is logged');
+  assert.equal(s.lines.some(line => line.includes(secret)), false, 'the log has no key');
+});
+
+test('the permission a runtime is started with is a closed type: a value outside the list does not type-check, and find() hands out the already-narrowed one', () => {
+  const s = setup();
+  const found = s.registry.find({ runtimes: [runtime('cc', 'claude-code', { permission: 'bypassPermissions' })] }, 'cc');
+  assert.ok(found.ok);
+  const narrowed: 'default' | 'acceptEdits' | 'read-only' | 'workspace-write' = found.permission;
+  assert.equal(narrowed, 'default');
+  const neverCalled = (runtimeToStart: AgentRuntime, base: Omit<RuntimeRequest, 'permission'>): void => {
+    // @ts-expect-error bypassPermissions is not one of the permissions a runtime can be started with
+    void runtimeToStart.start({ ...base, permission: 'bypassPermissions' });
+    // @ts-expect-error an arbitrary string is not a permission either
+    void runtimeToStart.start({ ...base, permission: 'anything' as string });
+    void runtimeToStart.start({ ...base, permission: 'acceptEdits' });
+  };
+  assert.equal(typeof neverCalled, 'function');
+});
+
+test('when the process cannot be started, the fake runtime closes the job it opened (the template AR-4 and AR-5 copy does not leak a job helper)', async t => {
+  let opened = 0;
+  let closed = 0;
+  const job = { add: () => undefined, close: async () => { closed += 1; }, ended: Promise.resolve(), listens: async () => 'unknown' as const };
+  const processes = new ProcessManager({ log: () => undefined, openJob: async () => { opened += 1; return job; } });
+  t.after(() => processes.closeAll());
+  const fake = new FakeRuntime(runtime('cc', 'claude-code'), { processes });
+  const missing = join(tempDir(t), 'no-such-folder');
+  await assert.rejects(fake.start({ conversationId: 'c1', cwd: missing, permission: 'default', signal: new AbortController().signal }), (error: unknown) => error instanceof ProcessRefused && error.reason === 'cwd');
+  assert.equal(opened, 1);
+  assert.equal(closed, 1, 'the job was closed');
 });

@@ -56,7 +56,13 @@ export class FakeRuntime implements AgentRuntime {
   async start(request: RuntimeRequest): Promise<RuntimeSession> {
     this.starts.push(request);
     const scope = await this.#processes.open();
-    const process = scope.spawn({ file: globalThis.process.execPath, args: [FAKE_RUNTIME_SCRIPT, '--permission', request.permission, ...this.#extra], cwd: request.cwd, signal: request.signal });
+    let process: RuntimeProcess;
+    try {
+      process = scope.spawn({ file: globalThis.process.execPath, args: [FAKE_RUNTIME_SCRIPT, '--permission', request.permission, ...this.#extra], cwd: request.cwd, signal: request.signal });
+    } catch (error) {
+      await scope.finish();
+      throw error;
+    }
     const id = `fake-${this.#next += 1}`;
     this.#sessions.set(id, { scope, process });
     return { id };

@@ -1,15 +1,18 @@
 import type { RuntimeKind } from '../config/schema.ts';
 
 // 実行役ごとに選べる許可の設定（閉じた一覧。先頭が既定）。何でも通す設定・裏で別のモデルが判定する設定は出さない（PLAN.md「選べる許可の設定」）
-export const PERMISSIONS: Readonly<Record<RuntimeKind, readonly [string, ...string[]]>> = {
+export const PERMISSIONS = {
   'claude-code': ['default', 'acceptEdits'],
   codex: ['read-only', 'workspace-write'],
-};
+} as const satisfies Readonly<Record<RuntimeKind, readonly [string, ...string[]]>>;
 
-// 無い・知らない値は既定（先頭）に倒す。何でも通す側へは倒れない
-export function permissionFor(kind: RuntimeKind, value: string | undefined): string {
-  const allowed = PERMISSIONS[kind];
-  return value !== undefined && allowed.includes(value) ? value : allowed[0];
+// 選べる値の型。RuntimeRequest.permission がこの型なので、一覧に無い値（bypassPermissions など）は型の上で渡せない
+export type RuntimePermission = (typeof PERMISSIONS)[RuntimeKind][number];
+
+// 無い・知らない値は既定（先頭）に倒す。何でも通す側へは倒れない。実行役の作り手（AR-4・AR-5）は、受け取った値にもこれをもう一度通す
+export function permissionFor(kind: RuntimeKind, value: string | undefined): RuntimePermission {
+  const allowed: readonly RuntimePermission[] = PERMISSIONS[kind];
+  return allowed.find(permission => permission === value) ?? PERMISSIONS[kind][0];
 }
 
 // 実行役が自分でできること・できないこと。できないことは false と宣言させ、画面にそのまま出す
@@ -51,7 +54,7 @@ export interface RuntimeRequest {
   // 続きの会話の ID（実行役が持つもの）
   resume?: string;
   // 起こすたびに必ず渡す。レジストリが設定から決めて入れる（無い・知らない値は既定）
-  permission: string;
+  permission: RuntimePermission;
   signal: AbortSignal;
 }
 
