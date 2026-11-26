@@ -134,9 +134,9 @@ const SENDS: ReadonlyArray<readonly [string, Shell, 'allow' | 'ask' | 'deny'] | 
   ["xargs powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
   ["wsl powershell -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
 
-  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { \"Remove-Item victim.txt\" }'", 'powershell', 'ask'],
-  ["powershell -NoProfile -c 'foreach ($f in Get-ChildItem) {}; \"Remove-Item victim.txt\"'", 'powershell', 'ask'],
-  ["Start-Process powershell -ArgumentList '-NoProfile','-c','foreach ($f in Get-ChildItem) { \"Remove-Item victim.txt\" }' -Wait -NoNewWindow", 'powershell', 'ask'],
+  ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { \"Remove-Item victim.txt\" }'", 'powershell', 'deny'],
+  ["powershell -NoProfile -c 'foreach ($f in Get-ChildItem) {}; \"Remove-Item victim.txt\"'", 'powershell', 'deny'],
+  ["Start-Process powershell -ArgumentList '-NoProfile','-c','foreach ($f in Get-ChildItem) { \"Remove-Item victim.txt\" }' -Wait -NoNewWindow", 'powershell', 'deny'],
   ["powershell -NoProfile -Command 'foreach ($f in Get-ChildItem) { \"x\" }'", 'bash', 'ask'],
   ["powershell -NoProfile -PSConsoleFile x.psc1 -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
   ["powershell -NoProfile -ConfigurationName x -Command 'foreach ($f in Get-ChildItem) { $f.Name }'", 'bash', 'ask'],
