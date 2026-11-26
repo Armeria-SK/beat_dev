@@ -187,12 +187,12 @@ test('Gemini: 確かめ（probe）は /models に Bearer で尋ね、サーバ�
 
 test('Gemini: モデルの一覧は …/models に Bearer で尋ね、models/ の頭が付いて返っても付かなくても、チャットに使う名前（頭なし）で出す。ほかの提供元の名前は変えない', async () => {
   const seen: Array<{ url: string; headers: Record<string, string>; redirect: unknown }> = [];
-  const answer = (ids: string[]) => (async (input: Parameters<typeof fetch>[0], init: RequestInit = {}) => {
+  const answer = (ids: unknown[]) => (async (input: Parameters<typeof fetch>[0], init: RequestInit = {}) => {
     seen.push({ url: String(input), headers: { ...(init.headers as Record<string, string>) }, redirect: init.redirect });
     return Response.json({ data: ids.map(id => ({ id })) });
   }) as typeof fetch;
   const official = gemini(GEMINI_URL);
-  assert.deepEqual(await listProviderModels(official, { [ENV]: KEY }, answer(['models/gemini-a', 'gemini-b', 'models/gemini-b'])), { models: ['gemini-a', 'gemini-b'], truncated: false });
+  assert.deepEqual(await listProviderModels(official, { [ENV]: KEY }, answer(['models/gemini-a', 'gemini-b', 'models/gemini-b', 'models/', 'models/ ', 7])), { models: ['gemini-a', 'gemini-b'], truncated: false });
   assert.deepEqual(seen, [{ url: 'https://generativelanguage.googleapis.com/v1beta/openai/models', headers: { Accept: 'application/json', Authorization: `Bearer ${KEY}` }, redirect: 'error' }]);
   assert.deepEqual(await listProviderModels(gemini(GEMINI_URL, { server: 'generic' }), { [ENV]: KEY }, answer(['models/x'])), { models: ['models/x'], truncated: false });
 });
