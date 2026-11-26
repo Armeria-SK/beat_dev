@@ -18,7 +18,7 @@ import {
   type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
 import { findClaudeExecutable } from './executable.ts';
-import { answerFor, claudeMode, disallowedTools, isCodexPermission, KEPT_TOOLS, STOPPED_ANSWER, toolHooks, type ClaudePermissionMode } from './permissions.ts';
+import { answerFor, claudeMode, disallowedTools, isCodexPermission, KEPT_TOOLS, sessionOnlyUpdates, STOPPED_ANSWER, toolHooks, type ClaudePermissionMode } from './permissions.ts';
 import { apiKeyInUse, EventTranslator, MIN_CLAUDE_CODE_VERSION, safeText, VERIFIED_CLAUDE_CODE_VERSION, versionAtLeast, versionParts } from './protocol.ts';
 
 export interface ClaudeCodeSdk {
@@ -266,9 +266,10 @@ class ClaudeCodeRuntime implements AgentRuntime {
       // 同じ求めの ID が待っているあいだに、もう 1 つ来たら断る（答えは ID ごとに 1 回だけ）
       if (session.closed || session.pending.has(requestId)) { resolve(STOPPED_ANSWER); return; }
       // 「この返事のあいだ聞かない」の決まりが、聞かれた操作より広くなるとき（suppressAlwaysAllowRule）は、決まりを残す提案を使わない
-      session.pending.set(requestId, { input: toolInput, suggestions: options.suppressAlwaysAllowRule === true ? undefined : options.suggestions, resolve });
+      const suggestions = options.suppressAlwaysAllowRule === true ? undefined : options.suggestions;
+      session.pending.set(requestId, { input: toolInput, suggestions, resolve });
       options.signal.addEventListener('abort', () => { if (session.pending.delete(requestId)) resolve(STOPPED_ANSWER); }, { once: true });
-      session.events.push({ type: 'approval', requestId, tool: toolName, input: toolInput });
+      session.events.push({ type: 'approval', requestId, tool: toolName, input: toolInput, ...(sessionOnlyUpdates(suggestions).length > 0 ? { forReply: true as const } : {}) });
     });
     let query: Query | undefined;
     try {

@@ -322,3 +322,17 @@ test('ui/pending: Decided の行を開くと、却下の理由の全文と、実
   assert.equal(en['ui.pending.output'], 'Output');
   assert.equal(en['ui.pending.reasonGiven'], 'Reason');
 });
+
+test('ui/pending（AR-8a）: 実行役の求めの行: 種類のラベルは Runtime asks、タイルは Judge unsure と同じ形。決めた文は、許した・古くなった理由・「返事が終わるまで聞かない」を分けて言う', () => {
+  assert.equal(en[kindLabel('runtime')], 'Runtime asks');
+  assert.equal(kindTile('runtime'), 'unsure');
+  const runtime = (over: Partial<PendingAction>) => row({ kind: 'runtime', tool: 'claude-code:Write', ...over });
+  assert.deepEqual(outcomeOf(runtime({ status: 'answered', decided_at: 10 })), { kind: 'answered', at: 10, reply: false });
+  assert.deepEqual(outcomeOf(runtime({ status: 'answered', decided_at: 10, reject_reason: 'Allowed, and not asked again until the reply ends' })), { kind: 'answered', at: 10, reply: true });
+  assert.deepEqual(outcomeOf(runtime({ status: 'stale', decided_at: 10, reject_reason: 'The reply that asked for this ended before it was answered' })), { kind: 'runtimeClosed', at: 10, reason: 'The reply that asked for this ended before it was answered' }, '実行役の求めは「承認した」と言わない');
+  assert.deepEqual(outcomeOf(runtime({ status: 'stale', decided_at: 10, reject_reason: null })), { kind: 'runtimeClosed', at: 10, reason: null });
+  assert.deepEqual(outcomeOf(row({ status: 'stale', decided_at: 10, reject_reason: 'changed' })), { kind: 'closed', at: 10 }, 'ほかの種類は今までどおり');
+  assert.deepEqual(earlierQuery([runtime({ id: 4, status: 'answered', decided_at: 300 }), runtime({ id: 3, status: 'answered', decided_at: 200 })]), { before: 3 }, 'answered も決め終わった行');
+  const held = runtime({ title: 'Write a.txt', shown: 'Write a.txt\nhello', parts: { body: 'hello', cwd: null, extra: null } });
+  assert.deepEqual(actionView(held), { title: 'Write a.txt', inline: null, block: 'hello', cwd: null, extra: null }, '実行役が書く・動かす中身は下の枠に出す');
+});

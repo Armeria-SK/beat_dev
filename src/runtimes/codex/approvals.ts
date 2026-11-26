@@ -148,12 +148,12 @@ export class ApprovalTable {
           kind, itemId, command: text(p.command), cwd: text(p.cwd), reason: text(p.reason), actions,
           network: network ? { host: asString(network.host) ?? '', protocol: asString(network.protocol) ?? '' } : null,
         };
-        return this.#park(requestId, id, kind, undefined, 'commandExecution', input);
+        return this.#park(requestId, id, kind, undefined, 'commandExecution', input, kind === 'command' && !network);
       }
       case SERVER_REQUEST.fileChange: {
         if (!p || itemId === undefined) return bad();
         const input: FileChangeApprovalInput = { itemId, reason: text(p.reason), grantRoot: text(p.grantRoot), changes: this.#changes.get(itemId) ?? null };
-        return this.#park(requestId, id, 'fileChange', undefined, 'fileChange', input);
+        return this.#park(requestId, id, 'fileChange', undefined, 'fileChange', input, input.grantRoot === null);
       }
       case SERVER_REQUEST.permissions: {
         const permissions = asRecord(p?.permissions);
@@ -172,9 +172,9 @@ export class ApprovalTable {
     }
   }
 
-  #park(requestId: string, rpcId: RequestId, kind: ApprovalKind, requested: JsonObject | undefined, tool: string, input: unknown): Classified {
+  #park(requestId: string, rpcId: RequestId, kind: ApprovalKind, requested: JsonObject | undefined, tool: string, input: unknown, forReply = false): Classified {
     this.#pending.set(requestId, { requestId, rpcId, kind, requested });
-    return { approval: { type: 'approval', requestId, tool, input } };
+    return { approval: { type: 'approval', requestId, tool, input, ...(forReply ? { forReply: true as const } : {}) } };
   }
 
   // 持ち主の答えを Codex への返事にして、待ちから外す。知らない・もう答えた求めは断る（2 回めの答えは受け付けない）

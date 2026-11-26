@@ -290,6 +290,19 @@ test('a command approval reaches the owner as an event, and only the closed answ
   }
 });
 
+test('only a command without network access and a file change without a wider folder can be answered "do not ask again in this reply"', { timeout: 90_000 }, async t => {
+  const flagsOf = async (name: string): Promise<boolean[]> => {
+    const r = rig(t, name);
+    const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
+    await reply(r, {}, event => { seen.push(event); return 'decline'; });
+    return seen.map(event => event.forReply === true);
+  };
+  assert.deepEqual(await flagsOf('command-approval'), [true], 'a plain command');
+  assert.deepEqual(await flagsOf('network-and-stdin'), [false, false], 'network access and a line sent to a running command');
+  assert.deepEqual(await flagsOf('file-approval'), [false, true], 'a change that also asks for a whole folder, and one that does not');
+  assert.deepEqual(await flagsOf('permissions'), [false]);
+});
+
 test('an approval can be answered once: a second answer, an unknown id and an unknown answer are refused', { timeout: 60_000 }, async t => {
   const r = rig(t, 'command-approval');
   const session = await r.runtime.start(r.request());

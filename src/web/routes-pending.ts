@@ -55,8 +55,16 @@ export function registerPendingRoutes(router: Router, app: App): void {
     const id = idOf(params[0]);
     const body = req.headers['content-type'] === undefined ? {} : requireObject(await readJson(req));
     if (body.remember !== undefined && typeof body.remember !== 'boolean') throw domainProblem(400, 'invalid_field', new PendingError('invalid_remember'));
+    if (body.reply !== undefined && typeof body.reply !== 'boolean') throw domainProblem(400, 'invalid_field', new PendingError('invalid_reply'));
+    if (body.reply === true && body.remember === true) throw domainProblem(400, 'invalid_field', new PendingError('invalid_reply'));
     let row: PendingRow;
     try {
+      if (body.reply === true) {
+        const before = app.pending.view(id);
+        if (!before) throw new PendingError('not_found', { id });
+        if (before.status !== 'waiting') throw new PendingError('not_waiting', { id, status: before.status });
+        if (!before.runtime?.reply) throw new PendingError('reply_unavailable', { id });
+      }
       row = body.remember === true ? transaction(app.db, () => {
         const before = app.pending.row(id);
         if (!before) throw new PendingError('not_found', { id });
@@ -67,7 +75,7 @@ export function registerPendingRoutes(router: Router, app: App): void {
         return app.pending.claim(id);
       }) : app.pending.claim(id);
     } catch (error) { pendingProblem(error); }
-    app.replayPending(row);
+    app.replayPending(row, { reply: body.reply === true });
     sendJson(res, 202, { item: app.pending.view(id) });
   });
   router.add('POST', '/api/pending/:id/reject', async ({ req, res, params }) => {

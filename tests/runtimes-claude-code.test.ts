@@ -493,6 +493,27 @@ test('accept_for_reply returns only allow rules that stay inside this reply; use
   assert.deepEqual(report.answers[3], { behavior: 'allow', updatedInput: bash('echo hi') }, 'only a mode change on offer: a plain accept');
 });
 
+test('the approval event says it can be answered "do not ask again in this reply" only when a session-only rule is on offer (user, project and local settings never count)', async t => {
+  const sessionRule: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'session' };
+  const local: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'localSettings' };
+  const user: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'userSettings' };
+  const mode: PermissionUpdate = { type: 'setMode', mode: 'acceptEdits', destination: 'session' };
+  const report: Report = { answers: [] };
+  const s = setup(t, { script: approvalScript(report, [
+    { toolUseID: 'with-rule', suggestions: [local, sessionRule] }, { toolUseID: 'settings-only', suggestions: [local, user] },
+    { toolUseID: 'mode-only', suggestions: [mode] }, { toolUseID: 'none' }, { toolUseID: 'too-wide', suggestions: [sessionRule], suppress: true },
+  ]) });
+  const session = await s.start();
+  await s.runtime.send(session.id, { text: 'go' });
+  const flags: Record<string, boolean> = {};
+  await collect(s.runtime, session.id, async event => {
+    if (event.type !== 'approval') return;
+    flags[event.requestId] = event.forReply === true;
+    await s.runtime.approve(session.id, event.requestId, 'accept');
+  });
+  assert.deepEqual(flags, { 'with-rule': true, 'settings-only': false, 'mode-only': false, none: false, 'too-wide': false });
+});
+
 test('an approval is answered once; an unknown or already answered id, and a second ask with the same id while one waits, are refused', async t => {
   const report: Report = { answers: [] };
   const script: FakeScript = async function* (ctx) {

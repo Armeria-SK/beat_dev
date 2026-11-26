@@ -713,4 +713,40 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE conversations ADD COLUMN runtime_session TEXT;
   ALTER TABLE engine_runs ADD COLUMN runtime TEXT;
   `,
+  `
+  CREATE TABLE pending_actions_next (
+    id INTEGER PRIMARY KEY,
+    tool TEXT NOT NULL,
+    input TEXT NOT NULL,
+    shown TEXT NOT NULL,
+    masked INTEGER NOT NULL DEFAULT 0,
+    cwd TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('send', 'delete', 'hook', 'policy', 'owner', 'judge', 'judge_failed', 'runtime')),
+    reason TEXT NOT NULL,
+    checks TEXT NOT NULL DEFAULT '[]',
+    bind TEXT,
+    state TEXT,
+    files TEXT,
+    run_id TEXT NOT NULL,
+    run_kind TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    task_id TEXT,
+    project_id TEXT,
+    tainted INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('waiting', 'running', 'ran', 'failed', 'rejected', 'stale', 'cancelled', 'answered')),
+    reject_reason TEXT,
+    exit_code INTEGER,
+    output_preview TEXT,
+    full_ref TEXT,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    ran_at INTEGER
+  ) STRICT;
+  INSERT INTO pending_actions_next (id, tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, reject_reason, exit_code, output_preview, full_ref, created_at, decided_at, ran_at)
+  SELECT id, tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, reject_reason, exit_code, output_preview, full_ref, created_at, decided_at, ran_at FROM pending_actions;
+  DROP TABLE pending_actions;
+  ALTER TABLE pending_actions_next RENAME TO pending_actions;
+  CREATE INDEX ix_pending_actions_status ON pending_actions (status, created_at DESC);
+  CREATE INDEX ix_pending_actions_project ON pending_actions (project_id, status);
+  `,
 ];

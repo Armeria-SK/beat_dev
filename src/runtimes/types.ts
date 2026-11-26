@@ -103,7 +103,8 @@ export type RuntimeEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool_start'; id: string; name: string; input: unknown; nested?: true }
   | { type: 'tool_end'; id: string; output: string; isError: boolean; nested?: true }
-  | { type: 'approval'; requestId: string; tool: string; input: unknown }
+  // forReply: 実行役がこの求めに「この返事が終わるまで聞かない」の答えを返せる（Claude Code は session だけの聞かない決まりの提案があるとき、Codex は acceptForSession が効く求めのとき）
+  | { type: 'approval'; requestId: string; tool: string; input: unknown; forReply?: true }
   // 会話の途中で来た、状態の行に出す注意（Codex の windows/worldWritableWarning など）。会話は止まらない
   | { type: 'issue'; issue: RuntimeIssue }
   | { type: 'done' }

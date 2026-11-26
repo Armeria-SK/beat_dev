@@ -7,51 +7,12 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
 import { tempDir } from './helpers.ts';
+import { rig, SECRET } from './helpers/runtime-rig.ts';
 import { OK_STATUS, ScriptedRuntime, scriptedFactory, type Script } from './helpers/scripted-runtime.ts';
 
 // AR-7: 会話を外の実行役で動かす橋（src/engine/runtime-bridge.ts と ChatEngine の分かれ道）。実行役の本体は起こさず、台本どおりに出来事を返すにせものを使う
 
-const SECRET = 'zq-env-secret-value-7f3a9c1d5e';
 let n = 200;
-
-async function rig(t: Parameters<typeof startApp>[0], options: { permission?: string; kind?: 'claude-code' | 'codex'; env?: Record<string, string>; efforts?: string[]; providerVision?: boolean } = {}) {
-  const products = realpathSync.native(tempDir(t as never));
-  const holder: { current?: ScriptedRuntime } = {};
-  const kind = options.kind ?? 'claude-code';
-  const s = await startApp(t, {
-    models: [{ id: 'cc', runtime: kind, model: 'sonnet', vision: false, ...(options.efforts ? { efforts: options.efforts } : {}) }, fakeModel('m1', { vision: options.providerVision === true })],
-    configure: config => {
-      config.runtimes = [{ id: kind, kind, enabled: true, ...(options.permission ? { permission: options.permission } : {}) }];
-      config.routing.chat = ['cc', 'm1'];
-    },
-    runtimeFactories: { [kind]: scriptedFactory(holder) },
-    projectFolderExempt: [products],
-    runtimeStopGraceMs: 150,
-    env: options.env ?? { FAKE_KEY: SECRET },
-  });
-  assert.ok(s.app.runtimes.find(s.app.config(), kind).ok);
-  const runtime = holder.current!;
-  const product = async (name = 'prod', files: Record<string, string> = {}) => {
-    const root = join(products, name);
-    mkdirSync(root, { recursive: true });
-    for (const [rel, body] of Object.entries(files)) writeFileSync(join(root, rel), body);
-    const made = await s.json('/api/projects', 'POST', { root });
-    assert.equal(made.status, 201, JSON.stringify(made.body));
-    return { id: made.body.project.id as string, root };
-  };
-  const events: RunEvent[] = [];
-  s.app.bus.subscribe(entry => events.push(entry.event));
-  const check = async () => { const res = await s.json(`/api/runtimes/${kind}/check`, 'POST'); assert.equal(res.status, 200, JSON.stringify(res.body)); };
-  const send = async (conversation: string, text: string, extra: Record<string, unknown> = {}) => s.json(`/api/conversations/${conversation}/messages`, 'POST', { text, ...extra });
-  const turn = async (conversation: string, text: string, extra: Record<string, unknown> = {}) => {
-    const sent = await send(conversation, text, extra);
-    assert.equal(sent.status, 202, JSON.stringify(sent.body));
-    await settled(s.app, sent.body.runId);
-    return sent.body.runId as string;
-  };
-  const rows = (conversation: string) => s.app.conversations.messages(conversation, 100).map(r => r.message);
-  return { s, runtime, product, events, check, send, turn, rows, products };
-}
 
 const toolScript = (extra: Partial<{ input: unknown; output: string; isError: boolean }> = {}): Script => async feed => {
   feed.push({ type: 'text', delta: 'Looking. ' });
@@ -219,25 +180,25 @@ test('始められない確かめ（契約ではないログイン）は、会�
   assert.equal(blocked.runtime.starts.length, 0, 'a check that cannot start a conversation stops the reply before the runtime is started');
 });
 
-test('承認の求めが来たら、何も許さずに返事を止めて「承認の橋はまだ」を返す', async t => {
+test('承認の求めは、計画モードの会話では何も許さず持ち主にも聞かずに断る。返事は止まらず終わり、求めの中の鍵は会話にも行にも残らない', async t => {
   const r = await rig(t);
   const { id: projectId } = await r.product();
   await r.check();
   r.runtime.script = async feed => {
     feed.push({ type: 'text', delta: 'About to write. ' });
     feed.push({ type: 'approval', requestId: 'req-1', tool: 'Write', input: { file_path: 'x', content: SECRET } });
-    await feed.stopped;
+    await waitFor(() => r.runtime.approvals.length === 1, 'the request was answered');
     feed.done();
   };
   const conversation = uuid(++n);
   const runId = await r.turn(conversation, 'go', { projectId, modelId: 'cc' });
   const run = r.s.app.runs.get(runId)!;
-  assert.deepEqual({ ok: run.ok, kind: run.error_kind }, { ok: 0, kind: 'provider_error' });
-  assert.match(run.error_message!, /approval/u);
-  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'cancel' }], 'the request was answered with a decline, never an accept');
-  assert.ok(r.runtime.interrupts >= 1);
+  assert.deepEqual({ ok: run.ok, kind: run.error_kind, message: run.error_message }, { ok: 1, kind: null, message: null }, 'the reply is not failed any more');
+  assert.deepEqual(r.runtime.approvals, [{ requestId: 'req-1', decision: 'decline' }], 'the request was declined by beat, never accepted');
+  assert.equal(r.runtime.interrupts, 0);
   assert.ok(!JSON.stringify(r.rows(conversation)).includes(SECRET));
-  assert.equal((r.s.app.db.prepare('SELECT COUNT(*) AS c FROM pending_actions').get() as { c: number }).c, 0);
+  assert.equal((r.s.app.db.prepare('SELECT COUNT(*) AS c FROM pending_actions').get() as { c: number }).c, 0, 'a plan-mode conversation never asks the owner');
+  assert.ok(!r.s.logs.some(line => line.includes(SECRET)));
 });
 
 test('実行役が落ちた・失敗を返したら、画面にはっきり出る。理由の文の制御文字と鍵は消える', async t => {
@@ -639,27 +600,32 @@ test('実行役の道具が beat の道具と同じ名前・同じ形の入力�
   assert.equal(r.runtime.sent.length, 1);
 });
 
-test('承認の求めに答える・止める呼びかけが応えなくても、返事は待たされずに終わる。そのあいだに止めるボタンを押せば、止めた返事として終わる', async t => {
+test('求めを断る・止める呼びかけが応えなくても、返事は待たされずに終わる。持ち主の答えを待つあいだに止めるボタンを押せば、止めた返事として終わる', async t => {
   const r = await rig(t);
   const { id: projectId } = await r.product();
   await r.check();
   r.runtime.hang = { approve: true, interrupt: true };
-  r.runtime.script = async feed => { feed.push({ type: 'approval', requestId: 'req-1', tool: 'Write', input: {} }); };
+  r.runtime.script = async feed => {
+    feed.push({ type: 'approval', requestId: 'req-1', tool: 'Write', input: {} });
+    await waitFor(() => r.runtime.approvals.length === 1, 'the request was declined');
+    feed.done();
+  };
   const first = await r.send(uuid(++n), 'go', { projectId, modelId: 'cc' });
   await settled(r.s.app, first.body.runId);
   const ended = r.s.app.runs.get(first.body.runId)!;
-  assert.deepEqual({ ok: ended.ok, kind: ended.error_kind }, { ok: 0, kind: 'provider_error' });
-  assert.match(ended.error_message!, /approval/u);
-  assert.deepEqual([r.runtime.approvals.length, r.runtime.interrupts], [1, 1], 'the stop call is made even when the decline never returns');
+  assert.deepEqual({ ok: ended.ok, kind: ended.error_kind }, { ok: 1, kind: null }, 'the decline that never returns does not hold the reply');
+  assert.equal(r.runtime.approvals.length, 1);
   const gaveUp = r.s.logs.filter(line => /Gave up waiting/u.test(line));
-  assert.deepEqual(gaveUp.map(line => /to (.+) after/u.exec(line)?.[1]), ['decline the approval request', 'interrupt the reply'], 'each call that was not waited for to the end is logged, with what it was');
+  assert.deepEqual(gaveUp.map(line => /to (.+) after/u.exec(line)?.[1]), ['decline the approval request'], 'each call that was not waited for to the end is logged, with what it was');
   assert.ok(gaveUp.every(line => line.includes('claude-code') && line.includes('150 ms')), gaveUp.join('\n'));
 
-  const second = await r.send(uuid(++n), 'go again', { projectId, modelId: 'cc' });
-  await waitFor(() => r.runtime.approvals.length === 2, 'the second approval request was answered');
+  r.runtime.script = async feed => { feed.push({ type: 'approval', requestId: 'req-2', tool: 'Write', input: { file_path: 'x', content: 'y' } }); };
+  const second = await r.send(uuid(++n), 'go again', { projectId, modelId: 'cc', permissionMode: 'auto' });
+  await waitFor(() => (r.s.app.db.prepare("SELECT COUNT(*) AS c FROM pending_actions WHERE status = 'waiting'").get() as { c: number }).c === 1, 'the request waits for the owner');
   assert.equal(r.s.app.engine.stop(second.body.runId), true);
   await settled(r.s.app, second.body.runId);
-  assert.equal(r.s.app.runs.get(second.body.runId)!.error_kind, 'cancelled', 'a reply the owner stopped ends as stopped, not as an approval failure');
+  assert.equal(r.s.app.runs.get(second.body.runId)!.error_kind, 'cancelled', 'a reply the owner stopped ends as stopped');
+  assert.equal((r.s.app.db.prepare("SELECT status FROM pending_actions WHERE kind = 'runtime'").get() as { status: string }).status, 'stale', 'the request nobody can answer any more is closed');
   r.runtime.release();
 });
 

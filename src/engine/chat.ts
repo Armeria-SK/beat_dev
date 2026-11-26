@@ -50,6 +50,7 @@ import { gateText } from '../shared/messages/gate.ts';
 import type { RunBus } from './bus.ts';
 import type { RuntimeChecks } from '../runtimes/checks.ts';
 import type { RuntimeRegistry } from '../runtimes/registry.ts';
+import type { RuntimeApprovals } from './runtime-approvals.ts';
 import { runRuntimeTurn, runtimeFolder, runtimePreflight, type RuntimeRefusal, type RuntimeTurnDeps } from './runtime-bridge.ts';
 import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_TOOL_RESULTS, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, clearFloor, compactOutputTokens, contextAvailable, ownerWordsTokens, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
@@ -256,6 +257,8 @@ export interface ChatEngineDeps {
   runtimes?: { registry: RuntimeRegistry; checks: RuntimeChecks } | undefined;
   // 止めると言ってから、実行役の終わりの知らせを待つ時間（ミリ秒）。試験で短くするためだけの上書き。ふつうは 15 秒
   runtimeStopGraceMs?: number | undefined;
+  // 実行役の承認の求めの待ちの控え（AR-8a）。無ければ、実行役の承認の求めは全部断る
+  runtimeApprovals?: RuntimeApprovals | undefined;
 }
 
 
@@ -1144,7 +1147,7 @@ export class ChatEngine {
 
   #bridge(): RuntimeTurnDeps {
     const d = this.#d;
-    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs };
+    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs, pending: d.tools?.pending, approvals: d.runtimeApprovals };
   }
 
   // 実行役の道で、発言を保存して返事を始める。何かを書く前に、製品・作業フォルダ・実行役の確かめを見て、断れるものは断る（何も保存しない）

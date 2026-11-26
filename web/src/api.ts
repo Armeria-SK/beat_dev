@@ -63,8 +63,8 @@ export interface Project {
   doc_language?: string | null;
   doc_language_pinned?: boolean;
 }
-export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
-export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
+export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed' | 'runtime';
+export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled' | 'answered';
 export interface PendingFact { path: string; exists: boolean; type?: 'file' | 'dir' | 'link' | 'other'; size?: number; mtime?: number; files?: number; newest?: number; more?: boolean }
 export interface PendingAction {
   id: number; tool: string; title?: string | null; shown: string; parts?: { body: string | null; cwd: string | null; extra: string | null }; masked: number; held?: string[]; oldPreview?: true; kind: PendingKind; reason: string;
@@ -74,6 +74,8 @@ export interface PendingAction {
   status: PendingStatus; reject_reason: string | null; exit_code: number | null; output_preview: string | null;
   created_at: number; decided_at: number | null; ran_at: number | null;
   rule?: { shown: string; push?: true; outside?: true } | null;
+  // 外の実行役からの求めのとき: reply = 「この返事が終わるまで聞かない」を出せる
+  runtime?: { id: string; reply: boolean } | null;
 }
 export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingKind, number>>; notParked: number; ruled?: Record<string, number> }
 export interface ApprovalRule { id: number; project_id: string; project_name: string | null; archived: boolean; kind: 'judge' | 'send' | 'delete' | 'policy'; tool: string; shown: string; created_at: number; push?: true; outside?: true }
@@ -129,7 +131,7 @@ export interface NewProject { root: string; name?: string; checkCommand?: string
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
-export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' };
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' } | { by: 'guard'; key: string } | { by: 'owner'; id: number; allowed: boolean };
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
@@ -451,7 +453,7 @@ export const api = {
   pending: (query: PendingQuery) =>
     call<{ items: PendingAction[] }>(`/api/pending?status=${query.status}${inProject(query.project, '&')}${query.before === undefined ? '' : `&before=${query.before}`}${query.earlier ? '&earlier=1' : ''}`),
   pendingCounts: () => call<PendingCounts>('/api/pending/counts'),
-  approvePending: (id: number, remember = false) => call<{ item?: PendingAction }>(`/api/pending/${id}/approve`, { method: 'POST', body: remember ? '{"remember":true}' : '{}' }),
+  approvePending: (id: number, remember = false, reply = false) => call<{ item?: PendingAction }>(`/api/pending/${id}/approve`, { method: 'POST', body: remember ? '{"remember":true}' : reply ? '{"reply":true}' : '{}' }),
   approvalRules: () => call<{ items: ApprovalRule[] }>('/api/approval-rules'),
   removeApprovalRule: (id: number) => call<{ removed: number }>(`/api/approval-rules/${id}`, { method: 'DELETE' }),
   rejectPending: (id: number, reason: string) => call<{ item?: PendingAction }>(`/api/pending/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
