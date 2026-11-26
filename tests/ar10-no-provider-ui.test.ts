@@ -42,9 +42,15 @@ test('setupRuntimeConfig: 提供元のモデルが無いとき、実行役を入
   assert.equal(bare().models.length, 0, 'the input is not changed');
 });
 
-test('setupRuntimeConfig: 提供元のモデルがあるときは会話の順番に触らない。切ってあった実行役の行は同じ id のまま入れ直す', () => {
+test('setupRuntimeConfig: 提供元のモデルがあっても、いま選んだ実行役のモデルが会話の順番の先頭に来る（提供元のモデルは後ろ。裏の順番は触らない）。切ってあった実行役の行は同じ id のまま入れ直す', () => {
   const owned = setupRuntimeConfig(withProvider(), { kind: 'codex', model: 'gpt-x' });
-  assert.deepEqual(owned.config.routing, withProvider().routing, 'a provider model keeps the order it had');
+  assert.deepEqual(owned.config.routing, { chat: [owned.modelId, 'm1'], background: ['m1'], retriesPerModel: 0 }, 'the runtime first, the provider models after it; the background order is not touched');
+  assert.doesNotThrow(() => parseConfig(owned.config));
+  const emptyOrder = setupRuntimeConfig({ ...withProvider(), routing: { chat: [], background: [], retriesPerModel: 0 } }, { kind: 'codex', model: 'gpt-x' });
+  assert.deepEqual(emptyOrder.config.routing.chat, [emptyOrder.modelId, 'm1'], 'an empty order meant "every provider model": it stays so, after the runtime');
+  const other = setupRuntimeConfig(owned.config, { kind: 'claude-code', model: 'sonnet' });
+  assert.deepEqual(other.config.routing.chat, [other.modelId, 'm1'], 'a second runtime choice replaces the first one at the head');
+  assert.deepEqual(setupRuntimeConfig(owned.config, { kind: 'codex', model: 'gpt-x' }).config, owned.config, 'choosing the same thing again changes nothing');
   assert.equal(owned.config.runtimes[0].enabled, true);
   const off = { ...bare(), runtimes: [{ id: 'cc', kind: 'claude-code', enabled: false, permission: 'acceptEdits' }] };
   const back = setupRuntimeConfig(off, { kind: 'claude-code', model: 'opus' });
@@ -77,6 +83,18 @@ test('はじめの設定の取り直し: 実行役を試したあとで提供元
   assert.doesNotThrow(() => parseConfig(provider.config));
   const second = setupModelConfig(provider.config, modelFormOf({ ...emptyConnect('openai'), model: 'gpt-x', context: '32768' }), null);
   assert.deepEqual(second.config.routing.chat, [provider.modelId, second.modelId], 'with a provider model already there the order is kept and the new one goes last');
+});
+
+test('はじめの設定の取り直し（逆の順）: 先に提供元のモデルを試して、そのあと実行役を選んで通ると、会話の順番の先頭は実行役になる（提供元のモデルは後ろに残る）', () => {
+  const provider = setupModelConfig(bare(), modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'rejected' }), null);
+  assert.deepEqual(provider.config.routing.chat, [provider.modelId]);
+  const runtime = setupRuntimeConfig(provider.config, { kind: 'claude-code', model: 'sonnet' });
+  assert.equal(runtime.config.routing.chat[0], runtime.modelId, 'the last choice is the default of the conversations');
+  assert.deepEqual(runtime.config.routing.chat, [runtime.modelId, provider.modelId]);
+  assert.deepEqual(runtime.config.routing.background, [provider.modelId], 'the background stays on the provider model');
+  assert.doesNotThrow(() => parseConfig(runtime.config));
+  const back = setupModelConfig(runtime.config, modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'k' }), provider.modelId);
+  assert.deepEqual(back.config.routing.chat, [runtime.modelId, provider.modelId], 'trying the same provider model again keeps the order (the runtime was chosen last)');
 });
 
 test('はじめの設定の入力: 選べる「つなぐもの」に実行役が入り、実行役はモデル名だけで足りる（鍵・URL・長さは要らない）', () => {

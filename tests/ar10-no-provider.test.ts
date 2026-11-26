@@ -235,6 +235,28 @@ test('はじめの設定の印: 会話の既定になる実行役（会話の順
   assert.equal(await step(), true, 'with the usable runtime first in the chat order, the step is met');
 });
 
+test('はじめの設定の印: 会話の順番の先頭が実行役のモデルなら、後ろに提供元のモデルがあっても、その実行役の確かめで決まる（先頭が使えないのに印が付かない）。先頭が提供元のモデルなら、提供元のモデルがあるだけで付く', async t => {
+  const holder: { current?: ScriptedRuntime } = {};
+  const s = await startApp(t, {
+    models: [{ ...PROVIDER_MODEL }, { ...MODEL } as never],
+    configure: config => { config.runtimes = [{ id: 'claude-code', kind: 'claude-code', enabled: true }] as never; config.routing = { chat: [MODEL.id, 'm1'], background: ['m1'], retriesPerModel: 0 }; },
+    runtimeFactories: { 'claude-code': scriptedFactory(holder) },
+    env: {},
+  });
+  const step = async () => (await s.json('/api/onboarding', 'GET')).body.steps.model as boolean;
+  const check = async () => { const res = await s.json('/api/runtimes/claude-code/check', 'POST'); assert.equal(res.status, 200, JSON.stringify(res.body)); };
+  assert.equal(await step(), false, 'the runtime is first and was never checked: a provider model behind it does not count');
+  await check();
+  assert.equal(await step(), true, 'the runtime is first and usable');
+  holder.current!.status = { ...OK_STATUS, auth: 'login_required' };
+  await check();
+  assert.equal(await step(), false, 'signed out: the conversations would go to the runtime, so the step is not met');
+  const config = structuredClone((await s.json('/api/settings', 'GET')).body.config) as Json;
+  config.routing.chat = ['m1'];
+  assert.equal((await s.json('/api/settings', 'PUT', { config })).status, 200);
+  assert.equal(await step(), true, 'a provider model first: the provider model is what counts');
+});
+
 test('調べものの断りの順番: 提供元が無いときは、元の会話が実行役に結ばれていても「提供元が要る」が先（実行役の会話だから、は提供元がある場合の話）', async t => {
   const r = await bare(t);
   await r.enable();

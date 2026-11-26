@@ -1,5 +1,5 @@
 import type { App } from '../app.ts';
-import { enabledRuntimeModels, providerModels } from '../config/schema.ts';
+import { enabledRuntimeModels, isRuntimeModel, providerModels } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { candidateModelIds } from '../engine/chat.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
@@ -30,6 +30,11 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     const check = first && app.runtimeChecks.get(first.runtime);
     return check !== undefined && usableCheck(check.status);
   };
+  // 会話の既定（会話の順番の先頭）が実行役のモデルなら、その実行役の確かめで決まる（後ろに提供元のモデルがあっても、先頭が使えなければ会話は始まらない）。そうでなければ、提供元のモデルがあるか
+  const modelConnected = (config: ReturnType<App['config']>): boolean => {
+    const first = config.models.find(model => model.id === candidateModelIds(config, 'chat')[0]);
+    return first !== undefined && isRuntimeModel(first) ? usableRuntime(config) : providerModels(config).length > 0;
+  };
   const state = () => {
     const config = app.config();
     const flags = app.kv.getJson<StepFlags>(STEPS_KEY) ?? {};
@@ -42,7 +47,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     const done = app.kv.get(DONE_KEY) !== undefined || (!started && usedAlready);
     return {
       done,
-      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: providerModels(config).length > 0 || usableRuntime(config) },
+      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: modelConnected(config) },
     };
   };
 
