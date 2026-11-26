@@ -70,8 +70,18 @@ async function say(s: Awaited<ReturnType<typeof startApp>>, conversationId: stri
 
 test('テンプレート: PowerShell の制限モードで動かない書き方を避けるよう、基本ルールとシェルの道具の説明に書いてある', t => {
   const real = paths(t);
-  assert.match(readTemplate(real, 'rules'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## What you do not do/u);
+  assert.match(readTemplate(real, 'rules'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n/u);
   assert.match(shellRun.description, /constrained mode, so do not use \.NET type syntax \([^)]*\[pscustomobject\]/u);
+});
+
+test('テンプレート: PowerShell では rm -rf が引数のエラーになるので、Remove-Item -Recurse -Force を使うと基本ルールの「When you use the shell」に書いてある', t => {
+  const shell = /## When you use the shell\r?\n\r?\n((?:- [^\r\n]*\r?\n)+)/u.exec(readTemplate(paths(t), 'rules'))?.[1] ?? '';
+  assert.match(shell, /^- In PowerShell, `rm -rf <path>` fails with an argument error: delete with `Remove-Item -Recurse -Force <path>`\r?$/mu);
+});
+
+test('テンプレート: 製品の記憶は製品のフォルダのファイルではなく、file_list や file_read でなく mesh_read で読むと基本ルールの「What you remember」に書いてある', t => {
+  const remember = /## What you remember\r?\n\r?\n((?:- [^\r\n]*\r?\n)+)/u.exec(readTemplate(paths(t), 'rules'))?.[1] ?? '';
+  assert.match(remember, /^- In a product, its memory notes are not files in the product folder, so file_list and file_read do not find them: read one with mesh_read \(memory\/<name>\.md, the names in the MESH index\)\r?$/mu);
 });
 
 test('テンプレート: 基本ルールの「How you speak」に、道具を使う前に何をするかを 1 文で言い、長く使ったあとは見つけたことを 1 行で言うと書いてある', t => {

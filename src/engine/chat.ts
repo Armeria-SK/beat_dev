@@ -66,6 +66,7 @@ import { plainLine, stripHidden } from '../shared/plain-text.ts';
 import { compactPrompt, compactRequest, compactSpeaker, compactSystem, composeSummary, hasSummarySections, quoteOwner, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, buildTail, fenceTail, isFencedTail, nextTail, recordFileVersions, requirementsText, type TailSent } from './workspace.ts';
 import { instructionsBudget, instructionsSection, readInstructions } from '../projects/instructions.ts';
+import { languageName } from '../projects/build.ts';
 import { ownWords, stripAttachments } from '../uploads/store.ts';
 import type { RunJob } from '../os/run-job.ts';
 
@@ -1753,7 +1754,8 @@ export class ChatEngine {
     // dynamic は実行のあいだ変わらない部分だけ（日付まで）。時刻・Checklist・裏のコマンドは tail へ（S1。dynamic が変わると後ろの履歴が全部書き直しになる）
     const now = d.now?.() ?? new Date();
     const fence = this.#fence(p.runId, p.conversationId);
-    const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
+    const owner = p.kind === 'task' && config.ui.explainLanguage !== 'auto' ? engineText(language, 'run.owner_language', { language: languageName(config.ui.explainLanguage) }) : '';
+    const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), owner, deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
     const sections = { checklist, background, product: productStatus, build };
     const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
     const apiTools = specs;

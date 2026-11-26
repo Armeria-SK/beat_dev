@@ -15,10 +15,14 @@ const RUN_ID = /^[0-9a-f-]{36}$/u;
 const ITEM_ID = /^A-[1-9]\d{0,3}$/u;
 const MAX_MARKED_RUNS = 20;
 
+export function languageName(tag: string): string {
+  try { return new Intl.DisplayNames('en', { type: 'language' }).of(tag) ?? tag; } catch { return tag; }
+}
+
 export const BUILD_BODY = (docLanguage: string | null, only?: readonly string[], language?: string | null): string => [
   'Build the product as planned. Read the plan with mesh_read("plan.md") and the acceptance items with mesh_read("acceptance.json").',
   ...(only ? [`This build covers only the new or changed acceptance items ${only.join(', ')}.`] : []),
-  ...(docLanguage ? [`Owner-facing notes go in ${docLanguage}.`] : []),
+  ...(docLanguage ? [`Owner-facing notes go in ${languageName(docLanguage)}.`] : []),
   ...(language ? [`Use ${language} for the product (the owner picked it before building; see DECISIONS.md).`] : []),
 ].join(' ');
 

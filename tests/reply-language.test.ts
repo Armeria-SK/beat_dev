@@ -74,6 +74,25 @@ test('返事の言語: 新しい会話の固定の system は英語のルール�
   assert.deepEqual(s.app.db.prepare(LANGUAGE_KV).all(), []);
 });
 
+test('説明の言語: ja・en にすると、タスクの実行の動的な部分に持ち主が読む言語の指示が付く。auto と、会話の実行には付かない', async t => {
+  for (const [choice, name] of [['ja', 'Japanese'], ['en', 'English'], ['auto', undefined]] as const) {
+    const s = await startApp(t, { configure: c => { c.ui.explainLanguage = choice; } });
+    s.adapter().scripts = [say('done'), say('こんにちは')];
+    const task = s.app.tasks.create({ title: 'Build the shop', origin: 'user', actor: 'user' });
+    const started = s.app.engine.runTask(task, s.app.conversations.create({ kind: 'task' }).id, 'Build the product as planned.');
+    assert.ok(started.ok, choice);
+    await started.done;
+    const dynamic = s.adapter().calls.at(-1)!.system.dynamic;
+    assert.ok(dynamic.includes(REPLY_DIRECTIVE), choice);
+    if (name === undefined) assert.doesNotMatch(dynamic, /The owner reads/u, choice);
+    else assert.match(dynamic, new RegExp(`^The owner reads ${name}: write everything the owner will read in ${name}, even if the task, the files or these instructions are in another language\\. That is the progress text between tool calls, the task_complete summary, notes and questions\\.`, 'mu'), choice);
+
+    const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'こんにちは' });
+    await settled(s.app, sent.body.runId);
+    assert.doesNotMatch(s.adapter().calls.at(-1)!.system.dynamic, /The owner reads/u, `${choice}: 会話の返事は持ち主が書いた言語のまま`);
+  }
+});
+
 test('古い設定: language（ja でも fr でも）は落とすだけで読め、ファイルは書き換えない', t => {
   for (const value of ['ja', 'fr']) {
     const parsed = parseConfig({ version: 1, server: {}, routing: {}, language: value });

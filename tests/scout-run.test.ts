@@ -166,6 +166,19 @@ test('scout loop: a scout run sends a scout, records the ledger and puts a propo
   assert.match(s.prompt(lead!), /OUTSIDE CONTENT/u);
 });
 
+test('scout language: the proposals follow the language the owner reads (named in the system prompt), the ledger stays English, and with Auto nothing names a language', async t => {
+  for (const [choice, name] of [['ja', 'Japanese'], ['auto', undefined]] as const) {
+    const s = await setup(t, { edit: c => { c.ui.explainLanguage = choice; } });
+    s.adapter().scripts.push(...loop());
+    assert.equal(await s.app.worker.tick(), 'ran');
+    const lead = s.adapter().calls[0]!;
+    assert.match(s.prompt(lead), /- Write the ledger in English\. Write each proposal's title and why in the language the owner reads \(the system prompt names it; English when it names none\)\./u, choice);
+    assert.doesNotMatch(s.prompt(lead), /ledger and proposals in English/u, choice);
+    if (name === undefined) assert.doesNotMatch(lead.system.dynamic, /The owner reads/u, choice);
+    else assert.match(lead.system.dynamic, new RegExp(`The owner reads ${name}: write everything the owner will read in ${name}`, 'u'), choice);
+  }
+});
+
 test('scout loop: the next run sees the checked area as seen, and a rejected proposal comes back with its reason', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(...loop());
