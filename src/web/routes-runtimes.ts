@@ -41,12 +41,14 @@ function checkView(check: RuntimeCheck | undefined): RuntimeView['check'] {
 }
 
 export function runtimeView(app: App, config: Pick<AppConfig, 'runtimes'>, runtime: Pick<RuntimeConfig, 'id' | 'kind'> & Partial<Pick<RuntimeConfig, 'enabled' | 'permission'>>, configured: boolean): RuntimeView {
-  const check = runtime.enabled === true ? app.runtimeChecks.get(runtime.id) : undefined;
+  const on = runtime.enabled === true;
+  const check = on ? app.runtimeChecks.get(runtime.id) : undefined;
+  const list = on ? app.runtimeChecks.models(runtime.id) : null;
   return {
     id: runtime.id, kind: runtime.kind, configured, enabled: runtime.enabled === true,
     permission: permissionFor(runtime.kind, runtime.permission), permissions: PERMISSIONS[runtime.kind],
     check: checkView(check),
-    models: check?.models ? check.models.map(model => ({ id: model.id, label: model.label ?? model.id, efforts: model.efforts ?? [] })) : null,
+    models: list ? list.map(model => ({ id: model.id, label: model.label ?? model.id, efforts: model.efforts ?? [] })) : null,
   };
 }
 
@@ -61,6 +63,15 @@ const REASON_KEY = { unknown: 'runtime_missing', disabled: 'runtime_off', not_bu
 
 const statusOf = (reason: RuntimeCheckFailure): number => (reason === 'unknown' ? 404 : reason === 'check_failed' || reason === 'failed' ? 502 : 409);
 
+// 確かめ・読み込みを待っているあいだに、実行役が切られた・入れる先が変えられたかもしれない。待ったあとの設定で結果を整理し（古い結果は捨てる）、その設定で答える
+function settle(app: App, id: string): RuntimeView {
+  const config = app.config();
+  app.status.refreshRuntimes(config);
+  const runtime = config.runtimes?.find(candidate => candidate.id === id);
+  if (!runtime || !runtime.enabled) throw problem(409, 'runtime_unavailable', 'runtime_off', { params: { id, reason: '' } });
+  return runtimeView(app, config, runtime, true);
+}
+
 export function registerRuntimeRoutes(router: Router, app: App): void {
   router.add('GET', '/api/runtimes', ({ res }) => sendJson(res, 200, { runtimes: runtimeViews(app, app.config()) }));
 
@@ -69,9 +80,7 @@ export function registerRuntimeRoutes(router: Router, app: App): void {
     const config = app.config();
     const outcome = await app.runtimeChecks.check(config, id);
     if (!outcome.ok) throw problem(statusOf(outcome.reason), 'runtime_unavailable', REASON_KEY[outcome.reason], { params: { id, reason: outcome.detail } });
-    app.status.refreshRuntimes(config);
-    const runtime = config.runtimes!.find(candidate => candidate.id === id)!;
-    sendJson(res, 200, runtimeView(app, config, runtime, true));
+    sendJson(res, 200, settle(app, id));
   });
 
   router.add('POST', '/api/runtimes/:id/models', async ({ res, params }) => {
@@ -79,8 +88,6 @@ export function registerRuntimeRoutes(router: Router, app: App): void {
     const config = app.config();
     const outcome = await app.runtimeChecks.loadModels(config, id);
     if (!outcome.ok) throw problem(statusOf(outcome.reason), 'runtime_unavailable', outcome.reason === 'check_failed' ? 'runtime_models_failed' : REASON_KEY[outcome.reason], { params: { id, reason: outcome.detail } });
-    app.status.refreshRuntimes(config);
-    const runtime = config.runtimes!.find(candidate => candidate.id === id)!;
-    sendJson(res, 200, runtimeView(app, config, runtime, true));
+    sendJson(res, 200, settle(app, id));
   });
 }

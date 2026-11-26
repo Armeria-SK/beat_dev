@@ -65,6 +65,7 @@ export function issueLine(t: T, issue: RuntimeIssue): string {
     case 'too_old': return t('ui.set.runtime.issueTooOldDesc', detail);
     case 'sandbox_not_ready': return t('ui.set.runtime.issueSandboxDesc', detail);
     case 'world_writable': return t('ui.set.runtime.issueWritableDesc', detail);
+    case 'writable_scan_failed': return t('ui.set.runtime.issueScanFailedDesc');
     case 'tools_unreviewed': return t('ui.set.runtime.issueToolsDesc', detail);
   }
 }
@@ -128,6 +129,7 @@ function RuntimeRow({ view, onView }: { view: RuntimeView; onView: (view: Runtim
             <Select value={permission} options={view.permissions.map(value => ({ value, label: PERM_LABEL[value] ? t(PERM_LABEL[value]!) : value }))} label={t('ui.set.runtime.permission')} disabled={busy}
               onChange={value => void ctx.commit(`${k}:permission`, c => updateRuntime(c, view, { permission: value }))} />
           </Row>
+          {view.kind === 'codex' && check?.installed && check.verified === false && <p className="bt-meta" data-runtime-readonly={view.kind}>{t('ui.set.runtime.readOnlyUnverifiedDesc')}</p>}
           {view.kind === 'claude-code' && <p className="bt-meta" data-runtime-note={view.kind}>{t('ui.set.runtime.claudeNoteDesc')}</p>}
           <Row k={`${k}:models`} title={t('ui.set.runtime.models')} desc={view.models !== null && view.models.length === 0 ? t('ui.set.runtime.noModelsDesc') : t('ui.set.runtime.modelsDesc')}
             below={loadFailed !== null && (

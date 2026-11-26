@@ -748,19 +748,25 @@ test('the model list process answers any permission ask with a stop, so nothing 
 
 test('probe reads the version and only the logged-in flag, and never returns the account details', async t => {
   const asks: string[][] = [];
-  let status = '{"loggedIn":true,"authMethod":"claude.ai","email":"someone@example.com","orgName":"Example Org"}';
+  let status = '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"someone@example.com","orgName":"Example Org"}';
   let version: string[] | undefined = ['2.1.331 (Claude Code)'];
   const s = setup(t, { options: { ask: async (file, args) => { asks.push([file, ...args]); return args[0] === '--version' ? version : [status]; } } });
-  assert.deepEqual(await s.runtime.probe(), { installed: true, version: '2.1.331', verified: true, auth: 'ok' });
+  assert.deepEqual(await s.runtime.probe(), { installed: true, version: '2.1.331', verified: true, auth: 'ok', login: 'subscription' });
   assert.deepEqual(asks, [[process.execPath, '--version'], [process.execPath, 'auth', 'status', '--json']]);
-  status = '{"loggedIn":true,"apiProvider":"firstParty","email":"someone@example.com"}';
-  const subscription = await s.runtime.probe();
-  assert.equal(subscription.login, 'subscription', 'apiProvider firstParty is the login shown as a subscription');
-  assert.ok(!JSON.stringify(subscription).includes('someone@example.com'));
-  status = '{"loggedIn":true,"apiProvider":"bedrock"}';
-  assert.equal((await s.runtime.probe()).login, 'other');
+  status = '{"loggedIn":true,"authMethod":"console","apiProvider":"firstParty","email":"someone@example.com"}';
+  const consoleLogin = await s.runtime.probe();
+  assert.equal(consoleLogin.login, 'other', 'firstParty names the API host, so a Console sign-in is not a subscription');
+  assert.ok(!JSON.stringify(consoleLogin).includes('someone@example.com'));
+  status = '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"bedrock"}';
+  assert.equal((await s.runtime.probe()).login, 'other', 'a cloud provider is not the subscription');
+  status = '{"loggedIn":true,"apiProvider":"firstParty"}';
+  assert.equal((await s.runtime.probe()).login, 'other', 'firstParty alone proves no subscription');
+  status = '{"loggedIn":true,"authMethod":"claude.ai"}';
+  assert.equal((await s.runtime.probe()).login, 'other', 'claude.ai alone, without the provider, proves no subscription');
   status = '{"loggedIn":true,"apiKeySource":"none"}';
-  assert.equal((await s.runtime.probe()).login, undefined, 'no apiKeySource guess: without apiProvider the kind of login is not said');
+  assert.equal((await s.runtime.probe()).login, 'other', 'signed in, but nothing says it is a subscription');
+  status = '{"loggedIn":false,"authMethod":"claude.ai","apiProvider":"firstParty"}';
+  assert.equal((await s.runtime.probe()).login, undefined, 'not signed in: no kind of login is said');
   version = ['2.1.400 (Claude Code)'];
   assert.equal((await s.runtime.probe()).verified, false, 'a newer body is not one beat has checked');
   version = ['2.1.331 (Claude Code)'];

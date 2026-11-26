@@ -116,12 +116,13 @@ test('turning a runtime on adds a turned-off-by-default row to the settings, the
 
 test('state line: installed + unchecked version + API-key login; not installed; signed out', async () => {
   const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), {
-    checks: { 'claude-code': { ...CHECKED, version: '2.1.400', verified: false, login: 'other' }, codex: { ...CHECKED, installed: false, version: null, auth: 'unknown', login: null, usable: false } },
+    checks: { 'claude-code': { ...CHECKED, version: '2.1.400', verified: false, login: 'other', usable: false }, codex: { ...CHECKED, installed: false, version: null, auth: 'unknown', login: null, usable: false } },
   });
   const c = await open(world);
   const claude = text(row(c, 'runtime:claude-code'));
   assert.match(claude, /Version 2\.1\.400 \(not a version beat has checked; it may still work\)/u);
-  assert.match(claude, /Signed in with an API key or another login, not a subscription/u);
+  assert.match(claude, /Signed in with an API key or another login, not a subscription\. beat does not use it/u);
+  assert.match(claude, /Not ready/u, 'a login that is not a subscription is not ready, as the server says it is not usable');
   assert.match(text(row(c, 'runtime:codex')), /Not installed, or not found on this computer/u);
   assert.match(text(row(c, 'runtime:codex')), /Not installed/u);
   world.checks.codex = { ...CHECKED, auth: 'login_required', login: null, usable: false };
@@ -134,7 +135,7 @@ test('state line: installed + unchecked version + API-key login; not installed; 
 test('what the check found is said under the row: unwritable folders, a sandbox that is not ready, a version that is too old, and the tools a conversation stopped on', async () => {
   const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), {
     checks: {
-      codex: { ...CHECKED, version: '0.172.0', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }, { code: 'world_writable', detail: 'C:/shared/a, C:/shared/b (+7)' }], usable: false },
+      codex: { ...CHECKED, version: '0.172.0', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }, { code: 'world_writable', detail: 'C:/shared/a, C:/shared/b (+7)' }, { code: 'writable_scan_failed' }], usable: false },
       'claude-code': { ...CHECKED, issues: [{ code: 'too_old', detail: '2.1.296' }], stop: { code: 'tools_unreviewed', detail: 'Foo, Bar' }, usable: false },
     },
   });
@@ -143,6 +144,7 @@ test('what the check found is said under the row: unwritable folders, a sandbox 
   assert.deepEqual(lines('codex'), [
     ['sandbox_not_ready', 'The Windows sandbox is not ready (updateRequired), so beat will not start a conversation yet'],
     ['world_writable', 'Folders the sandbox cannot protect: C:/shared/a, C:/shared/b (+7)'],
+    ['writable_scan_failed', 'The check for folders the sandbox cannot protect did not finish'],
   ]);
   assert.deepEqual(lines('claude-code').map(([code]) => code), ['too_old', 'tools_unreviewed']);
   assert.match(lines('claude-code')[1]![1]!, /tools beat has not reviewed \(Foo, Bar\)/u);
@@ -185,6 +187,21 @@ test('sign-in is only a pointer to the runtime itself, and there is no MCP warni
   assert.match(notes[0]![1]!, /agents, skills \(allowed-tools\), permissions\.allow and worktree settings still apply/u);
   assert.match(notes[0]![1]!, /sub-agent it starts never asks beat for approval/u);
   assert.match(notes[0]![1]!, /deny rules reach outside the working folder, or cover Grep and Glob, is not confirmed/u);
+});
+
+test('an unchecked Codex version says it starts read-only whatever the permission row shows; a checked version, a missing Codex and Claude Code say nothing of the kind', async () => {
+  const runtimes = [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true, permission: 'workspace-write' }];
+  const world = serve(base({ runtimes }), { checks: { 'claude-code': { ...CHECKED, version: '2.1.400', verified: false }, codex: { ...CHECKED, version: '0.199.0', verified: false } } });
+  const notesFor = async (): Promise<string[][]> => {
+    const { container } = await render(createElement(Settings, props()));
+    await settle(); await settle();
+    return [...container.querySelectorAll('[data-runtime-readonly]')].map(el => [el.getAttribute('data-runtime-readonly')!, text(el)]);
+  };
+  assert.deepEqual(await notesFor(), [['codex', 'This Codex version is not one beat has checked, so it starts read-only whatever is set above']], 'only Codex, and only for the unchecked version');
+  world.checks.codex = { ...CHECKED, version: '0.172.0', verified: true };
+  assert.deepEqual(await notesFor(), [], 'a version beat has checked starts with the permission that is set');
+  world.checks.codex = { ...CHECKED, installed: false, version: null, verified: false, auth: 'unknown', login: null, usable: false };
+  assert.deepEqual(await notesFor(), [], 'a Codex that is not installed has no version to speak of');
 });
 
 test('Check asks the server once and shows the new state', async () => {

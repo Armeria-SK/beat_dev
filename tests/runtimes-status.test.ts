@@ -99,6 +99,8 @@ test('the model state follows what the check found: not installed, signed out, u
     ['sandbox not ready', { installed: true, version: '0.172.0', verified: true, auth: 'ok', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }] }, 'error', 'runtime_blocked'],
     ['unwritable folders only warn', { installed: true, version: '0.172.0', verified: true, auth: 'ok', issues: [{ code: 'world_writable', detail: 'C:/x' }] }, 'ok', 'runtime_ok'],
     ['an unchecked version still works', { installed: true, version: '2.1.400', verified: false, auth: 'ok', login: 'subscription' }, 'ok', 'runtime_ok'],
+    ['a login that is not a subscription (API key, Console, cloud)', { installed: true, version: '2.1.331', verified: true, auth: 'ok', login: 'other' }, 'error', 'runtime_blocked'],
+    ['Codex signed in with an API key', { installed: true, version: '0.172.0', verified: true, auth: 'unknown', login: 'other' }, 'error', 'runtime_blocked'],
   ];
   for (const [label, status, expected, code] of cases) {
     const s = await start(t, plan(status));
@@ -106,6 +108,80 @@ test('the model state follows what the check found: not installed, signed out, u
     const probe = (await s.model()).probe;
     assert.deepEqual([probe.status, probe.messageCode], [expected, `provider.probe.${code}`], label);
   }
+});
+
+test('a login that is not a subscription is "not usable": the row says so and the model is blocked', async t => {
+  const s = await start(t, plan({ installed: true, version: '2.1.331', verified: true, auth: 'ok', login: 'other' }));
+  assert.equal((await s.check()).status, 200);
+  const check = (await s.rows())[0].check;
+  assert.deepEqual([check.auth, check.login, check.usable], ['ok', 'other', false]);
+  assert.equal(s.app.status.usable('cc'), false);
+  assert.equal((await s.model()).probe.messageCode, 'provider.probe.runtime_blocked');
+});
+
+test('loading models before any check keeps the list: the row and the model row show it, a save keeps it, and turning the runtime off forgets it', async t => {
+  const s = await start(t);
+  const loaded = await s.json(`/api/runtimes/${RT}/models`, 'POST');
+  assert.equal(loaded.status, 200);
+  assert.equal(loaded.body.check, null, 'nothing was checked');
+  assert.deepEqual(loaded.body.models.map((m: { id: string }) => m.id), ['sonnet', 'opus'], 'the answer still carries the list');
+  assert.deepEqual((await s.rows())[0].models, loaded.body.models, 'and it is remembered for the screen');
+  assert.deepEqual((await s.model()).efforts, ['low', 'high']);
+  await s.app.status.probeAll(s.app.config());
+  assert.equal((await s.rows())[0].models.length, 2, 'a settings save keeps the list');
+  await s.check();
+  assert.equal((await s.rows())[0].models.length, 2, 'a check keeps it too');
+  const config = (await s.json('/api/settings', 'GET')).body.config;
+  config.runtimes[0].enabled = false;
+  assert.equal((await s.json('/api/settings', 'PUT', { config })).status, 200);
+  assert.equal((await s.rows())[0].models, null);
+  assert.equal(s.app.runtimeChecks.models(RT), null);
+});
+
+test('a runtime turned off, or pointed at another program, while its check runs does not keep the result', async t => {
+  const settings = async (s: Awaited<ReturnType<typeof start>>, edit: (config: any) => void) => {
+    const config = (await s.json('/api/settings', 'GET')).body.config;
+    edit(config);
+    return s.json('/api/settings', 'PUT', { config });
+  };
+  const slow = async (change: (config: any) => void) => {
+    const p = plan();
+    let release = (): void => undefined;
+    p.hold = new Promise<void>(resolve => { release = resolve; });
+    const s = await start(t, p);
+    const pending = s.check();
+    for (let i = 0; i < 200 && p.probes === 0; i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(p.probes, 1, 'the check is running');
+    assert.equal((await settings(s, change)).status, 200);
+    release();
+    return { s, res: await pending };
+  };
+  const off = await slow(config => { config.runtimes[0].enabled = false; });
+  assert.deepEqual([off.res.status, off.res.body.code], [409, 'http.runtime_off']);
+  assert.equal(off.s.app.runtimeChecks.get(RT), undefined, 'no "ok" is kept for a runtime that was turned off');
+  assert.equal((await off.s.model()).probe.messageCode, 'provider.probe.runtime_off');
+  const moved = await slow(config => { config.runtimes[0].executablePath = process.execPath; });
+  assert.equal(moved.res.status, 200);
+  assert.equal(moved.res.body.check, null, 'the answer is about the runtime as it is now: not checked');
+  assert.equal(moved.s.app.runtimeChecks.get(RT), undefined, 'the result for the old program is not kept');
+  assert.equal((await moved.s.model()).probe.messageCode, 'provider.probe.runtime_unchecked');
+});
+
+test('text a runtime returns is cleaned before it is logged, kept or sent: control characters become ? and secrets are hidden', async t => {
+  const s = await start(t);
+  s.claude.failProbe = 'spawn\u0007 failed\u202E sk-ant-api03-abcdefghijklmnop';
+  const res = await s.check();
+  assert.equal(res.status, 502);
+  assert.ok(!/[\u0007\u202E]/u.test(res.body.message ?? ''), 'no control character in what the screen gets');
+  assert.ok(!(res.body.message ?? '').includes('abcdefghijklmnop'));
+  assert.ok(s.logs.some(line => line.includes('the check failed: spawn? failed?')), 'and the log has the cleaned text');
+  assert.ok(!s.logs.some(line => /[\u0007\u202E]/u.test(line)));
+  delete s.claude.failProbe;
+  s.claude.status = { installed: true, auth: 'unknown', reason: 'odd\u0007 reason\u202E' };
+  await s.check();
+  assert.ok(s.logs.some(line => line.includes('runtime claude-code: odd? reason?')), 'a reason the runtime gave is cleaned in the log');
+  s.app.runtimeChecks.report(RT, { code: 'tools_unreviewed', detail: 'Foo\u0007, Bar\u202E' });
+  assert.equal((await s.rows())[0].check.stop.detail, 'Foo?, Bar?');
 });
 
 test('a turned-off or unknown runtime is never started by Check or by loading models', async t => {

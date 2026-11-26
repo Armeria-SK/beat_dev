@@ -312,18 +312,14 @@ const PROBE_HANDLERS: ConnectionHandlers = {
   ended: () => undefined,
 };
 
-// windows/worldWritableWarning: 囲い（サンドボックス）が守れない、誰でも書けるフォルダの知らせ。状態の行に出すため、確かめのあいだだけ拾う。フォルダの名前を数件と、残りの数だけ短く残す
-function worldWritableCapture(onWarning: (detail: string) => void): ConnectionHandlers {
-  return {
-    ...PROBE_HANDLERS,
-    notification: (_conn, method, params) => {
-      if (method !== 'windows/worldWritableWarning') return;
-      const record = asRecord(params);
-      const sample = (Array.isArray(record?.samplePaths) ? record.samplePaths : []).flatMap(path => (typeof path === 'string' ? [safeLabel(path)] : [])).slice(0, 3);
-      const extra = typeof record?.extraCount === 'number' && Number.isFinite(record.extraCount) ? Math.max(0, Math.floor(record.extraCount)) : 0;
-      onWarning(`${sample.join(', ')}${extra > 0 ? ` (+${extra})` : ''}`);
-    },
-  };
+// windows/worldWritableWarning（囲い〔サンドボックス〕が守れない、誰でも書けるフォルダの知らせ）を、状態の行に出す注意にする。0.172.0 の型は samplePaths・extraCount・failedScan で、スレッドの番号は持たない。
+// いつ来るかは確かめていない（0.172.0 の本物の 1 往復では見えなかった）ので、確かめ（probe）では待たない。会話の中で来たときに、会話をつなぐ段が RuntimeChecks.report へ渡す。フォルダの名前は数件と、残りの数だけ短く残す
+export function worldWritableIssue(params: unknown): RuntimeIssue | undefined {
+  const record = asRecord(params);
+  const sample = (Array.isArray(record?.samplePaths) ? record.samplePaths : []).flatMap(path => (typeof path === 'string' ? [safeLabel(path)] : [])).slice(0, 3);
+  const extra = typeof record?.extraCount === 'number' && Number.isFinite(record.extraCount) ? Math.max(0, Math.floor(record.extraCount)) : 0;
+  if (sample.length > 0 || extra > 0) return { code: 'world_writable', detail: `${sample.join(', ')}${extra > 0 ? `${sample.length > 0 ? ' ' : ''}(+${extra})` : ''}` };
+  return record?.failedScan === true ? { code: 'writable_scan_failed' } : undefined;
 }
 
 async function readAccount(conn: CodexConnection): Promise<{ type: string | undefined; requiresLogin: boolean }> {
@@ -406,10 +402,8 @@ export class CodexRuntime implements AgentRuntime {
 
   async probe(): Promise<RuntimeStatus> {
     let opened;
-    let worldWritable: string | undefined;
-    const handlers = worldWritableCapture(detail => { worldWritable = detail; });
     try {
-      opened = await this.#open(tmpdir(), handlers);
+      opened = await this.#open(tmpdir(), PROBE_HANDLERS);
     } catch (error) {
       if (error instanceof CodexRefused) return { installed: error.reason !== 'not_installed', auth: 'unknown', reason: error.message };
       throw error;
@@ -425,7 +419,6 @@ export class CodexRuntime implements AgentRuntime {
         notes.push(`The Windows sandbox for Codex is not ready (${short(sandbox, 40)}), so beat will not start a conversation yet.`);
         issues.push({ code: 'sandbox_not_ready', detail: safeLabel(sandbox, 40) });
       }
-      if (worldWritable !== undefined) issues.push({ code: 'world_writable', ...(worldWritable ? { detail: worldWritable } : {}) });
       if (account.requiresLogin) notes.unshift('Codex is not signed in. Sign in with Codex itself.');
       else if (account.type !== 'chatgpt') notes.unshift(`Codex is signed in with ${short(account.type ?? 'an unknown method', 40)}, not with a ChatGPT subscription.`);
       const auth = account.requiresLogin ? 'login_required' : account.type === 'chatgpt' ? 'ok' : 'unknown';

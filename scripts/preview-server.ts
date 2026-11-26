@@ -132,7 +132,7 @@ function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
 // Claude Code answers as a checked version signed in with a subscription; Codex as an unchecked version with a Windows sandbox that is not ready.
 const PREVIEW_STATUS: Record<RuntimeConfig['kind'], RuntimeStatus> = {
   'claude-code': { installed: true, version: '2.1.331', verified: true, auth: 'ok', login: 'subscription' },
-  codex: { installed: true, version: '0.199.0', verified: false, auth: 'ok', login: 'subscription', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }, { code: 'world_writable', detail: 'C:/shared/a, C:/shared/b (+7)' }] },
+  codex: { installed: true, version: '0.199.0', verified: false, auth: 'ok', login: 'subscription', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }] },
 };
 const PREVIEW_MODELS: Record<RuntimeConfig['kind'], RuntimeModel[]> = {
   'claude-code': [{ id: 'sonnet', label: 'Sonnet', efforts: ['low', 'medium', 'high'] }, { id: 'opus', label: 'Opus', efforts: ['low', 'high'] }, { id: 'haiku', label: 'Haiku' }],

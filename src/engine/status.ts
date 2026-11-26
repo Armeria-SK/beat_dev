@@ -5,7 +5,7 @@ import type { ProbeResult } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import type { RuntimeChecks } from '../runtimes/checks.ts';
-import { BLOCKING_ISSUES } from '../runtimes/types.ts';
+import { startBlocked } from '../runtimes/types.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { contextAvailable, maxOutputFor, MEMORY_BUDGET_RATIO } from './context-budget.ts';
 
@@ -93,7 +93,7 @@ export class ModelStatus {
     const checked = this.#deps.runtimes?.get(model.runtime);
     const make = (status: ProbeResult['status'], code: 'no_runtime' | 'runtime_off' | 'runtime_unchecked' | 'runtime_missing' | 'runtime_login' | 'runtime_unknown' | 'runtime_blocked' | 'runtime_ok'): ProbeResult => {
       const params = { id: model.runtime };
-      const efforts = checked?.models?.find(entry => entry.id === model.model)?.efforts;
+      const efforts = this.#deps.runtimes?.models(model.runtime)?.find(entry => entry.id === model.model)?.efforts;
       return {
         modelId: model.id, status, server: runtime?.kind ?? '?', required: 0, message: providerText(language, `probe.${code}`, params), messageCode: `provider.probe.${code}`, messageParams: params,
         ...(efforts && efforts.length > 0 ? { efforts: [...efforts] } : {}), checkedAt: checked?.checkedAt ?? Date.now(),
@@ -105,7 +105,7 @@ export class ModelStatus {
     const { status } = checked;
     if (!status.installed) return make('not_found', 'runtime_missing');
     if (status.auth === 'login_required') return make('error', 'runtime_login');
-    if ((status.issues ?? []).some(issue => BLOCKING_ISSUES.has(issue.code))) return make('error', 'runtime_blocked');
+    if (startBlocked(status)) return make('error', 'runtime_blocked');
     return status.auth === 'ok' ? make('ok', 'runtime_ok') : make('unreachable', 'runtime_unknown');
   }
 

@@ -361,6 +361,8 @@ export const EXPLAIN_KEYS = [
   'ui.set.runtime.versionNewDesc',
   'ui.set.runtime.issueTooOldDesc',
   'ui.set.runtime.issueSandboxDesc',
+  'ui.set.runtime.issueScanFailedDesc',
+  'ui.set.runtime.readOnlyUnverifiedDesc',
   'ui.set.runtime.issueWritableDesc',
   'ui.set.runtime.issueToolsDesc',
   'ui.set.runtime.permNoteDesc',

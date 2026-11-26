@@ -162,7 +162,7 @@ export interface ModelView {
   efforts?: string[];
 }
 // 外の実行役（Claude Code・Codex）の 1 行。確かめは持ち主が押したときだけ起こす（check が null = まだ確かめていない）
-export type RuntimeIssueCode = 'too_old' | 'sandbox_not_ready' | 'world_writable' | 'tools_unreviewed';
+export type RuntimeIssueCode = 'too_old' | 'sandbox_not_ready' | 'world_writable' | 'writable_scan_failed' | 'tools_unreviewed';
 export interface RuntimeIssue { code: RuntimeIssueCode; detail?: string }
 export interface RuntimeView {
   id: string; kind: 'claude-code' | 'codex';

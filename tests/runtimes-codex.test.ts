@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeConfig } from '../src/config/schema.ts';
-import { checksWindowsSandbox, CodexRuntime, createCodexRuntime, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
+import { checksWindowsSandbox, CodexRuntime, createCodexRuntime, worldWritableIssue, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
 import { CodexRefused } from '../src/runtimes/codex/app-server.ts';
 import { wirePermission } from '../src/runtimes/codex/protocol.ts';
 import { ProcessManager } from '../src/runtimes/process-manager.ts';
@@ -531,10 +531,19 @@ test('probe: signed in + verified version is ok with no reason; an unchecked ver
   assert.match(sandbox.reason ?? '', /Windows sandbox for Codex is not ready \(updateRequired\)/u);
   assert.deepEqual(sandbox.issues, [{ code: 'sandbox_not_ready', detail: 'updateRequired' }]);
   assert.equal(ok.issues, undefined);
-  const writable = await rig(t, 'text', ['--world-writable']).runtime.probe();
-  assert.deepEqual(writable.issues, [{ code: 'world_writable', detail: 'C:/shared/a, C:/shared/b, C:/shared/c (+7)' }], 'the folders the sandbox cannot protect are kept short');
-  assert.equal(writable.auth, 'ok');
+  const odd = await rig(t, 'text', ['--readiness', 'update\u0007Required']).runtime.probe();
+  assert.deepEqual(odd.issues, [{ code: 'sandbox_not_ready', detail: 'update?Required' }], 'a control character in the state Codex reports comes out as ?');
   assert.ok(!JSON.stringify([ok, newer, loggedOut, apiKey, sandbox]).includes(ACCOUNT_EMAIL));
+});
+
+test('the world-writable warning becomes a short issue: a few folder names and the rest as a count, control characters as ?, and a failed scan on its own', () => {
+  assert.deepEqual(worldWritableIssue({ samplePaths: ['C:/shared/a', 'C:/shared/b', 'C:/shared/c', 'C:/shared/d'], extraCount: 7, failedScan: false }), { code: 'world_writable', detail: 'C:/shared/a, C:/shared/b, C:/shared/c (+7)' });
+  assert.deepEqual(worldWritableIssue({ samplePaths: ['C:/a\u202Eb'], extraCount: 0, failedScan: false }), { code: 'world_writable', detail: 'C:/a?b' });
+  assert.deepEqual(worldWritableIssue({ samplePaths: [], extraCount: 3, failedScan: false }), { code: 'world_writable', detail: '(+3)' });
+  assert.deepEqual(worldWritableIssue({ samplePaths: [], extraCount: 0, failedScan: true }), { code: 'writable_scan_failed' });
+  assert.equal(worldWritableIssue({ samplePaths: [], extraCount: 0, failedScan: false }), undefined);
+  assert.equal(worldWritableIssue(null), undefined);
+  assert.equal(worldWritableIssue({ samplePaths: [7, null, 'D:/x'], extraCount: 'many' })?.detail, 'D:/x', 'only strings are kept and a count that is not a number is ignored');
 });
 
 test('probe says "not installed" for a missing program or a .cmd launcher, and never starts a shell', { timeout: 60_000 }, async t => {
