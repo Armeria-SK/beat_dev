@@ -15,6 +15,8 @@ export interface SearchEngine {
   readonly provider: string;
   // 止められたときに一緒に休む先の名前（同じ仕組みで止める先。DuckDuckGo の html と lite）。無ければ id
   readonly restGroup?: string;
+  // true: 1 つのサイトの中だけを探す先（Wikipedia）。0 件でも「ウェブに無い」とは言えないので、empty は「0 件の結果」の根拠にしない
+  readonly narrow?: boolean;
   hosts(region: string): string[];
   readonly minIntervalMs: number;
   readonly maxPerHour: number;
