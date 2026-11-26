@@ -69,7 +69,8 @@
 .ui-find kbd { padding: 0 var(--space-1); border: 1px solid var(--line-strong); border-radius: var(--radius-xs); background: var(--surface-sunk); color: var(--ink-soft); font: 500 11px/16px var(--font-mono); }
 .ui-find__keys { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); flex: none; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); }
 .ui-find__keys > span { display: inline-flex; align-items: center; gap: var(--space-1); }
-@media (max-width: 760px) { .ui-find__scrim { padding: var(--space-3); } }
+.bt-modal.ui-find:focus { outline: none; }
+@media (max-width: 760px) { .ui-find__scrim { padding: var(--space-3); } .bt-modal.ui-find { border: 1px solid var(--line); border-radius: var(--radius-lg); } }
 @media (pointer: coarse) { .ui-find__keys { display: none; } }
 @media (pointer: coarse), (max-width: 760px) { .ui-find__row { min-height: 44px; } }
 

@@ -6,31 +6,39 @@ import { isComposing } from '../keys.ts';
 import type { UiIconName } from './icons.ts';
 import { Icon } from './parts.tsx';
 import { routeHash } from './routes.ts';
-import { SEARCH_TABS, searchNote, searchRows, stepIndex, stepTab, type SearchState, type SearchTab } from './search-state.ts';
+import { freshSearch, IDLE_SEARCH, SEARCH_TABS, searchNote, searchRows, stepIndex, stepTab, switchesTab, type HeldSearch, type SearchTab } from './search-state.ts';
 
 const TAB_LABEL = { all: 'ui.search.tabAll', conversations: 'ui.search.tabSessions', products: 'ui.search.tabProducts' } as const;
 
 interface Item { key: string; href: string; icon: UiIconName; title: string; snippet: string; meta: string | null; group: 'recent' | 'actions' | null }
 
-export function SearchModal({ products, conversations, onClose }: { products: readonly Project[]; conversations: readonly Conversation[]; onClose: (opened: boolean) => void }) {
+export interface SearchModalProps {
+  products: readonly Project[]; conversations: readonly Conversation[];
+  query: string; tab: SearchTab; onQuery: (query: string) => void; onTab: (tab: SearchTab) => void;
+  onClose: (opened: boolean, href?: string) => void;
+}
+
+export function SearchModal({ products, conversations, query, tab, onQuery, onTab, onClose }: SearchModalProps) {
   const t = useT();
   const uid = useId();
-  const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<SearchTab>('all');
-  const [at, setAt] = useState(0);
-  const [search, setSearch] = useState<SearchState>({ kind: 'idle' });
+  const [current, setCurrent] = useState<string | null>(null);
+  const [held, setHeld] = useState<HeldSearch>(IDLE_SEARCH);
   const field = useRef<HTMLInputElement>(null);
   const shut = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
+  useEffect(() => { field.current?.select(); }, []);
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setSearch({ kind: 'idle' }); return undefined; }
+    if (!q) { setHeld(IDLE_SEARCH); return undefined; }
     let live = true;
-    const timer = setTimeout(() => { void api.history(q).then(r => { if (live) setSearch({ kind: 'loaded', hits: r.hits }); }).catch(() => { if (live) setSearch({ kind: 'failed' }); }); }, 250);
+    const timer = setTimeout(() => {
+      void api.history(q).then(r => { if (live) setHeld({ query: q, state: { kind: 'loaded', hits: r.hits } }); }).catch(() => { if (live) setHeld({ query: q, state: { kind: 'failed' } }); });
+    }, 250);
     return () => { live = false; clearTimeout(timer); };
   }, [query]);
 
+  const search = freshSearch(held, query);
   const items = useMemo<Item[]>(() => {
     const recent = query.trim() === '' && tab !== 'products';
     const found = searchRows({ query, tab, state: search, conversations, projects: products }).map<Item>(r => (r.kind === 'product'
@@ -42,24 +50,32 @@ export function SearchModal({ products, conversations, onClose }: { products: re
       { key: 'a:product', href: routeHash({ view: 'newProduct' }), icon: 'plus', title: t('ui.product.new'), snippet: '', meta: null, group: 'actions' }];
   }, [query, tab, search, conversations, products, t]);
 
-  const active = items.length === 0 ? -1 : Math.min(at, items.length - 1);
+  const active = items.length === 0 ? -1 : Math.max(0, items.findIndex(item => item.key === current));
   const note = searchNote({ query, tab, state: search, rows: items.length });
   useEffect(() => { list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, items]);
 
-  const pickTab = (next: SearchTab) => { setTab(next); setAt(0); field.current?.focus(); };
+  const pickTab = (next: SearchTab) => { onTab(next); setCurrent(null); field.current?.focus(); };
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) return;
     const plain = !(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(false); }
+    if (e.key === 'Enter') {
+      if (plain && e.target === field.current && active >= 0) { e.preventDefault(); list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.click(); }
+    } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(false); }
     else if (e.key === 'Tab') { e.preventDefault(); (e.target === field.current ? shut.current : field.current)?.focus(); }
-    else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && plain) { e.preventDefault(); pickTab(stepTab(tab, e.key === 'ArrowRight' ? 1 : -1)); }
-    else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && plain) { e.preventDefault(); setAt(stepIndex(items.length, Math.max(active, 0), e.key === 'ArrowDown' ? 1 : -1)); }
-    else if (e.key === 'Enter' && plain && e.target === field.current && active >= 0) { e.preventDefault(); list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.click(); }
+    else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && plain) {
+      if (!switchesTab(e.key, e.target === field.current ? field.current : null)) return;
+      e.preventDefault();
+      pickTab(stepTab(tab, e.key === 'ArrowRight' ? 1 : -1));
+    } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && plain) {
+      e.preventDefault();
+      const next = items[stepIndex(items.length, Math.max(active, 0), e.key === 'ArrowDown' ? 1 : -1)];
+      if (next) setCurrent(next.key);
+    }
   };
 
   const row = (item: Item, i: number) => (
     <a key={item.key} id={`${uid}-o${i}`} role="option" aria-selected={i === active} tabIndex={-1} className="bt-side ui-find__row" href={item.href}
-      onMouseMove={() => { if (i !== active) setAt(i); }} onClick={() => onClose(true)}>
+      onMouseMove={() => { if (i !== active) setCurrent(item.key); }} onClick={() => onClose(true, item.href)}>
       <Icon name={item.icon} />
       <span className="bt-side__name">{item.title}{item.snippet && <span className="bt-meta ui-find__snippet">{item.snippet}</span>}</span>
       {item.meta && <span className="bt-meta ui-find__meta">{item.meta}</span>}
@@ -75,13 +91,13 @@ export function SearchModal({ products, conversations, onClose }: { products: re
 
   return createPortal(
     <div className="ui-overlay">
-      <div className="bt-scrim ui-find__scrim" onMouseDown={e => { if (e.target === e.currentTarget) onClose(false); }}>
-        <section className="bt-modal ui-find" role="dialog" aria-modal="true" aria-label={t('ui.search.open')} onKeyDown={onKeyDown}>
+      <div className="bt-scrim ui-find__scrim" onMouseDown={e => { if (e.target === e.currentTarget) { e.preventDefault(); onClose(false); } }}>
+        <section className="bt-modal ui-find" role="dialog" aria-modal="true" aria-label={t('ui.search.open')} tabIndex={-1} onKeyDown={onKeyDown}>
           <div className="ui-find__bar">
             <Icon name="search" />
             <input ref={field} className="bt-field" type="text" autoFocus value={query} role="combobox" aria-expanded="true" aria-controls={`${uid}-list`} aria-autocomplete="list"
               aria-activedescendant={active >= 0 ? `${uid}-o${active}` : undefined} aria-label={t('ui.search.field')} placeholder={t('ui.search.field')}
-              onChange={e => { setQuery(e.target.value); setAt(0); }} />
+              onChange={e => { onQuery(e.target.value); setCurrent(null); }} />
             <button ref={shut} type="button" className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost" aria-label={t('ui.search.close')} onClick={() => onClose(false)}><Icon name="x" /></button>
           </div>
           <div className="bt-tabs ui-find__tabs" role="tablist" aria-label={t('ui.search.tabs')}>

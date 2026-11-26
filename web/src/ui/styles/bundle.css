@@ -438,7 +438,7 @@
 .bt-side__home.has-waiting .bt-side__ov::after { content: ""; position: absolute; top: 0; right: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--pulse); border: 1px solid var(--surface-sunk); animation: bt-beat var(--dur-beat) var(--ease-calm) infinite; }
 @media (pointer: coarse) { .bt-side__ov { width: 36px; height: 36px; } }
 
-/* Modal: Settings only. A veil over the app, one floating sheet. */
+/* Modal: Settings and Search (the Search row's sheet, see SidebarItem). A veil over the app, one floating sheet. */
 @keyframes bt-veil { from { opacity: 0; } }
 @keyframes bt-modal-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
 .bt-scrim { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; padding: var(--space-5); }

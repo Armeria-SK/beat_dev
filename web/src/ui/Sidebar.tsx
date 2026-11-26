@@ -10,6 +10,7 @@ import { memoryHash, productNav } from './product-nav.ts';
 import { moreCount } from './products.ts';
 import { parseRoute, routeHash, type Route } from './routes.ts';
 import { SearchModal } from './SearchModal.tsx';
+import type { SearchTab } from './search-state.ts';
 import { SessionMenu } from './SessionMenu.tsx';
 
 export interface SidebarProps {
@@ -167,10 +168,19 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
   const { extra, rest, expand } = useMoreSessions(conversations);
   const nav = useMemo(() => productNav(projects, conversations, conversationsMore, extra, rest), [projects, conversations, conversationsMore, extra, rest]);
   const [finding, setFinding] = useState(false);
+  const [find, setFind] = useState<{ query: string; tab: SearchTab }>({ query: '', tab: 'all' });
   const findButton = useRef<HTMLButtonElement>(null);
   const refocus = useRef(false);
   useEffect(() => { if (!finding && refocus.current) { refocus.current = false; findButton.current?.focus(); } }, [finding]);
   const products = useMemo(() => nav.rows.map(row => row.project), [nav]);
+  const sessions = useMemo(() => [...nav.rows.flatMap(row => row.sessions), ...nav.none], [nav]);
+  const closeFind = (opened: boolean, href?: string) => {
+    const samePage = opened && href !== undefined && routeHash(parseRoute(location.hash)) === href;
+    const inDrawer = navRef.current?.closest('.is-drawer-open') != null;
+    refocus.current = !opened || (samePage && !inDrawer);
+    setFinding(false);
+    if (samePage && inDrawer) window.dispatchEvent(new HashChangeEvent('hashchange', { oldURL: location.href, newURL: location.href }));
+  };
   const navRef = useRef<HTMLElement>(null);
   const landing = useRef<{ id: string; seen: ReadonlySet<string> } | null>(null);
   useEffect(() => {
@@ -251,7 +261,7 @@ export function Sidebar({ state, route, foot, kanban, questions, pending, sessio
         <SideLink href="#/runs" icon="menu" name={t('ui.nav.runs')} active={at('runs')} />
         <SideLink href="#/archived" icon="archive" name={t('ui.nav.archived')} active={at('archived')} />
       </div>
-      {finding && <SearchModal products={products} conversations={conversations} onClose={opened => { refocus.current = !opened; setFinding(false); }} />}
+      {finding && <SearchModal products={products} conversations={sessions} query={find.query} tab={find.tab} onQuery={query => setFind(old => ({ ...old, query }))} onTab={tab => setFind(old => ({ ...old, tab }))} onClose={closeFind} />}
       <div className="bt-sidebar__foot">
         <span className="bt-side__name bt-meta">{footText(t, foot)}</span>
         <a className="bt-btn bt-btn--icon bt-btn--sm bt-btn--ghost bt-bell" href="#/notifications" aria-label={t('ui.bell', unread)} aria-current={at('notifications') ? 'page' : undefined}>
