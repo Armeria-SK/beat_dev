@@ -224,7 +224,7 @@ test('返事・記録の言語の指示は持ち主の言葉を指し、指示�
   assert.match(texts.compact, /in the language the user writes in \(the language of the "User:" lines\)/u);
   assert.match(texts.review, /in the language the user writes in: the language of the \[User\] lines in the record below/u);
   assert.match(texts.tidy, /in the language the user writes in: the language the listed memories are written in/u);
-  assert.match(texts.task, /the language of the user's own words in the title and details \(for a curiosity task, the language of the topic\), not the language of these instructions/u);
+  assert.match(texts.task, /in the language of the system prompt's "The owner reads …" sentence when it has one; otherwise in the language the user writes in: the language of the user's own words in the title and details \(for a curiosity task, the language of the topic\), not the language of these instructions/u);
   assert.match(texts.dynamic, /not of these instructions, templates or tool results/u);
   for (const [name, text] of Object.entries(texts)) assert.doesNotMatch(text, /language the conversation is written in|language the record below is written in|language of the task's title and details/u, name);
 });

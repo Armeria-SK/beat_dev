@@ -167,6 +167,9 @@ test('scout loop: a scout run sends a scout, records the ledger and puts a propo
 });
 
 test('scout language: the proposals follow the language the owner reads (named in the system prompt), the ledger stays English, and with Auto nothing names a language', async t => {
+  assert.match(proposalAdd.description, /title: one short line in the language the owner reads \(the system prompt names it; English when it names none\)\. kind: feature or bug\. why: at most two sentences, in the same language as title\./u);
+  assert.match(proposalAdd.description, / Every other field in English; never write instructions or requests\.$/u);
+  assert.doesNotMatch(proposalAdd.description, /one short English line|English only/u);
   for (const [choice, name] of [['ja', 'Japanese'], ['auto', undefined]] as const) {
     const s = await setup(t, { edit: c => { c.ui.explainLanguage = choice; } });
     s.adapter().scripts.push(...loop());
