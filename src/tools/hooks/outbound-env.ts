@@ -21,7 +21,10 @@ export interface GitOutboundOptions {
   gitExe: string;
   language?: Language;
   isCreated: (path: string) => boolean;
+  git?: GitRun;
 }
+
+export type GitRun = (dir: string, args: string[]) => string | undefined;
 
 interface RepoState { top: string; ok: ReadonlySet<string>; dirty: readonly string[] }
 
@@ -41,7 +44,7 @@ function filesUnder(dir: string): string[] | undefined {
   return out;
 }
 
-export function isolatedGit(options: { dataDir: string; env?: Env | undefined; gitExe: string; productRoot?: string | undefined }): (dir: string, args: string[]) => string | undefined {
+export function isolatedGit(options: { dataDir: string; env?: Env | undefined; gitExe: string; productRoot?: string | undefined }): GitRun {
   const base: Env = Object.fromEntries(Object.entries(options.env ?? process.env).filter(([k]) => !/^git_/iu.test(k)));
   const exe = options.gitExe;
   const trusted = (dir: string): boolean => isAbsolute(exe) && ![dir, ...(options.productRoot ? [options.productRoot] : [])].some(d => isInside(d, exe) || isInside(realish(d), realish(exe)));
@@ -54,8 +57,18 @@ export function isolatedGit(options: { dataDir: string; env?: Env | undefined; g
   };
 }
 
+// 同じ（フォルダ, 引数）の問い合わせは 1 回だけ動かし、答え（失敗も）を使い回す。1 回の振り分けごとに作り、次の振り分けには持ち越さない
+export function memoGit(git: GitRun): GitRun {
+  const seen = new Map<string, string | undefined>();
+  return (dir, args) => {
+    const key = JSON.stringify([dir, args]);
+    if (!seen.has(key)) seen.set(key, git(dir, args));
+    return seen.get(key);
+  };
+}
+
 export function gitOutboundEnv(options: GitOutboundOptions): OutboundEnv {
-  const git = isolatedGit(options);
+  const git = options.git ?? isolatedGit(options);
   let state: RepoState | null | undefined;
   const load = (): RepoState | null => {
     if (state !== undefined) return state;

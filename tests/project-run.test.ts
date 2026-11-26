@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -166,7 +167,7 @@ test('npm の作業フォルダの .npmrc（指摘 1）: npm が起動のとき�
   mkdirSync(join(u.root, 'sub', 'package.json'));
   assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'ask', 'package.json という名前のフォルダで止まらない');
   rmSync(join(u.root, '.npmrc'));
-  writeFileSync(join(u.root, '.npmrc'), `${'#'.repeat(1_100_000)}\nprefix=.\n`);
+  writeFileSync(join(u.root, '.npmrc'), `${'#'.repeat(1_100_000)}\nregistry=https://example.com/\n`);
   assert.equal(shellPreCheck({ command: 'npm -v' }, u.ctx()).decision, 'ask', '上限より大きい .npmrc は、中身を読み切らずに数える');
   rmSync(join(u.root, '.npmrc'));
   assert.equal(shellPreCheck({ command: 'npm -v' }, sub).decision, 'allow');
@@ -181,13 +182,41 @@ test('npm の .npmrc（3 回目の審査 3）: 持ち主のホームの .npmrc �
   const home = join(u.base, 'h');
   const cwd = join(home, 'proj');
   mkdirSync(cwd, { recursive: true });
-  writeFileSync(join(home, '.npmrc'), 'registry=https://example.com/\n');
+  writeFileSync(join(home, '.npmrc'), 'prefix=.\n');
   const npm = (env: Record<string, string | undefined>) => checkShellCommand('npm -v', cwd, { policy: u.policy, outsideRoots: 'ask', env }).decision;
   assert.equal(npm({ ...process.env, HOME: home }), 'allow', 'HOME の .npmrc は持ち主のもの');
   assert.equal(npm({ ...process.env, HOME: home.toUpperCase() }), WINDOWS ? 'allow' : 'ask', 'Windows では大文字小文字を区別しない');
   assert.equal(npm({ ...process.env, HOME: '' }), 'ask', 'HOME が空ならこの PC のホームで比べる');
   writeFileSync(join(u.base, '.npmrc'), 'prefix=.\n');
   assert.equal(npm({ ...process.env, HOME: home }), 'ask', 'ホームの上の階の .npmrc は数える');
+});
+
+const npmCmdAvailable = WINDOWS && spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'where npm.cmd'], { encoding: 'utf8' }).status === 0;
+const npmEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^npm_config_/iu.test(k)));
+
+test('npm の .npmrc（実機）: Windows の npm.cmd は、.npmrc の prefix（userconfig・globalconfig で指した先の prefix も）の先の npm-cli.js を npm -v でも動かす。守りはその .npmrc では npm -v を聞く。無害な .npmrc は聞かず、動かさない', { skip: !npmCmdAvailable && 'Windows の npm.cmd が無い' }, t => {
+  const rows: Record<string, { rc: string; rc2?: string; runs: boolean }> = {
+    prefix: { rc: 'prefix=.\n', runs: true },
+    userconfig: { rc: 'userconfig=./rc2\n', rc2: 'prefix=.\n', runs: true },
+    globalconfig: { rc: 'globalconfig=./rc2\n', rc2: 'prefix=.\n', runs: true },
+    'registry only': { rc: 'registry=https://registry.npmjs.org/\n', runs: false },
+  };
+  for (const [name, row] of Object.entries(rows)) {
+    const u = unit(t);
+    const marker = join(u.root, 'MARKER');
+    writeFileSync(join(u.root, '.npmrc'), row.rc);
+    if (row.rc2 !== undefined) writeFileSync(join(u.root, 'rc2'), row.rc2);
+    mkdirSync(join(u.root, 'node_modules', 'npm', 'bin'), { recursive: true });
+    writeFileSync(join(u.root, 'node_modules', 'npm', 'bin', 'npm-cli.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+    for (const command of ['npm -v', 'npm --version']) {
+      const check = shellPreCheck({ command }, u.ctx());
+      assert.equal(check.decision, row.runs ? 'ask' : 'allow', `${name}: ${command}`);
+      if (row.runs) assert.equal(check.askKinds?.includes('code'), true, `${name}: ${command}`);
+    }
+    const real = spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'npm.cmd -v'], { cwd: u.root, env: npmEnv(), encoding: 'utf8', windowsVerbatimArguments: true, timeout: 120_000 });
+    assert.equal(existsSync(marker), row.runs, `${name}: 実機の npm.cmd -v が、リポジトリの npm-cli.js を${row.runs ? '動かす' : '動かさない'}（status ${real.status}, stderr ${real.stderr.slice(0, 200)}）`);
+    if (!row.runs) assert.match(real.stdout.trim(), /^\d+\.\d+\.\d+/u, `${name}: 本物の npm のバージョンが出る`);
+  }
 });
 
 // ── 製品の実行（本物の App） ──

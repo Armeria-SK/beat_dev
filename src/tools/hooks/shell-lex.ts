@@ -694,7 +694,7 @@ const PS_METHOD_OK = new Set([
   'contains', 'indexof', 'lastindexof', 'padleft', 'padright', 'join', 'format',
 ]);
 // .Replace( は、呼ぶ先の値が文字列と分かるときだけ通す（FileInfo の Replace(先, 控え) は、先を上書きして元のファイルを消す）。
-// 結果が文字列のメソッド・値が文字列のプロパティ（Get-ChildItem の Name・FullName など）・引用符の文字列のあとの .Replace( は文字列の Replace。変数・括弧の値・ハッシュの中身には、値の種類が分からないので聞く
+// 結果が文字列のメソッド・値が文字列のプロパティ（Get-ChildItem の Name・FullName など）・環境変数 $env:名前（値がいつも文字列）・引用符の文字列のあとの .Replace( は文字列の Replace。変数・括弧の値・ハッシュの中身には、値の種類が分からないので聞く
 const PS_TEXT_METHODS = new Set(['tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'substring', 'padleft', 'padright']);
 const PS_TEXT_MEMBERS = new Set(['name', 'fullname', 'basename', 'extension', 'directoryname', 'pschildname', 'pspath', 'psparentpath']);
 const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
@@ -1077,7 +1077,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
   const operand = (depth: number, st: Statement): Word | LexFail | null => {
     const t = peek()!;
     // .メンバー・[添字] が続くと、値は計算されたもの（'a'.Replace(..) など）。元の文字ではないので、パスとして読めない印の $( … ) にする
-    if (t.t === 'var') { k++; if (t.v !== '?' && t.v.includes('?')) st.shapes.push(`expr:$${t.v}`); const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
+    if (t.t === 'var') { k++; if (t.v !== '?' && t.v.includes('?')) st.shapes.push(`expr:$${t.v}`); const start = k; const r = chain(depth, st, true, t.v.startsWith('env:') ? 'text' : 'object'); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
     if (t.t === 'str') {
       k++;
       const inner = stringSubs(t, depth);

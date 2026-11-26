@@ -314,6 +314,9 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
 // 札に出す文字。JSON.parse で本物になった制御文字・向きを変える文字・見えない文字を \uXXXX にして、行を見た目どおりに読めるようにする
 export const cardQuote = (text: string): string => JSON.stringify(text).replace(INVISIBLE, c => Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''));
 
+// 行の中でフォルダを変えたあとの npm run は、別の package.json のスクリプトなので、そこから先は追わない
+const CWD_CHANGERS: ReadonlySet<string> = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location']);
+
 // 名前のスクリプトの行（前後のフック pre<名前>・post<名前> と、行の中の npm run・npm test・npm start が呼ぶスクリプトも）。package.json に有るものだけで、無ければ空。「動かしそうな行」を見せるだけで、全部だとは言わない（全体は別の札にある）
 export function packageScriptView(packageText: string, names: readonly string[]): string[] {
   let table: unknown;
@@ -327,6 +330,7 @@ export function packageScriptView(packageText: string, names: readonly string[])
       if (typeof value !== 'string' || lines.has(key)) continue;
       lines.set(key, `${cardQuote(key)}: ${cardQuote(value)}`);
       for (const seg of segments(value)) {
+        if (CWD_CHANGERS.has(seg.cmd)) break;
         const called = packageScriptName(seg.cmd, seg.args);
         if (called !== undefined) add(called);
       }

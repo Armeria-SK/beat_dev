@@ -59,8 +59,8 @@ export interface MatchCtx {
   productEnvPath?: ((value: string) => boolean) | undefined;
 }
 
-// file: 読まれる設定ファイルの場所。unknownCwd: cd の先が分からず、調べられない
-export type ToolRc = { file: string } | { unknownCwd: true };
+// file: 読まれる設定ファイルの場所。harmless: npm だけ。読まれうる .npmrc がすべて無害な項目だけだと確かめられたとき true（無ければ聞く側）。unknownCwd: cd の先が分からず、調べられない
+export type ToolRc = { file: string; harmless?: boolean } | { unknownCwd: true };
 
 export interface CdUse { word: Word | null; maybe?: boolean }
 export interface StatementResult {

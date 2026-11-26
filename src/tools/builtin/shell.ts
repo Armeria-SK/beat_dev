@@ -14,9 +14,9 @@ import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
 import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
 import { isInterpreter, packageScriptName, packageScriptView, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
-import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
+import { checkShellCommand, type CheckedPath, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
-import { gitOutboundEnv, isolatedGit, ownerHooksPathSet } from '../hooks/outbound-env.ts';
+import { gitOutboundEnv, isolatedGit, memoGit, ownerHooksPathSet, type GitRun } from '../hooks/outbound-env.ts';
 import { productEnvPath, productEnvReader } from '../hooks/product-env.ts';
 import { productRunOf } from '../hooks/product-run.ts';
 import { judgeFilesOf } from '../judge-files.ts';
@@ -108,7 +108,7 @@ function childEnvFor(shell: AppConfig['tools']['shell'], cwd: string, powershell
 }
 
 // beat の作業ブランチがあるリポジトリで、それをまとめて送る・消しうる push（D-6・8-1 の申し送り）。git が動かせなければ見ない（push も同じ git で動く）
-function beatBranchPush(statements: readonly StatementFacts[], git: (dir: string, args: string[]) => string | undefined, cwd: string): string | undefined {
+function beatBranchPush(statements: readonly StatementFacts[], git: GitRun, cwd: string): string | undefined {
   const beat = git(cwd, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/heads/beat/']);
   if (!beat?.trim()) return undefined;
   const settings = git(cwd, ['config', '--get-regexp', '^(push\\.default|remote\\..*\\.mirror)$']) ?? '';
@@ -139,16 +139,28 @@ function previewOf(path: string, content: string): PreviewFile {
 
 const PACKAGE_PROGRAM = /^(?:npm|pnpm|yarn|bun)$/u;
 
-// package.json ごとに、「名前のスクリプトを動かすだけ」の呼び出し（npm run x・npm test・npm start。名前のあとに -- の引数だけ）が動かす名前
+// package.json ごとに、「名前のスクリプトを動かすだけ」の呼び出し（npm run x・npm test・npm start。名前のあとに -- の引数だけ）が動かす名前。
+// 同じ package.json に、名前を読めない呼び出し（npm install など、前後のフックも動く）が別にあれば、その package.json の分は出さない。
+// フォルダが決められない呼び出し・包んだコマンドの中の呼び出しがあれば、どの package.json のことか分からないので、何も出さない
 function scriptRuns(statements: readonly StatementFacts[]): Map<string, string[]> {
   const runs = new Map<string, string[]>();
-  for (const st of statements) {
-    if (st.cwd === null || !PACKAGE_PROGRAM.test(st.program)) continue;
-    const name = packageScriptName(st.program, st.words.slice(1).map(w => w.text));
-    if (name === undefined) continue;
-    const file = resolve(st.cwd, 'package.json');
-    runs.set(file, [...(runs.get(file) ?? []), name]);
-  }
+  const unread = new Set<string>();
+  let anywhere = false;
+  const visit = (list: readonly StatementFacts[], top: boolean): void => {
+    for (const st of list) {
+      if (PACKAGE_PROGRAM.test(st.program)) {
+        const name = top ? packageScriptName(st.program, st.words.slice(1).map(w => w.text)) : undefined;
+        if (st.cwd === null) anywhere = true;
+        else if (name === undefined) unread.add(resolve(st.cwd, 'package.json'));
+        else { const file = resolve(st.cwd, 'package.json'); runs.set(file, [...(runs.get(file) ?? []), name]); }
+      }
+      visit(st.inner ?? [], false);
+      visit(st.unknownInner ?? [], false);
+    }
+  };
+  visit(statements, true);
+  if (anywhere) return new Map();
+  for (const file of unread) runs.delete(file);
   return runs;
 }
 
@@ -188,10 +200,10 @@ function remotesOf(ctx: ToolContext): Remote[] | undefined {
   try { return parseRemotes(ctx.services?.projects?.get(ctx.project.id)?.remotes); } catch { return []; }
 }
 
-function shellOutbound(command: string, statements: readonly StatementFacts[], ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, language: Language, created: Set<string>): Outbound | undefined {
+function shellOutbound(command: string, statements: readonly StatementFacts[], ctx: ToolContext, env: Record<string, string>, gitExe: string | undefined, git: GitRun | undefined, language: Language, created: Set<string>): Outbound | undefined {
   if (!statements.length) return { kind: 'send', reason: outboundText(language, 'send.unknown_command', { cmd: command.trim().slice(0, 80) }), targets: [] };
   const outEnv = gitOutboundEnv({
-    productRoot: ctx.project?.root, remotes: remotesOf(ctx), dataDir: ctx.paths.data, env, gitExe: gitExe ?? '', language,
+    productRoot: ctx.project?.root, remotes: remotesOf(ctx), dataDir: ctx.paths.data, env, gitExe: gitExe ?? '', ...(git ? { git } : {}), language,
     ...(ctx.place && ctx.project?.root ? { workspaceRoots: [ctx.project.root] } : {}),
     isCreated: path => {
       let yes = false;
@@ -414,6 +426,30 @@ function rewritesOf(sts: readonly StatementFacts[], shown: ReadonlySet<string>):
   return run.inner === undefined ? undefined : rewritesOf(run.inner, shown);
 }
 
+const CD_PROGRAMS = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl', 'push-location']);
+const flatStatements = (list: readonly StatementFacts[]): StatementFacts[] => list.flatMap(st => [st, ...flatStatements(st.inner ?? [])]);
+
+// cd・pushd・Set-Location の行き先は入るだけのフォルダで、中を読むのは、あとの文が自分のパスで名前を出すものだけ。
+// 行き先を読むパスに数えると、積んだあとに行き先の中へ新しいファイルができただけで、cd sub && git push が「変わった」で止まる。
+// 引くのは、行き先が 1 つの素直な語（変数・ワイルドカード・~ ・旗でない）と決まる cd が、自分で paths に足した参照そのものだけ（statement.own）。
+// 行き先の分からない cd・許可の表に載らない書き方・フォルダを数え直した値は引かない（同じ場所を別の文が読む分と取り違えて、束縛が消える）
+function readPathsOf(paths: readonly CheckedPath[], statements: readonly StatementFacts[]): string[] {
+  const own = new Set<object>();
+  for (const st of flatStatements(statements)) {
+    if (!CD_PROGRAMS.has(st.program) || st.programDynamic || st.programOdd || st.inner || st.env.length) continue;
+    const args = st.words.slice(1);
+    const rest = args[0] && /^-(?:path|literalpath)$/iu.test(args[0].text) ? args.slice(1) : args;
+    const target = rest.length === 1 ? rest[0]! : undefined;
+    if (!target || target.dynamic || target.glob || /^[-~]/u.test(target.text)) continue;
+    for (const p of st.own ?? []) if (!p.write && p.input === target.text) own.add(p);
+  }
+  const read = new Set<string>();
+  for (const p of paths) if (p.path && !own.has(p)) read.add(p.path);
+  return [...read];
+}
+
+const once = <T>(fn: () => T): (() => T) => { let done = false; let value: T; return () => { if (!done) { value = fn(); done = true; } return value; }; };
+
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
   if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
@@ -424,6 +460,9 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const spec = resolveShell(shell.shell);
   const powershell = spec.name === 'powershell' || spec.name === 'pwsh';
   const { env: childEnv, gitIsolated, gitExe } = childEnvFor(shell, cwd.cwd, powershell);
+  // 1 回の振り分けの中の git の問い合わせは、同じものを 1 回だけ動かす（この呼び出しが終われば捨てる）
+  const git = gitExe ? memoGit(isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined })) : undefined;
+  const ownerHooks = once(() => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data));
   const checked = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
@@ -439,12 +478,10 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   // 作業コピーのタスクは、本体のフォルダ（作業コピーの外）を作業フォルダにして動かさない（files.ts の checkFilePath のシェル版）
   if (place && mainWrites([cwd.cwd], place).length) return { decision: 'deny', reasons: [guardText(language, WT_MAIN_PATH, { path: cwd.cwd })], reasonKeys: [WT_MAIN_PATH] };
   if (place && verdict.decision !== 'deny') {
-    const wtGit = gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: place.worktree }) : undefined;
-    const once = <T>(fn: () => T): (() => T) => { let done = false; let value: T; return () => { if (!done) { value = fn(); done = true; } return value; }; };
     const refused = worktreeGitRefusal(verdict.statements, {
       ...place, command: input.command, powershell,
-      remotes: once(() => wtGit?.(place.worktree, ['remote'])?.split(/\r?\n/u).map(line => line.trim()).filter(Boolean)),
-      sharedConfig: once(() => wtGit?.(place.worktree, ['config', '--list'])),
+      remotes: once(() => git?.(place.worktree, ['remote'])?.split(/\r?\n/u).map(line => line.trim()).filter(Boolean)),
+      sharedConfig: once(() => git?.(place.worktree, ['config', '--list'])),
     });
     if (refused !== undefined) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.cmd, path: refused.path ?? refused.cmd })], reasonKeys: [refused.key] };
     // git の文があるコマンドで、見張りが作業コピーの外（または決められない場所）を指すパスを見つけたら、git ごと断る（字句の読み違いの受け止め）
@@ -466,11 +503,11 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const paths = approvalPaths(verdict.paths);
   const pathsMore = approvalPathsMore(verdict.paths);
   const created = new Set<string>();
-  const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, ctx, childEnv, gitExe, language, created);
+  const outbound = verdict.decision === 'deny' ? undefined : shellOutbound(input.command, verdict.statements, ctx, childEnv, gitExe, git, language, created);
   const places = placesOf(verdict.statements, cwd.cwd);
   const pushes = pushesOf(verdict.statements, verdict.reasonKeys);
   if (input.background === true && pushes.length) return { decision: 'deny', reasons: [guardText(language, 'shell.background_push')] };
-  const beatPush = pushes.length && gitExe && verdict.decision !== 'deny' ? beatBranchPush(verdict.statements, isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }), cwd.cwd) : undefined;
+  const beatPush = pushes.length && git && verdict.decision !== 'deny' ? beatBranchPush(verdict.statements, git, cwd.cwd) : undefined;
   if (beatPush !== undefined) return { decision: 'deny', reasons: [guardText(language, WT_PUSH_BEAT, { cmd: beatPush })], reasonKeys: [WT_PUSH_BEAT] };
   // 直す実行（beat 8-6a D-11 の 1）: 裏のコマンド・push・通信・写しの外のパスは、判定役にも Pending にも回さずここで断る
   if (ctx.place?.kind === 'fix' && ctx.project?.root && verdict.decision !== 'deny') {
@@ -480,21 +517,21 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     });
     if (refused) return { decision: 'deny', reasons: [guardText(language, refused.key, { cmd: refused.detail })], reasonKeys: [refused.key] };
   }
-  const readPaths = [...new Set(verdict.paths.flatMap(p => (p.path ? [p.path] : [])))];
+  const readPaths = readPathsOf(verdict.paths, verdict.statements);
   const run = ctx.project?.root && verdict.decision === 'ask' ? productRunOf({
     root: ctx.project.root, verdict,
     which: (name, dir) => findExecutable(name, childEnv, dir, { powershell }),
-    git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project.root }) : () => undefined,
-    ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data),
+    git: git ?? (() => undefined),
+    ownerHooks,
   }) : undefined;
   const pushed = verdict.decision === 'ask' ? pushProtectOf({
     config: ctx.config, statements: verdict.statements, projectRoot: ctx.project?.root ?? undefined, productRoots: [],
-    git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }) : () => undefined,
+    git: git ?? (() => undefined),
   }) : undefined;
   const runFacts = pushed ? { ownerReason: 'files' in pushed ? pendingText('en', 'owner_protected_push', { files: pushed.files.join('; ') }) : pendingText('en', 'owner_push_unchecked') }
     : run && 'run' in run ? { productRun: run.run } : run && 'secret' in run ? { ownerReason: pendingText('en', 'owner_secret_commit', { path: run.secret }) }
     : run && 'secretMessage' in run ? { ownerReason: pendingText('en', 'owner_secret_message') } : {};
-  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...ruleShapeField(verdict.decision, verdict.statements, ctx.project?.root, outbound, { scripts: verdict.scripts, ownHooksDir: verdict.ownHooksDir, git: gitExe ? isolatedGit({ dataDir: ctx.paths.data, env: childEnv, gitExe, productRoot: ctx.project?.root ?? undefined }) : undefined, ownerHooks: () => !gitExe || ownerHooksPathSet(gitExe, ctx.paths.data), config: ctx.config }), ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(gitStagingOnly(verdict.statements) ? { gitStaging: true as const } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
+  const effects = { writes: verdict.writes, cwd: cwd.cwd, readPaths, ...ruleShapeField(verdict.decision, verdict.statements, ctx.project?.root, outbound, { scripts: verdict.scripts, ownHooksDir: verdict.ownHooksDir, git, ownerHooks, config: ctx.config }), ...(outbound ? { outbound } : {}), ...(places.length ? { places } : {}), ...(pushes.length ? { pushes } : {}), ...(gitStagingOnly(verdict.statements) ? { gitStaging: true as const } : {}), ...(created.size ? { created: [...created].sort() } : {}) };
   const codeTouch = verdict.decision === 'deny' ? undefined : installTouchOf(verdict.statements, ctx.policy, cwd.cwd);
   if (codeTouch && !verdict.onceOnly) return { decision: 'ask', reasons: [guardText(language, 'code.self_touch', { markers: codeTouch }), ...verdict.reasons], reasonKeys: ['code.self_touch', ...verdict.reasonKeys], details, paths, pathsMore, askKinds: [...new Set([...verdict.askKinds, 'code' as const])], ...(verdict.fetched ? { fetched: true } : {}), ...effects };
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, reasonKeys: verdict.reasonKeys, details, paths, pathsMore, ...(verdict.decision === 'ask' ? { askKinds: verdict.askKinds } : {}), ...(verdict.fetched ? { fetched: true } : {}), ...effects, ...runFacts };

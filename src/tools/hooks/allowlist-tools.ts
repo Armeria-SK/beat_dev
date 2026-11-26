@@ -620,7 +620,8 @@ function langInfo(name: string, words: Word[], acc: Acc, ctx: MatchCtx): void {
   const args = words.slice(1);
   if (name === 'npm') {
     const config = ctx.toolConfig?.('npm');
-    if (config) acc.add('once', 'file' in config ? 'list.npm_rc' : 'list.npm_rc_unknown', { cmd: 'npm', path: 'file' in config ? config.file : '' }, false);
+    const versionOnly = config !== undefined && 'file' in config && config.harmless === true && exactForm(words, [['--version'], ['-v']]);
+    if (config && !versionOnly) acc.add('once', 'file' in config ? 'list.npm_rc' : 'list.npm_rc_unknown', { cmd: 'npm', path: 'file' in config ? config.file : '' }, false);
   }
   const rest = args.map(w => w.text).join(' ');
   const installing = /^(?:npm|pnpm|yarn|bun)$/u.test(name)

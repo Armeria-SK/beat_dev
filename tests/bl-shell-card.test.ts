@@ -48,6 +48,12 @@ const PACKAGE = {
     missing: 'node nope.js',
     nul: `node a${String.fromCodePoint(0)}b.js`,
     bidi: `node a${String.fromCodePoint(0x202e)}b.js`,
+    go: 'echo ROOT-GO-MARKER',
+    cdrun: 'cd sub && npm run go',
+    cdpush: 'pushd sub; npm run go',
+    setloc: 'Set-Location sub; npm run go',
+    both: 'npm run x && cd sub && npm run go',
+    plainchain: 'npm run x && npm run go',
   },
 };
 
@@ -71,7 +77,7 @@ const FILES: Record<string, string> = {
   'packages/api/evil.js': "console.log('evil');\n",
 };
 
-const LIKELY = 'Likely to run (from the scripts in package.json; the whole file is below)';
+const LIKELY = 'Some of the lines likely to run, from the scripts in package.json. Other lines can run too (install hooks, tools that pick a script, other folders). The file itself is the next card';
 const SCRIPTS = '#scripts';
 const rel = (path: string): string => path.replaceAll('\\', '/').replace(/^.*\/workspace\//u, '');
 const cardOf = (pre: ReturnType<typeof shellPreCheck>) => (pre.preview ?? []).map(p => ({ abs: p.path, path: rel(p.path), text: p.text, truncated: p.truncated, chars: p.chars }));
@@ -94,17 +100,23 @@ const CLEAN: Array<[string, string[]]> = [
   ['yarn run serve', ['serve']],
   ['bun run serve', ['serve']],
   ['npm run loop', ['loop']],
-  ['npm run x; npm install', ['prex', 'x', 'postx']],
-  ['npm install; npm test', ['test']],
-  ['npm.ps1 install; npm test', ['test']],
   ['npm run release', ['release']],
   ['npm run bad', ['bad']],
+  ['npm run cdrun', ['cdrun']],
+  ['npm run cdpush', ['cdpush']],
+  ['npm run setloc', ['setloc']],
+  ['npm run both', ['both', 'prex', 'x', 'postx']],
+  ['npm run plainchain', ['plainchain', 'prex', 'x', 'postx', 'go']],
+  ['cd sub; npm install; cd ..; npm test', ['test']],
 ];
 const UNCERTAIN = [
   'npm install', 'npm run nosuch', 'npm run -s x', 'npm --silent run x', 'bun test', 'npm run',
   'npm test -w packages/api', 'npm run go --prefix sub', 'npm run go -C sub', 'npm run x --workspaces', 'npm run x --if-present', 'npm test --workspace=packages/api',
   'npm_config_prefix=sub npm run go', 'FOO=1 npm run x', '$env:npm_config_prefix = "sub"; npm test', '$env:FOO = "1"; npm run x',
   'time npm run x', 'bash -c "npm run x"', 'timeout 5 npm test', 'npx foo', 'corepack npm install',
+  // a call in the same folder whose script name cannot be read (install and its hooks, a flag, a variable) runs lines the card would not show
+  'npm run x; npm install', 'npm install; npm test', 'npm.ps1 install; npm test', 'npm test; npm install', 'npm ci && npm test', 'npm test; npm i', 'npm test; pnpm install', 'npm test; yarn',
+  'npm test; npm run x --if-present', 'npm test; npm run $NAME', 'npm run x; bash -c "npm install"', 'bash -c "npm install"; npm test', 'npm test; cd $D; npm install',
 ];
 // The shapes the reviews found: a wrapper that runs install hooks, tools that pick their own script, a bare nodemon, `node .` with main
 const REVIEWED: Array<[string, string]> = [
@@ -190,6 +202,13 @@ test('UX-10: control, format and line-separator characters in a script line are 
   assert.equal(cardQuote(`a${String.fromCodePoint(0x85)}b`), '"a\\u0085b"');
   assert.equal(cardQuote(`a${String.fromCodePoint(0xe0041)}b`), '"a\\udb40\\udc41b"');
   assert.equal(cardQuote('a"b\n'), '"a\\"b\\n"');
+});
+
+test('the label of the extra card does not say the lines are all of them, or sure', () => {
+  assert.match(LIKELY, /^Some of the lines likely to run/u);
+  assert.match(LIKELY, /Other lines can run too/u);
+  assert.doesNotMatch(LIKELY, /whole file is below|^Will run|^Likely to run/u);
+  assert.equal(guardText('en', 'card.likely'), LIKELY);
 });
 
 test('UX-10: the label of the extra card comes from the guard messages, not from text inside the card code', t => {
@@ -294,6 +313,17 @@ test('UX-10: through the pipeline, the waiting Pending row carries the extra car
   assert.equal(row!.preview[0]!.text, likely(line('prex'), line('x'), line('postx')));
   assert.equal(row!.preview[1]!.text, baseText(row!.preview[1]!.path));
   assert.deepEqual(r.ran, []);
+});
+
+test('a script line that changes folder first (cd, pushd, Set-Location, sl, Push-Location, popd) is followed no further: the next npm run is another package.json, not this one', t => {
+  const r = selfRunRig(t, undefined, FILES);
+  for (const command of ['npm run cdrun', 'npm run cdpush', 'npm run setloc']) {
+    const card = extraOf(cardOf(shellPreCheck({ command }, r.ctx)));
+    assert.equal(card.length, 1, command);
+    assert.ok(!card[0]!.text.includes('ROOT-GO-MARKER'), `${command}: the root go script is not what runs after the cd: ${card[0]!.text}`);
+  }
+  assert.deepEqual(extraOf(cardOf(shellPreCheck({ command: 'npm run both' }, r.ctx))).map(p => p.text), [likely(line('both'), line('prex'), line('x'), line('postx'))], 'what runs before the cd is still followed');
+  assert.ok(extraOf(cardOf(shellPreCheck({ command: 'npm run plainchain' }, r.ctx)))[0]!.text.includes('ROOT-GO-MARKER'), 'without a cd, the chain is followed as before');
 });
 
 test('UX-10: a script that calls itself shows its line once', t => {

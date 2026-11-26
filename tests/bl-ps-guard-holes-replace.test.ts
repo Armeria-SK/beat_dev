@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -163,15 +163,26 @@ test('実機（Windows PowerShell 5.1）L176: 辞書の中のファイルを $d.
   assert.equal(readFileSync(s.file('dest.txt'), 'utf8'), 'S');
 });
 
-// 文字列と分からない値は、今も聞く（$PWD.Path・括弧の結果・変数）。環境変数 $env:名前 は値がいつも文字列なので、通すのが目標
+// 文字列と分からない値は、今も聞く（括弧の結果・変数・文字列を返さない呼び出しのあと）。.Replace は文字列の道具なので、文字列と分かる値にだけ許す
 const STILL_ASK: readonly string[] = [
   `$PWD.Path.Replace('\\','/')`,
   `(Get-Location).Path.Replace('\\','/')`,
+  `$d = @{Path=(Get-Item a.txt)}; $d.Path.Replace('victim.txt','victim.bak')`,
   `$s.Replace('a','b')`,
   `(Get-Content a.txt -Raw).Replace('a','b')`,
+  `$x.Split(',').Replace('a','b')`,
+  `'a,b'.Split(',').Replace('a','b')`,
+  `$env:Path.Split(';').Replace('a','b')`,
+  `$env:Path.Trim().Split(';').Replace('a','b')`,
+  `$env:Path[0].Replace('a','b')`,
+  `(Get-Item a.txt).Replace('victim.txt','victim.bak')`,
+  `(Get-Item $env:TEMP\\a.txt).Replace('victim.txt','victim.bak')`,
+  `$f = Get-Item $env:TEMP\\a.txt; $f.Replace('victim.txt','victim.bak')`,
+  `Get-ChildItem $env:TEMP | ForEach-Object { $_.Replace('victim.txt','victim.bak') }`,
+  `$env:TEMP.Replace('victim.txt','victim.bak'); (Get-Item a.txt).Replace('victim.txt','victim.bak')`,
 ];
 
-test('L176: $PWD.Path・括弧の結果・変数の Replace は、文字列と分からないので聞く（shape.method）', t => {
+test('L176: $PWD.Path・(Get-Location).Path・変数・括弧の結果・Split() など文字列と分からない値のあとの Replace は聞く（shape.method）。変数に入れたハッシュの Path がファイルのこともある。$env: を通しても、この形は今のまま', t => {
   const wrong: string[] = [];
   for (const shell of ['powershell', 'pwsh'] as const) for (const command of STILL_ASK) {
     const v = verdictOf(command, shell, t);
@@ -180,19 +191,54 @@ test('L176: $PWD.Path・括弧の結果・変数の Replace は、文字列と�
   assert.deepEqual(wrong, []);
 });
 
+// $env:名前 の値はいつも文字列。.Path は通さない（変数に入れたハッシュの Path がファイルのことがあり、値の種類が分からない）
 const ENV_TEXT: readonly string[] = [
   `$env:USERPROFILE.Replace('\\','/')`,
   `$env:Path.Replace(';', ',')`,
   `$env:Path.Trim().Replace(';', ',')`,
+  `$env:Path.ToLower().Replace(';', ',')`,
+  `$ENV:TEMP.Replace('\\','/')`,
+  `Write-Output $env:USERPROFILE.Replace('\\','/')`,
 ];
 
-test('L176 の目標（未着手）: $env:名前 のあとの Replace は、環境変数の値がいつも文字列なので通る', { todo: 'shell-lex.ts の operand の var の枝を chain(depth, st, true, t.v.startsWith(\'env:\') ? \'text\' : \'object\') にする一行の直し' }, t => {
+test('L176: $env:名前（値がいつも文字列）のあとの Replace は確かめなしで通る（5.1・7）', t => {
   const wrong: string[] = [];
   for (const shell of ['powershell', 'pwsh'] as const) for (const command of ENV_TEXT) {
     const v = verdictOf(command, shell, t);
     if (v.decision !== 'allow') wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
   }
   assert.deepEqual(wrong, []);
+});
+
+test('L176: $env: を通しても、同じ文にあるファイルの Replace・動的な呼び出し・削除の引数は今も聞く', t => {
+  const asks: readonly string[] = [
+    `$env:Path.Replace('a','b'); (Get-Item a.txt).Replace('victim.txt','victim.bak')`,
+    `& $env:Path.Replace('a','b')`,
+    `Remove-Item $env:Path.Replace('a','b')`,
+  ];
+  const wrong: string[] = [];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of asks) {
+    const v = verdictOf(command, shell, t);
+    if (v.decision !== 'ask') wrong.push(`${shell}: ${command} -> ${v.decision} ${v.keys.join(',')}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('実機（Windows PowerShell 5.1）L176: 通すことにした $env:名前 は System.String で、Replace は文字を置き換えるだけ（ファイルは何も変わらない）。変数に入れたハッシュの Path は FileInfo で、Replace がファイルの Replace になる', { skip: SKIP }, t => {
+  const s = setup(t, 'ask');
+  s.seed();
+  const before = readdirSync(s.cwd).sort().join(',');
+  const run = (command: string) => spawnSync('powershell.exe', ['-NoProfile', '-Command', command], { cwd: s.cwd, encoding: 'utf8', env: { ...process.env, BL_PROBE: 'a\\b;c' } });
+  const typed = run(`$env:BL_PROBE.GetType().FullName`);
+  assert.equal(typed.stdout.trim(), 'System.String', typed.stderr);
+  const replaced = run(`$env:BL_PROBE.Replace('\\','/')`);
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.equal(replaced.stdout.split(/\r?\n/u)[0], 'a/b;c');
+  const held = run(`$d = @{Path=(Get-Item src.txt)}; $d.Path.GetType().FullName`);
+  assert.equal(held.stdout.trim(), 'System.IO.FileInfo', `前提: 変数に入れたハッシュの Path はファイルのことがある。${held.stderr}`);
+  assert.equal(readdirSync(s.cwd).sort().join(','), before, '文字の置き換えだけで、フォルダの中は何も変わらない');
+  assert.equal(readFileSync(s.file('src.txt'), 'utf8'), 'S');
+  assert.equal(readFileSync(s.file('dest.txt'), 'utf8'), 'D');
 });
 
 test('実機（Windows PowerShell 5.1）L176: ファイルの .Replace(先, 控え) は判定役が聞くと答えれば動かさず、文字列の Replace は動く', { skip: SKIP }, async t => {
