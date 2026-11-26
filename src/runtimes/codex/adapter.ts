@@ -13,7 +13,7 @@ import { ProcessRefused, type ExitInfo, type LaunchRecord, type ProcessScope, ty
 import type { RuntimeDeps } from '../registry.ts';
 import {
   PERMISSIONS, permissionFor, type AgentRuntime, type ApprovalDecision, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeModel,
-  type RuntimePermission, type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
+  type RuntimeIssue, type RuntimePermission, type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
 import { ApprovalTable, requestIdFor } from './approvals.ts';
 import { asRecord, asString, CodexConnection, CodexRefused, isRecord, safeLabel, type ConnectionHandlers } from './app-server.ts';
@@ -312,6 +312,16 @@ const PROBE_HANDLERS: ConnectionHandlers = {
   ended: () => undefined,
 };
 
+// windows/worldWritableWarning（囲い〔サンドボックス〕が守れない、誰でも書けるフォルダの知らせ）を、状態の行に出す注意にする。0.172.0 の型は samplePaths・extraCount・failedScan で、スレッドの番号は持たない。
+// いつ来るかは確かめていない（0.172.0 の本物の 1 往復では見えなかった）ので、確かめ（probe）では待たない。会話の中で来たときに、会話をつなぐ段が RuntimeChecks.report へ渡す。フォルダの名前は数件と、残りの数だけ短く残す
+export function worldWritableIssue(params: unknown): RuntimeIssue | undefined {
+  const record = asRecord(params);
+  const sample = (Array.isArray(record?.samplePaths) ? record.samplePaths : []).flatMap(path => (typeof path === 'string' ? [safeLabel(path)] : [])).slice(0, 3);
+  const extra = typeof record?.extraCount === 'number' && Number.isFinite(record.extraCount) ? Math.max(0, Math.floor(record.extraCount)) : 0;
+  if (sample.length > 0 || extra > 0) return { code: 'world_writable', detail: `${sample.join(', ')}${extra > 0 ? `${sample.length > 0 ? ' ' : ''}(+${extra})` : ''}` };
+  return record?.failedScan === true ? { code: 'writable_scan_failed' } : undefined;
+}
+
 async function readAccount(conn: CodexConnection): Promise<{ type: string | undefined; requiresLogin: boolean }> {
   // 本人の情報（email・workspace・id）は読み捨てる。残すのは account.type と、ログインが要るかだけ
   const raw = asRecord(await conn.request('account/read', { refreshToken: false }));
@@ -398,18 +408,27 @@ export class CodexRuntime implements AgentRuntime {
       if (error instanceof CodexRefused) return { installed: error.reason !== 'not_installed', auth: 'unknown', reason: error.message };
       throw error;
     }
+    const verified = opened.version === VERIFIED_VERSION;
     try {
       const account = await readAccount(opened.conn);
       const sandbox = await readSandbox(opened.conn);
       const notes: string[] = [];
-      if (opened.version !== VERIFIED_VERSION) notes.push(`beat has only checked Codex ${VERIFIED_VERSION}${opened.version ? ` (this is ${opened.version})` : ''}.`);
-      if (sandbox !== 'ready' && sandbox !== 'not_checked') notes.push(`The Windows sandbox for Codex is not ready (${short(sandbox, 40)}), so beat will not start a conversation yet.`);
+      const issues: RuntimeIssue[] = [];
+      if (!verified) notes.push(`beat has only checked Codex ${VERIFIED_VERSION}${opened.version ? ` (this is ${opened.version})` : ''}.`);
+      if (sandbox !== 'ready' && sandbox !== 'not_checked') {
+        notes.push(`The Windows sandbox for Codex is not ready (${short(sandbox, 40)}), so beat will not start a conversation yet.`);
+        issues.push({ code: 'sandbox_not_ready', detail: safeLabel(sandbox, 40) });
+      }
       if (account.requiresLogin) notes.unshift('Codex is not signed in. Sign in with Codex itself.');
       else if (account.type !== 'chatgpt') notes.unshift(`Codex is signed in with ${short(account.type ?? 'an unknown method', 40)}, not with a ChatGPT subscription.`);
       const auth = account.requiresLogin ? 'login_required' : account.type === 'chatgpt' ? 'ok' : 'unknown';
-      return { installed: true, ...(opened.version ? { version: opened.version } : {}), auth, ...(notes.length > 0 ? { reason: notes.join(' ') } : {}) };
+      const login = account.type === undefined ? undefined : account.type === 'chatgpt' ? 'subscription' : 'other';
+      return {
+        installed: true, ...(opened.version ? { version: opened.version } : {}), verified, auth, ...(login ? { login } : {}),
+        ...(notes.length > 0 ? { reason: notes.join(' ') } : {}), ...(issues.length > 0 ? { issues } : {}),
+      };
     } catch (error) {
-      if (error instanceof CodexRefused) return { installed: true, ...(opened.version ? { version: opened.version } : {}), auth: 'unknown', reason: error.message };
+      if (error instanceof CodexRefused) return { installed: true, ...(opened.version ? { version: opened.version } : {}), verified, auth: 'unknown', reason: error.message };
       throw error;
     } finally {
       await opened.scope.finish();

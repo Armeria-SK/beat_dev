@@ -1,5 +1,5 @@
 import type { ModelView, ProviderKeyState } from '../../api.ts';
-import type { Config } from '../../settings/model.ts';
+import { isRuntimeEntry, type Config } from '../../settings/model.ts';
 
 export type Reach = 'ok' | 'warn' | 'danger';
 
@@ -84,8 +84,10 @@ export function setScoutEffort(config: Config, effort: string): Config {
   return next;
 }
 
+// 会話のモデルを決める。実行役のモデルは会話の先頭にだけ置けるので、先頭から外れた実行役のモデルは、控えにも残さない
 export function setConversation(config: Config, id: string): Config {
-  const chat = (config.routing.chat as string[]).filter(x => x !== id);
+  const runtimeIds = new Set(((config.models ?? []) as Array<{ id: string; runtime?: unknown }>).filter(isRuntimeEntry).map(m => m.id));
+  const chat = (config.routing.chat as string[]).filter(x => x !== id && !runtimeIds.has(x));
   return { ...config, routing: { ...config.routing, chat: [id, ...chat] } };
 }
 

@@ -1,5 +1,6 @@
 import { getExplainLanguage, type Lang } from '../i18n/state.ts';
 import { serverText } from '../server-text.ts';
+import { slugId, uniqueSlug } from './ids.ts';
 import { derivedKeyEnv, isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
 
 // 設定の画面の、画面を使わない部分。保存に失敗したときの問題の読み取り・設定の書き換え。
@@ -112,15 +113,36 @@ export function uniqueId(base: string, taken: readonly string[]): string {
   for (let n = 2; ; n += 1) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`;
 }
 
+// 外の実行役を指すモデルか（設定の 1 件に runtime があれば）。実行役のモデルは、会話の先頭にだけ置ける
+export const isRuntimeEntry = (model: { runtime?: unknown }): boolean => typeof model.runtime === 'string';
+
 export function addModel(config: Config): { config: Config; id: string } {
   const providers = config.providers as Array<{ id: string }>;
   const id = uniqueId('new-model', (config.models as Array<{ id: string }>).map(m => m.id));
   const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', vision: false };
-  const ids = (config.models as Array<{ id: string }>).map(m => m.id);
+  // 候補を全部入れる形（下）には、提供元のモデルだけを入れる（実行役のモデルは会話の先頭にだけ置ける）
+  const ids = (config.models as Array<{ id: string; runtime?: unknown }>).filter(m => !isRuntimeEntry(m)).map(m => m.id);
   const routing = config.routing as { chat: string[]; background: string[] };
   // チャットも裏方も順番が空のときは、サーバーが設定のモデル全部を候補にする。足したモデルが他のモデルを押しのけないよう、今の候補に足した順番にする
   const filled = routing.chat.length === 0 && routing.background.length === 0 ? { ...routing, chat: [...ids, id], background: [...ids, id] } : routing;
   return { config: { ...config, models: [...config.models, model], routing: filled }, id };
+}
+
+// 実行役の 1 行（設定の runtimes）を足す・直す。設定にまだ無い種類は、切った状態の 1 行として足してから patch を重ねる
+export function updateRuntime(config: Config, runtime: { id: string; kind: string }, patch: Record<string, unknown>): Config {
+  const list = (config.runtimes as Array<Record<string, unknown>> | undefined) ?? [];
+  const next = list.some(item => item.id === runtime.id)
+    ? list.map(item => (item.id === runtime.id ? pruned({ ...item, ...patch }) : item))
+    : [...list, pruned({ id: runtime.id, kind: runtime.kind, enabled: false, ...patch })];
+  return { ...config, runtimes: next };
+}
+
+// 実行役自身の一覧から選んだモデルを、設定のモデルに足す（会話の先頭にするかは、持ち主が役の行で選ぶ）
+export function addRuntimeModel(config: Config, runtimeId: string, entry: { id: string; label: string; efforts: readonly string[] }): { config: Config; id: string } {
+  const taken = (config.models as Array<{ id: string }>).map(m => m.id);
+  const id = uniqueSlug(slugId(`${runtimeId}-${entry.id}`, 'model'), taken, 'model');
+  const model = { id, label: entry.label, runtime: runtimeId, model: entry.id, vision: false, ...(entry.efforts.length > 0 ? { efforts: [...entry.efforts] } : {}) };
+  return { config: { ...config, models: [...config.models, model] }, id };
 }
 
 export function removeModel(config: Config, id: string): Config {

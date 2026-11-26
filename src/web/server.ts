@@ -23,6 +23,7 @@ import { configProblem, domainProblem, HttpProblem, problem, readBody, readJson,
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerKeyRoutes } from './routes-keys.ts';
+import { registerRuntimeRoutes } from './routes-runtimes.ts';
 import { registerMcpRoutes } from './routes-mcp.ts';
 import { registerBrowserRoutes } from './routes-browser.ts';
 import { registerBackgroundRoutes } from './routes-background.ts';
@@ -105,7 +106,7 @@ function modelsView(app: App) {
       const { capacity, maxOutput } = app.status.limits(m);
       const probe = app.status.get(m.id);
       return {
-        id: m.id, label: m.label ?? m.id, provider: isRuntimeModel(m) ? '' : m.provider, model: m.model,
+        id: m.id, label: m.label ?? m.id, provider: isRuntimeModel(m) ? '' : m.provider, runtime: isRuntimeModel(m) ? m.runtime : null, model: m.model,
         providerKind: providerOf(config, m)?.kind,
         contextLength: m.contextLength, maxOutputTokens: m.maxOutputTokens,
         limits: {
@@ -477,6 +478,7 @@ export function createWebServer(app: App): WebServer {
 
   // ── 設定とモデル ──
   registerKeyRoutes(router, app);
+  registerRuntimeRoutes(router, app);
   registerNotifyRoutes(router, app);
   registerMcpRoutes(router, app);
   registerBrowserRoutes(router, app);

@@ -7,7 +7,7 @@ import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, GEMINI_URL, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, GEMINI_URL, isRuntimeEntry, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -15,6 +15,7 @@ import { RowConfirm } from '../RowConfirm.tsx';
 import { OPENAI_URL } from '../onboarding-steps.ts';
 import { planKeyFor } from './commit.ts';
 import { CommitField, Group, ListField, NumberField, Row, SecretField, Seg, Select, Switch, useSet, type Option } from './controls.tsx';
+import { RuntimeModelPill, RuntimesGroup } from './runtimes.tsx';
 import { JUDGE_OFF, judgeBackups, judgeChoice, judgeIsOff, keyLine, lastChecked, modelReach, moveItem, providerReach, rolesOf, scoutBackups, scoutChoice, scoutEffort, setConversation, setFallback, setJudge, setScout, setScoutEffort, type ModelReach } from './view.ts';
 
 type Json = Record<string, any>;
@@ -264,9 +265,11 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
   };
   const providers: Option<string>[] = (ctx.config.providers as Json[]).map(p => ({ value: p.id as string, label: p.id as string }));
   const name = (model.label as string) || id;
+  // 実行役を指すモデルは、提供元も長さの設定も持たない（状態は、その実行役の確かめの結果）
+  const runtime = typeof model.runtime === 'string' ? model.runtime : null;
   const status = probing ? t('ui.set.models.checking') : probe ? probeMessage(probe, getExplainLanguage()) || probe.status : t('ui.set.models.unchecked');
   return (
-    <Row k={k} title={name} desc={<><code>{model.provider as string} · {model.model as string}</code> · {status}</>}
+    <Row k={k} title={name} desc={<><code>{runtime ?? (model.provider as string)} · {model.model as string}</code> · {status}</>}
       below={(open || removing) && (
         <>
         {removing && <RowConfirm warn={t('ui.lib.deleteWarn')} action={t('ui.set.model.remove')} busy={busy} onConfirm={() => { setRemoving(false); void ctx.commit(k, c => removeModel(c, id)); }} onKeep={() => setRemoving(false)} />}
@@ -274,14 +277,16 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
         <div className="ui-set__detail">
           <Row k={`${k}:label`} title={t('ui.set.model.label')}><CommitField value={(model.label as string | undefined) ?? ''} label={t('ui.set.model.label')} onCommit={v => edit({ label: v || undefined })} /></Row>
           <Row k={`${k}:id`} title={t('ui.set.model.id')}><CommitField value={id} label={t('ui.set.model.id')} mono onCommit={rename} /></Row>
-          <Row k={`${k}:provider`} title={t('ui.set.model.provider')}><Select value={model.provider as string} options={providers} label={t('ui.set.model.provider')} onChange={provider => edit({ provider })} /></Row>
+          {runtime === null && <Row k={`${k}:provider`} title={t('ui.set.model.provider')}><Select value={model.provider as string} options={providers} label={t('ui.set.model.provider')} onChange={provider => edit({ provider })} /></Row>}
           <Row k={`${k}:model`} title={t('ui.set.model.name')} desc={t('ui.set.model.nameDesc')}><CommitField value={model.model as string} label={t('ui.set.model.name')} mono required onCommit={v => edit({ model: v })} /></Row>
           <Row k={`${k}:vision`} title={t('ui.set.model.vision')}><Switch checked={Boolean(model.vision)} label={t('ui.set.model.vision')} disabled={busy} onChange={vision => edit({ vision })} /></Row>
           {askContext && contextRow}
-          <Row k={`${k}:advanced`} title={t('ui.set.model.advanced')} desc={summary || undefined}>
-            <Button small variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? t('ui.set.less') : t('ui.set.edit')}</Button>
-          </Row>
-          {advanced && (
+          {runtime === null && (
+            <Row k={`${k}:advanced`} title={t('ui.set.model.advanced')} desc={summary || undefined}>
+              <Button small variant="ghost" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? t('ui.set.less') : t('ui.set.edit')}</Button>
+            </Row>
+          )}
+          {runtime === null && advanced && (
             <>
               {!askContext && contextRow}
               <Row k={`${k}:out`} title={t('ui.set.model.maxOutput')} desc={sourceOf(model.maxOutputTokens as number | undefined, limits?.maxOutput, () => edit({ maxOutputTokens: undefined }))}>
@@ -296,7 +301,7 @@ function ModelRow({ model, open, onToggle, onRenamed, probing }: { model: Json; 
         )}
         </>
       )}>
-      {reach && <Pill tone={REACH[reach].tone}>{t(REACH[reach].key)}</Pill>}
+      {runtime !== null ? <RuntimeModelPill probe={probe} /> : reach && <Pill tone={REACH[reach].tone}>{t(REACH[reach].key)}</Pill>}
       {!removing && <Button small variant="ghost" aria-label={t('ui.set.list.remove', name)} disabled={busy} onClick={() => setRemoving(true)}>{t('ui.set.model.removeShort')}</Button>}
       <Button small variant="ghost" aria-expanded={open} onClick={onToggle}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>
     </Row>
@@ -358,6 +363,8 @@ export function ModelsPanel() {
     try { await api.probe(); await ctx.reload(); } catch (error) { ctx.fail('models:check', errorText(error, t('ui.set.models.checkFailed'))); } finally { setProbing(false); }
   };
   const modelOptions: Option<string>[] = models.map(m => ({ value: m.id as string, label: (m.label as string) || (m.id as string) }));
+  // 実行役のモデルは会話の先頭にだけ置ける（判定役・控え・裏方・調べ役の選びには出さない）
+  const providerOptions: Option<string>[] = models.filter(m => !isRuntimeEntry(m)).map(m => ({ value: m.id as string, label: (m.label as string) || (m.id as string) }));
   const backups = judgeBackups(ctx.config);
   const scoutTail = scoutBackups(ctx.config);
   const modelName = (id: string): string => modelOptions.find(o => o.value === id)?.label ?? id;
@@ -374,6 +381,7 @@ export function ModelsPanel() {
           {adding !== 'provider' && <Button small onClick={() => setAdding('provider')}>{t('ui.set.provider.addShort')}</Button>}
         </Row>
       </Group>
+      <RuntimesGroup />
       <Group title={t('ui.set.models.models')}>
         {models.length === 0 && <p className="bt-meta">{t('ui.set.models.none')}</p>}
         {models.map(m => <ModelRow key={m.id as string} model={m} probing={probing} open={open === `m:${m.id}`} onToggle={() => toggle(`m:${m.id}`)} onRenamed={next => setOpen(now => openAfterRename(now, `m:${m.id}`, `m:${next}`))} />)}
@@ -390,15 +398,15 @@ export function ModelsPanel() {
         </Row>
         <Row k="roles:judge" title={t('ui.set.models.judge')} desc={judgeIsOff(ctx.config) ? t('ui.set.models.judgeOffDesc') : t('ui.set.models.judgeDesc')}
           below={backups.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', backups.map(modelName).join(', '))}</span>}>
-          <Select value={judgeChoice(ctx.config)} options={[{ value: '', label: t('ui.set.models.judgeSame') }, ...modelOptions, { value: JUDGE_OFF, label: t('ui.set.models.judgeOff') }]} label={t('ui.set.models.judge')} onChange={id => void ctx.commit('roles:judge', c => setJudge(c, id))} />
+          <Select value={judgeChoice(ctx.config)} options={[{ value: '', label: t('ui.set.models.judgeSame') }, ...providerOptions, { value: JUDGE_OFF, label: t('ui.set.models.judgeOff') }]} label={t('ui.set.models.judge')} onChange={id => void ctx.commit('roles:judge', c => setJudge(c, id))} />
         </Row>
         <Row k="roles:fallback" title={t('ui.set.models.fallback')} desc={t('ui.set.models.fallbackDesc')}
-          below={<OrderList k="fallback" ids={roles.fallback} label={t('ui.set.models.fallback')} models={models.filter(m => m.id !== roles.conversation)} onChange={ids => void ctx.commit('roles:fallback', c => setFallback(c, ids))} />} />
+          below={<OrderList k="fallback" ids={roles.fallback} label={t('ui.set.models.fallback')} models={models.filter(m => m.id !== roles.conversation && !isRuntimeEntry(m))} onChange={ids => void ctx.commit('roles:fallback', c => setFallback(c, ids))} />} />
         <Row k="roles:background" title={t('ui.set.models.background')} desc={t('ui.set.models.backgroundDesc')}
-          below={<OrderList k="background" ids={roles.background} label={t('ui.set.models.background')} models={models} onChange={ids => void ctx.commit('roles:background', c => ({ ...c, routing: { ...c.routing, background: ids } }))} />} />
+          below={<OrderList k="background" ids={roles.background} label={t('ui.set.models.background')} models={models.filter(m => !isRuntimeEntry(m))} onChange={ids => void ctx.commit('roles:background', c => ({ ...c, routing: { ...c.routing, background: ids } }))} />} />
         <Row k="roles:scout" title={t('ui.set.models.scout')} desc={t('ui.set.models.scoutDesc')}
           below={scoutTail.length > 0 && <span className="bt-meta">{t('ui.set.models.judgeBackups', scoutTail.map(modelName).join(', '))}</span>}>
-          <Select value={scoutChoice(ctx.config)} options={[{ value: '', label: t('ui.set.models.scoutOff') }, ...modelOptions]} label={t('ui.set.models.scout')} onChange={id => void ctx.commit('roles:scout', c => setScout(c, id))} />
+          <Select value={scoutChoice(ctx.config)} options={[{ value: '', label: t('ui.set.models.scoutOff') }, ...providerOptions]} label={t('ui.set.models.scout')} onChange={id => void ctx.commit('roles:scout', c => setScout(c, id))} />
         </Row>
         {scoutId !== '' && (
           <Row k="roles:scoutEffort" title={t('ui.set.models.scoutEffort')} desc={t('ui.set.models.scoutEffortDesc')}

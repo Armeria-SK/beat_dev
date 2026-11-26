@@ -10,6 +10,9 @@ type Failed = Extract<RuntimeEvent, { type: 'failed' }>;
 // 使う機能（initializationResult）が要る本体のいちばん低い版（SDK の文書: 2.1.296 以上）
 export const MIN_CLAUDE_CODE_VERSION = '2.1.296';
 
+// beat が本物で確かめた本体の版（AR-0・AR-5 の確かめ）。ほかの版は、動いても「確かめていない版」と画面に出す
+export const VERIFIED_CLAUDE_CODE_VERSION = '2.1.331';
+
 const MAX_MESSAGE = 2000;
 const MAX_RAW = 4000;
 const MAX_OUTPUT = 20_000;

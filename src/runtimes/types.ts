@@ -32,13 +32,33 @@ export interface RuntimeCapabilities {
   permissions: readonly string[];
 }
 
+// 確かめで見つかった、画面に出す注意。種類は閉じた一覧（画面が言葉にする）。detail は短い技術の語だけ（版・状態の語・フォルダの名前・道具の名前）
+export const RUNTIME_ISSUES = ['too_old', 'sandbox_not_ready', 'world_writable', 'writable_scan_failed', 'tools_unreviewed'] as const;
+export type RuntimeIssueCode = (typeof RUNTIME_ISSUES)[number];
+
+export interface RuntimeIssue {
+  code: RuntimeIssueCode;
+  detail?: string;
+}
+
+// 会話を始められなくする注意（それ以外は、見せるだけ）
+export const BLOCKING_ISSUES: ReadonlySet<RuntimeIssueCode> = new Set(['too_old', 'sandbox_not_ready']);
+
 export interface RuntimeStatus {
   installed: boolean;
   version?: string;
   // ログインの状態。beat はログインの中身を読まない（実行役の公式の口で聞くだけ）
   auth: 'ok' | 'login_required' | 'unknown';
   reason?: string;
+  // beat が確かめた版か（確かめていない版は、動くかもしれないが保証しない）
+  verified?: boolean;
+  // 実際に使う認証。subscription = 契約のログイン（Claude Code は authMethod が claude.ai で apiProvider が firstParty のときだけ、Codex は account.type が chatgpt）、other = それ以外（API キーなど）。読めなければ無い
+  login?: 'subscription' | 'other';
+  issues?: readonly RuntimeIssue[];
 }
+
+// 会話を始められない確かめの結果か（会話を始められなくする注意がある、または契約ではないログイン）。画面の札とモデルの状態が同じ決まりを使う
+export const startBlocked = (status: Pick<RuntimeStatus, 'login' | 'issues'>): boolean => status.login === 'other' || (status.issues ?? []).some(issue => BLOCKING_ISSUES.has(issue.code));
 
 export interface RuntimeModel {
   id: string;

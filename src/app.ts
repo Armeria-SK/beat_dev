@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AppConfig, ModelConfig, ProviderConfig } from './config/schema.ts';
+import type { AppConfig, ModelConfig, ProviderConfig, RuntimeKind } from './config/schema.ts';
 import { ConfigStore } from './config/store.ts';
 import { Conversations } from './db/conversations.ts';
 import { openDatabase } from './db/database.ts';
@@ -12,6 +12,9 @@ import { RunBus } from './engine/bus.ts';
 import { candidateModelIds, ChatEngine } from './engine/chat.ts';
 import { HealthMonitor } from './engine/health.ts';
 import { ModelStatus } from './engine/status.ts';
+import { RuntimeChecks } from './runtimes/checks.ts';
+import { ProcessManager } from './runtimes/process-manager.ts';
+import { FACTORIES, RuntimeRegistry, type RuntimeFactory } from './runtimes/registry.ts';
 import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
 import { buildDynamic, buildSnapshot, buildTail, ensureWorkspace, fenceTail } from './engine/workspace.ts';
 import { PLACEHOLDER_NONCE } from './shared/fence.ts';
@@ -153,6 +156,8 @@ export interface AppOptions {
   projectFolderExempt?: readonly string[];
   botMemory?: boolean;
   folderDialog?: FolderDialogOptions;
+  // 試験用: 外の実行役の作り手の入れ替え（書かなければ本物の Claude Code・Codex の窓口）
+  runtimeFactories?: Readonly<Partial<Record<RuntimeKind, RuntimeFactory>>>;
 }
 
 export class App {
@@ -167,6 +172,10 @@ export class App {
   readonly kv: KV;
   readonly registry: ProviderRegistry;
   readonly status: ModelStatus;
+  // 外の実行役（Claude Code・Codex）の置き場と、その確かめの結果（Settings の実行役の行・モデルの状態が読む）
+  readonly runtimes: RuntimeRegistry;
+  readonly runtimeChecks: RuntimeChecks;
+  readonly #processes: ProcessManager;
   readonly bus: RunBus;
   readonly limiter: EndpointLimiter;
   readonly tools: ToolRegistry;
@@ -240,7 +249,10 @@ export class App {
     });
     this.registry.reload(config);
     this.botMemory = options.botMemory === true;
-    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: model => this.baseTokens(model), memoryTokens: () => this.memoryTokens(), log: this.log });
+    this.#processes = new ProcessManager({ log: this.log });
+    this.runtimes = new RuntimeRegistry({ processes: this.#processes, log: this.log }, { ...FACTORIES, ...options.runtimeFactories });
+    this.runtimeChecks = new RuntimeChecks(this.runtimes, this.log);
+    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: model => this.baseTokens(model), memoryTokens: () => this.memoryTokens(), runtimes: this.runtimeChecks, log: this.log });
     this.bus = new RunBus();
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
@@ -686,6 +698,7 @@ export class App {
     this.engine.saveQueued();
     this.research.close();
     this.engine.stopAll();
+    void this.#processes.closeAll().catch(() => undefined);
     this.db.close();
   }
 }
