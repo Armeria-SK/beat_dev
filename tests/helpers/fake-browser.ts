@@ -236,6 +236,7 @@ export class FakePage implements PageHandle {
   }
 
   permitSubmits(permit: SubmitPermit | undefined): void { this.permit = permit; }
+  isClosed(): boolean { return this.closed; }
   async screenshot(): Promise<Buffer> { return this.#site?.png ?? TINY_PNG; }
   async close(): Promise<void> { this.closed = true; this.browser.pageList = this.browser.pageList.filter(p => p !== this); }
 }

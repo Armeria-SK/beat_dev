@@ -241,6 +241,8 @@ export interface PageHandle {
   setViewport?(size: ViewportSize): Promise<void>;
   // タブが閉じたときの知らせ（持ち主が手で閉じたとき・こちらが閉じたとき・ブラウザごと閉じたとき）。持たない driver（偽物）は省ける
   onClose?(cb: () => void): void;
+  // もう閉じているか。持たない driver（偽物）は省ける。閉じた知らせを登録するより先に閉じたタブを見分ける
+  isClosed?(): boolean;
   close(): Promise<void>;
 }
 
@@ -658,6 +660,7 @@ class PlaywrightPage implements PageHandle {
   lastRefusal(): RouteRefusal | undefined { return this.refusal; }
   setViewport(size: ViewportSize): Promise<void> { return this.page.setViewportSize({ width: size.width, height: size.height }); }
   onClose(cb: () => void): void { this.page.on('close', cb); }
+  isClosed(): boolean { return this.page.isClosed(); }
   async close(): Promise<void> { await this.page.close({ runBeforeUnload: false }); }
 }
 

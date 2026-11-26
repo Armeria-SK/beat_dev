@@ -853,6 +853,8 @@ export class BrowserSession {
         const opened: BrowserTab[] = [];
         let closed = 0;
         for (const { page, kind, handle } of sink.pages) {
+          // 開いてすぐ自分で閉じた窓は、タブにしない（閉じた知らせは、ここで登録するより先に済んでいる）
+          if (page.isClosed?.()) continue;
           if (this.#tabLimit(grant.conversationId, config.limits.maxTabs)) { await withTimeout(page.close(), CLOSE_TIMEOUT_MS); closed += 1; continue; }
           opened.push(this.#addTab(grant, kind, page, handle));
         }

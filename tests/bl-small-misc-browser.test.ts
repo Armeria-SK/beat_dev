@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type ActionEvents, type ElementTarget, type FocusFacts, type PressAt } from '../src/tools/browser/driver.ts';
+import type { BrowserContext, Page } from 'playwright-core';
+import { BrowserFailure, PlaywrightBrowser, type ActionEvents, type ElementTarget, type FocusFacts, type PressAt } from '../src/tools/browser/driver.ts';
 import type { BrowserGrant } from '../src/tools/browser/loopback.ts';
 import { BrowserSession, type MirrorConversation } from '../src/tools/browser/session.ts';
 import { FakeBrowser, FakeBrowserDriver, FakePage } from './helpers/fake-browser.ts';
 import { testConfig } from './helpers.ts';
 
-// backlog L192（Stop のあとも、終わっていない操作がある間は「動いている」）
+// backlog L192（Stop のあとも、終わっていない操作がある間は「動いている」）・L193（開いてすぐ閉じたポップアップはタブに数えない）
 
 const PAGE = 'https://example.com/start';
 const OTHER = 'https://example.com/other';
@@ -52,6 +53,7 @@ function rig(t: Hooks, maxTabs = 4) {
 const grant: BrowserGrant = { conversationId: 'c1', runId: 'run-1', attended: false, loopback: false, productId: 'p-a' };
 const conversations: MirrorConversation = id => (id === 'c1' ? { attended: false } : undefined);
 const call = () => ({ grant, signal: new AbortController().signal });
+const failure = (code: BrowserFailure['code']) => (thrown: unknown): boolean => thrown instanceof BrowserFailure && thrown.code === code;
 
 type Kind = 'click' | 'fill' | 'select' | 'press' | 'goto';
 
@@ -122,4 +124,54 @@ test('L192: 操作が無い・終わっているなら、今までどおり（�
   r.active.add('run-1');
   r.clock.now += 61_000;
   assert.equal(r.session.view('p-a', conversations)?.driving, false);
+});
+
+test('L193: 開いてすぐ自分で閉じたポップアップは、タブに数えない。次のタブも開ける（maxTabs = 2）', async t => {
+  const r = rig(t, 2);
+  const original = FakeBrowser.prototype.popup;
+  t.mock.method(FakeBrowser.prototype, 'popup', function (this: FakeBrowser) {
+    const page = original.call(this);
+    page.closed = true;
+    this.pageList = this.pageList.filter(other => other !== page);
+    return page;
+  });
+  const grabbed = await r.session.run(call(), async api => {
+    const tab = await api.openTab('work');
+    await tab.page.goto(PAGE, 1000);
+    const page = r.driver.context!.pageList[0] as SlowPage;
+    const pop = { ref: page.refFor('button', 'Pop'), role: 'button', name: 'Pop' };
+    return api.withPopups(() => tab.page.click(pop, 1000));
+  });
+  assert.deepEqual([grabbed.opened.length, grabbed.closed], [0, 0], '閉じたポップアップは、開いた窓にも、上限で閉じた窓にも入れない');
+  assert.equal(r.session.tabCount('c1'), 1);
+  assert.equal(r.session.status().tabs, 1);
+  const next = await r.session.run(call(), api => api.openTab('work'));
+  assert.equal(r.session.tabCount('c1'), 2, '空いた分で次のタブを開けた');
+  assert.ok(next.id);
+});
+
+test('L193: 閉じていないポップアップは今までどおりタブになる。上限の 2 枚に着いたら、あふれた分は閉じて数だけ返す', async t => {
+  const r = rig(t, 2);
+  const grabbed = await r.session.run(call(), async api => {
+    const tab = await api.openTab('work');
+    await tab.page.goto(PAGE, 1000);
+    const page = r.driver.context!.pageList[0] as SlowPage;
+    const pop = { ref: page.refFor('button', 'Pop'), role: 'button', name: 'Pop' };
+    const first = await api.withPopups(() => tab.page.click(pop, 1000));
+    const second = await api.withPopups(() => tab.page.click(pop, 1000));
+    return { first, second };
+  });
+  assert.deepEqual([grabbed.first.opened.length, grabbed.first.closed], [1, 0]);
+  assert.deepEqual([grabbed.second.opened.length, grabbed.second.closed], [0, 1]);
+  assert.equal(r.session.tabCount('c1'), 2);
+  await assert.rejects(r.session.run(call(), api => api.openTab('work')), failure('tab_limit'));
+});
+
+test('L193: 本物の PlaywrightPage は、ページが閉じているかを渡す', () => {
+  let closed = false;
+  const page = { isClosed: () => closed, on: () => undefined } as unknown as Page;
+  const wrapped = new PlaywrightBrowser({} as BrowserContext).wrap(page);
+  assert.equal(wrapped.isClosed?.(), false);
+  closed = true;
+  assert.equal(wrapped.isClosed?.(), true);
 });
