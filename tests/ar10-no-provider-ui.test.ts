@@ -28,15 +28,18 @@ afterEach(async () => {
 const bare = (): Json => ({ ...(defaultConfig() as Json), providers: [], models: [], runtimes: [], routing: { chat: [], background: [], retriesPerModel: 0 } });
 const withProvider = (): Json => ({ ...bare(), providers: [{ id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1', maxParallel: 1, timeoutMs: 600_000 }], models: [{ id: 'm1', label: '', provider: 'local', model: 'm1', vision: false }], routing: { chat: ['m1'], background: ['m1'], retriesPerModel: 0 } });
 
-test('setupRuntimeConfig: 提供元のモデルが無いとき、実行役を入れてモデルを足し、会話の順番の先頭に置く（保存できる形）', () => {
+test('setupRuntimeConfig: 提供元のモデルが無いときも、確かめる前の保存は実行役を入れてモデルを足すだけで会話の順番に触らない。確かめが通ったあとの putRuntimeFirst で先頭に置く（保存できる形）', () => {
   const made = setupRuntimeConfig(bare(), { kind: 'claude-code', model: ' sonnet ' });
   assert.deepEqual(made.config.runtimes, [{ id: 'claude-code', kind: 'claude-code', enabled: true }]);
   assert.deepEqual(made.config.models, [{ id: 'claude-code-sonnet', label: 'sonnet', runtime: 'claude-code', model: 'sonnet', vision: false }]);
   assert.equal(made.runtimeId, 'claude-code');
   assert.equal(made.modelId, 'claude-code-sonnet');
-  assert.deepEqual(made.config.routing, { chat: ['claude-code-sonnet'], background: [], retriesPerModel: 0 }, 'a runtime model may only be first in chat; the background stays empty');
-  assert.doesNotThrow(() => parseConfig(made.config));
-  const again = setupRuntimeConfig(made.config, { kind: 'claude-code', model: 'sonnet' });
+  assert.deepEqual(made.config.routing, { chat: [], background: [], retriesPerModel: 0 }, 'before the check the order is not touched, even without a provider model');
+  assert.doesNotThrow(() => parseConfig(made.config), 'a runtime model outside the order is a valid config');
+  const passed = putRuntimeFirst(made.config, made.modelId);
+  assert.deepEqual(passed.routing, { chat: ['claude-code-sonnet'], background: [], retriesPerModel: 0 }, 'a runtime model may only be first in chat; the background stays empty');
+  assert.doesNotThrow(() => parseConfig(passed));
+  const again = setupRuntimeConfig(passed, { kind: 'claude-code', model: 'sonnet' });
   assert.equal(again.config.models.length, 1, 'the same model is not added twice');
   assert.deepEqual(again.config.routing.chat, ['claude-code-sonnet']);
   assert.equal(bare().models.length, 0, 'the input is not changed');
@@ -64,21 +67,29 @@ test('setupRuntimeConfig: 提供元のモデルがあるときは、確かめる
   assert.equal(back.config.models[0].runtime, 'cc');
 });
 
-test('はじめの設定の取り直し: 実行役を試して選び直しても、会話の順番の先頭は「いま選んだもの」だけになる（前に試した実行役・綴りを直す前のモデルが先頭に残らない）', () => {
+test('はじめの設定の取り直し（提供元なし）: 通ったものだけが会話の順番の先頭になる。通らなかった試し（綴りの違い・別の実行役）は順番に触らず、通ったあとの実行役を順番から外さない', () => {
   const first = setupRuntimeConfig(bare(), { kind: 'claude-code', model: 'sonet' });
-  assert.deepEqual(first.config.routing.chat, ['claude-code-sonet']);
-  const fixed = setupRuntimeConfig(first.config, { kind: 'claude-code', model: 'sonnet' });
-  assert.deepEqual(fixed.config.routing.chat, ['claude-code-sonnet'], 'a typo fixed: the corrected model is the default');
-  const other = setupRuntimeConfig(first.config, { kind: 'codex', model: 'gpt-x' });
-  assert.equal(other.config.routing.chat[0], other.modelId, 'Claude Code failed, Codex chosen: Codex is the default');
-  assert.deepEqual(other.config.routing.chat, [other.modelId]);
-  assert.doesNotThrow(() => parseConfig(other.config));
-  const again = setupRuntimeConfig(other.config, { kind: 'codex', model: 'gpt-x' });
-  assert.deepEqual(again.config, other.config, 'choosing the same thing again changes nothing');
+  assert.deepEqual(first.config.routing.chat, [], 'a failed first attempt leaves the order empty');
+  const fixed = putRuntimeFirst(setupRuntimeConfig(first.config, { kind: 'claude-code', model: 'sonnet' }).config, 'claude-code-sonnet');
+  assert.deepEqual(fixed.routing.chat, ['claude-code-sonnet'], 'a typo fixed and passed: the corrected model is the default');
+  const codex = setupRuntimeConfig(first.config, { kind: 'codex', model: 'gpt-x' });
+  assert.deepEqual(codex.config.routing.chat, [], 'Codex tried: not the default until it passes');
+  const other = putRuntimeFirst(codex.config, codex.modelId);
+  assert.deepEqual(other.routing.chat, [codex.modelId], 'Claude Code failed, Codex passed: Codex is the default');
+  assert.doesNotThrow(() => parseConfig(other));
+  assert.deepEqual(putRuntimeFirst(other, codex.modelId), other, 'choosing the same thing again changes nothing');
+  // replay: Claude Code passed earlier, now Codex is tried and fails: the order keeps Claude Code
+  const replay = setupRuntimeConfig(fixed, { kind: 'codex', model: 'gpt-5' });
+  assert.deepEqual(replay.config.routing.chat, ['claude-code-sonnet'], 'a failed Codex attempt does not drop the Claude Code that passed');
+  assert.equal((replay.config.models as Json[]).some(m => m.id === replay.modelId), true, 'the Codex model is saved (the check needs the runtime, not the order)');
+  assert.doesNotThrow(() => parseConfig(replay.config));
+  assert.deepEqual(putRuntimeFirst(replay.config, replay.modelId).routing.chat, [replay.modelId], 'if the Codex check passes, Codex is the default');
 });
 
 test('はじめの設定の取り直し: 実行役を試したあとで提供元のモデルに切り替えて通ると、会話の順番も裏の順番も提供元のモデルだけになる（実行役の行は残るが、先頭ではない）', () => {
-  const runtime = setupRuntimeConfig(bare(), { kind: 'claude-code', model: 'sonnet' });
+  const tried = setupRuntimeConfig(bare(), { kind: 'claude-code', model: 'sonnet' });
+  const runtime = { config: putRuntimeFirst(tried.config, tried.modelId) };
+  assert.deepEqual(runtime.config.routing.chat, ['claude-code-sonnet'], 'the runtime passed: it heads the order');
   const form = modelFormOf({ ...emptyConnect('anthropic'), model: 'claude-sonnet-4-5', key: 'k' });
   const provider = setupModelConfig(runtime.config, form, null);
   assert.equal(provider.config.routing.chat[0], provider.modelId, 'the provider model is the default of the chat');
@@ -232,12 +243,44 @@ test('はじめの設定: 「Claude Code or Codex」を選び、モデル名を�
   await input(c.querySelector('input[list="ui-ob-model-names"]'), 'sonnet');
   await click(button(c, 'Test connection'));
   await settle(); await settle();
-  assert.deepEqual(world.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check']);
+  assert.deepEqual(world.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check', 'PUT /api/settings'], 'the runtime and model are saved, checked, and only then put first');
   assert.deepEqual(world.config.runtimes, [{ id: 'claude-code', kind: 'claude-code', enabled: true }]);
   assert.equal(world.config.models[0].runtime, 'claude-code');
   assert.deepEqual(world.config.routing.chat, ['claude-code-sonnet']);
   assert.match(text(c), /Ready/u);
   assert.equal(next(c).disabled, false, 'the step can be passed with a usable runtime');
+});
+
+test('はじめの設定（提供元なしで、前に通した実行役がある人がもう一度やり直す）: 別の実行役の確かめが通らなかったら、会話の順番は前に通した実行役のまま。通ったときだけ、その実行役が先頭になる', async () => {
+  const passedBefore = (): Json => ({
+    ...bare(),
+    runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }],
+    models: [{ id: 'claude-code-sonnet', label: 'sonnet', runtime: 'claude-code', model: 'sonnet', vision: false }],
+    routing: { chat: ['claude-code-sonnet'], background: [], retriesPerModel: 0 },
+  });
+  const failing = serve(passedBefore(), { ...CHECKED, auth: 'login_required', usable: false });
+  const c = await onboard(failing);
+  await click(button(c, 'Claude Code or Codex'));
+  await click(button(c, 'Codex'));
+  await input(c.querySelector('input[list="ui-ob-model-names"]'), 'gpt-5');
+  await click(button(c, 'Test connection'));
+  await settle(); await settle();
+  assert.match(text(c), /Signed out/u);
+  assert.deepEqual(failing.config.routing.chat, ['claude-code-sonnet'], 'the Claude Code that passed stays the default');
+  assert.deepEqual(failing.sent, ['PUT /api/settings', 'POST /api/runtimes/codex/check'], 'one save before the check, none after it');
+  assert.equal(failing.config.models.some((m: Json) => m.id === 'codex-gpt-5'), true, 'the Codex model is saved so that its check can run');
+  assert.equal(next(c).disabled, true);
+
+  const passing = serve(passedBefore());
+  const d = await onboard(passing);
+  await click(button(d, 'Claude Code or Codex'));
+  await click(button(d, 'Codex'));
+  await input(d.querySelector('input[list="ui-ob-model-names"]'), 'gpt-5');
+  await click(button(d, 'Test connection'));
+  await settle(); await settle();
+  assert.deepEqual(passing.config.routing.chat, ['codex-gpt-5'], 'Codex passed: it is the default now (the last one that passed)');
+  assert.deepEqual(passing.sent, ['PUT /api/settings', 'POST /api/runtimes/codex/check', 'PUT /api/settings']);
+  assert.equal(next(d).disabled, false);
 });
 
 test('はじめの設定（提供元が動いている人がもう一度やり直す）: 実行役の確かめが通らなかったら、会話の順番は替えない。通ったときだけ、実行役が先頭に来る（提供元のモデルは後ろ）', async () => {
@@ -309,7 +352,7 @@ test('はじめの設定: 実行役のモデル名は、一覧を読み込んで
   await input(c.querySelector('input[list="ui-ob-model-names"]'), 'sonnet');
   await click(button(c, 'Test connection'));
   await settle(); await settle();
-  assert.deepEqual(world.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check']);
+  assert.deepEqual(world.sent, ['PUT /api/settings', 'POST /api/runtimes/claude-code/check', 'PUT /api/settings']);
   assert.equal(next(c).disabled, false);
   assert.equal(c.querySelector('[data-runtime-untested]'), null, 'the name was found in the list: nothing is left untested');
 

@@ -89,7 +89,7 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
 }
 
 // 実行役（Claude Code・Codex）を、はじめの設定の「つなぐもの」にする（AR-10）。その種類の実行役を入れ、モデルを 1 つ足す（同じモデルがあれば足さない）。
-// 確かめる前の保存（1 回目）: 実行役を入れてモデルを足すだけで、会話の順番には触らない（確かめが通る前に、会話の既定を替えない）。例外は提供元のモデルが 1 つも無いとき: 実行役のモデルを先頭に置く形しか作れないので、そのモデルだけにする（前に試して使えなかったものも消える）。
+// 確かめる前の保存（1 回目）: 実行役を入れてモデルを足すだけで、会話の順番には触らない（確かめが通る前に、会話の既定を替えない。提供元のモデルが 1 つも無いときも同じ: 前に通した実行役を順番から外さない。順番に無い実行役のモデルでも、確かめは通る）。
 // 確かめが通ったあとの保存（2 回目）は putRuntimeFirst: 「最後に通ったものが会話の既定」
 export type RuntimeKindId = 'claude-code' | 'codex';
 export const runtimeIdOf = (config: Config, kind: RuntimeKindId): string => ((config.runtimes as Array<{ id: string; kind: string }> | undefined) ?? []).find(item => item.kind === kind)?.id ?? kind;
@@ -100,8 +100,7 @@ export function setupRuntimeConfig(config: Config, form: { kind: RuntimeKindId; 
   const turnedOn = updateRuntime(config, { id: runtimeId, kind: form.kind }, { enabled: true });
   const same = (turnedOn.models as Entry[]).find(m => m.runtime === runtimeId && m.model === entry);
   const added = same ? { config: turnedOn, id: same.id } : addRuntimeModel(turnedOn, runtimeId, { id: entry, label: entry, efforts: [] });
-  const noOwn = !(added.config.models as Entry[]).some(m => !isRuntimeEntry({ runtime: m.runtime }));
-  return { config: noOwn ? putRuntimeFirst(added.config, added.id) : added.config, runtimeId, modelId: added.id };
+  return { config: added.config, runtimeId, modelId: added.id };
 }
 
 // 確かめが通った実行役のモデルを、会話の順番の先頭に置く（実行役のモデルは先頭にだけ置ける）。前に通した実行役は外し、提供元のモデルが 1 つも無ければそれだけ、あれば後ろに提供元のモデルを続ける（順番が空だったときは全部）。裏の順番には触らない

@@ -133,7 +133,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     finally { setBusy(false); }
   }
 
-  // 実行役: 入れる・モデルを足す（提供元のモデルが無いときは会話の順番の先頭にも置く）を保存してから、持ち主が押した確かめを 1 回だけ起こす。会話の順番の先頭に置くのは、確かめが通ったあと（2 回目の保存）だけ
+  // 実行役: 入れる・モデルを足す（会話の順番には触らない）を保存してから、持ち主が押した確かめを 1 回だけ起こす。会話の順番の先頭に置くのは、確かめが通ったあと（2 回目の保存）だけ（提供元のモデルが 1 つも無いときも同じ）
   async function testRuntime() {
     const found = connectProblem(form, keySet);
     setProblem(found); setRuntimeView(null);
