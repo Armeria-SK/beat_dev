@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
@@ -12,7 +12,7 @@ import { approvalPaths, approvalPathsMore, type PreviewFile } from '../approvals
 import { ruleShapeField } from '../approval-rules.ts';
 import { DEFAULT_BEAT_PORT, deniedLoopbackPorts } from '../browser/loopback.ts';
 import { DEV_RUNNERS, NODE_SKIP_FLAG } from '../hooks/decision-order.ts';
-import { isInterpreter, packageScriptName, packageScriptView, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
+import { cardQuote, isInterpreter, packageScriptName, packageScriptView, PWSH_FILE_FLAG, selfTouchMarkers, type BeatPorts } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath, realish, type ScopePolicy } from '../hooks/scope.ts';
 import { checkShellCommand, type StatementFacts } from '../hooks/shell-guard.ts';
 import { outboundOf, placesOf, pushesOf, type Outbound } from '../hooks/outbound.ts';
@@ -138,41 +138,54 @@ function previewOf(path: string, content: string): PreviewFile {
 }
 
 const PACKAGE_PROGRAM = /^(?:npm|pnpm|yarn|bun)$/u;
+const PACKAGE_WRAPPER = /^(?:npx|pnpx|bunx|corepack)$/u;
+const ENV_PROGRAM = /^(?:export|declare|typeset|local|readonly|set|setx|setenv|set-item|si|set-variable|sv|new-item|ni|env|eval|iex|invoke-expression|source|\.)$/u;
 const ENTRY_FILES_MAX = 4;
+const NOT_SHOWN_NAMES_MAX = 8;
+const EXCERPT_NOTE = '(excerpt of package.json: only the scripts that run)';
+const lowerName = (text: string): string => text.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
 
-// package.json ごとに、その文が動かすスクリプトの名前。同じ package.json にほかの呼び出し（install・名前が変数・旗つきなど）が 1 つでも届くか、包みの中が読めないときは、その package.json を入れない（札は全体を見せる）
-function scriptRuns(statements: readonly StatementFacts[], scripts: ReadonlySet<string>): Map<string, string[]> {
+// package.json ごとに、その文が動かすスクリプトの名前。同じ package.json に、ほかの呼び出し（install・旗・環境変数・動的な名前・npm が語に出るだけの文）が 1 つでも届けば、その package.json は入れない（札は全体を見せる）。
+// 作業フォルダが決まらない文・包み（inner）・動的な実行役・npx / pnpx / bunx / corepack・環境変数を決める文が 1 つでもあれば、どれも入れない
+function scriptRuns(statements: readonly StatementFacts[], scripts: ReadonlySet<string>, reasonKeys: readonly string[]): Map<string, string[]> {
   const runs = new Map<string, string[] | null>();
   const walk = (list: readonly StatementFacts[]): boolean => list.every(st => {
-    if (st.inner === null || st.unknownInner?.length || !walk(st.inner ?? [])) return false;
-    const program = st.program.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
-    const file = st.cwd === null ? undefined : resolve(st.cwd, 'package.json');
-    if (!PACKAGE_PROGRAM.test(program) || file === undefined || !scripts.has(file)) return true;
+    const program = lowerName(st.program);
+    if (st.cwd === null || st.programDynamic || st.inner !== undefined || st.unknownInner?.length || PACKAGE_WRAPPER.test(program) || ENV_PROGRAM.test(program) || st.words.some(w => PACKAGE_WRAPPER.test(lowerName(w.text)))) return false;
+    if (!st.words.some(w => PACKAGE_PROGRAM.test(lowerName(w.text)))) return true;
     const words = st.words.slice(1);
-    const name = words.some(w => w.dynamic || w.glob) ? undefined : packageScriptName(program, words.map(w => w.text));
+    const clean = PACKAGE_PROGRAM.test(program) && lowerName(st.words[0]!.text) === program && st.env.length === 0 && !words.some(w => w.dynamic || w.glob);
+    const name = clean ? packageScriptName(program, words.map(w => w.text)) : undefined;
+    const file = resolve(st.cwd, 'package.json');
     const known = runs.get(file);
     runs.set(file, name === undefined || known === null ? null : [...(known ?? []), name]);
     return true;
   });
-  const all = walk(statements);
-  return new Map([...runs].flatMap(([file, names]) => (all && names ? [[file, names] as [string, string[]]] : [])));
+  const ok = !reasonKeys.some(key => key === 'list.env' || key === 'code.env') && walk(statements);
+  return new Map([...runs].flatMap(([file, names]) => (ok && names && scripts.has(file) ? [[file, names] as [string, string[]]] : [])));
 }
 
-// npm run x などの札: package.json の全体のかわりに、動かすスクリプトの行と、その行が渡すファイル（製品の中・秘密のパスでない・ふつうのファイル）を見せる。
-// 判定には使わない。指紋は package.json の全体と見せたファイルを bind に入れるので、あとで変わったら承認は古くなる
-function runCards(cards: readonly Peeked[], statements: readonly StatementFacts[], scripts: readonly string[], root: string, policy: ScopePolicy, language: Language): Peeked[] {
-  const runs = scriptRuns(statements, new Set(scripts));
-  if (runs.size === 0) return [...cards];
-  const have = new Set(cards.map(card => card.preview.path));
-  const shown = (file: string): boolean => isInside(root, file) && isInside(realish(root), realish(file)) && placePath(file, policy).kind === 'inside' && statSync(file, { throwIfNoEntry: false })?.isFile() === true;
-  return cards.flatMap(card => {
-    const names = runs.get(card.preview.path);
-    const view = names && card.content !== undefined ? packageScriptView(card.content, names, dirname(card.preview.path), language) : undefined;
-    if (!view) return [card];
-    const entries = view.files.filter(file => !have.has(file) && shown(file)).slice(0, ENTRY_FILES_MAX);
-    for (const file of entries) have.add(file);
-    return [{ ...card, preview: previewOf(card.preview.path, view.lines.join('\n')) }, ...entries.map(file => peek(file, language))];
-  });
+// npm run x などの札: package.json の全体のかわりに、動かすスクリプトの行（抜き出しだと分かる 1 行を付ける）と、その行が渡すファイル（製品の中・秘密のパスでない・ふつうのファイル）を見せる。
+// 見せなかったファイルは名前だけを 1 行で挙げる（中身は読まない）。判定には使わない。指紋は package.json の全体と見せたファイルを bind に入れるので、あとで変わったら承認は古くなる。
+// 何か投げたら、札はこれまでどおり（全体）
+function runCards(cards: readonly Peeked[], statements: readonly StatementFacts[], scripts: readonly string[], reasonKeys: readonly string[], root: string, policy: ScopePolicy, language: Language): Peeked[] {
+  try {
+    const runs = scriptRuns(statements, new Set(scripts), reasonKeys);
+    if (runs.size === 0) return [...cards];
+    const have = new Set(cards.map(card => card.preview.path));
+    const shown = (file: string): boolean => isInside(root, file) && isInside(realish(root), realish(file)) && placePath(file, policy).kind === 'inside' && statSync(file, { throwIfNoEntry: false })?.isFile() === true;
+    return cards.flatMap(card => {
+      const names = runs.get(card.preview.path);
+      const view = names && card.content !== undefined ? packageScriptView(card.content, names, dirname(card.preview.path), language) : undefined;
+      if (!view) return [card];
+      const wanted = view.files.filter(file => !have.has(file));
+      const entries = wanted.filter(shown).slice(0, ENTRY_FILES_MAX);
+      for (const file of entries) have.add(file);
+      const left = wanted.filter(file => !entries.includes(file)).map(file => cardQuote(relative(dirname(card.preview.path), file).replaceAll('\\', '/')));
+      const note = left.length ? [`(not shown: ${[...left.slice(0, NOT_SHOWN_NAMES_MAX), ...(left.length > NOT_SHOWN_NAMES_MAX ? ['…'] : [])].join(', ')})`] : [];
+      return [{ ...card, preview: previewOf(card.preview.path, [EXCERPT_NOTE, ...view.lines, ...note].join('\n')) }, ...entries.map(file => peek(file, language))];
+    });
+  } catch { return [...cards]; }
 }
 
 function hookFingerprints(dir: string | null | undefined, language: Language): string[] {
@@ -512,7 +525,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const shown = judgeFilesOf({ scripts: verdict.scripts, inline: verdict.statements.flatMap(st => st.cwd === null ? [] : st.code.map(code => ({ code, cwd: st.cwd! }))), root: ctx.project?.root ?? ctx.workspace,
     writes: [...verdict.writes, ...verdict.paths.flatMap(p => (p.write && p.path ? [p.path] : []))], unshown: verdict.unshown ?? (scope.kind === 'owner' ? scope.why : undefined), rewrites: rewritesOf(verdict.statements, new Set(verdict.scripts)) });
   const peeked = [...new Set([...verdict.scripts, ...shown.read.map(file => file.path)])].map(file => peek(file, language));
-  const cards = runCards(peeked, verdict.statements, verdict.scripts, ctx.project?.root ?? ctx.workspace, ctx.policy, language);
+  const cards = runCards(peeked, verdict.statements, verdict.scripts, verdict.reasonKeys, ctx.project?.root ?? ctx.workspace, ctx.policy, language);
   const peekTouch = codeTouch ?? installTouchOf([], ctx.policy, cwd.cwd, peeked.flatMap(p => p.content ?? []));
   const found = selfTouchMarkers(input.command, selfHostsOf(ctx.config), ctx.config.server, beatPortsOf(ctx), peeked.flatMap(p => p.content ?? []));
   const markers = [...found.strong, ...(peekTouch ? [peekTouch] : [])];

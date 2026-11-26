@@ -298,34 +298,49 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   return [];
 }
 
-// ── R1.4 の札用: npm run x が本当に動かすもの（札に見せる行とファイルを選ぶだけ。判定には使わない） ──
-// npm run <名前>・npm test・npm start（pnpm・yarn・bun も）が動かすスクリプトの名前。ほかの書き方（名前の前の旗・install・bun test など）は undefined
+// ── R1.4 の札用: npm run x が本当に動かすもの（札に見せる行とファイルを選ぶだけ。判定には使わない。迷ったら package.json の全体を見せる） ──
+// npm run <名前>・npm test・npm start（pnpm・yarn・bun も）が動かすスクリプトの名前。名前のあとが無いか `--` で区切った引数だけのときに限る。
+// ほかの書き方（名前の前後の旗〔--prefix・-w・-C など、npm は旗をどこでも読む〕・install・bun test など）は undefined
 export function packageScriptName(cmd: string, args: readonly string[]): string | undefined {
   const [sub, name] = args;
+  const plain = (from: number): boolean => args.length <= from || args[from] === '--';
   if (!PACKAGE_TOOLS.has(cmd) || sub === undefined) return undefined;
-  if (sub === 'test' || sub === 'start') return cmd === 'bun' && sub === 'test' ? undefined : sub;
-  return (sub === 'run' || sub === 'run-script') && name !== undefined && !name.startsWith('-') ? name : undefined;
+  if (sub === 'test' || sub === 'start') return (cmd === 'bun' && sub === 'test') || !plain(1) ? undefined : sub;
+  return (sub === 'run' || sub === 'run-script') && name !== undefined && !name.startsWith('-') && plain(2) ? name : undefined;
 }
 
 export interface ScriptView { lines: string[]; files: string[] }
 
+const CD_CMDS = new Set(['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl', 'push-location', 'pop-location']);
+const SCRIPT_TEXT_MAX = 6000;
+const SCRIPT_WORD_SPLIT = /[\s"'`()&|;<>=]+/u;
+const SCRIPT_GLOB = /[*?[\]{}]/u;
+const INVISIBLE = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
+
+// 札に出す文字。JSON.parse で本物になった制御文字・向きを変える文字・見えない文字を \uXXXX にして、行を見た目どおりに読めるようにする
+export const cardQuote = (text: string): string => JSON.stringify(text).replace(INVISIBLE, c => Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''));
+
 // 名前のスクリプトの行（前後のフック pre<名前>・post<名前> と、行の中の npm run が呼ぶスクリプトも）と、行が渡す先のファイル（node x.js・tsx x.ts など、直接の実行と同じ読み方）。
-// 行を絞りきれない（名前のスクリプトが無い・install など別の呼び出しがある・package.json が読めない）ときは undefined。札は package.json の全体を見せる
+// 絞りきれないとき（名前のスクリプトが無い・install など別の呼び出しがある・行に cd がある・行が長い・見せた行が見せていないスクリプトの名前を語・npm:名前・glob で挙げている・package.json が読めない）は undefined。札は package.json の全体を見せる
 export function packageScriptView(packageText: string, names: readonly string[], dir: string, language: Language): ScriptView | undefined {
   let table: unknown;
   try { table = (JSON.parse(packageText) as { scripts?: unknown }).scripts; } catch { return undefined; }
   if (typeof table !== 'object' || table === null) return undefined;
   const scripts = table as Record<string, unknown>;
   const lines: string[] = [];
+  const values: string[] = [];
   const files: string[] = [];
   const seen = new Set<string>();
+  let size = 0;
   const one = (key: string): boolean => {
     if (seen.has(key)) return true;
     seen.add(key);
     const value = Object.hasOwn(scripts, key) ? scripts[key] : undefined;
-    if (typeof value !== 'string') return false;
-    lines.push(`${JSON.stringify(key)}: ${JSON.stringify(value)}`);
+    if (typeof value !== 'string' || (size += value.length) > SCRIPT_TEXT_MAX) return false;
+    lines.push(`${cardQuote(key)}: ${cardQuote(value)}`);
+    values.push(value);
     return segments(value).every(seg => {
+      if (CD_CMDS.has(seg.cmd)) return false;
       const called = packageScriptName(seg.cmd, seg.args);
       if (called !== undefined) return withHooks(called);
       if (PACKAGE_TOOLS.has(seg.cmd) && !PACKAGE_READONLY_SUB.has(seg.args.find(a => !a.startsWith('-')) ?? '')) return false;
@@ -334,7 +349,15 @@ export function packageScriptView(packageText: string, names: readonly string[],
     });
   };
   const withHooks = (name: string): boolean => [`pre${name}`, name, `post${name}`].every(key => (key !== name && !Object.hasOwn(scripts, key)) || one(key));
-  return names.every(withHooks) ? { lines, files: [...new Set(files)] } : undefined;
+  if (!names.every(withHooks)) return undefined;
+  const hidden = Object.keys(scripts).filter(key => !seen.has(key));
+  const mentioned = (token: string): boolean => {
+    const bare = token.replace(/^(?:npm|yarn|pnpm|bun):/u, '');
+    const glob = bare.search(SCRIPT_GLOB);
+    return bare !== '' && hidden.some(key => (glob < 0 ? key === bare : key.startsWith(bare.slice(0, glob))));
+  };
+  if (hidden.length > 0 && values.some(value => value.split(SCRIPT_WORD_SPLIT).some(mentioned))) return undefined;
+  return { lines, files: [...new Set(files)] };
 }
 
 // ── R1.5 ほかのプロセスを起こす・残す ──
