@@ -31,7 +31,7 @@ export class ScriptedRuntime implements AgentRuntime {
   script: Script = feed => feed.done();
   startError: Error | undefined;
   // 応えない実行役（呼ばれても終わらない）を作る
-  hang: { probe?: boolean; approve?: boolean; interrupt?: boolean } = {};
+  hang: { probe?: boolean; approve?: boolean; interrupt?: boolean; close?: boolean } = {};
   // 応えない呼び出しを、試験の終わりに解く（待っている確かめの時計も道連れに残さない）
   readonly release!: () => void;
   readonly #gate = new Promise<void>(resolve => { (this as { release: () => void }).release = resolve; });
@@ -106,7 +106,11 @@ export class ScriptedRuntime implements AgentRuntime {
     }
   }
 
-  async close(sessionId: string): Promise<void> { this.closes += 1; this.#open.delete(sessionId); }
+  async close(sessionId: string): Promise<void> {
+    this.closes += 1;
+    this.#open.delete(sessionId);
+    if (this.hang.close) await this.#gate;
+  }
 }
 
 export function scriptedFactory(runtime: { current?: ScriptedRuntime }): RuntimeFactory {

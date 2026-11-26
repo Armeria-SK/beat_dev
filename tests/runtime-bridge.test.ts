@@ -186,7 +186,7 @@ test('許可の設定は、起こすたびに設定から決め直す（知ら�
     const { id: projectId } = await r.product();
     await r.check();
     r.runtime.script = feed => feed.done();
-    await r.turn(uuid(++n), 'go', { projectId, modelId: 'cc' });
+    await r.turn(uuid(++n), 'go', { projectId, modelId: 'cc', permissionMode: 'auto' });
     assert.equal(r.runtime.starts[0]!.permission, expected, `${configured}`);
   }
 });
@@ -651,6 +651,9 @@ test('承認の求めに答える・止める呼びかけが応えなくても�
   assert.deepEqual({ ok: ended.ok, kind: ended.error_kind }, { ok: 0, kind: 'provider_error' });
   assert.match(ended.error_message!, /approval/u);
   assert.deepEqual([r.runtime.approvals.length, r.runtime.interrupts], [1, 1], 'the stop call is made even when the decline never returns');
+  const gaveUp = r.s.logs.filter(line => /Gave up waiting/u.test(line));
+  assert.deepEqual(gaveUp.map(line => /to (.+) after/u.exec(line)?.[1]), ['decline the approval request', 'interrupt the reply'], 'each call that was not waited for to the end is logged, with what it was');
+  assert.ok(gaveUp.every(line => line.includes('claude-code') && line.includes('150 ms')), gaveUp.join('\n'));
 
   const second = await r.send(uuid(++n), 'go again', { projectId, modelId: 'cc' });
   await waitFor(() => r.runtime.approvals.length === 2, 'the second approval request was answered');
@@ -704,4 +707,79 @@ test('続きに使う会話の ID は、実行の記録にも、実行の一覧�
   const records = (listed.body.runs as Array<{ runtime: string | null }>).map(run => run.runtime).filter((text): text is string => text !== null);
   assert.equal(records.length, 2);
   assert.ok(records.every(text => text.includes('[session]') && text.includes('--session-id')), 'the shape of the launch stays visible');
+});
+
+test('モデルを選ばない製品の新しい会話は、最初の送信が実行役へ回るので、考える深さは実行役のモデルの一覧で確かめる（提供元の先頭のモデルの一覧ではなく）。製品の無い会話・発言のある会話は今までどおり提供元の一覧', async t => {
+  const r = await rig(t, { efforts: ['low', 'high'] });
+  const { id: projectId } = await r.product();
+  await r.check();
+  r.runtime.script = feed => feed.done();
+
+  const refused = await r.send(uuid(++n), 'go', { projectId, effort: 'xhigh' });
+  assert.equal(refused.status, 400, JSON.stringify(refused.body));
+  assert.match(JSON.stringify(refused.body), /low \/ high/u, 'the message lists the depths of the runtime model');
+
+  const auto = uuid(++n);
+  await r.turn(auto, 'go', { projectId, effort: 'high' });
+  const row = r.s.app.conversations.get(auto)!;
+  assert.deepEqual({ runtime: row.runtime_id, effort: row.effort }, { runtime: 'claude-code', effort: 'high' });
+  assert.equal(r.runtime.starts[0]!.effort, 'high');
+
+  // 製品の無い会話は提供元の側へ回る。提供元のモデルに無い深さは今までどおり断る
+  const noProduct = await r.send(uuid(++n), 'go', { effort: 'high' });
+  assert.equal(noProduct.status, 400, JSON.stringify(noProduct.body));
+
+  // 発言のある（実行役に結ばれていない）会話は、次の送信も提供元の側。実行役の深さで通さない
+  const old = uuid(++n);
+  r.s.app.conversations.create({ id: old, projectId });
+  r.s.app.conversations.append(old, { role: 'user', content: 'an earlier message' });
+  const started = r.runtime.starts.length;
+  const again = await r.send(old, 'go', { effort: 'high' });
+  assert.equal(again.status, 400, JSON.stringify(again.body));
+  assert.equal(r.runtime.starts.length, started, 'nothing reached the runtime');
+});
+
+test('実行役を止める・断る・閉じる呼びかけが返らないまま待つ時間が切れたら、何を待つのをやめたかを 1 行ログに残す。時間内に返る呼びかけは何も出さない', async t => {
+  const r = await rig(t);
+  const { id: projectId } = await r.product();
+  await r.check();
+  r.runtime.script = feed => feed.done();
+  r.runtime.hang = { close: true };
+  await r.turn(uuid(++n), 'go', { projectId, modelId: 'cc' });
+  const gaveUp = r.s.logs.filter(line => /Gave up waiting/u.test(line));
+  assert.equal(gaveUp.length, 1, gaveUp.join('\n'));
+  assert.ok(gaveUp[0]!.startsWith('[WARN]') && gaveUp[0]!.includes('close the runtime session') && gaveUp[0]!.includes('claude-code') && gaveUp[0]!.includes('150 ms'), gaveUp[0]);
+  assert.equal(r.runtime.closes, 1, 'the close call was still made');
+  r.runtime.release();
+
+  r.runtime.hang = {};
+  await r.turn(uuid(++n), 'again', { projectId, modelId: 'cc' });
+  assert.equal(r.runtime.closes, 2);
+  assert.equal(r.s.logs.filter(line => /Gave up waiting/u.test(line)).length, 1, 'a close that answers in time adds nothing');
+});
+
+test('画面を通らない送信（モードを渡さない）で始まる実行役の新しい会話の既定モードは、提供元の道と同じ: 計画の無い製品は plan（慎重な許可で起こす）、計画のある製品は auto。モードを渡せばそれが勝つ', async t => {
+  const r = await rig(t, { permission: 'acceptEdits' });
+  const { id: bare } = await r.product('bare');
+  const { id: planned } = await r.product('planned');
+  await r.check();
+  r.runtime.script = feed => feed.done();
+  const planConversation = uuid(++n);
+  r.s.app.conversations.create({ id: planConversation, projectId: planned });
+  r.s.app.plans.write(planned, planConversation, '# Plan\n\nBuild it.', { by: 'owner', tainted: false, conversationId: planConversation, runId: null });
+
+  const noPlan = uuid(++n);
+  await r.turn(noPlan, 'go', { projectId: bare, modelId: 'cc' });
+  assert.equal(r.s.app.conversations.modeOf(noPlan), 'plan');
+  assert.equal(r.runtime.starts[0]!.permission, 'default', 'a plan-mode conversation starts the runtime on the most careful permission');
+
+  const withPlan = uuid(++n);
+  await r.turn(withPlan, 'go', { projectId: planned, modelId: 'cc' });
+  assert.equal(r.s.app.conversations.modeOf(withPlan), 'auto');
+  assert.equal(r.runtime.starts[1]!.permission, 'acceptEdits');
+
+  const chosen = uuid(++n);
+  await r.turn(chosen, 'go', { projectId: bare, modelId: 'cc', permissionMode: 'auto' });
+  assert.equal(r.s.app.conversations.modeOf(chosen), 'auto');
+  assert.equal(r.runtime.starts[2]!.permission, 'acceptEdits');
 });

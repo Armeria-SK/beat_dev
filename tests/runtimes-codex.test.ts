@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeConfig } from '../src/config/schema.ts';
 import { checksWindowsSandbox, CodexRuntime, createCodexRuntime, worldWritableIssue, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
-import { CodexRefused } from '../src/runtimes/codex/app-server.ts';
+import { CodexConnection, CodexRefused } from '../src/runtimes/codex/app-server.ts';
 import { wirePermission } from '../src/runtimes/codex/protocol.ts';
 import { ProcessManager } from '../src/runtimes/process-manager.ts';
 import { FACTORIES, RuntimeRegistry } from '../src/runtimes/registry.ts';
@@ -634,4 +634,22 @@ test('the world-writable warning also reaches the caller as an issue event while
   const normal = await plain.runtime.start(plain.request());
   assert.equal(normal.containReason, undefined);
   await plain.runtime.close(normal.id);
+});
+
+test('a request that could not be answered is logged with control and direction characters replaced and secrets hidden, even when the error text carries them', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'odd-method');
+  const original = CodexConnection.prototype.respondError;
+  CodexConnection.prototype.respondError = (() => { throw new Error(`broken\u202e\u0007line ${SECRET} end`); }) as never;
+  try {
+    const session = await r.runtime.start(r.request());
+    await r.runtime.send(session.id, { text: 'hello' });
+    const deadline = Date.now() + 15_000;
+    while (!r.lines.some(line => line.includes('could not be answered')) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+    await r.runtime.close(session.id);
+  } finally { CodexConnection.prototype.respondError = original; }
+  const line = r.lines.find(entry => entry.includes('could not be answered'));
+  assert.ok(line, r.lines.join('\n'));
+  assert.ok(!/[\p{Cc}\p{Cf}]/u.test(line), JSON.stringify(line));
+  assert.ok(line.includes('broken??line'), line);
+  assert.ok(!line.includes('abcdefgh12345678'), line);
 });
