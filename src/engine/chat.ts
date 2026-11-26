@@ -1755,7 +1755,7 @@ export class ChatEngine {
     const now = d.now?.() ?? new Date();
     const fence = this.#fence(p.runId, p.conversationId);
     const ownerTag = config.ui.explainLanguage === 'auto' ? product?.docLanguage : config.ui.explainLanguage;
-    const owner = p.kind === 'task' && !bare && ownerTag ?engineText(language, 'run.owner_language', { language: languageName(ownerTag) }) : '';
+    const owner = p.kind === 'task' && !bare && ownerTag ? engineText(language, 'run.owner_language', { language: languageName(ownerTag) }) : '';
     const dynamic = [buildDynamic(config.timezone, language, now, mode, product, requirements), owner, deferred, mesh, p.runId ? fence.clean(summary) : summary].filter(Boolean).join('\n\n');
     const sections = { checklist, background, product: productStatus, build };
     const system = { frozen: p.snapshot, dynamic, tail: fenceTail(buildTail(config.timezone, language, now, sections), fence.nonce) };
