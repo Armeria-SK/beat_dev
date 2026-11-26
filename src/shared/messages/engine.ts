@@ -98,6 +98,11 @@ const en = {
   'runtime.stopped_partway': '(stopped partway)',
   'usage.runtime': 'The length gauge is not shown for a conversation that runs through an external runtime, because the runtime manages its own context',
   'warn.runtime_contain': 'The external runtime could not be tied to this run ({reason}), so stopping the reply may leave its child processes running',
+  'warn.runtime_changes_guarded': 'While this reply ran, git showed changes to files that beat protects or cannot follow safely: {paths}. Check them in Changes before you go on',
+  'warn.runtime_git_hooks': 'While this reply ran, the git hooks of this product changed. Hooks can run commands later, so check them before you use git here',
+  'warn.runtime_git_config': 'While this reply ran, the git settings of this product (.git/config) changed. Check them before you use git here',
+  'warn.runtime_changes_unseen': 'beat could not list the files that changed while this reply ran (the folder could not be read afterwards, or the runtime may still be running). Check the product folder yourself before you go on',
+  'warn.runtime_git_other': 'While this reply ran, parts of .git that can hide changes from beat or run commands changed ({parts}). Check them before you use git here',
 };
 
 export const engineText = defineMessages('engine', en);

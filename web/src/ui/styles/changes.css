@@ -15,6 +15,14 @@
 .ui-changes .ui-changes__why { color: var(--ink-mute); white-space: normal; }
 .ui-changes .bt-diff:focus { outline: none; }
 .ui-changes .bt-diff.is-focus { box-shadow: 0 0 0 1px var(--line-strong); }
+.ui-changes__runtime { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.ui-changes__run { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.ui-changes__runhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+.ui-changes__runfiles { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; font: 400 12px/18px var(--font-mono); color: var(--ink-soft); }
+.ui-changes__runfile { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); min-width: 0; }
+.ui-changes__marks { display: inline-flex; flex: none; gap: var(--space-1); }
+.ui-changes__mark { color: var(--ink); }
+.ui-changes .ui-changes__alert { color: var(--ink); }
 .ui-changes-branch { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .ui-changes-branch__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; }
 .ui-changes-branch__bar > .bt-tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

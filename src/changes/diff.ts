@@ -52,7 +52,7 @@ export function ownName(path: string, part: string): boolean {
   try { return foldPath(basename(realpathSync.native(path))) === foldPath(part); } catch { return false; }
 }
 
-function readUpTo(path: string, size: number): Buffer | 'unknown' | 'large' {
+export function readUpTo(path: string, size: number): Buffer | 'unknown' | 'large' {
   if (size > KEEP_MAX_BYTES) return 'large';
   let fd: number | undefined;
   try {
@@ -64,23 +64,39 @@ function readUpTo(path: string, size: number): Buffer | 'unknown' | 'large' {
   } catch { return 'unknown'; } finally { if (fd !== undefined) closeSync(fd); }
 }
 
-// 製品のフォルダの中のファイルを、途中のリンク・ジャンクション・別名をたどらずに読む。5MB を超えるものは読まない
-export function readCurrent(realRoot: string, rel: string): Content {
-  if (!safeRel(rel)) return 'unknown';
+// 製品のフォルダの中の 1 つのパスを、途中のリンク・ジャンクション・別名をたどらずに 1 段ずつ lstat で見る（中身は読まない）。
+// absent: 無い（途中がファイルで先が無いときも）。unknown: 取れない（why: 安全に扱えないパス・リンクかジャンクション・別名・ふつうのファイルでない・読めない。at は引っかかった所）。file: ふつうのファイル
+export type Walked =
+  | { kind: 'absent' }
+  | { kind: 'unknown'; why: 'unsafe' | 'link' | 'alias' | 'special' | 'error'; at: string }
+  | { kind: 'file'; path: string; size: number; mtimeMs: number; ctimeMs: number; ino: number };
+
+export function walkCurrent(realRoot: string, rel: string): Walked {
+  if (!safeRel(rel)) return { kind: 'unknown', why: 'unsafe', at: realRoot };
   let path = realRoot;
   const parts = rel.split('/');
   for (const [i, part] of parts.entries()) {
     path = join(path, part);
     const st = lstatOf(path);
-    if (st === undefined) return null;
-    if (st === null || st.isSymbolicLink() || !ownName(path, part)) return 'unknown';
-    if (i < parts.length - 1 && !st.isDirectory()) return null;
+    if (st === undefined) return { kind: 'absent' };
+    if (st === null) return { kind: 'unknown', why: 'error', at: path };
+    if (st.isSymbolicLink()) return { kind: 'unknown', why: 'link', at: path };
+    if (!ownName(path, part)) return { kind: 'unknown', why: 'alias', at: path };
+    if (i < parts.length - 1 && !st.isDirectory()) return { kind: 'absent' };
     if (i === parts.length - 1) {
-      if (!st.isFile()) return st.isDirectory() ? null : 'unknown';
-      return readUpTo(path, st.size);
+      if (!st.isFile()) return st.isDirectory() ? { kind: 'absent' } : { kind: 'unknown', why: 'special', at: path };
+      return { kind: 'file', path, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino };
     }
   }
-  return 'unknown';
+  return { kind: 'unknown', why: 'error', at: path };
+}
+
+// 製品のフォルダの中のファイルを、途中のリンク・ジャンクション・別名をたどらずに読む。5MB を超えるものは読まない
+export function readCurrent(realRoot: string, rel: string): Content {
+  const walked = walkCurrent(realRoot, rel);
+  if (walked.kind === 'absent') return null;
+  if (walked.kind === 'unknown') return 'unknown';
+  return readUpTo(walked.path, walked.size);
 }
 
 const same = (a: Content, b: Content): boolean => (a === null && b === null) || (Buffer.isBuffer(a) && Buffer.isBuffer(b) && a.equals(b));
