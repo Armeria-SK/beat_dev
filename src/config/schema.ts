@@ -14,6 +14,7 @@ export const ServerKind = Type.Union([
   Type.Literal('tabbyapi'),
   Type.Literal('openrouter'),
   Type.Literal('openai'),
+  Type.Literal('gemini'),
   Type.Literal('generic'),
 ]);
 

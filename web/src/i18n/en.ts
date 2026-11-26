@@ -1246,7 +1246,7 @@ export const en = {
   'ui.set.key.confirmTitle': 'The key goes to an address outside this PC',
   'ui.set.key.confirmOk': 'Send key',
   'ui.set.provider.add': 'Add a provider',
-  'ui.set.provider.addDesc': 'Anthropic, OpenAI or an OpenAI-compatible URL',
+  'ui.set.provider.addDesc': 'Anthropic, OpenAI, Gemini or an OpenAI-compatible URL',
   'ui.set.provider.addShort': 'Add provider',
   'ui.set.provider.id': 'Name',
   'ui.set.provider.idDesc': 'Models refer to the provider by this name',

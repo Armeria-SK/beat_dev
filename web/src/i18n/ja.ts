@@ -358,7 +358,7 @@ export const ja = {
   'ui.set.key.removeDesc': '.env ファイルから消します',
   'ui.set.key.removeWarn': 'Remove key · 元に戻せません',
   'ui.set.key.confirmTitle': 'キーがこの PC の外のアドレスに送られます',
-  'ui.set.provider.addDesc': 'Anthropic・OpenAI、または OpenAI 互換の URL',
+  'ui.set.provider.addDesc': 'Anthropic・OpenAI・Gemini、または OpenAI 互換の URL',
   'ui.set.provider.idDesc': 'モデルはこの名前でプロバイダーを指します',
   'ui.set.provider.urlDesc': '空ならプロバイダーの既定を使います',
   'ui.set.provider.envDesc': 'キーを入れる .env の変数名',

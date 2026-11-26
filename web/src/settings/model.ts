@@ -6,6 +6,8 @@ import { derivedKeyEnv, isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../
 
 export type Config = Record<string, any>;
 
+export const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+
 export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'notify' | 'mcp' | 'browser' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
 
 export const isPlain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
