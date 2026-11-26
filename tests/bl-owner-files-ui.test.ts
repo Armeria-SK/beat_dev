@@ -55,7 +55,7 @@ test('ui/ChangesPane（DOM）: 断られた（changed）あと読み直すと、
   await click(undo());
   await wait(50);
   assert.deepEqual(bodies[0], { base: 'commit', paths: ['src/a.ts'], hashes: { 'src/a.ts': H1 } });
-  assert.equal(text(container.querySelector('.bt-notice--warn')), '1 file could not be undone · src/a.ts: it changed again after the undo');
+  assert.equal(text(container.querySelector('.bt-notice--warn')), '1 file could not be undone · src/a.ts: it changed in the meantime');
   await wait(50);
   await click(undo());
   await wait(50);

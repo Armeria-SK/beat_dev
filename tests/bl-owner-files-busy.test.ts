@@ -56,6 +56,8 @@ async function rig(t: Parameters<typeof startApp>[0], writeRoots = false) {
 
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), 'utf8');
 const busy = (r: { status: number; body: { code?: string } }): [number, string | undefined] => [r.status, r.body.code];
+// 断る文は「この製品の」と言い切らない。止めているのは、入れ子の別の製品の実行や、製品に結び付かない会話（tools.roots で書ける）のこともある
+const WRITES_HERE = /^A task or conversation that can write to this product folder is running \(it may belong to another product, or to none\)\./u;
 
 test('L240: 実行のない scout-run の行（考える・直す実行の印）が running でも、Undo・Redo は断らない。ふつうのタスクの running なら断る', async t => {
   const s = await rig(t);
@@ -84,7 +86,9 @@ test('L240: フォルダが入れ子の別の製品のタスクが running な�
   await s.run(child.id, [readThen('file_write', { path: 'c.txt', content: 'c2\n' })]);
 
   const childBuild = s.running(child.id);
-  assert.deepEqual(busy(await s.undo(parent.id, { paths: ['a.txt'] })), [409, 'project.changes_busy'], '子の実行が動いている間、親の Undo は断る');
+  const blocked = await s.undo(parent.id, { paths: ['a.txt'] });
+  assert.deepEqual(busy(blocked), [409, 'project.changes_busy'], '子の実行が動いている間、親の Undo は断る');
+  assert.match((blocked.body as { message: string }).message, WRITES_HERE, '入れ子の別の製品の実行にも当てはまる文');
   assert.equal(read(parent.root, 'a.txt'), 'v2\n');
   childBuild();
 
@@ -119,7 +123,9 @@ test('L240: tools.roots でその製品のフォルダに書ける会話（製�
   await wide.edited(p);
   const release = await wide.hold();
   try {
-    assert.deepEqual(busy(await wide.undo(p.id, { paths: ['a.txt'] })), [409, 'project.changes_busy']);
+    const blocked = await wide.undo(p.id, { paths: ['a.txt'] });
+    assert.deepEqual(busy(blocked), [409, 'project.changes_busy']);
+    assert.match((blocked.body as { message: string }).message, WRITES_HERE, '製品に結び付かない会話にも当てはまる文');
     assert.equal(read(p.root, 'a.txt'), 'v2\n');
   } finally { await release(); }
   assert.equal((await wide.undo(p.id, { paths: ['a.txt'] })).status, 200, '会話が終われば戻せる');

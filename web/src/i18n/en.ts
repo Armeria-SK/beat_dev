@@ -2070,7 +2070,7 @@ export const en = {
   'ui.changes.why.too_large': 'the earlier contents were too large to keep',
   'ui.changes.why.cannot_keep': 'its current contents could not be kept for Redo',
   'ui.changes.why.same_file': 'the same file was listed twice',
-  'ui.changes.why.changed': 'it changed again after the undo',
+  'ui.changes.why.changed': 'it changed in the meantime',
   'ui.changes.why.failed': 'writing it failed',
   'ui.notice.undid': (n: number) => `Undid ${n} ${pluralEn(n, { one: 'file', other: 'files' })}`,
   'ui.notice.undidRefused': (n: number) => `${n} could not be undone`,

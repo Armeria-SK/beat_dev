@@ -14,6 +14,7 @@ import { ChatEngine } from '../src/engine/chat.ts';
 import { ModelStatus } from '../src/engine/status.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
+import { classifyFetchError } from '../src/providers/http.ts';
 import { EndpointLimiter } from '../src/providers/limiter.ts';
 import { ProviderRegistry } from '../src/providers/registry.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
@@ -81,7 +82,8 @@ function slowStart(ms: number, text = '遅くなりました'): Script {
 
 // 出来事が 1 つも来ないまま、提供元の時間切れで終わる台本。silentFor が上限（modelSilentMs）より短い（すぐ失敗する）と、黙っていたことにならない
 const timeoutError = (): ProviderError => providerError('timeout', 'timeout');
-const undiciTimeout = (code: string): ProviderError => providerError('provider_error', 'connect.code', { code }, { retryable: true });
+// 本物の経路と同じ形: 標準の fetch の失敗（cause.code）を classifyFetchError が読む。UND_ERR_HEADERS_TIMEOUT・UND_ERR_BODY_TIMEOUT は timeout に、ほかの code は connect.code になる
+const undiciFailure = (code: string): ProviderError => classifyFetchError(Object.assign(new TypeError('fetch failed'), { cause: { code } }), new AbortController().signal);
 const failsAfter = (silentFor: number, error: Error): Script => async function* () {
   await pause(silentFor);
   throw error;
@@ -178,7 +180,7 @@ test('次のモデルが無いときは「N 分何も届きませんでした」
 
 test('提供元の上限（10 分）より手前の、実際の標準の部品の時間切れ（undici の 300 秒）も、黙ったまま来たなら試し直さない', async t => {
   for (const code of ['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']) {
-    const s = await setup(t, { scripts: [failsAfter(200, undiciTimeout(code)), reply('届かないはず')], models: [model('a')], modelSilentMs: 80 });
+    const s = await setup(t, { scripts: [failsAfter(200, undiciFailure(code)), reply('届かないはず')], models: [model('a')], modelSilentMs: 80 });
     const result = await sendAndWait(s.engine);
     assert.equal(result.ok, false, code);
     if (result.ok) return;
@@ -205,7 +207,7 @@ test('上限より前の時間切れ（出来事なし）は、黙っていた�
 });
 
 test('黙ったあとの失敗でも、時間切れでないもの（接続のリセットなど）は今までどおり試し直す', async t => {
-  const s = await setup(t, { scripts: [failsAfter(200, undiciTimeout('ECONNRESET')), reply('届きました')], modelSilentMs: 80 });
+  const s = await setup(t, { scripts: [failsAfter(200, undiciFailure('ECONNRESET')), reply('届きました')], modelSilentMs: 80 });
   const result = await sendAndWait(s.engine);
   assert.ok(result.ok);
   assert.equal(result.modelId, 'a');
