@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ChatMessage, StopReason, ToolCall } from '../src/engine/types.ts';
+import { Conversations } from '../src/db/conversations.ts';
+import { openDatabase } from '../src/db/database.ts';
+import { eraseConversation } from '../src/db/erase.ts';
+import { MIGRATIONS } from '../src/db/migrations.ts';
+import { Uploads } from '../src/uploads/store.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
-import { reply, withLoad, type Script } from './helpers.ts';
+import { reply, tempDir, withLoad, type Script } from './helpers.ts';
 import { FakeBrowserDriver, TINY_PNG } from './helpers/fake-browser.ts';
 
 // backlog L798: browser_screenshot の画面の写しは、messages.parts に base64 で入れず、添付と同じ uploads のファイルに置き、発言には id だけ残す
@@ -46,4 +51,65 @@ test('L798: 本物の App で browser_screenshot を呼ぶと、写しはファ�
   assert.equal(erased.status, 200, JSON.stringify(erased.body));
   assert.equal(existsSync(file), false, '会話を消すと写しのファイルも消える');
   assert.equal(s.app.db.prepare('SELECT 1 FROM uploads WHERE id = ?').get(shot.imageIds![0]!), undefined);
+});
+
+test('L798: 会話を消すとき、道具の画像は「ほかの発言が使っていないか」の検索をせずに消す（画像 1 枚ごとに messages 全体を読まない）。添付は今までどおり調べる', t => {
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const dir = tempDir(t);
+  const uploads = new Uploads(db, dir);
+  const conversations = new Conversations(db);
+  const conversation = conversations.create({ projectId: 'p1' });
+  const attachment = uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の中身') });
+  conversations.append(conversation.id, { role: 'user', content: '見て', attachments: [{ id: attachment.id, name: 'memo.txt', kind: 'text' }] });
+  const shots = [1, 2, 3].map(n => uploads.save({ name: 'browser_screenshot', mime: 'image/png', body: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.from(`shot ${n}`)]) }));
+  for (const [n, shot] of shots.entries()) conversations.append(conversation.id, { role: 'tool', toolCallId: `c${n}`, name: 'browser_screenshot', content: '写した', imageIds: [shot.id] });
+
+  const sqls: string[] = [];
+  const spy = new Proxy(db, {
+    get(target, key) {
+      const value = Reflect.get(target, key);
+      if (typeof value !== 'function') return value;
+      return key === 'prepare' ? (sql: string) => { sqls.push(sql); return target.prepare(sql); } : value.bind(target);
+    },
+  });
+  const erased = eraseConversation({ db: spy, uploadsDir: dir, toolOutputsDir: dir }, conversation.id);
+
+  assert.equal(erased.uploads, 4);
+  assert.deepEqual(erased.files.failed, []);
+  for (const id of [attachment.id, ...shots.map(s => s.id)]) {
+    assert.equal(uploads.get(id), undefined, `uploads の行が消える: ${id}`);
+    assert.equal(existsSync(join(dir, id)), false, `ファイルが消える: ${id}`);
+  }
+  const sharedUseChecks = sqls.filter(sql => /role = 'user' AND instr\(parts/u.test(sql));
+  assert.equal(sharedUseChecks.length, 1, '「ほかの発言が使っているか」の検索は、添付 1 つ分だけ（画像の 3 枚分は無い）');
+});
+
+test('L798: ファイルが無くなった画像は、モデルに渡さず、知らせは画像ごとに 1 回だけ（返事のあいだに assemble が何度動いても、実行を重ねても）', async t => {
+  const driver = new FakeBrowserDriver().site(PAGE, { title: 'Start', text: 'start page' });
+  const s = await startApp(t, {
+    models: [fakeModel('m1', { vision: true })], browserDriver: driver,
+    configure: c => { c.tools.browser.enabled = true; c.tools.browser.sites = ['example.com']; c.routing = { chat: ['m1'], background: ['m1'], retriesPerModel: 0 }; c.memory.review = false; },
+  });
+  s.adapter().scripts = [callScript('browser_open', { url: PAGE }), callScript('browser_screenshot', {}), reply('見ました'), reply('二回目'), reply('三回目')];
+  const id = uuid(97);
+  s.app.conversations.create({ id, title: '会話' });
+  const send = async (text: string) => {
+    const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text });
+    assert.equal(sent.status, 202, JSON.stringify(sent.body));
+    await settled(s.app, sent.body.runId as string);
+  };
+  await send('開いて写して');
+  const shot = s.app.conversations.messages(id).map(m => m.message).find((m): m is Extract<ChatMessage, { role: 'tool' }> => m.role === 'tool' && m.name === 'browser_screenshot')!;
+  const imageId = shot.imageIds![0]!;
+  const lost = () => s.logs.filter(line => line.includes(`Could not read the image ${imageId}`));
+  assert.equal(lost().length, 0, 'ファイルがあるあいだは知らせない');
+
+  rmSync(join(s.paths.uploads, imageId));
+  await send('もう一度');
+  await send('もう一回');
+  assert.equal(lost().length, 1);
+  assert.match(lost()[0]!, /^\[WARN\]/u);
+  const seen = s.adapter().calls.at(-1)!.messages.find(m => m.role === 'tool' && m.name === 'browser_screenshot')!;
+  assert.equal(seen.role === 'tool' ? seen.images : 'x', undefined, '読めない画像はモデルに渡さない');
 });

@@ -392,11 +392,20 @@ export class ChatEngine {
     return { ids, inline };
   }
 
+  // 読めない画像は、モデルに渡さず、画像ごとに 1 回だけ知らせる（#assemble は 1 つの返事のあいだに何度も動く）
+  #imageLost = new Set<string>();
   #loadImage(id: string): ImageRef | undefined {
     try {
       const upload = this.#images().get(id);
-      return upload?.kind === 'image' ? this.#images().image(upload) : undefined;
-    } catch { return undefined; }
+      if (upload?.kind !== 'image') throw new Error('it is not in the uploads table');
+      return this.#images().image(upload);
+    } catch (error) {
+      if (!this.#imageLost.has(id)) {
+        this.#imageLost.add(id);
+        this.#d.log?.(`[WARN] Could not read the image ${id} of a tool result; the model will not see it: ${(error as Error).message}`);
+      }
+      return undefined;
+    }
   }
 
   #busy(key: EngineMessageKey): SendOutcome {

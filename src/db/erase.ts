@@ -67,12 +67,13 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
   const { db } = deps;
   // この会話の発言に付いていた添付の ID と、道具の結果の画像（imageIds）の ID
   const attachmentIds = new Set<string>();
+  const imageIds = new Set<string>();
   const rows = db.prepare("SELECT parts FROM messages WHERE conversation_id = ? AND role IN ('user', 'tool')").all(id) as Array<{ parts: string }>;
   for (const row of rows) {
     try {
       const parts = JSON.parse(row.parts) as { attachments?: Array<{ id?: unknown }>; imageIds?: unknown[] };
       for (const a of parts.attachments ?? []) if (typeof a.id === 'string') attachmentIds.add(a.id);
-      for (const imageId of parts.imageIds ?? []) if (typeof imageId === 'string') attachmentIds.add(imageId);
+      for (const imageId of parts.imageIds ?? []) if (typeof imageId === 'string') imageIds.add(imageId);
     } catch { }
   }
   const refs = db.prepare('SELECT full_ref FROM tool_calls WHERE conversation_id = ? AND full_ref IS NOT NULL').all(id) as Array<{ full_ref: string }>;
@@ -107,6 +108,9 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
     const used = db.prepare("SELECT 1 FROM messages WHERE role = 'user' AND instr(parts, ?) > 0 LIMIT 1").get(`"id":"${uploadId}"`);
     if (used) continue;
     if (Number(db.prepare('DELETE FROM uploads WHERE id = ?').run(uploadId).changes)) { uploads++; files.push(join(deps.uploadsDir, uploadId)); }
+  }
+  for (const imageId of imageIds) {
+    if (Number(db.prepare('DELETE FROM uploads WHERE id = ?').run(imageId).changes)) { uploads++; files.push(join(deps.uploadsDir, imageId)); }
   }
   db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
   return { messages, uploads };
