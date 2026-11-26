@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join, resolve, sep } from 'node:path';
-import { DEFAULT_LANGUAGE, isRuntimeModel, providerModels, providerOf, type AppConfig, type Language, type ModelConfig, type ProviderConfig, type ProviderModelConfig, type RuntimeModelConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, enabledRuntimeModels, isRuntimeModel, providerModels, providerOf, type AppConfig, type Language, type ModelConfig, type ProviderConfig, type ProviderModelConfig, type RuntimeModelConfig } from '../config/schema.ts';
 import type { ConversationRow, Conversations, StoredMessage } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
 import type { KV } from '../db/kv.ts';
@@ -299,7 +299,12 @@ export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: 
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
 export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
   const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
-  return preferred.length ? [...preferred] : providerModels(config).map(m => m.id);
+  if (preferred.length) return [...preferred];
+  const own = providerModels(config).map(m => m.id);
+  if (own.length > 0 || route !== 'chat') return own;
+  // AR-10: 提供元のモデルが 1 つも無いとき、会話の既定は、切っていない実行役の先頭のモデル（実行役は裏方の道には使わない）
+  const runtime = enabledRuntimeModels(config)[0];
+  return runtime ? [runtime.id] : [];
 }
 
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）

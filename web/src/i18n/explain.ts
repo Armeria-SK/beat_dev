@@ -697,6 +697,18 @@ export const EXPLAIN_KEYS = [
   'ui.set.rs.preferDesc',
   'ui.set.rs.avoidDesc',
   'ui.set.rs.columnsDesc',
+  'ui.wait.noProvider',
+  'ui.np.short',
+  'ui.np.build',
+  'ui.np.schedule',
+  'ui.np.scout',
+  'ui.np.research',
+  'ui.np.roles',
+  'ui.np.background',
+  'ui.np.grow',
+  'ui.conv.runtimeTitle',
+  'ui.conv.runtimeText',
+  'ui.ob.model.runtimeNote',
 ] as const satisfies readonly DictKey[];
 
 export type ExplainKey = typeof EXPLAIN_KEYS[number];

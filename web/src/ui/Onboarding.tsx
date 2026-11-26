@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { api, ApiError, type Probe, type Profile } from '../api.ts';
+import { api, ApiError, type Probe, type Profile, type RuntimeView } from '../api.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { dropListed, keyEnvOf, plannedProviderId, setupModelConfig } from '../onboarding.ts';
+import { dropListed, keyEnvOf, plannedProviderId, runtimeIdOf, setupModelConfig, setupRuntimeConfig, turnOnRuntime, type RuntimeKindId } from '../onboarding.ts';
 import { accessKey, accessWidening, keyEntryAccess, type Access } from '../settings/access.ts';
 import { applyEdits, deepEqual, diffConfig } from '../settings/merge.ts';
 import type { Config } from '../settings/model.ts';
@@ -13,6 +13,7 @@ import {
 } from './onboarding-steps.ts';
 import { Avatar, Button, Pill } from './parts.tsx';
 import { Widen } from './settings/controls.tsx';
+import { NAME as RUNTIME_NAME, pillOf, stateLine, type RuntimePill } from './settings/runtimes.tsx';
 
 type Json = Record<string, any>;
 
@@ -20,7 +21,11 @@ const errorText = (error: unknown, fallback: string): string => (error instanceo
 const HEX = /^#[0-9a-fA-F]{6}$/u;
 
 const PREVIEW_LABEL = { idle: 'ui.ob.agent.idle', working: 'ui.ob.agent.working', waiting: 'ui.ob.agent.waiting' } as const;
-const PROVIDER_LABEL = { anthropic: 'ui.ob.model.anthropic', openai: 'ui.ob.model.openai', custom: 'ui.ob.model.custom' } as const;
+const PROVIDER_LABEL = { anthropic: 'ui.ob.model.anthropic', openai: 'ui.ob.model.openai', custom: 'ui.ob.model.custom', runtime: 'ui.ob.model.runtime' } as const;
+const RUNTIME_KINDS = ['claude-code', 'codex'] as const satisfies readonly RuntimeKindId[];
+const RUNTIME_PILL = { off: 'ui.set.runtime.pillOff', unchecked: 'ui.set.runtime.pillUnchecked', ready: 'ui.set.runtime.pillReady', missing: 'ui.set.runtime.pillMissing', signedOut: 'ui.set.runtime.pillSignedOut', blocked: 'ui.set.runtime.pillBlocked' } as const satisfies Record<RuntimePill, string>;
+const RUNTIME_PILL_TONE = { off: undefined, unchecked: 'warn', ready: 'ok', missing: 'danger', signedOut: 'danger', blocked: 'warn' } as const;
+const SIGN_IN = { 'claude-code': 'ui.set.runtime.signInClaudeDesc', codex: 'ui.set.runtime.signInCodexDesc' } as const;
 const PROBLEM_TEXT = { model: 'ui.ob.model.problem.model', baseUrl: 'ui.ob.model.problem.baseUrl', context: 'ui.ob.model.problem.context', key: 'ui.ob.model.problem.key' } as const;
 const STYLE_TEXT = {
   calm: ['ui.ob.style.calm', 'ui.ob.style.calm.example'], friendly: ['ui.ob.style.friendly', 'ui.ob.style.friendly.example'],
@@ -42,6 +47,8 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   const [keySet, setKeySet] = useState(false);
   const [modelId, setModelId] = useState<string | null>(null);
   const [result, setResult] = useState<Probe | null>(null);
+  const [runtimeKind, setRuntimeKind] = useState<RuntimeKindId>('claude-code');
+  const [runtimeView, setRuntimeView] = useState<RuntimeView | null>(null);
   const [existing, setExisting] = useState<string | null>(null);
   const [problem, setProblem] = useState<keyof typeof PROBLEM_TEXT | null>(null);
   const [widen, setWiden] = useState<{ items: Access[]; key: string; list?: boolean } | null>(null);
@@ -79,7 +86,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     let live = true;
     void Promise.all([api.settings(), api.models()]).then(([s, m]) => {
       if (!live) return;
-      const planned = form.provider === 'custom' ? null : plannedProviderId(s.config, modelFormOf(form), modelId);
+      const planned = form.provider === 'custom' || form.provider === 'runtime' ? null : plannedProviderId(s.config, modelFormOf(form), modelId);
       if (planned) api.providerKey(planned).then(k => { if (live) setKeySet(k.set); }).catch(() => undefined);
       else setKeySet(false);
       const ok = m.models.find(x => x.probe && REACHABLE.has(x.probe.status));
@@ -104,7 +111,8 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     return () => removeEventListener('keydown', onEscape, true);
   }, [busy, widen]);
 
-  const passed = (result !== null && REACHABLE.has(result.status)) || (existing !== null && result === null);
+  const runtimePassed = form.provider === 'runtime' && runtimeView !== null && runtimeView.kind === runtimeKind && runtimeView.enabled && runtimeView.check?.usable === true;
+  const passed = runtimePassed || (form.provider !== 'runtime' && ((result !== null && REACHABLE.has(result.status)) || (existing !== null && result === null)));
   const ready = canContinue(step, { name, agent, style, passed });
 
   async function next() {
@@ -125,7 +133,35 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
     finally { setBusy(false); }
   }
 
+  // 実行役: 入れる・モデルを足す・会話の順番の先頭に置く（提供元のモデルが無いとき）を保存してから、持ち主が押した確かめを 1 回だけ起こす
+  async function testRuntime() {
+    const found = connectProblem(form, keySet);
+    setProblem(found); setRuntimeView(null);
+    if (found) return;
+    setBusy(true); setError(null);
+    try {
+      const latest = (await api.settings()).config;
+      const built = setupRuntimeConfig(latest, { kind: runtimeKind, model: form.model });
+      await saveTidy(latest, built.config);
+      setRuntimeView(await api.checkRuntime(built.runtimeId));
+    } catch (failure) { setError(errorText(failure, t('ui.ob.model.failed'))); }
+    finally { setBusy(false); }
+  }
+
+  async function listRuntime() {
+    setBusy(true); setError(null); setListNote(null);
+    try {
+      const latest = (await api.settings()).config;
+      await saveTidy(latest, turnOnRuntime(latest, runtimeKind));
+      const view = await api.loadRuntimeModels(runtimeIdOf(latest, runtimeKind));
+      const got = view.models ?? [];
+      setNames(got.map(m => m.id)); setListNote(t('ui.set.model.listed', got.length));
+    } catch (failure) { setNames([]); setListNote(errorText(failure, t('ui.set.model.listFailed'))); }
+    finally { setBusy(false); }
+  }
+
   async function test(confirmed: string | null = null) {
+    if (form.provider === 'runtime') return testRuntime();
     const found = connectProblem(form, keySet);
     setProblem(found); setResult(null);
     if (found) return;
@@ -152,6 +188,7 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   }
 
   async function list(confirmed: string | null = null) {
+    if (form.provider === 'runtime') return listRuntime();
     const found = connectProblem({ ...form, model: '-', context: '32768' }, keySet);
     setProblem(found);
     if (found) return;
@@ -187,6 +224,9 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
   const pill = result && (REACHABLE.has(result.status)
     ? <Pill tone="ok">{t('ui.set.reach.ok')}</Pill>
     : <Pill tone={result.status === 'unreachable' ? 'warn' : 'danger'}>{result.status === 'unreachable' ? t('ui.set.reach.offline') : result.status === 'no_api_key' ? t('ui.ob.model.rejectedKey') : t('ui.set.reach.rejected')}</Pill>);
+
+  const runtimeShown = runtimeView ? pillOf(runtimeView) : null;
+  const runtimePill = runtimeShown && <Pill {...(RUNTIME_PILL_TONE[runtimeShown] ? { tone: RUNTIME_PILL_TONE[runtimeShown] } : {})}>{t(RUNTIME_PILL[runtimeShown])}</Pill>;
 
   const stepClass = (id: typeof ONBOARD_STEPS[number]) => `bt-onboard__step${id === step ? ' is-current' : ''}`;
   return (
@@ -244,8 +284,15 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
               <div className="bt-form-row"><span className="bt-label">{t('ui.ob.model.provider')}</span>
                 <div><div className="bt-seg" role="group" aria-label={t('ui.ob.model.provider')}>
                   {PROVIDERS.map(p => <button key={p} type="button" className="bt-seg__opt" aria-pressed={form.provider === p}
-                    onClick={() => { setForm(emptyConnect(p)); setModelId(null); setResult(null); setProblem(null); setWiden(null); setNames([]); setListNote(null); }}>{t(PROVIDER_LABEL[p])}</button>)}
+                    onClick={() => { setForm(emptyConnect(p)); setModelId(null); setResult(null); setRuntimeView(null); setProblem(null); setWiden(null); setNames([]); setListNote(null); }}>{t(PROVIDER_LABEL[p])}</button>)}
                 </div></div></div>
+              {form.provider === 'runtime' && (
+                <div className="bt-form-row"><span className="bt-label">{t('ui.ob.model.runtimeKind')}</span>
+                  <div><div className="bt-seg" role="group" aria-label={t('ui.ob.model.runtimeKind')}>
+                    {RUNTIME_KINDS.map(kind => <button key={kind} type="button" className="bt-seg__opt" aria-pressed={runtimeKind === kind}
+                      onClick={() => { setRuntimeKind(kind); setRuntimeView(null); setNames([]); setListNote(null); }}>{t(RUNTIME_NAME[kind])}</button>)}
+                  </div></div></div>
+              )}
               <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.name')}</span>
                 <input className="bt-field bt-field--mono" value={form.model} placeholder={t('ui.ob.model.namePh')} spellCheck={false} autoComplete="off" aria-invalid={problem === 'model' || undefined} list="ui-ob-model-names"
                   onChange={e => { setForm({ ...form, model: e.target.value }); setResult(null); }} /></label>
@@ -255,21 +302,28 @@ export function Onboarding({ profile, replay, start, onProfile, onDone, onSkip }
                   <input className="bt-field bt-field--mono" value={form.baseUrl} spellCheck={false} autoComplete="off" aria-invalid={problem === 'baseUrl' || undefined}
                     onChange={e => { setForm({ ...form, baseUrl: e.target.value }); setResult(null); setNames([]); setListNote(null); }} /></label>
               )}
-              {form.provider !== 'anthropic' && (
+              {form.provider !== 'anthropic' && form.provider !== 'runtime' && (
                 <label className="bt-form-row"><span className="bt-label">{t('ui.ob.model.context')}</span>
                   <input className="bt-field bt-field--mono bt-field--short" inputMode="numeric" value={form.context} spellCheck={false} autoComplete="off" aria-invalid={problem === 'context' || undefined}
                     onChange={e => { setForm({ ...form, context: e.target.value }); setResult(null); }} /></label>
               )}
-              <label className="bt-form-row"><span className="bt-label">{form.provider === 'custom' ? t('ui.ob.model.keyOptional') : t('ui.ob.model.key')}</span>
+              {form.provider !== 'runtime' && <label className="bt-form-row"><span className="bt-label">{form.provider === 'custom' ? t('ui.ob.model.keyOptional') : t('ui.ob.model.key')}</span>
                 <input className="bt-field bt-field--mono" type="password" value={form.key} placeholder={keySet ? t('ui.ob.model.keySet') : t('ui.set.key.paste')} autoComplete="new-password" spellCheck={false} aria-invalid={problem === 'key' || undefined}
-                  onChange={e => { setForm({ ...form, key: e.target.value }); setResult(null); }} /></label>
+                  onChange={e => { setForm({ ...form, key: e.target.value }); setResult(null); }} /></label>}
+              {form.provider === 'runtime' && <p className="bt-meta" data-runtime-onboarding>{t('ui.ob.model.runtimeNote')}</p>}
               {problem && <p className="bt-meta bt-del" role="alert">{t(PROBLEM_TEXT[problem])}</p>}
               <div className="ui-ob__test">
                 <Button disabled={busy} onClick={() => void test()}>{t('ui.ob.model.test')}</Button>
                 <Button variant="ghost" disabled={busy} onClick={() => void list()}>{t('ui.ob.model.list')}</Button>
-                {pill}
-                {!result && existing && <span className="bt-meta">{t('ui.ob.model.existing', existing)}</span>}
+                {form.provider === 'runtime' ? runtimePill : pill}
+                {form.provider !== 'runtime' && !result && existing && <span className="bt-meta">{t('ui.ob.model.existing', existing)}</span>}
               </div>
+              {form.provider === 'runtime' && runtimeView && (
+                <>
+                  <p className="bt-meta" data-runtime-state>{stateLine(t, runtimeView)}</p>
+                  {['missing', 'signedOut'].includes(pillOf(runtimeView)) && <p className="bt-meta" data-runtime-signin>{t(SIGN_IN[runtimeView.kind])}</p>}
+                </>
+              )}
               {result && !REACHABLE.has(result.status) && result.message && <p className="bt-meta">{result.message}</p>}
               {listNote && <p className="bt-meta" role="status">{listNote}</p>}
               {widen && <Widen pending={{ row: 'ob:model', items: widen.items, title: t('ui.ob.model.widen'), run: () => void (widen.list ? list(widen.key) : test(widen.key)) }} busy={busy} onCancel={() => setWiden(null)} />}

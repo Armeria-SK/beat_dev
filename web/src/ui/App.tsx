@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { api, type Conversation as ConversationRow, type Profile, type Project, type WorkerStatus } from '../api.ts';
+import { setNoProvider } from '../provider-state.ts';
 import { useRunEvents, type Draft, type RunEvent } from '../events.ts';
 import { toast } from '../feedback.ts';
 import { loadServerSettings, useT } from '../i18n/index.ts';
@@ -109,6 +110,7 @@ export function App() {
   const [live, setLive] = useState<LiveState>(EMPTY);
   const liveRef = useRef(live);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
+  useEffect(() => { setNoProvider(worker?.noProvider === true); }, [worker]);
   const [drawer, setDrawer] = useState(false);
   const drawerRef = useRef(drawer);
   drawerRef.current = drawer;

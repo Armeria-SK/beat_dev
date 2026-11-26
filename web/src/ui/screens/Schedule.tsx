@@ -5,6 +5,7 @@ import { formatDateTime, formatDateTimeSmart, formatRelative, formatZonedInput, 
 import { buildNewTask, draftError, draftSummary, emptyDraft, FREQS, PRIORITIES, type DraftError, type Freq, type TaskDraft } from '../../task-form.ts';
 import { STATUS_KEY } from '../../task-meta.ts';
 import { WEEKDAYS } from '../../weekdays.ts';
+import { useNoProvider } from '../../provider-state.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, countText, Notice, Pill } from '../parts.tsx';
@@ -341,6 +342,7 @@ function Timeline({ range, window: win, now, schedule, streams, projects }: { ra
 
 export function Schedule({ revision, projects }: ScheduleProps) {
   const t = useT();
+  const noProvider = useNoProvider();
   const [range, setRange] = useState<Range>('day');
   const [data, setData] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState(false);
@@ -448,6 +450,7 @@ export function Schedule({ revision, projects }: ScheduleProps) {
         </div>
       </header>
       {creating && <ScheduleForm task={null} projects={projects} onClose={closeNew} onSaved={() => void load()} />}
+      {noProvider && <Notice tone="warn" icon="alert" title={t('ui.np.schedule')} />}
       {failed && <Notice tone="warn" icon="alert" title={t('ui.kanban.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />}
       {data && rows && (
         <>

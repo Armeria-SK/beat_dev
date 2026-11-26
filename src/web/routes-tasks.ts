@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { App } from '../app.ts';
 import { transaction } from '../db/database.ts';
-import { AVATAR_SHAPES } from '../config/schema.ts';
+import { AVATAR_SHAPES, providerModels } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
 import { isScoutRun, SCHEDULE_MAX_RANGE_MS, TaskError, type Task } from '../tasks/store.ts';
@@ -346,7 +346,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   });
 
   // ── ワーカー ──
-  const workerView = () => ({ ...app.worker.status(), judgeOff: judgeOff(app.config()) });
+  const workerView = () => ({ ...app.worker.status(), judgeOff: judgeOff(app.config()), noProvider: providerModels(app.config()).length === 0 });
   router.add('GET', '/api/worker', ({ res }) => sendJson(res, 200, workerView()));
   router.add('POST', '/api/worker', async ({ req, res }) => {
     const body = requireObject(await readJson(req));

@@ -89,7 +89,7 @@ export interface WorkerDeps {
   fixes?: FixCopies | undefined;
 }
 
-export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' };
+export type WaitReason = { kind: 'owner' } | { kind: 'off' } | { kind: 'paused' } | { kind: 'chat' } | { kind: 'budget'; at: number } | { kind: 'product' } | { kind: 'slots' } | { kind: 'no_provider' };
 
 // fix: 考える番に動かした直す実行（beat 8-6b）
 export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?: ReviewKind; taskId: string | null; runId: string; title: string; projectId?: string; fix?: boolean }
@@ -97,7 +97,7 @@ export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?:
 interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: boolean; marks?: Marks }
 
 export type ScoutView = { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null };
-export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_not_built' | 'scout_busy' };
+export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_provider' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_not_built' | 'scout_busy' };
 
 const NOT_SCOUT_RUN = `conversation_id NOT IN (SELECT conversation_id FROM tasks WHERE proposed_by = '${SCOUT_RUN}' AND conversation_id IS NOT NULL)`;
 
@@ -365,6 +365,8 @@ export class Worker {
     if (task.status !== 'ready' || (task.run_at !== null && task.run_at > now) || task.attempts >= task.max_attempts) return null;
     if (!this.#ownerWork(task)) return task.origin === 'self' || task.origin === 'curiosity' ? { kind: 'owner' } : c.worker.enabled ? null : { kind: 'off' };
     if (this.#d.tasks.openChildren(task.id) > 0) return null;
+    // AR-10: 提供元のモデルが 1 つも無い間は、裏の実行は始まらない。黙って待たず「提供元が要る」と出す
+    if (!providerModels(c).length) return { kind: 'no_provider' };
     if (hold) return { kind: hold };
     const familyAt = this.#forced.has(task.id) ? undefined : this.#familyFreeAt(task, now);
     if (familyAt !== undefined) return { kind: 'budget', at: familyAt };
@@ -976,6 +978,7 @@ export class Worker {
     if (!project) return undefined;
     const c = this.#d.config();
     if (project.archived_at !== null || !scoutsOn(project.scout_mode)) return { ok: false, code: 'scout_off' };
+    if (!providerModels(c).length) return { ok: false, code: 'scout_no_provider' };
     const route = (c.routing.scout ?? []).length ? this.#d.engine.scoutRoute() : null;
     if (!route) return { ok: false, code: 'scout_no_model' };
     if (!route.local && (c.scout?.cloudRunsPerHour ?? 1) === 0) return { ok: false, code: 'scout_cloud_zero' };

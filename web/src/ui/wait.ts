@@ -10,5 +10,6 @@ export function waitText(reason: WaitReason, now = Date.now()): string {
     case 'budget': return t('ui.wait.budget', formatDateTimeSmart(reason.at, now));
     case 'product': return t('ui.wait.product');
     case 'slots': return t('ui.wait.slots');
+    case 'no_provider': return t('ui.wait.noProvider');
   }
 }

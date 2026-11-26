@@ -6,7 +6,7 @@ import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
 import {
   ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_LABEL, modeHint, modelInEffect, modelName, modelOptions, NO_RUNTIME, PLACEHOLDER,
-  queuedLine, queueRow, runtimeInEffect, runtimeShown, slashAvailable, slashItems, toastLift,
+  chatModelCount, queuedLine, queueRow, runtimeInEffect, runtimeShown, slashAvailable, slashItems, toastLift,
   type RuntimeUse, type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
 import { menuLeft, menuStep } from './menu.ts';
@@ -93,7 +93,7 @@ export function Composer(props: ComposerProps) {
   const use = props.runtime ?? NO_RUNTIME;
   const current = modelInEffect(runtimeShown(models ?? [], use), chatOrder, modelId, use);
   const byRuntime = runtimeInEffect(use, current);
-  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
+  const view = composerView({ hasConversation, running, mode, chatModels: models ? chatModelCount(models) : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
   const depths = depthOptions(current);
   const commands = slashClosed ? [] : slashItems(text, props.slash, slashForced);
   const active = Math.min(slashIndex, Math.max(0, commands.length - 1));

@@ -156,7 +156,7 @@ test('with a provider model after it, the conversation goes on as before and the
   assert.equal(s.adapter().calls.at(-1)!.model.id, 'm1');
 });
 
-test('onboarding counts provider models only: a runtime model alone does not complete the model step', async t => {
+test('onboarding: a runtime model that was never checked does not complete the model step (a usable one does: tests/ar10-no-provider.test.ts)', async t => {
   const only = await startApp(t, { models: [], configure: config => { withRuntime(config); config.routing.chat = ['rt']; } });
   assert.equal((await only.json('/api/onboarding', 'GET')).body.steps.model, false);
   const both = await startApp(t, { models: [fakeModel('m1')], configure: config => { withRuntime(config); config.routing.chat = ['m1']; } });

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ScoutMode, ScoutState } from '../../api.ts';
 import { toast } from '../../feedback.ts';
 import { formatRelative, useT } from '../../i18n/index.ts';
+import { useNoProvider } from '../../provider-state.ts';
 import { useNow } from '../hooks.ts';
 import { Button, Pill } from '../parts.tsx';
 import { productOf } from '../products.ts';
@@ -15,10 +16,11 @@ const PILL = { thinking: 'ui.scout.thinking', asleep: 'ui.scout.asleep', idle: '
 
 export function ScoutEmpty({ state, mode, archived = false, now, onThinkNow }: { state: ScoutState; mode: ScoutMode; archived?: boolean; now: number; onThinkNow: () => Promise<void> }) {
   const t = useT();
+  const noProvider = useNoProvider();
   const [busy, setBusy] = useState(false);
   const meta = state.state === 'thinking' ? [t('ui.scout.examined', state.examined), state.area && t('ui.scout.reading', state.area)]
     : state.state === 'asleep' ? [state.lastChangeAt !== null && t('ui.scout.lastChange', formatRelative(state.lastChangeAt, now)), t('ui.scout.wakes')]
-    : state.state === 'off' ? [t(mode === 'off' ? 'ui.scout.offMeta' : archived ? 'ui.scout.offMetaArchived' : 'ui.scout.offMetaModel')]
+    : state.state === 'off' ? [t(mode === 'off' ? 'ui.scout.offMeta' : archived ? 'ui.scout.offMetaArchived' : noProvider ? 'ui.np.scout' : 'ui.scout.offMetaModel')]
     : [];
   const shown = meta.filter((line): line is string => Boolean(line));
   const title = state.state === 'off' ? t('ui.scout.offTitle') : state.state === 'asleep' ? t('ui.scout.nothingNew') : t('ui.scout.nothingYet');
@@ -33,7 +35,7 @@ export function ScoutEmpty({ state, mode, archived = false, now, onThinkNow }: {
       <h2 className="bt-empty__title">{title}</h2>
       {shown.length > 0 && <p className="bt-meta ui-scout__meta">{shown.join(' · ')}</p>}
       {state.note && <p className="bt-meta ui-scout__meta" data-scout-note>{state.note}</p>}
-      {canThinkNow(state, mode) && <Button small disabled={busy} onClick={() => void think()}>{t('ui.scout.thinkNow')}</Button>}
+      {canThinkNow(state, mode) && <Button small disabled={busy || noProvider} {...(noProvider ? { title: t('ui.np.scout') } : {})} onClick={() => void think()}>{t('ui.scout.thinkNow')}</Button>}
     </div>
   );
 }

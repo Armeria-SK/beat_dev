@@ -13,6 +13,7 @@ import {
   decisionFailure, diffLabel, editAccess, editBase, editHint, editOp, editRequest, formProblem, itemDetails, itemForm, loadedAcceptance, noticeAfterReload, outsideContent, pagingCursor, previousVersion, problemField, proposalRows, proposalStale, removeOp, revealSection, revealStep,
   showAcceptance, shownItems, shownNotDoing, sourceLabel, startPaging, stateLabel, stateTone, versionDiff, versionItems, versionSourceLabel, versionsShown, watchedBuild, type BuildFailure, type DecisionFailure, type DiffRow, type EditBase, type ItemForm, type Paging,
 } from '../acceptance.ts';
+import { useNoProvider } from '../../provider-state.ts';
 import { useNow } from '../hooks.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Icon, Notice, Pill } from '../parts.tsx';
@@ -581,7 +582,8 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
   const planless = conversationId === undefined;
   const state = planState(doc, failure !== null);
   const writing = state === 'writing';
-  const action = buildAction({ state, mode, acc, task, isGit, pending: building });
+  const noProvider = useNoProvider();
+  const action = buildAction({ state, mode, acc, task, isGit, pending: building, noProvider });
   const pill = buildPill(task?.status);
   const wait = task?.status === 'ready' ? waits?.[task.id] : undefined;
   const shown = beforeBuildShown({ mode, acc, coverage, action });
@@ -736,6 +738,7 @@ export function PlanPane({ productId, conversationId, revision, taskRevision = '
       {acc !== null && !acc.frozen && <ResearchSection productId={productId} conversationId={conversationId} revision={revision} />}
       <div role="status" className="ui-plan__live">
         {action?.kind === 'building' && wait && <p className="bt-meta" data-wait>{waitText(wait)}</p>}
+        {noProvider && !planless && action?.kind === 'build' && <p className="bt-meta" data-no-provider="build">{t('ui.np.build')}</p>}
         {buildNotice?.kind === 'changed' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildChanged')} />}
         {buildNotice?.kind === 'frozen' && <Notice tone="warn" icon="alert" title={t('ui.plan.buildFrozen')} text={buildNotice.detail ?? undefined} />}
       </div>

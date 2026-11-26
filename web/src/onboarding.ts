@@ -1,6 +1,6 @@
 import { deepEqual } from './settings/merge.ts';
 import type { Config } from './settings/model.ts';
-import { isRuntimeEntry, newAnthropicProvider, uniqueId } from './settings/model.ts';
+import { addRuntimeModel, isRuntimeEntry, newAnthropicProvider, uniqueId, updateRuntime } from './settings/model.ts';
 
 // はじめの設定の、画面を使わない部分: 手順・続きの位置・モデルの入力から設定への書き換え。
 
@@ -86,6 +86,26 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
   return { config: { ...config, providers, models, routing: next }, modelId: model.id };
 }
+
+// 実行役（Claude Code・Codex）を、はじめの設定の「つなぐもの」にする（AR-10）。その種類の実行役を入れ、モデルを 1 つ足す（同じモデルがあれば足さない）。
+// 提供元のモデルが 1 つも無く、会話の順番が空のときだけ、そのモデルを会話の順番の先頭に置く（実行役のモデルは先頭にだけ置ける。提供元のモデルがあれば、空のままで今までどおり）
+export type RuntimeKindId = 'claude-code' | 'codex';
+export const runtimeIdOf = (config: Config, kind: RuntimeKindId): string => ((config.runtimes as Array<{ id: string; kind: string }> | undefined) ?? []).find(item => item.kind === kind)?.id ?? kind;
+
+export function setupRuntimeConfig(config: Config, form: { kind: RuntimeKindId; model: string }): { config: Config; runtimeId: string; modelId: string } {
+  const runtimeId = runtimeIdOf(config, form.kind);
+  const entry = form.model.trim();
+  const turnedOn = updateRuntime(config, { id: runtimeId, kind: form.kind }, { enabled: true });
+  const same = (turnedOn.models as Entry[]).find(m => m.runtime === runtimeId && m.model === entry);
+  const added = same ? { config: turnedOn, id: same.id } : addRuntimeModel(turnedOn, runtimeId, { id: entry, label: entry, efforts: [] });
+  const routing = added.config.routing as { chat: string[]; background: string[] };
+  const ownModels = (added.config.models as Entry[]).some(m => !isRuntimeEntry({ runtime: m.runtime }));
+  const next = !ownModels && routing.chat.length === 0 ? { ...routing, chat: [added.id] } : routing;
+  return { config: next === routing ? added.config : { ...added.config, routing: next }, runtimeId, modelId: added.id };
+}
+
+// 「モデルを読み込む」の前に、モデルの無いまま実行役だけを入れる（読み込みは入れた実行役にしか通らない）
+export const turnOnRuntime = (config: Config, kind: RuntimeKindId): Config => updateRuntime(config, { id: runtimeIdOf(config, kind), kind }, { enabled: true });
 
 export function setupProviderConfig(config: Config, form: ModelForm, modelId: string | null = null): { config: Config; providerId: string } {
   const providers = [...(config.providers as Entry[])];
