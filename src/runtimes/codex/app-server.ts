@@ -70,7 +70,7 @@ export class CodexConnection {
     try {
       for await (const line of this.#process.lines()) this.#line(line);
     } catch (error) {
-      this.#log(`[WARN] Codex output could not be read: ${redactSecrets((error as Error).message)}`);
+      this.#log(`[WARN] Codex output could not be read: ${safeLabel((error as Error).message, ERROR_TEXT_LIMIT)}`);
     }
     const exit = await this.#process.exited;
     this.#ended = true;
@@ -85,7 +85,7 @@ export class CodexConnection {
   }
 
   #guard(fn: () => void): void {
-    try { fn(); } catch (error) { this.#log(`[ERROR] Codex message handler failed: ${redactSecrets((error as Error).message)}`); }
+    try { fn(); } catch (error) { this.#log(`[ERROR] Codex message handler failed: ${safeLabel((error as Error).message, ERROR_TEXT_LIMIT)}`); }
   }
 
   #line(line: string): void {

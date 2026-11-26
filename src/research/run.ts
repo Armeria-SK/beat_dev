@@ -130,6 +130,7 @@ export class ResearchRunner {
     if (!settings) throw new ResearchError('not_found', { id: input.projectId });
     const source = this.#d.conversations.get(input.sourceConversationId);
     if (!source || source.kind !== 'chat' || source.project_id !== input.projectId || source.parent_run_id) throw new ResearchError('source_gone');
+    if (source.runtime_id !== null) throw new ResearchError('runtime_source');
     const route = this.#d.engine.researchRoute(source.model_id ?? null);
     if (!route) throw new ResearchError('no_model');
     const mode = phase === 'libraries' ? 'batch' : settings.mode === 'auto' ? (route.available !== undefined && route.available < ONE_BY_ONE_BELOW ? 'one_by_one' : 'batch') : settings.mode;

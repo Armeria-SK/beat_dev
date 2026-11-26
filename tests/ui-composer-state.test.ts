@@ -88,6 +88,24 @@ test('ui/composer-state: 深さはモデルに efforts があるときだけ。�
   assert.deepEqual(depthOptions(undefined), []);
 });
 
+test('ui/composer-state（#266）: 発言の無い製品の会話の「自動」は #runtimeRoute と同じ。先頭の候補が実行役のモデルなら、確かめが済んでいなくてもそれ（深さもそのモデルの）。先頭が提供元のモデルなら、実行役のモデルは使えていても選ばない', () => {
+  const unchecked = model('cc', { runtime: 'claude-code', provider: '', probe: { modelId: 'cc', status: 'unreachable', server: 'claude-code', required: 0, message: '', checkedAt: 0 }, efforts: ['low', 'high'] });
+  const checked = { ...unchecked, probe: { ...unchecked.probe!, status: 'ok' as const } };
+  const provider = model('a', { efforts: ['medium'] });
+  const first: RuntimeUse = { bound: null, allowed: true };
+  const pick = (models: ModelView[], order: string[], use: RuntimeUse) => modelInEffect(runtimeShown(models, use), order, null, use);
+
+  assert.equal(modelInEffect([unchecked, provider], ['cc', 'a'], null)?.id, 'a', 'with no use given, the old rule: the first usable one');
+  assert.equal(pick([unchecked, provider], ['cc', 'a'], first)?.id, 'cc', 'the first send goes to the runtime model the server picks, though it is not checked yet');
+  assert.deepEqual(depthOptions(pick([unchecked, provider], ['cc', 'a'], first)), ['low', 'high'], 'so the depths are the runtime model\'s, the ones the server accepts');
+  assert.equal(pick([unchecked, provider], ['cc', 'a'], NO_RUNTIME)?.id, 'a', 'a conversation that is not a fresh product one never goes to a runtime');
+  assert.equal(pick([unchecked, provider], ['cc', 'a'], { bound: 'claude-code', allowed: false })?.id, 'cc', 'a bound conversation keeps its own runtime');
+  assert.equal(pick([checked, provider], ['a', 'cc'], first)?.id, 'a', 'a runtime model that is not first is never the automatic one');
+  assert.equal(pick([checked, model('a', { probe: null, efforts: ['medium'] })], ['a', 'cc'], first)?.id, 'a', 'the provider model is first and not usable: the server still stays on the provider chain');
+  assert.equal(pick([checked, provider], ['cc', 'a'], first)?.id, 'cc');
+  assert.equal(modelInEffect([unchecked, provider], ['cc', 'a'], 'a', first)?.id, 'a', 'a chosen model wins');
+});
+
 test('ui/composer-state: モデルの一覧は Auto と設定のモデル全部。使えないモデルは選べない（今選んでいるものは除く）', () => {
   const options = modelOptions([model('a', { probe: null }), model('b')], 'a');
   assert.deepEqual(options.map(o => [o.id, o.checked, o.disabled]), [[null, false, false], ['a', true, false], ['b', false, false]]);
