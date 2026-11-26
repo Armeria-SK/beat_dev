@@ -1,4 +1,5 @@
 import type { App } from '../app.ts';
+import { providerModels } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import {
@@ -33,7 +34,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     const done = app.kv.get(DONE_KEY) !== undefined || (!started && usedAlready);
     return {
       done,
-      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: config.models.length > 0 },
+      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: providerModels(config).length > 0 },
     };
   };
 

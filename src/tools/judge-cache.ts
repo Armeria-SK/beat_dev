@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { AppConfig } from '../config/schema.ts';
+import { isRuntimeModel, type AppConfig } from '../config/schema.ts';
 import { boundFacts, destinationFacts, PUSH_UNCONFIRMED, pushFacts } from '../pending/snapshot.ts';
 import type { ClassifierInput } from './auto-approve.ts';
 import { isRemotePath } from './hooks/remote-path.ts';
@@ -52,7 +52,7 @@ export function nextCallNumber(ctx: ToolContext): number {
 export function judgeIdentity(config: Pick<AppConfig, 'routing' | 'models'>, current?: string): unknown {
   const named = config.routing.judge ?? [];
   const ids = named.length ? named : [current ?? null];
-  return ids.map(id => { const model = id === null ? undefined : config.models.find(m => m.id === id); return [id, model?.provider ?? null, model?.model ?? null]; });
+  return ids.map(id => { const model = id === null ? undefined : config.models.find(m => m.id === id); return [id, model && !isRuntimeModel(model) ? model.provider : null, model?.model ?? null]; });
 }
 
 const onRemoteDrive = (path: string): boolean => {

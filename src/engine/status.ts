@@ -1,4 +1,4 @@
-import type { AppConfig, ModelConfig } from '../config/schema.ts';
+import { providerModels, type AppConfig, type ModelConfig } from '../config/schema.ts';
 import type { KV } from '../db/kv.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import type { ProbeResult } from '../providers/types.ts';
@@ -44,7 +44,8 @@ export class ModelStatus {
   async probeAll(config: AppConfig): Promise<ProbeResult[]> {
     const memory = this.#deps.memoryTokens?.() ?? 0;
     const language = languageOf(config);
-    const results = await Promise.all(config.models.map(async model => {
+    // 外の実行役を指すモデルは提供元で確かめない（実行役の確かめの結果を状態にするのは、実行役を画面につなぐ段）
+    const results = await Promise.all(providerModels(config).map(async model => {
       const required = requiredContext(model, this.#deps.baseTokens(model), memory);
       const adapter = this.#deps.registry.get(model.provider);
       if (!adapter) {

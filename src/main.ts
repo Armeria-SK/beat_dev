@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { App } from './app.ts';
+import { providerModels } from './config/schema.ts';
 import { ConfigError } from './config/store.ts';
 import { acquireInstanceLock, releaseOnExit } from './instance-lock.ts';
 import { enterKillOnCloseJob } from './os/win-job.ts';
@@ -33,7 +34,7 @@ async function start(): Promise<void> {
   const boot = app.bootServer;
   const hostProblem = serverHostProblem(boot.host);
   if (hostProblem) throw new ConfigError(hostProblem);
-  if (!config.models.length) log('[WARN] No model is set up yet. Add one in "First-run setup" on the screen (until then, sending and the worker do not run)');
+  if (!providerModels(config).length) log('[WARN] No model is set up yet. Add one in "First-run setup" on the screen (until then, sending and the worker do not run)');
   else log('[INFO] Checking the context length of the models…');
   const results = await app.status.probeAll(config);
   for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);

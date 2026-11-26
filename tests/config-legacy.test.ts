@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { providerModels } from '../src/config/schema.ts';
 import { dropLegacy, LEGACY_KEYS } from '../src/config/legacy.ts';
 import { ConfigError, ConfigStore, defaultConfig, parseConfig } from '../src/config/store.ts';
 import type { AddressInfo } from 'node:net';
@@ -250,7 +251,7 @@ test('古い kind: "ollama" は openai_compatible に読み替え、baseUrl に 
     assert.deepEqual(result.dropped, [], String(baseUrl));
     const config = parseConfig(raw);
     assert.equal(config.providers.find(p => p.id === 'ollama')!.kind, 'openai_compatible', String(baseUrl));
-    assert.equal(config.models.find(m => m.id === 'old-local')!.provider, 'ollama', String(baseUrl));
+    assert.equal(providerModels(config).find(m => m.id === 'old-local')!.provider, 'ollama', String(baseUrl));
   }
 });
 
