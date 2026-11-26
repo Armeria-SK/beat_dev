@@ -4,7 +4,6 @@
 import { Acc, checkUrl, checkValue, envAssignOk, flagMap, isFlagLike, literal, parseGnu, SH_CD_NAMES, SH_POP_NAMES, walkAll, type CopyUse, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
 import { nodeFileIndex } from './decision-order.ts';
 import type { Word } from './shell-lex.ts';
-import { npmRcRunsCode } from './tool-config.ts';
 
 export type Run = (words: Word[], acc: Acc, ctx: MatchCtx) => void;
 export interface Tool { builtin: boolean; run: Run }
@@ -621,7 +620,7 @@ function langInfo(name: string, words: Word[], acc: Acc, ctx: MatchCtx): void {
   const args = words.slice(1);
   if (name === 'npm') {
     const config = ctx.toolConfig?.('npm');
-    const versionOnly = config !== undefined && 'file' in config && exactForm(words, [['--version'], ['-v']]) && !npmRcRunsCode(config.file);
+    const versionOnly = config !== undefined && 'file' in config && config.harmless === true && exactForm(words, [['--version'], ['-v']]);
     if (config && !versionOnly) acc.add('once', 'file' in config ? 'list.npm_rc' : 'list.npm_rc_unknown', { cmd: 'npm', path: 'file' in config ? config.file : '' }, false);
   }
   const rest = args.map(w => w.text).join(' ');

@@ -142,35 +142,41 @@ export function npmProjectConfigFile(cwd: string, env: Env, allowed: readonly st
   }
 }
 
-// npm -v が読む .npmrc が、コードを動かす項目（script-shell・node-options・onload-script）を持つか。見るのは項目の名前だけで、値は読まない（トークンなどが入る）。
-// 名前が素直な形でない行（引用符・[ ] の節・環境変数の展開など）、読めない・大きすぎるファイル、リンクの先を決められない場合は、持つ側に倒す。
-// npm が読むのは 1 つの .npmrc だが、どれかを決めきれないので、見つかった .npmrc から上のフォルダまですべて見る
-const NPM_CODE_KEYS: ReadonlySet<string> = new Set(['script-shell', 'node-options', 'onload-script']);
-const NPM_PLAIN_KEY = /^[@A-Za-z0-9/:._-]+$/u;
+// npm -v・--version が読む .npmrc が、無害と分かっている項目の名前だけでできているか。見るのは項目の名前だけで、値は読まない（トークンなどが入る）。
+// Windows の npm.cmd などは、起動の前に .npmrc の prefix（userconfig・globalconfig で指した先の prefix も）が選んだ場所の npm-cli.js を動かす。
+// だから表にない名前（prefix・userconfig・globalconfig・cafile・知らない名前）、名前が素直な形でない行、読めない・大きすぎるファイル、リンクの先を決められない場合は、すべて無害でない側に倒す
+// npm の ini は行を [\r\n]+ で分けるので、同じ分け方で読む。どの .npmrc が読まれるかは決めきれないので、見つかった .npmrc から上のフォルダまですべて見る
+const NPM_HARMLESS_KEY = /^(?:registry|always-auth|save-exact|save-prefix|engine-strict|fund|audit|progress|loglevel|strict-ssl|@[A-Za-z0-9._~-]+:registry|\/\/[A-Za-z0-9._~-]+(?::[0-9]+)?(?:\/[A-Za-z0-9._~%@+-]+)*\/:(?:_authToken|_auth|username|_password|email))$/u;
 
-function npmRcFileRunsCode(file: string): boolean {
-  if (isRemotePath(file)) return true;
+function npmRcFileHarmless(file: string): boolean {
+  if (isRemotePath(file)) return false;
   try {
     const target = withoutLinks(file);
-    if (target === undefined) return true;
+    if (target === undefined) return false;
     const st = statSync(target);
-    if (!st.isFile() || st.size > MAX_RC_BYTES) return true;
-    return readFileSync(target, 'utf8').split(/\r?\n/u).some(line => {
-      const text = line.trim();
-      if (text === '' || text.startsWith('#') || text.startsWith(';')) return false;
-      const key = (text.includes('=') ? text.slice(0, text.indexOf('=')) : text).trim().toLowerCase().replaceAll('_', '-');
-      return !NPM_PLAIN_KEY.test(key) || NPM_CODE_KEYS.has(key);
+    if (!st.isFile() || st.size > MAX_RC_BYTES) return false;
+    return readFileSync(target, 'utf8').split(/[\r\n]+/u).every(line => {
+      if (/^\s*(?:[;#]|$)/u.test(line)) return true;
+      return NPM_HARMLESS_KEY.test((line.includes('=') ? line.slice(0, line.indexOf('=')) : line).trim());
     });
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code !== 'ENOENT' && (e as NodeJS.ErrnoException).code !== 'ENOTDIR';
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' || (e as NodeJS.ErrnoException).code === 'ENOTDIR';
   }
 }
 
-export function npmRcRunsCode(file: string): boolean {
-  for (let dir = dirname(file); ; dir = dirname(dir)) {
-    if (npmRcFileRunsCode(join(dir, '.npmrc'))) return true;
-    if (dirname(dir) === dir) return false;
+export function npmRcHarmless(files: readonly string[]): boolean {
+  const checked = new Set<string>();
+  for (const file of files) {
+    for (let dir = dirname(file); ; dir = dirname(dir)) {
+      const rc = join(dir, '.npmrc');
+      if (!checked.has(rc)) {
+        checked.add(rc);
+        if (!npmRcFileHarmless(rc)) return false;
+      }
+      if (dirname(dir) === dir) break;
+    }
   }
+  return true;
 }
 
 // wget が設定として読むファイルのうち、設定が書かれているもの（最初の 1 つ）

@@ -13,7 +13,7 @@ import { gitSubcommand } from './allowlist-git.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
-import { containsToolConfig, curlConfigFile, isToolConfigPath, npmProjectConfigFile, wgetConfigFile, type Env } from './tool-config.ts';
+import { containsToolConfig, curlConfigFile, isToolConfigPath, npmProjectConfigFile, npmRcHarmless, wgetConfigFile, type Env } from './tool-config.ts';
 import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, windowsNames, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
 
@@ -508,9 +508,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   let wroteEarlier = false;
   const toolConfig: MatchCtx['toolConfig'] = tool => {
     if (!seen.known || (tool === 'npm' && wroteEarlier)) return { unknownCwd: true };
-    const file = tool === 'curl' ? seen.all.map(c => curlConfigFile(env, c)).find(Boolean)
-      : tool === 'npm' ? seen.all.map(c => npmProjectConfigFile(c, env, opts.policy.roots.map(r => r.path))).find(Boolean)
-        : wgetConfigFile(env);
+    if (tool === 'npm') {
+      const files = [...new Set(seen.all.map(c => npmProjectConfigFile(c, env, opts.policy.roots.map(r => r.path))).filter((f): f is string => f !== undefined))];
+      return files.length > 0 ? { file: files[0]!, harmless: npmRcHarmless(files) } : undefined;
+    }
+    const file = tool === 'curl' ? seen.all.map(c => curlConfigFile(env, c)).find(Boolean) : wgetConfigFile(env);
     return file ? { file } : undefined;
   };
   let enclosedEarlier = false;
