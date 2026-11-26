@@ -70,6 +70,7 @@ test('a normal reply: text, tools, no experimental API, and every request carrie
   const { session, events } = await reply(r);
   assert.deepEqual(events.filter(event => event.type === 'text').map(event => (event as { delta: string }).delta), ['Hel', 'lo', '\n\n', 'Second without deltas'], 'streamed text is not repeated from the final item; a message without deltas is used; messages are separated');
   assert.equal(events.at(-1)?.type, 'done');
+  assert.deepEqual(events.filter(event => event.type === 'text' && event.boundary === true).map(event => (event as { delta: string }).delta), ['\n\n'], 'the change from one message to the next is marked, so beat can tell which message is the last');
   assert.equal(events.filter(event => event.type === 'done').length, 1, 'a turn of another conversation is not ours');
   assert.equal(events.filter(event => event.type === 'unknown').length, 1, 'only the truly new notification is kept');
   assert.ok(r.lines.some(line => line.includes('Codex said (configWarning)') && !line.includes(SECRET)), 'a warning is logged with secrets hidden');
@@ -380,6 +381,12 @@ test('network and stdin requests are carried for the owner, flagged; permission 
   }
 });
 
+test('an approval request between two messages does not hide the change from one message to the next: it is still marked', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'text-approval-text');
+  const { events } = await reply(r, {}, () => 'decline');
+  assert.deepEqual(events.map(event => event.type === 'text' ? `text ${JSON.stringify(event.delta)}${event.boundary === true ? ' boundary' : ''}` : event.type), ['text "First"', 'approval', 'text "\\n\\n" boundary', 'text "Second"', 'done']);
+});
+
 test('requests beat cannot answer are declined without hanging Codex, and leave a row in the conversation', { timeout: 60_000 }, async t => {
   const r = rig(t, 'unanswerable');
   const { events } = await reply(r);
@@ -665,4 +672,18 @@ test('a request that could not be answered is logged with control and direction 
   assert.ok(!/[\p{Cc}\p{Cf}]/u.test(line), JSON.stringify(line));
   assert.ok(line.includes('broken??line'), line);
   assert.ok(!line.includes('abcdefgh12345678'), line);
+});
+
+test('instructions from beat (plan mode) go in front of the owner\'s message in the turn; none, or blank ones, leave the message as it is; plan tools are never sent to Codex', { timeout: 120_000 }, async t => {
+  const given = rig(t);
+  await reply(given, { instructions: '# Plan mode\nWrite the plan in a block.', planTools: { specs: [{ name: 'plan_write', description: 'x' }], call: async () => ({ text: '', isError: false }) } });
+  const turn = given.requests().find(message => message.method === 'turn/start');
+  assert.deepEqual(turn.params.input, [{ type: 'text', text: '# Plan mode\nWrite the plan in a block.\n\n---\n\nThe owner\'s message:\n\nhello', text_elements: [] }]);
+  const wire = JSON.stringify(given.requests());
+  assert.ok(!wire.includes('plan_write') && !wire.includes('dynamicTools'), 'nothing about tools reaches the Codex protocol');
+  for (const value of [undefined, '', '  \n']) {
+    const r = rig(t);
+    await reply(r, value === undefined ? {} : { instructions: value });
+    assert.deepEqual(r.requests().find(message => message.method === 'turn/start').params.input, [{ type: 'text', text: 'hello', text_elements: [] }], JSON.stringify(value));
+  }
 });

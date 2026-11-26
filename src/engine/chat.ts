@@ -52,6 +52,7 @@ import type { RuntimeChecks } from '../runtimes/checks.ts';
 import type { RuntimeRegistry } from '../runtimes/registry.ts';
 import type { RuntimeApprovals } from './runtime-approvals.ts';
 import { runRuntimeTurn, runtimeFolder, runtimePreflight, type RuntimeRefusal, type RuntimeTurnDeps } from './runtime-bridge.ts';
+import { runtimePlanTools } from './runtime-plan-tools.ts';
 import { COMPACT_FAILURE_LIMIT, CONTEXT_FILL_RATIO, CONTEXT_TARGET_RATIO, KEEP_TOOL_RESULTS, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, SPLIT_EXCHANGE_RATIO, clearFloor, compactOutputTokens, contextAvailable, ownerWordsTokens, raisedOutputFor, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { closeToolCalls, ContextOverflow, fitMessages, groupExchanges, irreducibleEstimate } from './fit.ts';
@@ -1157,7 +1158,11 @@ export class ChatEngine {
 
   #bridge(): RuntimeTurnDeps {
     const d = this.#d;
-    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs, pending: d.tools?.pending, approvals: d.runtimeApprovals, kv: d.kv };
+    const tools = d.tools;
+    const planTools: RuntimeTurnDeps['planTools'] = tools && d.memory
+      ? input => runtimePlanTools({ tools, config: d.config, paths: d.paths, conversations: d.conversations, projects: d.projects, acceptance: d.acceptance, bus: d.bus, log: d.log, services: () => this.toolServices(), modeOf: id => d.conversations.modeOf(id) }, input)
+      : undefined;
+    return { config: d.config, conversations: d.conversations, runs: d.runs, bus: d.bus, runtimes: d.runtimes!, paths: d.paths, projects: d.projects, log: d.log, stopGraceMs: d.runtimeStopGraceMs, pending: d.tools?.pending, approvals: d.runtimeApprovals, kv: d.kv, planTools };
   }
 
   // 実行役の道で、発言を保存して返事を始める。何かを書く前に、製品・作業フォルダ・実行役の確かめを見て、断れるものは断る（何も保存しない）

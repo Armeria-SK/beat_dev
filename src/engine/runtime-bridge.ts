@@ -19,7 +19,7 @@ import { usableCheck, type RuntimeChecks } from '../runtimes/checks.ts';
 import { ownFolderOverlap } from '../runtimes/claude-code/adapter.ts';
 import type { RuntimeRegistry } from '../runtimes/registry.ts';
 import { mapApproval, type RefusalCode } from '../runtimes/approval-map.ts';
-import { BLOCKING_ISSUES, permissionFor, type AgentRuntime, type RuntimeEvent, type RuntimeIssue, type RuntimeSession, type RuntimeStatus } from '../runtimes/types.ts';
+import { BLOCKING_ISSUES, permissionFor, type AgentRuntime, type BeatPlanTools, type RuntimeEvent, type RuntimeIssue, type RuntimeSession, type RuntimeStatus } from '../runtimes/types.ts';
 import { previewJson } from '../shared/json-preview.ts';
 import { languageOf } from '../shared/language.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
@@ -30,8 +30,10 @@ import { plainBlock, plainLine } from '../shared/plain-text.ts';
 import { redactExact, redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { TOOL_INPUT_PREVIEW_CHARS, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import type { RunBus } from './bus.ts';
+import { planBlocksOf, unreadPlanBlocks } from './runtime-plan-blocks.ts';
 import type { RuntimeApprovals } from './runtime-approvals.ts';
 import type { ChatMessage, EngineErrorKind, EngineResult, ToolGate } from './types.ts';
+import { runtimeRequirementsText, type RuntimePlanChannel } from './workspace.ts';
 
 export interface RuntimeTurnDeps {
   config: () => AppConfig;
@@ -49,6 +51,8 @@ export interface RuntimeTurnDeps {
   approvals?: RuntimeApprovals | undefined;
   // 返事のあいだに変わったファイルの一覧（AR-9。実行ごとに kv へ）の置き場。無ければ、変わったファイルは見張らない
   kv?: KV | undefined;
+  // 計画モードの会話に渡す、beat 自身の計画の道具（AR-9b。中身は beat の道具の登録の側が動かす）。無ければ、計画モードの会話は今までどおり読むだけ
+  planTools?: ((input: { runId: string; conversationId: string; projectId: string | null; signal: AbortSignal }) => BeatPlanTools | undefined) | undefined;
 }
 
 export interface RuntimeTurnInput {
@@ -155,6 +159,22 @@ const GUARD_TEXT: Record<RefusalCode | 'plan_mode', EngineMessageKey> = {
   shell_deny: 'runtime.guard.shell_deny',
 };
 
+// 実行役のモデルへ返す、beat が断った理由（英語）。持ち主に見せる行の文（GUARD_TEXT）とは別にしてある: あちらの「あなたには聞いていません」は持ち主へ向けた言い方で、実行役のモデルが読むと取り違える
+const PLAN_MODE_NOTE = "beat declined this request: this conversation is in plan mode, where every request that needs approval is declined: changing files, running commands, and reading outside the product folder or reading protected paths such as secrets. Reading inside the product folder and writing the plan and the acceptance items through beat's plan tools are allowed. If the owner wants more than that, they can switch this conversation to Normal mode. Do not look for another way around this; tell the owner. The owner was not asked.";
+const GUARD_NOTE: Record<RefusalCode, string> = {
+  secret: 'it touches a path that may hold secrets or that beat protects',
+  outside_write: 'it writes outside the product folder and the folders the owner allowed',
+  outside_read: 'it reads outside the product folder and the folders the owner allowed, and the owner settings say not to allow that',
+  readonly_root: 'it writes into a folder the owner set to read only',
+  link_write: 'it writes through a symbolic link',
+  protect_files: "it changes a file on the owner's protected list",
+  outside_cwd: 'it runs outside the product folder',
+  self_target: 'it talks to beat itself',
+  shell_deny: "the same shell check that guards beat's own shell tool refuses this command",
+};
+const declineNote = (code: RefusalCode | 'plan_mode', detail: string): string =>
+  code === 'plan_mode' ? `${PLAN_MODE_NOTE} [beat guard: plan_mode]` : `beat declined this request without asking the owner: ${GUARD_NOTE[code]}${detail !== '' ? ` (${detail})` : ''}. The owner was not asked. [beat guard: ${code}]`;
+
 type Outcome = { ok: true } | { ok: false; kind: EngineErrorKind; key: EngineMessageKey; params: MessageParams; cancelled?: true };
 
 const AUTH_REASONS: ReadonlySet<string> = new Set(['auth', 'login_required', 'auth_mismatch']);
@@ -207,12 +227,19 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   let unknownCount = 0;
   let paragraph = '';
   let text = '';
+  // 返事の文のうち、いちばん後ろの発言（実行役の 1 つのまとまり）が始まる位置。道具の前後と、実行役が発言の切れ目と言ったところで進む（AR-9b。計画の塊は、この最後の発言からだけ取り出す）
+  let messageFrom = 0;
   const open = new Map<string, OpenTool>();
   const usedIds = new Set<string>();
   const gates = new Map<string, GateMark>();
   let planMode = false;
+  // 計画モードの会話で、この返事に渡した計画の道具（AR-9b）と、実行役に見せた名前。渡す道は実行役ごとに違う（channel）
+  let planSurface: BeatPlanTools | undefined;
+  let planChannel: RuntimePlanChannel | null = null;
+  const planOffered = new Set<string>();
   let workRoot = '';
   let timedOut = false;
+  let planText = '';
   let watch: RunWatch | undefined;
 
   const save = (message: ChatMessage): void => {
@@ -279,11 +306,12 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   };
 
   type ApprovalEvent = Extract<RuntimeEvent, { type: 'approval' }>;
-  // 実行役への「断る・取り消す」の答え。答えない実行役のせいで、ここで止まらない
-  const answerNow = async (event: ApprovalEvent, decision: 'decline_by_beat' | 'cancel'): Promise<void> => {
+  // 実行役への「断る・取り消す・（計画の道具だけ）許す」の答え。答えない実行役のせいで、ここで止まらない。note は断る理由の文（実行役のモデルへ届くもの）
+  const answerNow = async (event: ApprovalEvent, decision: 'accept' | 'decline_by_beat' | 'cancel', note?: string): Promise<void> => {
     const { runtime, session } = held;
     if (!runtime || !session) return;
-    await bounded([[`${decision === 'cancel' ? 'cancel' : 'decline'} the approval request`, () => runtime.approve(session.id, event.requestId, decision)]]);
+    const what = decision === 'cancel' ? 'cancel' : decision === 'accept' ? 'allow' : 'decline';
+    await bounded([[`${what} the approval request`, () => (note === undefined ? runtime.approve(session.id, event.requestId, decision) : runtime.approve(session.id, event.requestId, decision, note))]]);
   };
   // 道具の行と結ぶ ID: Claude Code の求めの ID は tool_use の id と同じ。Codex の求めの ID は別で、項目の id（itemId）が道具の行の id
   const gateKeyOf = (event: ApprovalEvent): string => {
@@ -299,9 +327,18 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     const refuseHere = async (code: RefusalCode | 'plan_mode', detail: string): Promise<void> => {
       gates.set(key, { kind: 'guard', code, detail, name: toolName(event.tool), input: shownInput(event.input), used: false });
       log(`[INFO] Runtime ${runtimeId} asked for approval (${tool}); beat declined it without asking the owner (${code})`);
-      await answerNow(event, 'decline_by_beat');
+      await answerNow(event, 'decline_by_beat', declineNote(code, detail));
     };
-    if (planMode || deps.conversations.modeOf(conversationId) === 'plan') { await refuseHere('plan_mode', ''); return; }
+    if (planMode || deps.conversations.modeOf(conversationId) === 'plan') {
+      // 計画モードで通すのは、beat が渡した計画の道具の呼び出しだけ（実行役の窓口が、それだと自分で確かめて印を付けたもの。呼ぶのは beat の道具の道）。ほかは持ち主にも聞かず断る
+      if (event.beatTool !== undefined && planOffered.has(event.beatTool)) {
+        log(`[INFO] Runtime ${runtimeId} asked for approval (${tool}); beat allowed it: it is one of beat's own plan tools`);
+        await answerNow(event, 'accept');
+        return;
+      }
+      await refuseHere('plan_mode', '');
+      return;
+    }
     const mapped = mapApproval({
       kind: runtime.kind, config: deps.config(), paths: deps.paths, root: workRoot, runId, conversationId,
       productRoots: [...(deps.projects?.list() ?? []), ...(deps.projects?.list({ archived: true }) ?? [])].map(p => p.root),
@@ -336,11 +373,13 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
         const delta = redactExact(event.delta, secrets, true);
         paragraph += event.delta;
         if (delta !== '') deps.bus.publish({ type: 'text.delta', runId, conversationId, text: delta });
+        if (event.boundary) messageFrom = text.length + redactExact(paragraph, secrets, true).length;
         return undefined;
       }
       case 'tool_start': {
         if (open.has(event.id)) return undefined;
         flushText();
+        messageFrom = text.length;
         const entry: OpenTool = { callId: callIdFor(event.id), name: toolName(event.name), input: shownInput(event.input), nested: event.nested === true };
         open.set(event.id, entry);
         toolCount += 1;
@@ -349,6 +388,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       }
       case 'tool_end': {
         flushText();
+        messageFrom = text.length;
         const started = open.get(event.id);
         open.delete(event.id);
         const entry: OpenTool = started ?? { callId: callIdFor(event.id), name: toolName('unknown'), input: {}, nested: event.nested === true };
@@ -417,7 +457,19 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     const previous = deps.conversations.runtimeOf(conversationId).session;
     previousSession = previous;
     resumed = previous !== null;
-    const instructions = found.runtime.kind === 'claude-code' ? productInstructions(folder.root, log) : undefined;
+    // 計画モードの会話は、beat の計画の道具と計画の指示を実行役に渡す（AR-9b）。Claude Code は MCP の道具、Codex は返事の中の決まった塊（beat が取り出して、同じ道具で書く）
+    if (cautious && deps.planTools) {
+      const channel: RuntimePlanChannel = found.runtime.kind === 'claude-code' ? 'tools' : 'text';
+      const surface = deps.planTools({ runId, conversationId, projectId: input.projectId, signal });
+      planText = surface ? runtimeRequirementsText(deps.paths, folder.root, channel, input.projectId ? deps.projects?.get(input.projectId)?.doc_language : null) : '';
+      if (surface && planText !== '') {
+        planSurface = surface;
+        planChannel = channel;
+        if (channel === 'tools') for (const spec of surface.specs) planOffered.add(spec.name);
+      }
+    }
+    const productText = found.runtime.kind === 'claude-code' ? productInstructions(folder.root, log) : undefined;
+    const instructions = [productText, planSurface ? planText : undefined].filter((part): part is string => part !== undefined && part !== '').join('\n\n---\n\n') || undefined;
     // 実行役が何かを書く前に、git の状態を取る（返事のあとの状態と比べて、変わったファイルを beat が自分で割り出す。実行役の自己申告は当てにしない）
     if (deps.kv && input.projectId) {
       const began = await Promise.race([beginWatch({ config, paths: deps.paths, root: folder.root, runId, conversationId }), stopped]);
@@ -428,7 +480,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       held.session = await deps.runtimes.registry.start(config, runtimeId, {
         conversationId, cwd: folder.root, model: input.model, signal, beatPort: config.server.port,
         ...(effort !== undefined ? { effort } : {}), ...(cautious ? { cautious: true as const } : {}),
-        ...(instructions !== undefined ? { instructions } : {}), ...(previous !== null ? { resume: previous } : {}),
+        ...(instructions !== undefined ? { instructions } : {}), ...(planChannel === 'tools' && planSurface ? { planTools: planSurface } : {}), ...(previous !== null ? { resume: previous } : {}),
       });
     } catch (error) {
       if (signal.aborted) return cancelled();
@@ -501,6 +553,21 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       finishTool(rawId, entry, '', true);
     }
   } catch (error) { log(`[WARN] Could not save the last part of the reply of run ${runId}: ${clean((error as Error).message)}`); }
+  // 計画の道具を MCP で渡せなかった実行役（Codex）: 返事の中の決まった塊を取り出し、実行役が道具を呼んだのと同じ形（行と結果）で、beat の道具に書かせる
+  if (outcome.ok && planSurface && planChannel === 'text') {
+    const surface = planSurface;
+    const taken = planBlocksOf(text.slice(messageFrom));
+    for (const block of [...taken, ...unreadPlanBlocks(text, taken)]) {
+      try {
+        const entry: OpenTool = { callId: callIdFor(`beat_${block.tool}`), name: toolName(block.tool), input: shownInput('input' in block ? block.input : {}), nested: false };
+        toolCount += 1;
+        deps.bus.publish({ type: 'tool.call', runId, conversationId, callId: entry.callId, name: entry.name, input: previewJson(entry.input, TOOL_INPUT_PREVIEW_CHARS) });
+        if ('error' in block) { writeTool(entry, engineText(language, 'runtime.plan_block_unreadable', { tool: block.tool, detail: clean(block.error, 200) }), true); continue; }
+        const result = await surface.call(block.tool, block.input);
+        writeTool(entry, shownOutput(result.text), result.isError);
+      } catch (error) { log(`[WARN] Could not save the ${block.tool} block of run ${runId}: ${clean((error as Error).message)}`); }
+    }
+  }
   try { deps.approvals?.closeRun(runId, !outcome.ok && outcome.cancelled === true ? 'stopped' : 'reply_closed'); } catch (error) { log(`[WARN] Could not close the approval requests of run ${runId}: ${clean((error as Error).message)}`); }
   const sessionEnd = held.session?.runtimeSession;
   // 閉じる呼びかけに時間内に答えなかった、またはジョブに入れられなかった実行役は、まだ動いているかもしれない: そのときは返事のあとのファイルを取らない（動いているあいだに取ると、あとで書かれるものを見落とす）
@@ -526,7 +593,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     // 続きに使う会話の ID（beat が付けたもの・実行役が付けたもの）は、記録に残さない（起動の引数・thread の ID に入っていても伏せる）。一覧の API はこの記録をそのまま返す
     const sessionIds = [sessionStart, sessionEnd, previousSession].filter((id): id is string => typeof id === 'string' && id !== '');
     const seen = changes ? { state: changes.state, files: changes.files.length + changes.more, unchecked: changes.unchecked, git: changes.git, alert: changes.alert, unseen: changes.unseen } : null;
-    const record = redactJsonValue({ runtime: runtimeId, kind: held.runtime?.kind ?? null, model: input.model, effort: effort ?? null, permission, resumed, contained: held.session ? held.session.containReason === undefined : null, launch: launch ?? null, changes: seen });
+    const record = redactJsonValue({ runtime: runtimeId, kind: held.runtime?.kind ?? null, model: input.model, effort: effort ?? null, permission, resumed, contained: held.session ? held.session.containReason === undefined : null, launch: launch ?? null, plan: planSurface ? planChannel : null, changes: seen });
     const hidden = sessionIds.reduce((json, id) => json.split(id).join('[session]'), redactExact(JSON.stringify(record), secrets));
     deps.runs.setRuntime(runId, JSON.parse(hidden) as unknown);
   } catch (error) { log(`[WARN] Could not record the runtime launch of run ${runId}: ${clean((error as Error).message)}`); }
