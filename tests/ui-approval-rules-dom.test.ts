@@ -4,6 +4,7 @@ import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import type { ApprovalRule, PendingAction } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
+import { t } from '../web/src/i18n/index.ts';
 import { judgedLine } from '../web/src/ui/library.ts';
 
 // beat J-5: the "Approve, and don't ask again in this product" choice, the Settings list of rules, the rule gate on a tool row and the Runs count
@@ -169,4 +170,24 @@ test('ui AP-1b N10: 送る・消す・push・MCP の決まり（outside）は、
   assert.match(descs[0]!, / · also runs without asking after reading text from elsewhere$/u);
   assert.match(descs[1]!, /pushes run without asking, including commits you have not seen · also runs without asking after reading text from elsewhere$/u);
   assert.equal(descs[2], 'judge would have checked');
+});
+
+test('ui/ToolRow（DOM）AR-7: 実行役が動かした行は「Run by the runtime, not by beat」と出し、道具の名前と対象を見出しにし、子の担当の行は字下げの印を持つ', async () => {
+  const { container } = await render(createElement(ToolGroup, {
+    rows: [
+      { key: 'a', name: 'claude-code:Bash', input: JSON.stringify({ command: 'ls' }), result: { text: 'a.txt', isError: false }, gate: { by: 'runtime' } },
+      { key: 'b', name: 'claude-code:Read', input: JSON.stringify({ file_path: 'a.ts' }), result: { text: '(The result did not arrive)', isError: true }, gate: { by: 'runtime' }, nested: true },
+    ],
+    isNew: () => false,
+  }));
+  const rows = [...container.querySelectorAll('.bt-tool')];
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0]!.querySelector('.ui-tool__why')?.textContent, 'Run by the runtime, not by beat');
+  assert.equal(rows[0]!.querySelector('.bt-tool__verb')?.textContent, 'Bash');
+  assert.equal(rows[0]!.querySelector('.bt-tool__target')?.textContent, 'ls');
+  assert.equal(rows[0]!.classList.contains('ui-tool--nested'), false);
+  assert.equal(rows[1]!.classList.contains('ui-tool--nested'), true);
+  assert.equal(rows[1]!.querySelector('.bt-tool__meta')?.textContent?.includes('Run by the runtime'), true);
+  assert.equal(rows[1]!.querySelector('.bt-tool__meta')?.textContent?.includes(t('ui.tool.failed')), true, 'a tool whose result did not arrive still shows that it failed');
+  assert.equal(container.querySelector('.ui-tool__changes'), null, 'a runtime tool has no beat change record to open');
 });

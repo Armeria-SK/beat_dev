@@ -597,3 +597,26 @@ test('registered as the codex factory, off unless enabled: a turned-off runtime 
   const missing = { runtimes: [{ id: 'cx', kind: 'codex' as const, enabled: true, executablePath: join(r.dir, 'missing', 'codex.exe') }] };
   await assert.rejects(real.start(missing, 'cx', { conversationId: 'c', cwd: r.work, signal: new AbortController().signal }), refused('not_installed'));
 });
+
+test('the world-writable warning also reaches the caller as an issue event while the reply goes on, and a process that could not be put in a job is told at start', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'text');
+  const { events } = await reply(r);
+  const issues = events.filter(event => event.type === 'issue');
+  assert.deepEqual(issues, [{ type: 'issue', issue: { code: 'world_writable', detail: 'D:/open-folder (+2)' } }]);
+  assert.equal(events.at(-1)?.type, 'done', 'a warning does not end the reply');
+
+  const open = r.processes.open.bind(r.processes);
+  r.processes.open = async () => {
+    const scope = await open();
+    Object.defineProperty(scope, 'containReason', { value: `the job could not be made ${'x'.repeat(1000)}` });
+    return scope;
+  };
+  const session = await r.runtime.start(r.request());
+  assert.match(session.containReason!, /^the job could not be made/u);
+  assert.equal(session.containReason!.length, 300);
+  await r.runtime.close(session.id);
+  const plain = rig(t, 'text');
+  const normal = await plain.runtime.start(plain.request());
+  assert.equal(normal.containReason, undefined);
+  await plain.runtime.close(normal.id);
+});

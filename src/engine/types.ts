@@ -40,12 +40,14 @@ export interface ImageRef {
 export type ChatMessage =
   // askAnswer: ask_owner の札が開いているあいだに届いた発言（札の答え。選んだ札の文は AI が書いたものなので、持ち主の文〔ToolContext.ownerText〕に数えない。9-1b）
   | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[]; generated?: true; note?: 'pending' | 'continue'; fetched?: true; tail?: string; askAnswer?: true }
-  | { role: 'assistant'; content: string; toolCalls?: ToolCall[]; thinking?: ThinkingRecord }
+  // runtime: 外の実行役が動かした道具の呼び出し・結果の行。beat の道具には結び付かない（名前が `<種類>:<道具>` で registry に無い）。nested: 実行役の子の担当が動かしたもの
+  | { role: 'assistant'; content: string; toolCalls?: ToolCall[]; thinking?: ThinkingRecord; runtime?: true; nested?: true }
   // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
   // imageIds: 保存した発言だけが持つ。images の中身（base64）の代わりに、添付と同じ置き場（uploads の行とファイル）の id を残す。モデルに渡すときに images へ戻す。DB の大きさを増やさないため。以前の保存分は images に base64 のまま入っている
-  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; imageIds?: string[]; gate?: ToolGate; tail?: string };
+  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[]; imageIds?: string[]; gate?: ToolGate; tail?: string; runtime?: true; nested?: true };
 
-export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
+// runtime: 外の実行役が自分の許可の設定で通した（beat は見ていない）
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' };
 
 export interface Usage {
   inputTokens?: number;
@@ -98,8 +100,8 @@ export type RunEvent =
   | { type: 'text.delta'; runId: string; conversationId: string; text: string }
   | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, string | number | MessageParams> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
-  | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
-  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; gate?: ToolGate }
+  | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string; nested?: true }
+  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; gate?: ToolGate; nested?: true }
   // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと Pending に積む）
   | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }

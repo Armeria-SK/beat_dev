@@ -64,6 +64,8 @@ export const httpJa = {
   'persona_unsafe': "このファイルはリンクか、ふつうのファイルではないので、変えませんでした（{file}）",
   'persona_empty': "書くものがありません（userName・callMe・botName・style・styleNote の少なくとも 1 つを送ってください）",
   'conversation_running': "この会話はまだ返事を書いているので消せません。先に止めてください",
+  'runtime_fixed': "この会話は外の実行役（{id}）を通して動いています。ほかのモデルを使うなら、新しい会話を始めてください",
+  'runtime_not_fresh': "この会話には、ほかのモデルとのやり取りがもうあります。外の実行役（{id}）を使うなら、新しい会話を始めてください",
   'conversation_not_deletable': "タスクと振り返りの会話はここからは消せません",
   'pending_gone': "その待っているメッセージは、もう送られたか取り消されています",
   'unknown_model': "モデル「{id}」は設定にありません",

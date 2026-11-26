@@ -26,17 +26,21 @@ export interface ConversationRow {
   // 子の担当（agent_run）の会話だけが持つ。親の実行の id。NULL はふつうの会話
   parent_run_id: string | null;
   project_id: string | null;
+  // 外の実行役に結ばれた会話の実行役の id（設定の runtimes[].id）。NULL = 提供元の会話。最初の 1 回で書いて、替えない
+  runtime_id: string | null;
+  // 実行役が付けた会話の ID（続きに使う）。画面には出さない
+  runtime_session: string | null;
 }
 
 export const LIST_NO_PROJECT_LIMIT = 100;
 export const LIST_PER_PROJECT_LIMIT = 30;
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean; message_count: number; archived_at: number | null };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'source_conversation_id' | 'source_task_id' | 'runtime_session'> & { has_summary: boolean; message_count: number; archived_at: number | null };
 const ARCHIVED_AT = 'archived-at:';
 type ListRow = Omit<ConversationListItem, 'has_summary'> & { has_summary: number };
 const LIST_COLUMNS = `conversations.id, conversations.kind, conversations.title, conversations.archived, conversations.created_at, conversations.last_message_at, conversations.summary_upto,
-        conversations.model_id, conversations.effort, conversations.permission_mode, conversations.project_id,
+        conversations.model_id, conversations.effort, conversations.permission_mode, conversations.project_id, conversations.runtime_id,
         (conversations.summary IS NOT NULL AND conversations.summary != '') AS has_summary,
         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = conversations.id) AS message_count,
         (SELECT CAST(value AS INTEGER) FROM kv WHERE key = '${ARCHIVED_AT}' || conversations.id) AS archived_at`;
@@ -224,6 +228,23 @@ export class Conversations {
   everTainted(id: string): boolean {
     const row = this.db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get(id) as { ever_tainted: number } | undefined;
     return row === undefined || row.ever_tainted !== 0;
+  }
+
+  // 会話が結ばれている実行役（無ければ提供元の会話）と、実行役が付けた続きの ID
+  runtimeOf(id: string): { runtimeId: string | null; session: string | null } {
+    const row = this.db.prepare('SELECT runtime_id, runtime_session FROM conversations WHERE id = ?').get(id) as { runtime_id: string | null; runtime_session: string | null } | undefined;
+    return { runtimeId: row?.runtime_id ?? null, session: row?.runtime_session ?? null };
+  }
+
+  // 会話を実行役に結ぶ（最初の 1 回だけ。もう結ばれていれば何もせず、いまの結び先が同じかを返す）。beat には実行役が何を読んだか見えないので、同時に「外から読んだことがある」印も付ける
+  bindRuntime(id: string, runtimeId: string): boolean {
+    if (!this.ensure(id)) return false;
+    this.db.prepare('UPDATE conversations SET runtime_id = ?, ever_tainted = 1 WHERE id = ? AND runtime_id IS NULL').run(runtimeId, id);
+    return this.runtimeOf(id).runtimeId === runtimeId;
+  }
+
+  setRuntimeSession(id: string, session: string): void {
+    this.db.prepare('UPDATE conversations SET runtime_session = ? WHERE id = ? AND runtime_id IS NOT NULL').run(session, id);
   }
 
   // 会話の権限モード。無い会話と、前の形の normal は auto

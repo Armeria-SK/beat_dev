@@ -68,12 +68,24 @@ export const depthOptions = (model: ModelView | undefined): string[] => [...(mod
 
 export const modelName = (model: ModelView): string => model.model || model.label || model.id;
 
-export interface ModelOption { id: string | null; name: string | null; hint: string; checked: boolean; disabled: boolean }
+export interface ModelOption { id: string | null; name: string | null; hint: string; checked: boolean; disabled: boolean; runtime: string | null }
 
-export function modelOptions(models: readonly ModelView[], modelId: string | null): ModelOption[] {
+// 外の実行役の会話の決まり: bound はこの会話が結ばれている実行役（無ければ null）、allowed は実行役のモデルを選べる会話か（まだ発言が無く、製品の会話）。
+// 結ばれた会話はその実行役のモデルだけ、結ばれていなければ allowed のときだけ実行役のモデルを出す（提供元のモデルへも、別の実行役へも替えられない）
+export interface RuntimeUse { bound: string | null; allowed: boolean }
+export const NO_RUNTIME: RuntimeUse = { bound: null, allowed: false };
+
+export function runtimeShown(models: readonly ModelView[], use: RuntimeUse): ModelView[] {
+  if (use.bound !== null) return models.filter(m => m.runtime === use.bound);
+  return models.filter(m => !m.runtime || use.allowed);
+}
+
+export const runtimeInEffect = (use: RuntimeUse, current: ModelView | undefined): boolean => use.bound !== null || (use.allowed && Boolean(current?.runtime));
+
+export function modelOptions(models: readonly ModelView[], modelId: string | null, use: RuntimeUse = NO_RUNTIME): ModelOption[] {
   return [
-    { id: null, name: null, hint: '', checked: modelId === null, disabled: false },
-    ...models.map(m => ({ id: m.id, name: modelName(m), hint: m.label === modelName(m) ? '' : m.label, checked: m.id === modelId, disabled: !usable(m) && m.id !== modelId })),
+    { id: null, name: null, hint: '', checked: modelId === null, disabled: false, runtime: null },
+    ...runtimeShown(models, use).map(m => ({ id: m.id, name: modelName(m), hint: m.label === modelName(m) ? '' : m.label, checked: m.id === modelId, disabled: !usable(m) && m.id !== modelId, runtime: m.runtime ?? null })),
   ];
 }
 

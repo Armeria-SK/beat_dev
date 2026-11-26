@@ -10,6 +10,7 @@ export interface ToolItem {
   input: string;
   result: ToolResult | null;
   gate?: ToolGate | undefined;
+  nested?: true | undefined;
   running?: { startedAt: number | null; checking: boolean; helperTools: number | null; helperConversation: string | null } | undefined;
 }
 
@@ -145,7 +146,7 @@ export function threadItems({ messages, draft, notices = [], builds = [] }: Thre
     if (m.role === 'tool') {
       const rowKey = m.toolCallId ? rowKeyOf(m.toolCallId) : key;
       const input = m.toolCallId ? pending.get(m.toolCallId)?.shift() : undefined;
-      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) }, ...(m.gate ? { gate: m.gate } : {}) });
+      tools(rowKey).push({ key: rowKey, name: m.toolName ?? '', input: input ?? '', result: { text: m.text, isError: Boolean(m.isError) }, ...(m.gate ? { gate: m.gate } : {}), ...(m.nested ? { nested: true as const } : {}) });
     } else if (m.role === 'user') {
       if (m.note !== 'continue') items.push(m.generated ? { kind: 'generated', key, text: m.text } : { kind: 'owner', key, text: m.text, attachments: (m.attachments ?? []).map(a => a.name), at: m.createdAt });
     } else {

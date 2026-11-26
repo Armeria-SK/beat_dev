@@ -25,6 +25,8 @@ export interface Conversation {
   message_count?: number; archived_at?: number | null;
   project_id?: string | null;
   kind?: string;
+  // 外の実行役に結ばれた会話か（その実行役の ID。結ばれていなければ null・無し）。結ばれると行き先は替えられない
+  runtime_id?: string | null;
 }
 // beat 6-4: 製品の裏のコマンド（Terminal の欄）。command と出力は、サーバーが鍵らしい文字を伏せ、色のコードを消したもの
 export type BackgroundState = 'running' | 'exited' | 'stopped';
@@ -127,7 +129,7 @@ export interface NewProject { root: string; name?: string; checkCommand?: string
 export interface ProjectPatch { name?: string; checkCommand?: string | null; archived?: boolean; refreshRemotes?: true; docLanguage?: string | null; scoutMode?: ScoutMode }
 export interface FolderCheck { root: string; notes: ProjectNote[] }
 export interface ConversationList { conversations: Conversation[]; more?: Record<string, number> }
-export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string };
+export type ToolGate = { by: 'judge'; reason: string; same?: number } | { by: 'pending'; id: number } | { by: 'not-parked' } | { by: 'no-judge' } | { by: 'rule'; id: number; shown: string } | { by: 'runtime' };
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
@@ -136,6 +138,8 @@ export interface Message {
   // beat が足した一言（'continue' は返事が上限で切れたときの続きの頼み。画面に出さない）
   note?: 'pending' | 'continue';
   generated?: true;
+  // 外の実行役（Claude Code・Codex）が自分で動かした道具の行（beat は動かしていない）と、そのうち子の担当の道具の行
+  runtime?: true; nested?: true;
 }
 // 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
 export interface ModelChoice { modelId?: string | null; effort?: string | null; permissionMode?: PermissionMode }

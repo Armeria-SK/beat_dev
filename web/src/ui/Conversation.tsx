@@ -377,7 +377,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     return () => { live = false; };
   }, [id, revision]);
   useEffect(() => { void api.models().then(r => { setModels(r.models); setChatOrder(r.routing.chat); setModelsRead(true); }).catch(() => undefined); }, []);
-  const usage = useContextUsage(id, draft ? -1 : revision + usageTick * 1_000_000);
+  const usage = useContextUsage(loaded?.conversation?.runtime_id ? null : id, draft ? -1 : revision + usageTick * 1_000_000);
   const meter = contextMeter(usage?.ratio);
 
   const conversation = loaded?.conversation ?? null;
@@ -540,13 +540,13 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     try { await api.retry(id); } catch (error) { await fail(error, { label: t('ui.fail.retry'), run: () => void retry() }); }
   };
 
-  const alternative = models.find(m => m.id !== conversation?.model_id && m.probe?.status === 'ok' && m.inChat);
+  const alternative = conversation?.runtime_id ? undefined : models.find(m => m.id !== conversation?.model_id && m.probe?.status === 'ok' && m.inChat && !m.runtime);
   const useAlternative = (then: () => void): FailAction | null => (alternative && id ? {
     label: t('ui.fail.useModel', alternative.model || alternative.label),
     run: () => void api.chooseModel(id, { modelId: alternative.id }).then(() => { void load(); then(); }, error => fail(error, null)),
   } : null);
   const openSettings = { label: t('ui.fail.openSettings'), run: () => { location.hash = '#/settings'; } };
-  const canRetry = lastIsUser && !draft && !conversation?.parent_run_id && (conversation?.kind ?? 'chat') === 'chat';
+  const canRetry = lastIsUser && !draft && !conversation?.parent_run_id && (conversation?.kind ?? 'chat') === 'chat' && !conversation?.runtime_id;
 
   function runFailure(n: Extract<RunNotice, { kind: 'error' }>): ReactNode {
     const text = noticeText(t, n);
@@ -652,7 +652,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       {!gone && !helper && (
         <Composer
           draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}
-          models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode}
+          models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode} runtime={{ bound: conversation?.runtime_id ?? null, allowed: (id === null || messages.length === 0) && Boolean(product ?? conversation?.project_id) }}
           slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1, product: Boolean(product && panes?.onOpenPlan), scout: Boolean(product && product.scout_mode !== 'off') }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}
           onStop={() => { if (draft) void api.stop(draft.runId).catch(changeFailed); }}

@@ -10,6 +10,8 @@ import { createClaudeCodeRuntime } from './claude-code/adapter.ts';
 export interface RuntimeDeps {
   processes: ProcessManager;
   log: (line: string) => void;
+  // いま環境に入っている API キーの値（提供元の secrets() と同じ出どころ）。実行役が言ってきた文・入力・出力から、鍵そのものを伏せるために使う
+  secrets?: () => readonly string[];
 }
 
 export type RuntimeFactory = (config: RuntimeConfig, deps: RuntimeDeps) => AgentRuntime;
@@ -46,6 +48,9 @@ export class RuntimeRegistry {
   }
 
   kinds(): readonly RuntimeKind[] { return RUNTIME_KINDS; }
+
+  // 実行役が言ってきたものから伏せる鍵の値（出どころが無ければ空）
+  secrets(): readonly string[] { return this.#deps.secrets?.() ?? []; }
 
   find(config: Pick<AppConfig, 'runtimes'>, id: string): RuntimeLookup {
     const runtime = config.runtimes?.find(candidate => candidate.id === id);

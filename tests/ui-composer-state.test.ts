@@ -5,10 +5,10 @@ import { SLASH_COMMANDS } from '../web/src/chat-logic.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
+  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, NO_RUNTIME, runtimeInEffect, runtimeShown, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
   slashAvailable, slashItems,
   submitMessage, toastLift, UI_SLASH,
-  type ComposerInput, type SubmitDeps, type SubmitInput,
+  type ComposerInput, type RuntimeUse, type SubmitDeps, type SubmitInput,
 } from '../web/src/ui/composer-state.ts';
 import { EMPTY, reduce, type Action, type LiveState } from '../web/src/ui/live-state.ts';
 import { dropToast, leaveToast, pushToast, toastDuration, type ToastEntry } from '../web/src/ui/toast-list.ts';
@@ -326,4 +326,21 @@ test('ui/composer-state: /rename は題を書き換えるだけで送らない�
 test('ui/composer-state: トーストを入力欄の上へ持ち上げる高さ（画面の下から入力欄の上の端まで）', () => {
   assert.equal(toastLift(900, 716.4), 184);
   assert.equal(toastLift(900, 950), 0);
+});
+
+test('ui/composer-state（AR-7）: 実行役のモデルは、まだ発言の無い製品の会話でだけ選べる。結ばれた会話はその実行役のモデルだけ。実行役の会話では権限モードの切り替えを出さない', () => {
+  const models = [model('a'), model('cc', { runtime: 'claude-code', provider: '' }), model('cx', { runtime: 'codex', provider: '' })];
+  const ids = (use: RuntimeUse) => modelOptions(models, null, use).map(o => o.id);
+  assert.deepEqual(ids(NO_RUNTIME), [null, 'a'], 'a conversation with no product, or one already started with a provider, does not offer runtimes');
+  assert.deepEqual(ids({ bound: null, allowed: true }), [null, 'a', 'cc', 'cx']);
+  assert.deepEqual(ids({ bound: 'claude-code', allowed: false }), [null, 'cc'], 'a bound conversation can only stay with its own runtime');
+  assert.deepEqual(modelOptions(models, null, { bound: null, allowed: true }).map(o => o.runtime), [null, null, 'claude-code', 'codex']);
+  assert.deepEqual(modelOptions(models, null).map(o => o.id), [null, 'a'], 'the default is no runtime');
+
+  const cc = models[1];
+  assert.equal(runtimeInEffect({ bound: 'claude-code', allowed: false }, undefined), true);
+  assert.equal(runtimeInEffect({ bound: null, allowed: true }, cc), true);
+  assert.equal(runtimeInEffect({ bound: null, allowed: false }, cc), false, 'a runtime model that cannot be used here is not "in effect"');
+  assert.equal(runtimeInEffect({ bound: null, allowed: true }, models[0]), false);
+  assert.deepEqual(runtimeShown(models, { bound: null, allowed: false }).map(m => m.id), ['a']);
 });

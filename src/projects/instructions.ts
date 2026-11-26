@@ -36,7 +36,7 @@ export function linkTarget(root: string, linkPath: string, target: string): stri
 
 type Log = (line: string) => void;
 
-function readHead(path: string, maxBytes: number): { text: string; whole: boolean } | 'refused' {
+export function readHead(path: string, maxBytes: number): { text: string; whole: boolean } | 'refused' {
   const checked = lstatSync(path, { bigint: true });
   if (!checked.isFile() || checked.nlink !== 1n) return 'refused';
   const fd = openSync(path, WINDOWS ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

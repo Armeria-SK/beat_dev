@@ -144,6 +144,7 @@ export interface AppOptions {
   agentTimeoutMs?: number;
   // 試験用: 承認待ちだけが残った実行が決めを待つ時間（ミリ秒）。書かなければ 4 分
   pendingWaitMs?: number;
+  runtimeStopGraceMs?: number;
   judgeLimits?: JudgeLimitSet;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
@@ -250,7 +251,7 @@ export class App {
     this.registry.reload(config);
     this.botMemory = options.botMemory === true;
     this.#processes = new ProcessManager({ log: this.log });
-    this.runtimes = new RuntimeRegistry({ processes: this.#processes, log: this.log }, { ...FACTORIES, ...options.runtimeFactories });
+    this.runtimes = new RuntimeRegistry({ processes: this.#processes, log: this.log, secrets: () => this.registry.secrets() }, { ...FACTORIES, ...options.runtimeFactories });
     this.runtimeChecks = new RuntimeChecks(this.runtimes, this.log);
     this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: model => this.baseTokens(model), memoryTokens: () => this.memoryTokens(), runtimes: this.runtimeChecks, log: this.log });
     this.bus = new RunBus();
@@ -335,6 +336,8 @@ export class App {
       ...(options.now ? { now: () => new Date(now()) } : {}),
       ...(options.agentTimeoutMs !== undefined ? { agentTimeoutMs: options.agentTimeoutMs } : {}),
       ...(options.pendingWaitMs !== undefined ? { pendingWaitMs: options.pendingWaitMs } : {}),
+      runtimes: { registry: this.runtimes, checks: this.runtimeChecks },
+      ...(options.runtimeStopGraceMs !== undefined ? { runtimeStopGraceMs: options.runtimeStopGraceMs } : {}),
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
     });
     this.worker = new Worker({

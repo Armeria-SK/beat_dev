@@ -110,10 +110,18 @@ const TARGETS: Readonly<Record<string, (args: Args, cut: Cut) => string>> = {
 };
 const NO_ARGS_NEEDED = new Set(['plan_write', 'question_list']);
 const DESCRIBING_KEYS = [
-  'path', 'file', 'command', 'cmd', 'query', 'url', 'title', 'name', 'topic',
+  'path', 'file', 'file_path', 'pattern', 'command', 'cmd', 'query', 'url', 'title', 'name', 'topic',
   'question', 'summary', 'decision', 'expression', 'description', 'message', 'text', 'body', 'content',
 ];
 const MAX_TARGET = 240;
+
+// 外の実行役が動かした道具の行の名前は `<実行役の種類>:<道具>`（beat の道具の名前に : は無い）
+const RUNTIME_TOOL = /^[a-z][a-z0-9-]*:(.+)$/u;
+const RUNTIME_ICON: Readonly<Record<string, UiIconName>> = {
+  Bash: 'terminal', PowerShell: 'terminal', Read: 'search', Grep: 'search', Glob: 'search', WebFetch: 'search', WebSearch: 'search',
+  Edit: 'pencil', Write: 'pencil', NotebookEdit: 'pencil', Task: 'branch', Agent: 'branch',
+};
+const runtimeTool = (name: string): string | null => RUNTIME_TOOL.exec(name)?.[1] ?? null;
 
 const VERB_ICON: Record<ToolVerb, UiIconName> = { edit: 'pencil', run: 'terminal', search: 'search', helper: 'branch', tool: 'wrench' };
 
@@ -200,6 +208,8 @@ function pick(name: string, input: string): string {
 const words = (text: string): string => text.replace(/[_-]+/gu, ' ').trim();
 
 export function toolLabel(name: string): string {
+  const own = runtimeTool(name);
+  if (own !== null) return own;
   const key = `ui.toolLabel.${name}`;
   if (Object.hasOwn(en, key)) return t(key as PlainKey);
   const rest = name.startsWith(MCP_NAME_PREFIX) ? name.slice(MCP_NAME_PREFIX.length) : '';
@@ -307,7 +317,7 @@ export function toolRow(name: string, input: string, result: ToolResult | null):
   const verb = toolVerb(name);
   const args = record(input);
   const target = pick(name, input);
-  const view = { verb, name, icon: VERB_ICON[verb], target };
+  const view = { verb, name, icon: (Object.hasOwn(RUNTIME_ICON, runtimeTool(name) ?? '') ? RUNTIME_ICON[runtimeTool(name)!] : undefined) ?? VERB_ICON[verb], target };
   if (!result) return { ...view, meta: null };
   if (verb === 'run') return { ...view, meta: backgroundMeta(result, args) ?? runMeta(result, args?.['command']) };
   if (result.isError) return { ...view, meta: { kind: 'failed' } };

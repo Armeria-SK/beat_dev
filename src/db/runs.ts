@@ -31,6 +31,8 @@ export interface RunRow {
   tainted: number;
   // 子の担当（agent_run）の実行だけが持つ。親の実行の id
   parent_run_id: string | null;
+  // 外の実行役で動かした実行の記録（JSON。実行役の id・種類・起動した場所・版・許可の設定・引数。秘密は入らない）。提供元の実行は NULL
+  runtime: string | null;
 }
 
 export interface RunFinish {
@@ -76,6 +78,10 @@ export class Runs {
   start(id: string, kind: string, conversationId?: string, parentRunId?: string): void {
     this.db.prepare('INSERT INTO engine_runs (id, kind, conversation_id, started_at, parent_run_id) VALUES (?, ?, ?, ?, ?)')
       .run(id, kind, conversationId ?? null, this.now(), parentRunId ?? null);
+  }
+
+  setRuntime(id: string, record: unknown): void {
+    this.db.prepare('UPDATE engine_runs SET runtime = ? WHERE id = ?').run(JSON.stringify(record), id);
   }
 
   finish(id: string, f: RunFinish): void {

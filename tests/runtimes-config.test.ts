@@ -138,15 +138,14 @@ test('a runtime model that nothing else can stand in for is "not usable" with it
   const s = await startApp(t, { models: [], configure: config => { withRuntime(config); config.routing.chat = ['rt']; } });
   const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'hello' });
   assert.equal(sent.status, 409);
-  assert.equal(sent.body.problems[0].messageCode, 'engine.problem.runtime_unavailable');
-  assert.equal(sent.body.problems[0].modelId, 'rt');
+  assert.equal(sent.body.errorCode, 'engine.runtime.no_project', 'a runtime conversation needs a product; with no provider model to fall back on, that is the reason given');
   assert.equal(s.adapters.size === 0 || s.adapter().calls.length === 0, true, 'no provider was called');
   const usage = await s.json(`/api/conversations/${CONVERSATION}/context`, 'GET');
   assert.equal(usage.status, 409, 'the context estimate also says it cannot be counted instead of failing');
   assert.equal(usage.body.problems[0].messageCode, 'engine.problem.runtime_unavailable');
   const pinned = await s.json(`/api/conversations/${CONVERSATION}/context?modelId=rt`, 'GET');
   assert.equal(pinned.status, 409);
-  assert.equal(pinned.body.problems[0].messageCode, 'engine.problem.runtime_unavailable');
+  assert.equal(pinned.body.errorCode, 'engine.usage.runtime', 'a conversation that runs through a runtime has no length gauge');
 });
 
 test('with a provider model after it, the conversation goes on as before and the runtime model is skipped', async t => {

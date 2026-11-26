@@ -130,7 +130,7 @@ export function ownFolderOverlap(cwd: string, paths: AppPaths): string | undefin
   const own: Array<[string, string]> = [[resolve(paths.templates, '..'), 'the folder beat is installed in'], [paths.data, 'the beat data folder']];
   for (const [folder, name] of own) {
     const real = realish(resolve(folder));
-    if (isInside(real, target) || isInside(target, real)) return `The working folder overlaps ${name}, so Claude Code is not started there`;
+    if (isInside(real, target) || isInside(target, real)) return `The working folder overlaps ${name}, so the runtime is not started there`;
   }
   return undefined;
 }
@@ -256,7 +256,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
     const childEnv = this.#childEnv();
     // 新しい会話は beat が付けた ID で始める（続きに使う ID を、最初の知らせより前に持てる）。続きの会話は渡された ID
     const runtimeSession = request.resume ?? randomUUID();
-    const info: RuntimeSession = { id, runtimeSession };
+    const info: RuntimeSession = { id, runtimeSession, ...(scope.containReason !== undefined ? { containReason: safeText(scope.containReason, 300) } : {}) };
     const launch: ClaudeCodeLaunch = { record: undefined, claudeCodeVersion: undefined, permission, settingSources: ['user'], model: request.model, resumed: request.resume !== undefined };
     let session: Session;
     const canUseTool: CanUseTool = (toolName, toolInput, options) => new Promise<PermissionResult>(resolve => {
@@ -278,6 +278,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
           env: childEnv.env,
           permissionMode: permission,
           settingSources: ['user'],
+          systemPrompt: { type: 'preset', preset: 'claude_code', ...(request.instructions !== undefined && request.instructions !== '' ? { append: request.instructions } : {}) },
           tools: [...KEPT_TOOLS],
           disallowedTools: disallowedTools(),
           hooks: toolHooks(),
@@ -303,6 +304,8 @@ class ClaudeCodeRuntime implements AgentRuntime {
       if (!versionAtLeast(initialized.claude_code_version)) throw new ClaudeCodeError('version', `Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer is needed. Update Claude Code`);
       // 契約のログインで動かすつもりなので、API キーが使われているなら発言を渡す前に止める
       if (apiKeyInUse(initialized.account.apiKeySource)) throw new ClaudeCodeError('auth', 'Claude Code is set to use an API key, not the Claude login, so the reply was not started');
+      // 送り先が契約のログインの firstParty 以外（Bedrock・Vertex・ゲートウェイなど）と言ってきたら、発言を渡す前に止める。言ってこないとき（読めない）は、apiKeySource の確かめだけで通す
+      if (initialized.account.apiProvider !== undefined && initialized.account.apiProvider !== 'firstParty') throw new ClaudeCodeError('auth', 'Claude Code is not sending the conversation to Anthropic with the Claude login, so the reply was not started');
       // 起動の待ちのあいだに止められていたら、起こした本体を残さずに断る（止める合図は、まだ onAbort をつなぐ前なので、ここで見る）
       if (request.signal.aborted) throw new ClaudeCodeError('aborted', 'The reply was stopped while Claude Code was starting');
     } catch (error) {

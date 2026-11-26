@@ -467,3 +467,18 @@ test('ui/thread（model-auto B）: 続きを頼んだ一言（note: continue）�
   });
   assert.deepEqual(planLast.map(i => i.kind), ['owner', 'tools', 'reply', 'plan'], '一言が実行の最後でも「Plan written」を出す');
 });
+
+test('ui/thread（AR-7）: 実行役が動かした道具の行は、名前・入力・結果・「実行役が動かした」の印・子の担当の印を保ったまま 1 つのまとまりに入る', () => {
+  const items = threadItems({
+    messages: [
+      msg('user', 'go'),
+      msg('assistant', '', { runtime: true, toolCalls: [call('rt_p', 'claude-code:Agent', { prompt: 'x' })] }),
+      msg('tool', 'done', { toolName: 'claude-code:Agent', toolCallId: 'rt_p', gate: { by: 'runtime' }, runtime: true }),
+      msg('assistant', '', { runtime: true, nested: true, toolCalls: [call('rt_c', 'claude-code:Read', { file_path: 'a.ts' })] }),
+      msg('tool', 'text', { toolName: 'claude-code:Read', toolCallId: 'rt_c', gate: { by: 'runtime' }, runtime: true, nested: true }),
+    ],
+  });
+  const tools = items[1]!;
+  assert.ok(tools.kind === 'tools');
+  assert.deepEqual(tools.rows.map(r => [r.name, r.gate, r.nested]), [['claude-code:Agent', { by: 'runtime' }, undefined], ['claude-code:Read', { by: 'runtime' }, true]]);
+});

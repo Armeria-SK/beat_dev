@@ -225,7 +225,12 @@ class CodexSession {
         return;
       }
       default:
-        if (WARNING_NOTIFICATIONS.has(method)) { this.#log(`[WARN] Codex said (${method}): ${short(JSON.stringify(p ?? {}))}`); return; }
+        if (WARNING_NOTIFICATIONS.has(method)) {
+          this.#log(`[WARN] Codex said (${method}): ${short(JSON.stringify(p ?? {}))}`);
+          const issue = method === 'windows/worldWritableWarning' ? worldWritableIssue(p) : undefined;
+          if (issue && !this.finished) this.queue.push({ type: 'issue', issue });
+          return;
+        }
         if (!IGNORED_NOTIFICATIONS.has(method)) this.#unknownEvent(JSON.stringify({ method, params: p ?? null }));
     }
   }
@@ -507,7 +512,7 @@ export class CodexRuntime implements AgentRuntime {
       };
       this.#sessions.set(session.id, session);
       this.#deps.log(`[INFO] Codex ${opened.version ?? 'unknown version'} ${resumed ? 'resumed' : 'started'} a conversation (account ${account.type}, ${wire.sandbox}, ${wire.approvalPolicy})`);
-      return { id: session.id, runtimeSession: threadId, record: session.record };
+      return { id: session.id, runtimeSession: threadId, record: session.record, ...(opened.proc.containReason !== undefined ? { containReason: short(opened.proc.containReason, 300) } : {}) };
     } catch (error) {
       session.end();
       await opened.scope.abort();

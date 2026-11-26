@@ -63,6 +63,8 @@ const en = {
   'persona_unsafe': 'This file is a link or not a regular file, so it was not changed ({file})',
   'persona_empty': 'Nothing to write (send at least one of userName, callMe, botName, style and styleNote)',
   'conversation_running': 'This conversation is still writing a reply, so it cannot be deleted. Stop it first',
+  'runtime_fixed': 'This conversation runs through an external runtime ({id}). Start a new conversation to use another model',
+  'runtime_not_fresh': 'This conversation already has messages from another model. Start a new conversation to use the external runtime ({id})',
   'conversation_not_deletable': 'Conversations of tasks and reviews cannot be deleted from here',
   'pending_gone': 'That waiting message has already been sent or cancelled',
   'unknown_model': 'The model "{id}" is not in the settings',

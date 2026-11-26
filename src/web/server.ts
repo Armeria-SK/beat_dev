@@ -126,7 +126,7 @@ function modelsView(app: App) {
 
 // モデルと考える深さ・権限モードの選び方（PATCH と送信で共通）。設定にあるモデルだけ、そのモデルで選べる値だけを受ける。
 // モデルだけを替えて、今の考える深さが新しいモデルに無いときは、null に戻して effortReset で知らせる。何も書く前に検査を終える
-function readChoice(app: App, body: Record<string, unknown>, current: { model_id: string | null; effort: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
+function readChoice(app: App, body: Record<string, unknown>, current: { id?: string; model_id: string | null; effort: string | null; runtime_id?: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
   const choice: SendChoice = {};
   if (body.permissionMode !== undefined) {
     if (!isPermissionMode(body.permissionMode)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'permissionMode', params: { field: 'permissionMode', values: PERMISSION_MODES.join(' / ') } });
@@ -142,6 +142,11 @@ function readChoice(app: App, body: Record<string, unknown>, current: { model_id
   const effort = text('effort');
   if (modelId !== undefined) {
     if (modelId !== null && !app.config().models.some(m => m.id === modelId)) throw problem(400, 'invalid_field', 'unknown_model', { field: 'modelId', params: { id: modelId } });
+    // 外の実行役の会話は、最初の 1 回で行き先が決まって替わらない（エンジンの送信と同じ決まり）
+    const chosen = modelId === null ? undefined : app.config().models.find(m => m.id === modelId);
+    const chosenRuntime = chosen && isRuntimeModel(chosen) ? chosen.runtime : undefined;
+    if (current?.runtime_id && modelId !== null && chosenRuntime !== current.runtime_id) throw problem(409, 'conflict', 'runtime_fixed', { params: { id: current.runtime_id } });
+    if (chosenRuntime !== undefined && !current?.runtime_id && current?.id !== undefined && app.conversations.messages(current.id, 1).length > 0) throw problem(409, 'conflict', 'runtime_not_fresh', { params: { id: chosenRuntime } });
     choice.modelId = modelId;
   }
   if (effort !== undefined) choice.effort = effort;
@@ -206,7 +211,8 @@ export function createWebServer(app: App): WebServer {
     app.conversations.setChoice(id, choice);
     if (body.archived === true) { app.conversations.archive(id); changed('archived'); }
     if (body.archived === false) { app.conversations.unarchive(id); changed('unarchived'); }
-    sendJson(res, 200, { conversation: { ...app.conversations.get(id), archived_at: app.conversations.archivedAt(id) }, ...(effortReset ? { effortReset: true } : {}) });
+    const { runtime_session: _session, ...meta } = app.conversations.get(id)!;
+    sendJson(res, 200, { conversation: { ...meta, archived_at: app.conversations.archivedAt(id) }, ...(effortReset ? { effortReset: true } : {}) });
   });
   // 要約（読むだけ）。要約が無い会話は summary が null
   router.add('GET', '/api/conversations/:id/summary', ({ res, params }) => {
@@ -265,7 +271,7 @@ export function createWebServer(app: App): WebServer {
     const id = params[0]!;
     const conversation = app.conversations.get(id);
     if (!conversation) throw problem(404, 'not_found', 'conversation_missing');
-    const { snapshot: _snapshot, ...meta } = conversation;
+    const { snapshot: _snapshot, runtime_session: _session, ...meta } = conversation;
     const active = app.engine.activeRuns().find(r => r.conversationId === id);
     sendJson(res, 200, {
       conversation: meta,
@@ -278,6 +284,8 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'assistant' && m.message.toolCalls?.length
           ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: previewJson(redactJsonValue(c.arguments ?? c.raw ?? null), c.name === 'ask_owner' ? 16_000 : 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError), ...(m.message.gate ? { gate: m.message.gate } : {}) } : {}),
+        ...((m.message.role === 'assistant' || m.message.role === 'tool') && m.message.runtime ? { runtime: true } : {}),
+        ...((m.message.role === 'assistant' || m.message.role === 'tool') && m.message.nested ? { nested: true } : {}),
       })),
       pending: app.engine.pending(id),
       builds: app.tasks.buildsFrom(id).map(task => {

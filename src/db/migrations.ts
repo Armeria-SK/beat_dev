@@ -708,4 +708,9 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   CREATE INDEX ix_engine_runs_conversation ON engine_runs (conversation_id);
   `,
+  `
+  ALTER TABLE conversations ADD COLUMN runtime_id TEXT;
+  ALTER TABLE conversations ADD COLUMN runtime_session TEXT;
+  ALTER TABLE engine_runs ADD COLUMN runtime TEXT;
+  `,
 ];
