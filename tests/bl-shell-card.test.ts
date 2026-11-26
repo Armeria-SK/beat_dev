@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { guardText } from '../src/shared/messages/guard.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
 import { cardQuote, packageScriptName } from '../src/tools/hooks/code-guard.ts';
 import { selfRunRig } from './helpers/self-run-rig.ts';
@@ -28,6 +29,11 @@ const PACKAGE = {
     install: 'node scripts/install.js',
     bad: 'npm install && node scripts/pre.js',
     bad2: 'npm add left-pad && node scripts/pre.js',
+    release: 'npm version patch',
+    release2: 'yarn version --patch',
+    fixup: 'npm audit fix && node scripts/pre.js',
+    postversion: 'echo POSTVERSION-MARKER',
+    lsrun: 'npm ls && node scripts/pre.js',
     loop: 'npm run loop',
     keep: 'node secrets/helper.js',
     envfile: 'node .env.js',
@@ -78,9 +84,9 @@ const pathsOf = (pre: ReturnType<typeof shellPreCheck>) => cardOf(pre).map(p => 
 const excerpt = (...lines: string[]): string => [EXCERPT, ...lines].join('\n');
 const line = (key: string): string => `${cardQuote(key)}: ${cardQuote((PACKAGE.scripts as Record<string, string>)[key]!)}`;
 const whole = (card: ReturnType<typeof cardOf>, why: string): void => {
-  assert.ok(card.length >= 1, why);
-  assert.equal(card[0]!.path, 'package.json', why);
-  assert.ok(card[0]!.text.includes('UNRELATED-MARKER') && card[0]!.text.includes('left-pad') && !card[0]!.text.startsWith(EXCERPT), `${why}: the whole file`);
+  const pkg = card.find(p => p.path === 'package.json');
+  assert.ok(pkg, why);
+  assert.ok(pkg.text.includes('UNRELATED-MARKER') && pkg.text.includes('left-pad') && !pkg.text.startsWith(EXCERPT), `${why}: the whole file`);
 };
 
 test('UX-10: npm run x shows the script line (and its pre hook) and the files they run, not the whole package.json', t => {
@@ -128,9 +134,14 @@ test('UX-10: pnpm, yarn and bun run <name> are read the same way; a cd before it
 
 test('UX-10: every form that cannot be tied to the script lines still shows the whole package.json (as before)', t => {
   const r = selfRunRig(t, undefined, FILES);
-  for (const command of ['npm install', 'npm run nosuch', 'npm run -s x', 'npm --silent run x', 'npm run x; npm install', 'npm run bad', 'npm run bad2', 'bun test', 'npm run']) {
+  for (const command of ['npm install', 'npm run nosuch', 'npm run -s x', 'npm --silent run x', 'npm run x; npm install', 'npm run bad', 'npm run bad2', 'bun test', 'npm run', 'npm run release', 'npm run release2', 'npm run fixup']) {
     whole(cardOf(shellPreCheck({ command }, r.ctx)), command);
   }
+  const release = cardOf(shellPreCheck({ command: 'npm run release' }, r.ctx));
+  assert.ok(release[0]!.text.includes('POSTVERSION-MARKER'), 'npm version runs postversion, so its line is on the card');
+  const lsrun = cardOf(shellPreCheck({ command: 'npm run lsrun' }, r.ctx));
+  assert.deepEqual(lsrun.map(p => p.path), ['package.json', 'scripts/pre.js'], 'a read-only package call (npm ls) runs no script, so the card still narrows');
+  assert.equal(lsrun[0]!.text, excerpt(line('lsrun')));
 });
 
 test('UX-10: a flag after the name, a workspace, a prefix or an env var that picks another package shows the whole package.json, not the root script lines', t => {
@@ -143,7 +154,7 @@ test('UX-10: a flag after the name, a workspace, a prefix or an env var that pic
 
 test('UX-10: a wrapper, an npx / corepack call, or a folder that cannot be worked out shows the whole package.json', t => {
   const r = selfRunRig(t, undefined, FILES);
-  for (const command of ['npm test; npx npm install', 'npm test; corepack npm install', 'time npm run x', 'bash -c "npm run x"', 'timeout 5 npm test', 'npm run x; bash -c "npm run serve"', 'npm run x; & $p run serve', 'npm run x; corepack pnpm@9 run serve', 'npm run x; npx pnpm@9 run serve']) {
+  for (const command of ['npm test; npx npm install', 'npm test; corepack npm install', String.raw`& "C:\Program Files\nodejs\npm.cmd" install; npm test`, 'npm.ps1 install; npm test', 'npm.cmd install; npm test', 'time npm run x', 'bash -c "npm run x"', 'timeout 5 npm test', 'npm run x; bash -c "npm run serve"', 'npm run x; & $p run serve', 'npm run x; corepack pnpm@9 run serve', 'npm run x; npx pnpm@9 run serve']) {
     whole(cardOf(shellPreCheck({ command }, r.ctx)), command);
   }
 });
@@ -209,6 +220,22 @@ test('UX-10: a file outside the product folder is not shown even when the policy
   const card = cardOf(shellPreCheck({ command: 'cd sub; npm run up' }, { ...r.ctx, project: { id: 'p1', root: join(r.ws, 'sub') } }));
   assert.deepEqual(card.map(p => p.path), ['sub/package.json']);
   assert.equal(card[0]!.text, excerpt('"up": "node ../f1.js"', '(not shown: "../f1.js")'));
+});
+
+test('UX-10: the excerpt note and the not-shown note come from the guard messages, not from text inside the card code', t => {
+  const r = selfRunRig(t, undefined, FILES);
+  const table = guardText.tables.en as Record<string, string>;
+  const saved = [table['card.excerpt']!, table['card.not_shown']!];
+  assert.equal(saved[0], EXCERPT);
+  table['card.excerpt'] = 'EXCERPT-MARK';
+  table['card.not_shown'] = 'LEFT-MARK {names}';
+  try {
+    const card = cardOf(shellPreCheck({ command: 'npm run keep' }, r.ctx));
+    assert.equal(card[0]!.text, ['EXCERPT-MARK', line('keep'), 'LEFT-MARK "secrets/helper.js"'].join('\n'));
+  } finally {
+    table['card.excerpt'] = saved[0]!;
+    table['card.not_shown'] = saved[1]!;
+  }
 });
 
 test('UX-10: a long entry file is clipped', t => {

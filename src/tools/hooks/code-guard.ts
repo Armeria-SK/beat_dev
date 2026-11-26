@@ -312,6 +312,8 @@ export function packageScriptName(cmd: string, args: readonly string[]): string 
 export interface ScriptView { lines: string[]; files: string[] }
 
 const CD_CMDS = new Set(['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl', 'push-location', 'pop-location']);
+// 札の絞り込み専用。行の中の package 道具の呼び出しは、ここにある（スクリプトを動かさない）読むだけの下位コマンドのときだけ絞る。version・audit fix・pack・publish・install などは pre/post のスクリプトを動かすので、ここに無い下位コマンドはすべて全体を見せる。判定の PACKAGE_READONLY_SUB とは別（判定は変えない）
+const SCRIPT_SAFE_SUB = new Set(['ls', 'list', 'll', 'la', 'view', 'info', 'show', 'outdated', 'why', 'explain', 'help', 'bin', 'root', 'prefix']);
 const SCRIPT_TEXT_MAX = 6000;
 const SCRIPT_WORD_SPLIT = /[\s"'`()&|;<>=]+/u;
 const SCRIPT_GLOB = /[*?[\]{}]/u;
@@ -343,7 +345,7 @@ export function packageScriptView(packageText: string, names: readonly string[],
       if (CD_CMDS.has(seg.cmd)) return false;
       const called = packageScriptName(seg.cmd, seg.args);
       if (called !== undefined) return withHooks(called);
-      if (PACKAGE_TOOLS.has(seg.cmd) && !PACKAGE_READONLY_SUB.has(seg.args.find(a => !a.startsWith('-')) ?? '')) return false;
+      if (PACKAGE_TOOLS.has(seg.cmd) && !SCRIPT_SAFE_SUB.has(seg.args.find(a => !a.startsWith('-')) ?? '')) return false;
       files.push(...codeFindings(seg, { cwd: dir, language, selfHosts: [] }).flatMap(f => f.scripts));
       return true;
     });

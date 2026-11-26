@@ -142,7 +142,6 @@ const PACKAGE_WRAPPER = /^(?:npx|pnpx|bunx|corepack)$/u;
 const ENV_PROGRAM = /^(?:export|declare|typeset|local|readonly|set|setx|setenv|set-item|si|set-variable|sv|new-item|ni|env|eval|iex|invoke-expression|source|\.)$/u;
 const ENTRY_FILES_MAX = 4;
 const NOT_SHOWN_NAMES_MAX = 8;
-const EXCERPT_NOTE = '(excerpt of package.json: only the scripts that run)';
 const lowerName = (text: string): string => text.toLowerCase().replace(/\.(?:exe|cmd)$/u, '');
 
 // package.json ごとに、その文が動かすスクリプトの名前。同じ package.json に、ほかの呼び出し（install・旗・環境変数・動的な名前・npm が語に出るだけの文）が 1 つでも届けば、その package.json は入れない（札は全体を見せる）。
@@ -152,7 +151,7 @@ function scriptRuns(statements: readonly StatementFacts[], scripts: ReadonlySet<
   const walk = (list: readonly StatementFacts[]): boolean => list.every(st => {
     const program = lowerName(st.program);
     if (st.cwd === null || st.programDynamic || st.inner !== undefined || st.unknownInner?.length || PACKAGE_WRAPPER.test(program) || ENV_PROGRAM.test(program) || st.words.some(w => PACKAGE_WRAPPER.test(lowerName(w.text)))) return false;
-    if (!st.words.some(w => PACKAGE_PROGRAM.test(lowerName(w.text)))) return true;
+    if (!PACKAGE_PROGRAM.test(program) && !st.words.some(w => PACKAGE_PROGRAM.test(lowerName(w.text)))) return true;
     const words = st.words.slice(1);
     const clean = PACKAGE_PROGRAM.test(program) && lowerName(st.words[0]!.text) === program && st.env.length === 0 && !words.some(w => w.dynamic || w.glob);
     const name = clean ? packageScriptName(program, words.map(w => w.text)) : undefined;
@@ -182,8 +181,8 @@ function runCards(cards: readonly Peeked[], statements: readonly StatementFacts[
       const entries = wanted.filter(shown).slice(0, ENTRY_FILES_MAX);
       for (const file of entries) have.add(file);
       const left = wanted.filter(file => !entries.includes(file)).map(file => cardQuote(relative(dirname(card.preview.path), file).replaceAll('\\', '/')));
-      const note = left.length ? [`(not shown: ${[...left.slice(0, NOT_SHOWN_NAMES_MAX), ...(left.length > NOT_SHOWN_NAMES_MAX ? ['…'] : [])].join(', ')})`] : [];
-      return [{ ...card, preview: previewOf(card.preview.path, [EXCERPT_NOTE, ...view.lines, ...note].join('\n')) }, ...entries.map(file => peek(file, language))];
+      const note = left.length ? [guardText(language, 'card.not_shown', { names: [...left.slice(0, NOT_SHOWN_NAMES_MAX), ...(left.length > NOT_SHOWN_NAMES_MAX ? ['…'] : [])].join(', ') })] : [];
+      return [{ ...card, preview: previewOf(card.preview.path, [guardText(language, 'card.excerpt'), ...view.lines, ...note].join('\n')) }, ...entries.map(file => peek(file, language))];
     });
   } catch { return [...cards]; }
 }
