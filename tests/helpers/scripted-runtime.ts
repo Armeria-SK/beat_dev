@@ -24,6 +24,8 @@ export class ScriptedRuntime implements AgentRuntime {
   readonly starts: RuntimeRequest[] = [];
   readonly sent: string[] = [];
   readonly approvals: Array<{ requestId: string; decision: ApprovalDecision }> = [];
+  // beat が断る理由として添えた文（求めの ID ごと。添えなかった求めは入らない）
+  readonly notes = new Map<string, string>();
   // 待っていない求めへの答え（もう答えた・知らない ID）。本物の窓口と同じく投げて断る
   readonly refused: string[] = [];
   readonly #waiting = new Map<string, Set<string>>();
@@ -96,9 +98,10 @@ export class ScriptedRuntime implements AgentRuntime {
     return ids;
   }
 
-  async approve(sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> {
+  async approve(sessionId: string, requestId: string, decision: ApprovalDecision, note?: string): Promise<void> {
     if (!this.#waitingOf(sessionId).delete(requestId)) { this.refused.push(requestId); throw new Error('There is no waiting approval with that id'); }
     this.approvals.push({ requestId, decision });
+    if (note !== undefined) this.notes.set(requestId, note);
     if (this.hang.approve) await this.#gate;
   }
 

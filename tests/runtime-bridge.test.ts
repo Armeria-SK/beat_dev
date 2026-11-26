@@ -70,8 +70,10 @@ test('実行役の会話: 文と道具が seam.md の形で保存され、画面
   assert.equal(row.runtime_id, 'claude-code');
   assert.equal(row.runtime_session, 'sess-1');
   assert.equal(row.ever_tainted, 1);
-  // 実行役へは発言の文だけを渡す（人格・記憶・beat の system は足さない）
+  // 実行役へは発言の文だけを渡す（人格・記憶・beat の system は足さない）。計画の指示と道具は、文には混ぜず、起動の求め（instructions・planTools）で渡す。この会話は計画のない製品の新しい会話なので計画モード
   assert.deepEqual(r.runtime.sent, ['list the files']);
+  assert.match(r.runtime.starts[0]!.instructions ?? '', /^# Plan mode/u);
+  assert.deepEqual(r.runtime.starts[0]!.planTools?.specs.map(spec => spec.name), ['plan_write', 'acceptance_write']);
   assert.equal(r.runtime.closes, 1);
 });
 
@@ -319,18 +321,18 @@ test('製品の CLAUDE.md は全文のまま実行役（Claude Code）へ渡る�
   const withFile = await r.product('with-file', { 'CLAUDE.md': body });
   await r.check();
   r.runtime.script = feed => feed.done();
-  await r.turn(uuid(++n), 'go', { projectId: withFile.id, modelId: 'cc' });
+  await r.turn(uuid(++n), 'go', { projectId: withFile.id, modelId: 'cc', permissionMode: 'auto' });
   const passed = r.runtime.starts[0]!.instructions!;
   assert.ok(passed.endsWith('END-OF-FILE'), 'the whole file, not only its beginning');
   assert.ok(passed.length > 60_000);
 
   const without = await r.product('without-file');
-  await r.turn(uuid(++n), 'go', { projectId: without.id, modelId: 'cc' });
+  await r.turn(uuid(++n), 'go', { projectId: without.id, modelId: 'cc', permissionMode: 'auto' });
   assert.equal('instructions' in r.runtime.starts[1]!, false);
 
   const asFolder = await r.product('as-folder');
   mkdirSync(join(asFolder.root, 'CLAUDE.md'));
-  await r.turn(uuid(++n), 'go', { projectId: asFolder.id, modelId: 'cc' });
+  await r.turn(uuid(++n), 'go', { projectId: asFolder.id, modelId: 'cc', permissionMode: 'auto' });
   assert.equal('instructions' in r.runtime.starts[2]!, false, 'a folder named CLAUDE.md is not read');
   assert.ok(r.s.logs.some(line => /Did not pass CLAUDE\.md/u.test(line)));
 
@@ -338,7 +340,7 @@ test('製品の CLAUDE.md は全文のまま実行役（Claude Code）へ渡る�
   const product = await codex.product('codex-prod', { 'CLAUDE.md': 'rules' });
   await codex.check();
   codex.runtime.script = feed => feed.done();
-  await codex.turn(uuid(++n), 'go', { projectId: product.id, modelId: 'cc' });
+  await codex.turn(uuid(++n), 'go', { projectId: product.id, modelId: 'cc', permissionMode: 'auto' });
   assert.equal('instructions' in codex.runtime.starts[0]!, false, 'Codex reads its own files; beat passes nothing');
 });
 

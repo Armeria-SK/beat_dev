@@ -144,6 +144,8 @@ class CodexSession {
   cwd = '';
   model: string | undefined;
   effort: string | undefined;
+  // beat の計画モードの指示（AR-9b）。Codex には system の文を足す口が安定の面に無いので、返事の頭に添えて渡す。無ければ発言の文だけ
+  instructions: string | undefined;
   wire!: PermissionParams;
   record!: CodexRunRecord;
   turnStarted = false;
@@ -506,6 +508,7 @@ export class CodexRuntime implements AgentRuntime {
       session.cwd = request.cwd;
       session.model = request.model;
       session.effort = request.effort !== undefined && EFFORT_NAME.test(request.effort) ? request.effort : undefined;
+      session.instructions = request.instructions !== undefined && request.instructions.trim() !== '' ? request.instructions : undefined;
       session.wire = wire;
       const launched: LaunchRecord = opened.proc.record;
       session.record = {
@@ -530,7 +533,7 @@ export class CodexRuntime implements AgentRuntime {
     const { approvalPolicy, approvalsReviewer, sandboxPolicy } = session.wire;
     try {
       const reply = asRecord(await session.conn.request('turn/start', {
-        threadId: session.threadId, input: [{ type: 'text', text: input.text, text_elements: [] }], cwd: session.cwd,
+        threadId: session.threadId, input: [{ type: 'text', text: session.instructions === undefined ? input.text : `${session.instructions}\n\n---\n\nThe owner's message:\n\n${input.text}`, text_elements: [] }], cwd: session.cwd,
         approvalPolicy, approvalsReviewer, sandboxPolicy, ...(session.model ? { model: session.model } : {}), ...(session.effort ? { effort: session.effort } : {}),
       }, START_TIMEOUT_MS));
       session.turnId = asString(asRecord(reply?.turn)?.id);
@@ -557,7 +560,8 @@ export class CodexRuntime implements AgentRuntime {
     }
   }
 
-  async approve(sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> {
+  // note は使わない: Codex の承認への返事（decision だけ）に、断る理由の文を載せる所が無い
+  async approve(sessionId: string, requestId: string, decision: ApprovalDecision, _note?: string): Promise<void> {
     const session = this.#session(sessionId);
     const { rpcId, result } = session.approvals.answer(requestId, decision);
     if (!session.conn.respond(rpcId, result)) throw new CodexRefused('protocol', 'Codex already closed that request');

@@ -924,3 +924,105 @@ test('a process that could not be put in a job is told to the caller with its re
   assert.equal(session.containReason!.length, 301, 'cut at 300 characters, plus the mark that it was cut');
   assert.equal((await setup(t).start()).containReason, undefined);
 });
+
+// ---------------------------------------------------------------- beat の計画の道具（AR-9b）
+
+const planTools = (calls: Array<[string, unknown]> = [], reply: { text: string; isError: boolean } = { text: 'saved', isError: false }) => ({
+  specs: [{ name: 'plan_write', description: 'Write the plan.' }, { name: 'acceptance_write', description: 'Write the acceptance items.' }],
+  call: async (name: string, input: unknown) => { calls.push([name, input]); return reply; },
+});
+
+test('start with plan tools gives Claude Code beat\'s own in-process MCP server, and leaves the built-in tool list and the turned-off rules exactly as they are', async t => {
+  const plain = setup(t);
+  await plain.start();
+  const s = setup(t);
+  await s.start({ planTools: planTools() });
+  const options = s.sdk.last.ctx.options;
+  assert.deepEqual(Object.keys(options.mcpServers ?? {}), ['beat']);
+  assert.equal(options.mcpServers!.beat!.type, 'sdk');
+  assert.deepEqual(options.tools, [...KEPT_TOOLS]);
+  assert.deepEqual(options.tools, plain.sdk.last.ctx.options.tools);
+  assert.deepEqual(options.disallowedTools, plain.sdk.last.ctx.options.disallowedTools);
+  assert.equal('mcpServers' in plain.sdk.last.ctx.options, false, 'without plan tools nothing is added');
+  const none = setup(t);
+  await none.start({ planTools: { specs: [], call: async () => ({ text: '', isError: false }) } });
+  assert.equal('mcpServers' in none.sdk.last.ctx.options, false, 'a list with no tool adds no server');
+});
+
+test('the beat MCP server lists the offered plan tools and runs a call through planTools.call; an error result and a bad input are not both treated as success', async t => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const { buildBeatServer } = await import('../src/runtimes/claude-code/beat-tools.ts');
+  const calls: Array<[string, unknown]> = [];
+  const tools = planTools(calls);
+  const server = await buildBeatServer({ ...tools, specs: [...tools.specs, { name: 'not_a_beat_tool', description: 'x' }] });
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'probe', version: '1' });
+  await Promise.all([server.instance.connect(serverSide), client.connect(clientSide)]);
+  t.after(async () => { await client.close(); });
+  const listed = await client.listTools();
+  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), ['acceptance_write', 'plan_write'], 'a name beat has no shape for is not shown');
+  assert.equal(listed.tools.find(tool => tool.name === 'plan_write')!.description, 'Write the plan.');
+  const ok = await client.callTool({ name: 'plan_write', arguments: { content: '# Plan', language: 'en' } });
+  assert.deepEqual(calls, [['plan_write', { content: '# Plan', language: 'en' }]]);
+  assert.deepEqual(ok.content, [{ type: 'text', text: 'saved' }]);
+  assert.equal(ok.isError, undefined);
+  const bad = await client.callTool({ name: 'plan_write', arguments: { content: '' } }).catch(error => ({ isError: true, content: [{ type: 'text', text: String(error) }] }));
+  assert.equal(bad.isError, true, 'an empty plan is refused before it reaches beat\'s tool');
+  assert.equal(calls.length, 1);
+  const failing = await buildBeatServer(planTools([], { text: 'The plan has a secret in it', isError: true }));
+  const [c2, s2] = InMemoryTransport.createLinkedPair();
+  const client2 = new Client({ name: 'probe2', version: '1' });
+  await Promise.all([failing.instance.connect(s2), client2.connect(c2)]);
+  t.after(async () => { await client2.close(); });
+  const refusedCall = await client2.callTool({ name: 'plan_write', arguments: { content: '# Plan' } });
+  assert.equal(refusedCall.isError, true);
+  assert.deepEqual(refusedCall.content, [{ type: 'text', text: 'The plan has a secret in it' }]);
+});
+
+test('an approval request carries the beatTool mark only when the SDK says the tool comes from the in-process server beat registered, under that name, and beat offered the tool', async t => {
+  const report: Report = { answers: [] };
+  const asked = [
+    { tool: 'mcp__beat__plan_write', mcpServer: { name: 'beat', source: 'sdk' } },
+    { tool: 'mcp__beat__acceptance_write', mcpServer: { name: 'beat', source: 'sdk' } },
+    { tool: 'mcp__beat__plan_write', mcpServer: { name: 'beat', source: 'user' } },
+    { tool: 'mcp__beat__plan_write', mcpServer: { name: 'beat', source: 'project' } },
+    { tool: 'mcp__other__plan_write', mcpServer: { name: 'other', source: 'sdk' } },
+    { tool: 'mcp__beat__acceptance_change', mcpServer: { name: 'beat', source: 'sdk' } },
+    { tool: 'mcp__beat__plan_write' },
+  ];
+  const s = setup(t, {
+    script: async function* (ctx) {
+      yield initMessage();
+      await ctx.nextUser();
+      for (const [i, item] of asked.entries()) report.answers.push(await ctx.requestPermission(item.tool, { content: 'x' }, { toolUseID: `t${i}`, ...(item.mcpServer ? { mcpServer: item.mcpServer } : {}) }));
+      yield resultMessage();
+    },
+  });
+  const session = await s.start({ planTools: planTools() });
+  await s.runtime.send(session.id, { text: 'go' });
+  const approvals: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
+  await collect(s.runtime, session.id, event => { if (event.type === 'approval') { approvals.push(event); return s.runtime.approve(session.id, event.requestId, 'decline'); } return undefined; });
+  assert.deepEqual(approvals.map(event => event.beatTool), ['plan_write', 'acceptance_write', undefined, undefined, undefined, undefined, undefined]);
+});
+
+test('a decline by beat gives the runtime the reason beat sent; a blank reason falls back to the general one; other answers ignore the reason', async t => {
+  const report: Report = { answers: [] };
+  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a' }, { toolUseID: 'b' }, { toolUseID: 'c' }]) });
+  const session = await s.start();
+  await s.runtime.send(session.id, { text: 'go' });
+  const sent: Record<string, [string, string | undefined]> = { a: ['decline_by_beat', 'beat declined this request: this conversation is in plan mode.'], b: ['decline_by_beat', '   '], c: ['accept', 'ignored'] };
+  await collect(s.runtime, session.id, event => event.type === 'approval' ? s.runtime.approve(session.id, event.requestId, sent[event.requestId]![0] as 'accept', sent[event.requestId]![1]) : undefined);
+  assert.deepEqual(report.answers, [
+    { behavior: 'deny', message: 'beat declined this request: this conversation is in plan mode.' },
+    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." },
+    { behavior: 'allow', updatedInput: bash('echo hi') },
+  ]);
+});
+
+test('Claude Code lists beat\'s plan tools in its init message without the reply being stopped as an unreviewed tool', async t => {
+  const s = setup(t, { script: async function* (ctx) { yield initMessage({ tools: ['Read', 'mcp__beat__plan_write', 'mcp__beat__acceptance_write'] }); await ctx.nextUser(); yield textMessage('m1', 'ok'); yield resultMessage(); } });
+  const session = await s.start({ planTools: planTools() });
+  await s.runtime.send(session.id, { text: 'go' });
+  assert.deepEqual((await collect(s.runtime, session.id)).map(event => event.type), ['text', 'done']);
+});

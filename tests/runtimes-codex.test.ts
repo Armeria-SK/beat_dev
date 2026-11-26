@@ -666,3 +666,17 @@ test('a request that could not be answered is logged with control and direction 
   assert.ok(line.includes('broken??line'), line);
   assert.ok(!line.includes('abcdefgh12345678'), line);
 });
+
+test('instructions from beat (plan mode) go in front of the owner\'s message in the turn; none, or blank ones, leave the message as it is; plan tools are never sent to Codex', { timeout: 120_000 }, async t => {
+  const given = rig(t);
+  await reply(given, { instructions: '# Plan mode\nWrite the plan in a block.', planTools: { specs: [{ name: 'plan_write', description: 'x' }], call: async () => ({ text: '', isError: false }) } });
+  const turn = given.requests().find(message => message.method === 'turn/start');
+  assert.deepEqual(turn.params.input, [{ type: 'text', text: '# Plan mode\nWrite the plan in a block.\n\n---\n\nThe owner\'s message:\n\nhello', text_elements: [] }]);
+  const wire = JSON.stringify(given.requests());
+  assert.ok(!wire.includes('plan_write') && !wire.includes('dynamicTools'), 'nothing about tools reaches the Codex protocol');
+  for (const value of [undefined, '', '  \n']) {
+    const r = rig(t);
+    await reply(r, value === undefined ? {} : { instructions: value });
+    assert.deepEqual(r.requests().find(message => message.method === 'turn/start').params.input, [{ type: 'text', text: 'hello', text_elements: [] }], JSON.stringify(value));
+  }
+});

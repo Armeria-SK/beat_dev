@@ -47,6 +47,19 @@ export function requirementsText(paths: AppPaths, available: number): string {
   return readIfExists(join(paths.templates, available < REQUIREMENTS_COMPACT_BELOW ? 'requirements.compact.md' : 'requirements.md')).replace(/\r\n/gu, '\n');
 }
 
+// 外の実行役（Claude Code・Codex）の計画モードの指示（AR-9b。requirements.md の実行役版）。持ち主に聞く道具（ask_owner）は実行役には無いので、そこが違う。
+// 計画が beat に届く道が実行役ごとに違うので、その節だけ印で分ける: <!--tools--> は beat の計画の道具を MCP で渡す実行役（Claude Code）、<!--text--> は返事の文の中の決まった塊を beat が取り出す実行役（Codex）
+export type RuntimePlanChannel = 'tools' | 'text';
+
+// docLanguage: この製品の持ち主向けの文書の言語の印（ja など）。あれば先頭に 1 行で言う（本文の「named above」はその行）
+export function runtimeRequirementsText(paths: AppPaths, root: string, channel: RuntimePlanChannel, docLanguage?: string | null): string {
+  const raw = readIfExists(join(paths.templates, 'requirements.runtime.md')).replace(/\r\n/gu, '\n');
+  if (raw === '') return '';
+  const chosen = raw.replace(/<!--(tools|text)-->\n([\s\S]*?)<!--\/\1-->\n?/gu, (_whole, name: string, body: string) => (name === channel ? body : ''));
+  const text = chosen.replaceAll('{build_button}', planButton(root)).trim();
+  return docLanguage ? `Owner-facing documents of this product (plan, acceptance items, deviation notes) are written in ${docLanguage}.\n\n${text}` : text;
+}
+
 export function defaultTexts(paths: AppPaths): { rules: string; files: Array<{ name: WorkspaceFile; content: string }> } {
   return {
     rules: readTemplate(paths, 'rules'),
