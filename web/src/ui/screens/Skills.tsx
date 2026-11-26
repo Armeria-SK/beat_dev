@@ -33,6 +33,7 @@ function Delta({ added, removed }: { added: number; removed: number }) {
 function changeLabel(t: T, change: SkillChange): string {
   if (change.oldest) return t(change.created ? 'ui.skills.change.beforeAuto' : 'ui.skills.change.oldest');
   if (change.auto) return t(change.created ? 'ui.skills.change.autoNew' : 'ui.skills.change.auto');
+  if (change.outside) return t('ui.skills.change.outside');
   return t(change.who === 'you' ? 'ui.skills.change.you' : 'ui.skills.change.beat');
 }
 
@@ -199,7 +200,7 @@ function SkillDetail({ name, revision, now, onChanged }: { name: string; revisio
                     <span className="bt-row__title">{changeLabel(t, change)}</span>
                     {change.version && (
                       <span className="bt-row__sub bt-meta" title={formatDateTime(change.version.at, 'full')}>
-                        {t(change.who === 'you' ? 'ui.lib.you' : 'ui.lib.beat')} · {formatRelative(change.version.at, now)}{change.delta && <Delta {...change.delta} />}
+                        {!change.outside && <>{t(change.who === 'you' ? 'ui.lib.you' : 'ui.lib.beat')} · </>}{formatRelative(change.version.at, now)}{change.delta && <Delta {...change.delta} />}
                       </span>
                     )}
                   </div>

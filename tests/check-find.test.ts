@@ -238,9 +238,9 @@ test('find python: pytest の設定（pyproject の [tool.pytest]・pytest.ini�
 
 function storeAlias(t: Tee, ...folders: string[]): string {
   const dir = join(scratch(t), ...(folders.length > 0 ? folders : ['Microsoft', 'WindowsApps']));
-  const target = join(scratch(t), 'gone');
+  const target = join(scratch(t), 'Microsoft.DesktopAppInstaller_1.29.379.0_x64__8wekyb3d8bbwe', 'AppInstallerPythonRedirector.exe');
   mkdirSync(dir, { recursive: true });
-  mkdirSync(target);
+  mkdirSync(target, { recursive: true });
   symlinkSync(target, join(dir, 'python.exe'), 'junction');
   rmdirSync(target);
   return dir;
