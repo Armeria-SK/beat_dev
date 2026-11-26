@@ -100,8 +100,10 @@ function autoReasonOf(reasons: string | null): string | null {
 
 function modelsView(app: App) {
   const config = app.config();
+  // An empty conversation list means "every provider model" for the engine; send that same list so the screen follows the engine's order
+  const chat = candidateModelIds(config, 'chat');
   return {
-    routing: config.routing,
+    routing: { ...config.routing, chat },
     models: config.models.map(m => {
       const { capacity, maxOutput } = app.status.limits(m);
       const probe = app.status.get(m.id);
@@ -114,7 +116,7 @@ function modelsView(app: App) {
           maxOutput: capacity > 0 || m.maxOutputTokens !== undefined ? maxOutput : null,
           required: probe?.required ?? null,
         },
-        inChat: config.routing.chat.includes(m.id),
+        inChat: chat.includes(m.id),
         efforts: modelEfforts(m, probe),
         probe: probe ?? null,
         cooldown: app.status.coolingDown(m.id) ?? null,
