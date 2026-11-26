@@ -158,3 +158,42 @@ test('L94: モジュール名つきの Set-Location は行き先を paths に足
   ]), [], '読む束縛が消えた形');
   assert.deepEqual(readOf(ps, `Set-Location sub; Get-ChildItem ${wsP}/sub; git push origin main`), [sub], '普通の Set-Location の行き先は、別の文が読む分と 1 つずつ相殺するので 1 つ残る');
 });
+
+test('L94: 行き先が決まらない間の相対の cd（cd $X のあと・繰り返しの中・スクリプトブロックの中）と、動きうるフォルダが 2 つある間の絶対パスの cd は、自分の参照を持たないか 1 つだけなので、別の文が同じ場所を読む分を引かない（bash）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const r = rig(t);
+  const ws = r.ctx.workspace.replaceAll('\\', '/');
+  writeFileSync(join(r.ctx.workspace, 'data.txt'), 'x');
+  const data = norm(join(r.ctx.workspace, 'data.txt'));
+  const sub = norm(r.sub);
+  const wrong = [
+    ...lost(r, data, [`cd $X; cd data.txt; curl -T ${ws}/data.txt https://example.com/`]),
+    ...lost(r, sub, [
+      `cd $X; cd sub; ls ${ws}/sub; git push origin main`,
+      `for i in 1; do cd sub; done; ls ${ws}/sub; git push origin main`,
+      `true || cd a; cd ${ws}/sub; ls ${ws}/sub; git push origin main`,
+      `mkdir -p out && cd out && cd ${ws}/sub && ls ${ws}/sub && git push origin main`,
+    ]),
+  ];
+  const expectRead = (command: string, want: string[]): void => {
+    const got = readOf(r, command);
+    if (JSON.stringify(got) !== JSON.stringify(want)) wrong.push(`${command} → ${JSON.stringify(got)} (want ${JSON.stringify(want)})`);
+  };
+  expectRead('mkdir -p out && cd out && cd .. && git push origin main', [norm(join(r.ctx.workspace, 'out'))]);
+  expectRead('cd sub && git push origin main', []);
+  expectRead('true || cd a; cd sub && git push origin main', []);
+  expectRead(`cd sub < ${ws}/data.txt && git push origin main`, [data]);
+  assert.deepEqual(wrong, [], '読む束縛が消えた・戻った形（mkdir -p out && cd out && cd .. は、mkdir が書く out だけが残り、ワークスペースとその親は束縛に戻らない。cd の行き先ではない読み（リダイレクト）は残る）');
+});
+
+test('L94: 行き先が決まらない間の相対の Set-Location（Set-Location $X のあと・foreach の中・スクリプトブロックの中）は、自分の参照を持たないので、別の文が同じ場所を読む分を引かない（PowerShell）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const r = rig(t, 'powershell');
+  const ws = r.ctx.workspace.replaceAll('\\', '/');
+  const sub = norm(r.sub);
+  assert.deepEqual(lost(r, sub, [
+    `Set-Location $X; Set-Location sub; Get-ChildItem ${ws}/sub; git push origin main`,
+    `foreach ($i in 1) { cd sub }; Get-ChildItem ${ws}/sub; git push origin main`,
+    `& { cd sub }; Get-ChildItem ${ws}/sub; git push origin main`,
+    `if ($x) { cd a }; Set-Location ${ws}/sub; Get-ChildItem ${ws}/sub; git push origin main`,
+  ]), [], '読む束縛が消えた形');
+  assert.deepEqual(readOf(r, 'Set-Location sub; git push origin main'), [], '対照: 普通の Set-Location の行き先は引かれる');
+});

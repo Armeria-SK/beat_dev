@@ -546,7 +546,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   // secrets: 名前だけを出すコマンドは 'files'（secrets・secret のフォルダだけでは止めない）、依存パッケージの中で見つけた分は 'none'（別に今回だけの確かめにする）
   const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all'): void => {
     const placement = placePath(abs, opts.policy, secrets);
-    if (primary) paths.push({ input, path: abs, placement, write });
+    if (primary) {
+      const entry: CheckedPath = { input, path: abs, placement, write };
+      paths.push(entry);
+      current?.own?.push(entry);
+    }
     if (write) {
       if (!writes.includes(abs)) writes.push(abs);
       if (current && !current.writes.includes(abs)) current.writes.push(abs);
@@ -741,7 +745,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       urls: st.words.flatMap(w => [...w.text.matchAll(URL_IN_WORD)].map(m => ({ text: m[0], dynamic: w.dynamic }))),
       env: st.assigns.map(a => a.name), gitGlobal: name === 'git' ? gitGlobalOf(st.words) : [], code: inline.code, codeDynamic: inline.dynamic,
       stdin, shapes: [...st.shapes], reasonKeys: result.reasons.map(r => r.id ?? r.key),
-      deletes: result.deletes, targets: [], writes: [], piped: st.pipedIn || st.pipedOut, redirected: st.redirects.length > 0, cwd: track.known && track.now.length === 1 ? here : null, cwds: [...track.now], shell,
+      deletes: result.deletes, targets: [], writes: [], piped: st.pipedIn || st.pipedOut, redirected: st.redirects.length > 0, cwd: track.known && track.now.length === 1 ? here : null, cwds: [...track.now], own: [], shell,
     };
     const source = name ? innerSource(name, st.words, shell, stdin) : undefined;
     const matchedEntries = allowEntries.filter(entry => entryMatches(entry, st.words, windows));

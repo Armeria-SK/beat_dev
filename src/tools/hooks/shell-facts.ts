@@ -29,6 +29,8 @@ export interface StatementFacts {
   inner?: StatementFacts[] | null;
   // 作業フォルダが分からないので inner を null にした、包んだコマンドの中の文（push を落とさないため）
   unknownInner?: StatementFacts[];
+  // この文自身が paths に足した参照（verdict.paths と同じ物）。cd の行き先を、同じ場所を読む別の文の分と取り違えずに読むパスから引くため
+  own?: Array<{ input: string; path?: string; write: boolean }>;
 }
 
 export type InnerSource = { text: string; shell: ShellKind } | null | undefined;
