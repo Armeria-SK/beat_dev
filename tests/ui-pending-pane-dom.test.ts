@@ -1,4 +1,4 @@
-import { byText, cleanup, loadTsx, render, update } from './helpers/dom.ts';
+import { byText, cleanup, click, loadTsx, render, update } from './helpers/dom.ts';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
@@ -121,4 +121,33 @@ test('ui/PendingPane（DOM）: 名前の無い伏せ字（前の版の札）は�
   assert.doesNotMatch(why(22), /replaced/u);
   assert.match(why(23), /This text contains “\[BEAT-SECRET…\]” written in the command itself. Nothing here was replaced by beat./u);
   assert.doesNotMatch(why(24), /written in the command itself/u);
+});
+
+test('ui/PendingPane（DOM）（AR-8a）: 実行役の求めは、「この返事が終わるまで聞かない」を出せる行にだけそのボタンを出す。押すと reply: true の承認になり、「覚える」は出ない。決めた行は「実行役へ返した」と出す', async () => {
+  const posts: Array<{ url: string; body: string }> = [];
+  globalThis.fetch = (async (path: string | URL | Request, init?: RequestInit) => {
+    const url = String(path);
+    if (init?.method === 'POST') { posts.push({ url, body: String(init.body) }); return new Response(JSON.stringify({ item: { ...offer, status: 'running' } }), { status: 202, headers: { 'Content-Type': 'application/json' } }); }
+    const body = url.startsWith('/api/pending?status=decided') ? { items: [answered, closed] } : { error: 'not found' };
+    return new Response(JSON.stringify(body), { status: 'items' in body ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const base = { kind: 'runtime' as const, tool: 'claude-code:Bash', title: 'Run a command (Bash)', shown: 'Run a command (Bash)\nls', parts: { body: 'ls', cwd: null, extra: null }, reason: 'Claude Code is waiting for your answer: Bash', rule: null };
+  const offer = row({ ...base, id: 21, runtime: { id: 'claude-code', reply: true } });
+  const plain = row({ ...base, id: 22, runtime: { id: 'claude-code', reply: false } });
+  const answered = row({ ...base, id: 23, status: 'answered', decided_at: Date.now() - 1000, reject_reason: 'Allowed, and not asked again until the reply ends', runtime: { id: 'claude-code', reply: true } });
+  const closed = row({ ...base, id: 24, status: 'stale', decided_at: Date.now() - 2000, reject_reason: 'The reply that asked for this ended before it was answered', runtime: { id: 'claude-code', reply: false } });
+  const { container } = await render(createElement(PendingList, { projectId: 'prod01', waiting: [offer, plain], counts: null, projects: [], conversations: [], revision: '0', onOpenPlan: () => undefined }));
+  await update(() => new Promise(resolve => setTimeout(resolve, 0)));
+  const buttons = (id: number) => [...container.querySelectorAll(`[data-pending="${id}"] button`)].map(b => b.textContent);
+  assert.deepEqual(buttons(21), ['Approve', "Approve, and don't ask again until this reply ends", 'Reject']);
+  assert.deepEqual(buttons(22), ['Approve', 'Reject']);
+  assert.equal(container.querySelector('[data-pending="21"] .bt-label')?.textContent, 'Runtime asks');
+  assert.equal(container.querySelector('[data-pending="21"] [data-remember]'), null, 'a request of a runtime cannot become a rule');
+  await click(container.querySelector('[data-pending="21"] [data-reply]'));
+  assert.deepEqual(posts, [{ url: '/api/pending/21/approve', body: '{"reply":true}' }]);
+  await click(byText(container.querySelector('[data-pending="22"]')!, 'button', 'Approve'));
+  assert.deepEqual(posts.at(-1), { url: '/api/pending/22/approve', body: '{}' });
+  const decided = [...container.querySelectorAll('section.ui-pending__decided li')].map(li => li.textContent ?? '');
+  assert.match(decided.find(text => text.includes('passed to the runtime')) ?? '', /approved until the reply ends · passed to the runtime/u);
+  assert.match(decided.find(text => text.includes('closed ·')) ?? '', /closed · The reply that asked for this ended before it was answered/u);
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import { answerFor, claudeMode, DISALLOWED_TOOLS, disallowedTools, isCodexPermission, KEPT_TOOLS, REPORTED_ALIASES, secretDenyRules, sessionOnlyUpdates, STOPPED_ANSWER, unreviewedTools } from '../src/runtimes/claude-code/permissions.ts';
+import { answerFor, claudeMode, DISALLOWED_TOOLS, disallowedTools, isCodexPermission, KEPT_TOOLS, REPORTED_ALIASES, secretDenyRules, selfPortDenyRules, sessionOnlyUpdates, STOPPED_ANSWER, unreviewedTools } from '../src/runtimes/claude-code/permissions.ts';
 import { apiKeyInUse, EventTranslator, failureKind, versionAtLeast, type TranslatorOptions } from '../src/runtimes/claude-code/protocol.ts';
 import { PERMISSIONS } from '../src/runtimes/types.ts';
 import { SECRET_GLOBS } from '../src/tools/hooks/scope.ts';
@@ -176,6 +176,18 @@ test('deny rules cover every secret path for both Read and Edit', () => {
   assert.deepEqual(disallowedTools(), [...DISALLOWED_TOOLS, ...rules]);
 });
 
+test('the deny rules for beat\'s own port: three hosts for each of Bash, PowerShell and Monitor, only for a real port, and the list without a port is unchanged', () => {
+  assert.deepEqual(selfPortDenyRules(4777), [
+    'Bash(*127.0.0.1:4777*)', 'Bash(*localhost:4777*)', 'Bash(*[::1]:4777*)',
+    'PowerShell(*127.0.0.1:4777*)', 'PowerShell(*localhost:4777*)', 'PowerShell(*[::1]:4777*)',
+    'Monitor(*127.0.0.1:4777*)', 'Monitor(*localhost:4777*)', 'Monitor(*[::1]:4777*)',
+  ]);
+  for (const bad of [undefined, 0, -1, 65536, 1.5, Number.NaN]) assert.deepEqual(selfPortDenyRules(bad), [], String(bad));
+  assert.deepEqual(disallowedTools(), [...DISALLOWED_TOOLS, ...secretDenyRules()]);
+  assert.deepEqual(disallowedTools(4777), [...DISALLOWED_TOOLS, ...secretDenyRules(), ...selfPortDenyRules(4777)]);
+  assert.ok(disallowedTools(4777).every(rule => !/[,\s]/u.test(rule)), 'the SDK joins the list with commas into one argument, so no rule may hold a comma or a space');
+});
+
 test('the tools that ask a question, schedule later work, start remote work, publish or notify are all turned off, by the SDK\'s own names', async () => {
   const { BUILTIN_TOOL_NAMES } = await import('@anthropic-ai/claude-agent-sdk');
   const turnedOff: readonly string[] = DISALLOWED_TOOLS;
@@ -258,6 +270,7 @@ test('answers: accept keeps the input as it is; accept_for_reply adds only the s
   assert.deepEqual(answerFor('accept_for_reply', input, undefined), { behavior: 'allow', updatedInput: input });
   assert.deepEqual(answerFor('decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
   assert.deepEqual(answerFor('cancel', input, [rule]), { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
+  assert.deepEqual(answerFor('decline_by_beat', input, [rule]), { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." });
   assert.deepEqual(answerFor('anything-else' as 'decline', input, [rule]), { behavior: 'deny', message: 'The owner declined this request.' });
   assert.deepEqual(STOPPED_ANSWER, { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
 });

@@ -26,6 +26,8 @@ function outcomeText(t: T, outcome: Outcome): string {
     case 'failed': return t('ui.pending.failed', time, outcome.detail);
     case 'stale': return t('ui.pending.stale', time);
     case 'closed': return t('ui.pending.closedByBeat', time);
+    case 'answered': return t(outcome.reply ? 'ui.pending.answeredReply' : 'ui.pending.answered', time);
+    case 'runtimeClosed': return t('ui.pending.runtimeClosed', time, outcome.reason ?? '');
     case 'rejected': return t('ui.pending.rejected', time, outcome.reason);
     case 'cancelled': return t('ui.pending.cancelled', time);
   }
@@ -83,7 +85,7 @@ function ActionBody({ row, view }: { row: PendingAction; view: ActionView }) {
 
 interface ItemProps {
   row: PendingAction; index: number; now: number; withProduct: boolean; titles: ReadonlyMap<string, string | null>; busy: boolean; leaving: boolean;
-  onApprove: (row: PendingAction, remember?: boolean) => void; onReject: (row: PendingAction, reason: string) => void;
+  onApprove: (row: PendingAction, remember?: boolean, reply?: boolean) => void; onReject: (row: PendingAction, reason: string) => void;
 }
 
 function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onApprove, onReject }: ItemProps) {
@@ -108,6 +110,7 @@ function PendingItem({ row, index, now, withProduct, titles, busy, leaving, onAp
         <div className="bt-pending__actions">
           <Button small disabled={locked} onClick={() => onApprove(row)}>{t('ui.pending.approve')}</Button>
           {row.rule && <Button small variant="ghost" disabled={locked} data-remember onClick={() => setRemembering(true)}>{t('ui.pending.remember')}</Button>}
+          {row.runtime?.reply && <Button small variant="ghost" disabled={locked} data-reply onClick={() => onApprove(row, false, true)}>{t('ui.pending.approveReply')}</Button>}
           <Button small variant="ghost" disabled={locked} onClick={() => setAsking(true)}>{t('ui.pending.reject')}</Button>
         </div>
       )}
@@ -227,7 +230,7 @@ export function PendingList({ projectId, waiting, counts, projects, conversation
       void load();
     }, ROW_LEAVE_MS);
   };
-  const approve = (row: PendingAction, remember = false) => void decide(row, () => api.approvePending(row.id, remember), { status: 'running' });
+  const approve = (row: PendingAction, remember = false, reply = false) => void decide(row, () => api.approvePending(row.id, remember, reply), { status: 'running' });
   const reject = (row: PendingAction, reason: string) => void decide(row, () => api.rejectPending(row.id, reason), { status: 'rejected', reject_reason: reason || null });
 
   const rows = waitingShown(waiting, held, gone, projectId);

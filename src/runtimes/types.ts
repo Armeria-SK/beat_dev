@@ -77,6 +77,8 @@ export interface RuntimeRequest {
   instructions?: string;
   // 続きの会話の ID（実行役が持つもの）
   resume?: string;
+  // beat 自身の待ち受けのポート。Claude Code には、このポートへの接続を含むシェルの命令を、使う人の許す決まりより先に断る決まりとして渡す（実行役のシェルから beat の API を呼ばせない）。無ければ決まりを足さない
+  beatPort?: number;
   // 起こすたびに必ず渡す。レジストリが設定から決めて入れる（無い・知らない値は既定）
   permission: RuntimePermission;
   signal: AbortSignal;
@@ -95,7 +97,8 @@ export interface RuntimeInput {
 }
 
 // 返してよい答えは閉じた一覧だけ。使う人の設定や決まりを書き換える「許しを残す答え」は無い
-export type ApprovalDecision = 'accept' | 'accept_for_reply' | 'decline' | 'cancel';
+// decline は持ち主が断った答え、decline_by_beat は beat が持ち主に聞かずに断った答え（守りに当たった・計画モード・聞く先が無い）。実行役の側でも断りの理由が分かれる
+export type ApprovalDecision = 'accept' | 'accept_for_reply' | 'decline' | 'decline_by_beat' | 'cancel';
 
 // tool_start・tool_end の入力・出力と approval の入力は、実行役が言ってきたまま（伏せていない）。表示・保存する写しは、受け取った側（src/engine/runtime-bridge.ts）が伏せる。
 // nested: 子の担当（Claude Code のサブエージェント）が動かした道具。本筋の道具と区別して残す
@@ -103,7 +106,8 @@ export type RuntimeEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool_start'; id: string; name: string; input: unknown; nested?: true }
   | { type: 'tool_end'; id: string; output: string; isError: boolean; nested?: true }
-  | { type: 'approval'; requestId: string; tool: string; input: unknown }
+  // forReply: 実行役がこの求めに「この返事が終わるまで聞かない」の答えを返せる（Claude Code は session だけの聞かない決まりの提案があるとき、Codex は acceptForSession が効く求めのとき）
+  | { type: 'approval'; requestId: string; tool: string; input: unknown; forReply?: true }
   // 会話の途中で来た、状態の行に出す注意（Codex の windows/worldWritableWarning など）。会話は止まらない
   | { type: 'issue'; issue: RuntimeIssue }
   | { type: 'done' }

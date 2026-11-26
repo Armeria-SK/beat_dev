@@ -276,7 +276,7 @@ test('tool items become tool_start / tool_end; output is cut and secrets are hid
 });
 
 test('a command approval reaches the owner as an event, and only the closed answers go back', { timeout: 60_000 }, async t => {
-  const table: Array<[ApprovalDecision, string]> = [['accept', 'accept'], ['accept_for_reply', 'acceptForSession'], ['decline', 'decline'], ['cancel', 'cancel']];
+  const table: Array<[ApprovalDecision, string]> = [['accept', 'accept'], ['accept_for_reply', 'acceptForSession'], ['decline', 'decline'], ['decline_by_beat', 'decline'], ['cancel', 'cancel']];
   for (const [decision, expected] of table) {
     const r = rig(t, 'command-approval');
     const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
@@ -288,6 +288,19 @@ test('a command approval reaches the owner as an event, and only the closed answ
     assert.deepEqual(r.answers().map(answer => ({ id: answer.id, result: answer.result })), [{ id: 100, result: { decision: expected } }]);
     assert.equal(events.at(-1)?.type, 'done');
   }
+});
+
+test('only a command without network access and a file change without a wider folder can be answered "do not ask again in this reply"', { timeout: 90_000 }, async t => {
+  const flagsOf = async (name: string): Promise<boolean[]> => {
+    const r = rig(t, name);
+    const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
+    await reply(r, {}, event => { seen.push(event); return 'decline'; });
+    return seen.map(event => event.forReply === true);
+  };
+  assert.deepEqual(await flagsOf('command-approval'), [true], 'a plain command');
+  assert.deepEqual(await flagsOf('network-and-stdin'), [false, false], 'network access and a line sent to a running command');
+  assert.deepEqual(await flagsOf('file-approval'), [false, true], 'a change that also asks for a whole folder, and one that does not');
+  assert.deepEqual(await flagsOf('permissions'), [false]);
 });
 
 test('an approval can be answered once: a second answer, an unknown id and an unknown answer are refused', { timeout: 60_000 }, async t => {
@@ -318,9 +331,9 @@ test('a file change approval gets its paths from the item that started it; witho
   const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
   await reply(r, {}, event => { seen.push(event); return 'accept'; });
   assert.deepEqual(seen.map(event => event.tool), ['fileChange', 'fileChange']);
-  assert.deepEqual(seen[0]?.input, { itemId: 'f1', reason: 'needs write', grantRoot: 'D:\\work', changes: [{ path: 'src/a.ts', kind: 'update', movePath: 'src/b.ts' }, { path: 'src/new.ts', kind: 'add' }] });
+  assert.deepEqual(seen[0]?.input, { itemId: 'f1', reason: 'needs write', grantRoot: 'D:\\work', changes: [{ path: 'src/a.ts', kind: 'update', movePath: 'src/b.ts', diff: '@@' }, { path: 'src/new.ts', kind: 'add', diff: '+x' }] });
   assert.deepEqual(seen[1]?.input, { itemId: 'ghost', reason: null, grantRoot: null, changes: null });
-  assert.ok(!JSON.stringify(seen).includes('@@'), 'the diff itself is not carried');
+  assert.ok(JSON.stringify(seen).includes('@@'), 'the diff of each change is carried, so the owner can see what would change');
 });
 
 test('a file change list that changed (patchUpdated) before the approval is not shown stale: the paths become unknown (null)', { timeout: 60_000 }, async t => {

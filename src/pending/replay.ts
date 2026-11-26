@@ -206,6 +206,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     deps.store.finish(row.id, { status, output, ...result, ...(extra.fetched !== undefined ? { fetched: extra.fetched } : {}) });
     return { status, ...(output !== undefined ? { output } : {}), ...extra };
   };
+  if (row.kind === 'runtime') return end('failed', pendingText('en', 'runtime_not_replayable'));
   try {
     const prepared = await preparePending(row, deps);
     if ('early' in prepared) return end(prepared.early.status, prepared.early.output);

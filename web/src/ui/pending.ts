@@ -5,7 +5,7 @@ import type { Route } from './routes.ts';
 
 const KIND_LABEL = {
   send: 'ui.pending.kind.send', delete: 'ui.pending.kind.delete', judge: 'ui.pending.kind.judge', judge_failed: 'ui.pending.kind.judge',
-  hook: 'ui.pending.kind.rule', policy: 'ui.pending.kind.rule', owner: 'ui.pending.kind.protected',
+  hook: 'ui.pending.kind.rule', policy: 'ui.pending.kind.rule', owner: 'ui.pending.kind.protected', runtime: 'ui.pending.kind.runtime',
 } as const satisfies Record<PendingKind, PlainKey>;
 
 export const kindLabel = (kind: PendingKind): PlainKey => KIND_LABEL[kind];
@@ -47,7 +47,7 @@ export function waitingShown(waiting: readonly PendingAction[], held: readonly P
   return waitingOf([...waiting.filter(r => !heldIds.has(r.id)), ...held], projectId).filter(r => !gone.has(r.id));
 }
 
-const FINAL: ReadonlySet<PendingAction['status']> = new Set(['ran', 'failed', 'rejected', 'stale', 'cancelled']);
+const FINAL: ReadonlySet<PendingAction['status']> = new Set(['ran', 'failed', 'rejected', 'stale', 'cancelled', 'answered']);
 
 export function earlierQuery(shown: readonly PendingAction[]): { before: number } | { earlier: true } {
   const last = shown.findLast(r => FINAL.has(r.status) && r.decided_at !== null);
@@ -63,7 +63,8 @@ const PLAIN_TOOLS: ReadonlySet<string> = new Set(['shell_run']);
 export interface ActionView { title: string | null; inline: string | null; block: string | null; cwd: string | null; extra: string | null }
 
 export function actionView(row: Pick<PendingAction, 'tool' | 'title' | 'shown' | 'parts'>): ActionView {
-  const content = CONTENT_TOOLS.has(row.tool);
+  // a request of an outside runtime is named `<runtime>:<tool>` (a colon never appears in the name of a beat tool); what it writes or runs is shown as a block
+  const content = CONTENT_TOOLS.has(row.tool) || row.tool.includes(':');
   const title = row.title?.trim() || null;
   if (!row.parts || (row.parts.body === null && row.parts.cwd === null && row.parts.extra === null)) {
     const text = row.shown || null;
@@ -120,6 +121,8 @@ export type Outcome =
   | { kind: 'failed'; at: number; detail: string }
   | { kind: 'stale'; at: number }
   | { kind: 'closed'; at: number }
+  | { kind: 'answered'; at: number; reply: boolean }
+  | { kind: 'runtimeClosed'; at: number; reason: string | null }
   | { kind: 'rejected'; at: number; reason: string | null }
   | { kind: 'cancelled'; at: number };
 
@@ -132,7 +135,8 @@ export function outcomeOf(row: PendingAction): Outcome | null {
     case 'running': return { kind: 'running', at };
     case 'ran': return { kind: 'ran', at: row.ran_at ?? at, exit: row.exit_code };
     case 'failed': return { kind: 'failed', at, detail: lastLine(row.output_preview) };
-    case 'stale': return row.reject_reason ? { kind: 'closed', at } : { kind: 'stale', at };
+    case 'stale': return row.kind === 'runtime' ? { kind: 'runtimeClosed', at, reason: row.reject_reason?.trim() || null } : row.reject_reason ? { kind: 'closed', at } : { kind: 'stale', at };
+    case 'answered': return { kind: 'answered', at, reply: Boolean(row.reject_reason?.trim()) };
     case 'rejected': return { kind: 'rejected', at, reason: row.reject_reason?.trim() || null };
     case 'cancelled': return { kind: 'cancelled', at };
   }

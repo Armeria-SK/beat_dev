@@ -93,8 +93,18 @@ export function secretDenyRules(): string[] {
   return SECRET_GLOBS.flatMap(glob => [`Read(${glob})`, `Edit(${glob})`]);
 }
 
-export function disallowedTools(): string[] {
-  return [...DISALLOWED_TOOLS, ...secretDenyRules()];
+// beat 自身のポートへの接続を含む、シェルの命令（Bash・PowerShell・Monitor）の deny の決まり。使う人の設定の allow（Bash(curl:*) など）に通される形でも、beat の API（承認の答えなど）を実行役が自分で呼べないようにする。
+// 命令の文字列に当てる決まりなので、ポートを組み立てて書く形までは止まらない（止めきる守りではない）
+const SELF_HOSTS = ['127.0.0.1', 'localhost', '[::1]'] as const;
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor'] as const;
+
+export function selfPortDenyRules(port: number | undefined): string[] {
+  if (port === undefined || !Number.isInteger(port) || port < 1 || port > 65535) return [];
+  return SHELL_TOOLS.flatMap(tool => SELF_HOSTS.map(host => `${tool}(*${host}:${port}*)`));
+}
+
+export function disallowedTools(beatPort?: number): string[] {
+  return [...DISALLOWED_TOOLS, ...secretDenyRules(), ...selfPortDenyRules(beatPort)];
 }
 
 // 「この返事が終わるまで聞かない」で返してよい更新。destination が session（この Claude Code のプロセスの中だけ）の、聞かない決まり（allow の addRules）だけ。
@@ -106,6 +116,7 @@ export function sessionOnlyUpdates(suggestions: readonly PermissionUpdate[] | un
 }
 
 const DECLINED = 'The owner declined this request.';
+const DECLINED_BY_BEAT = "beat declined this request without asking the owner (one of beat's own guards, or plan mode).";
 const CANCELLED = 'The owner stopped the reply.';
 
 // 答えの作り方。許可は入力を書き換えず（updatedInput は元の入力）、閉じた一覧の外の答えは断りにする
@@ -117,6 +128,7 @@ export function answerFor(decision: ApprovalDecision, input: Record<string, unkn
       return { behavior: 'allow', updatedInput: input, ...(updatedPermissions.length > 0 ? { updatedPermissions } : {}) };
     }
     case 'cancel': return { behavior: 'deny', message: CANCELLED, interrupt: true };
+    case 'decline_by_beat': return { behavior: 'deny', message: DECLINED_BY_BEAT };
     default: return { behavior: 'deny', message: DECLINED };
   }
 }

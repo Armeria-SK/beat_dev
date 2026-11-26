@@ -24,6 +24,9 @@ export class ScriptedRuntime implements AgentRuntime {
   readonly starts: RuntimeRequest[] = [];
   readonly sent: string[] = [];
   readonly approvals: Array<{ requestId: string; decision: ApprovalDecision }> = [];
+  // 待っていない求めへの答え（もう答えた・知らない ID）。本物の窓口と同じく投げて断る
+  readonly refused: string[] = [];
+  readonly #waiting = new Map<string, Set<string>>();
   interrupts = 0;
   closes = 0;
   probes = 0;
@@ -73,7 +76,7 @@ export class ScriptedRuntime implements AgentRuntime {
     this.sent.push(input.text);
     const open = this.#open.get(sessionId)!;
     const feed: Feed = {
-      push: event => { open.queue.push(event); open.wake?.(); },
+      push: event => { if (event.type === 'approval') this.#waitingOf(sessionId).add(event.requestId); open.queue.push(event); open.wake?.(); },
       done: () => { open.queue.push({ type: 'done' }); open.ended = true; open.wake?.(); },
       stopped: open.stopped,
     };
@@ -82,11 +85,19 @@ export class ScriptedRuntime implements AgentRuntime {
 
   async interrupt(sessionId: string): Promise<void> {
     this.interrupts += 1;
+    this.#waiting.delete(sessionId);
     this.#open.get(sessionId)?.stop();
     if (this.hang.interrupt) await this.#gate;
   }
 
-  async approve(_sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> {
+  #waitingOf(sessionId: string): Set<string> {
+    let ids = this.#waiting.get(sessionId);
+    if (!ids) this.#waiting.set(sessionId, ids = new Set());
+    return ids;
+  }
+
+  async approve(sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> {
+    if (!this.#waitingOf(sessionId).delete(requestId)) { this.refused.push(requestId); throw new Error('There is no waiting approval with that id'); }
     this.approvals.push({ requestId, decision });
     if (this.hang.approve) await this.#gate;
   }
