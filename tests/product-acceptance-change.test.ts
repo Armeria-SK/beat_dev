@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
-import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
+import type { ChatMessage, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { estimateRequest, estimateTextTokens } from '../src/engine/tokens.ts';
 import { AcceptanceStore, applyChanges, frozenHash, type AcceptanceDoc, type ChangeOp } from '../src/projects/acceptance.ts';
 import { BUILD_BODY } from '../src/projects/build.ts';
@@ -665,4 +665,28 @@ test('3-3-s 製品のタスクの実行には acceptance_change を渡さない�
   s.adapter().scripts = [call('task_complete', { summary: 'done' })];
   assert.equal(await s.app.worker.tick(), 'ran');
   assert.ok(!s.adapter().calls.at(-1)!.tools.some(tool => tool.name === 'acceptance_change'));
+});
+
+test('3-3-s acceptance_change（札の答え）: 札が開いている間に持ち主が書いた文（答えに混ぜた文・自由な返事）は owner_words で当たり、札の選択肢の文を引用したものは AI added のまま', async t => {
+  const s = await setup(t);
+  const shop = await s.frozen();
+  const chat = uuid(2);
+  s.adapter().scripts = [reply('ok')];
+  await s.send(chat, { text: 'I want sharing', projectId: shop.id });
+  const ASK = { questions: [{ question: 'Which link lifetime should shared files have?', header: 'Lifetime', options: [{ label: 'Expire after one day' }, { label: 'Never expire' }] }] };
+  s.app.conversations.append(chat, { role: 'assistant', content: '', toolCalls: [{ id: 'call_card', name: 'ask_owner', arguments: ASK }] });
+  s.app.conversations.append(chat, { role: 'tool', toolCallId: 'call_card', name: 'ask_owner', content: 'shown' });
+  s.app.conversations.append(chat, { role: 'user', content: ['Answers:', '- Lifetime: Expire after one day, Guests keep links for thirty days at most'].join('\n'), askAnswer: true } as ChatMessage);
+  s.app.conversations.append(chat, { role: 'user', content: 'Shared links must work without signing in', askAnswer: true } as ChatMessage);
+  await s.propose(shop.id, chat, 'add them', {
+    changes: [
+      { op: 'add', result: 'Shared links work without signing in', quote: 'links must work without signing in', check: 'look' },
+      { op: 'add', result: 'Guest links last at most thirty days', quote: 'guests keep links for thirty days', check: 'look' },
+      { op: 'add', result: 'Links expire after one day', quote: 'Expire after one day', check: 'look' },
+    ],
+  });
+  const [row] = s.rows(shop.id);
+  const ops = JSON.parse(String(row!.ops)) as ChangeOp[];
+  assert.deepEqual(ops.map(op => op.source.kind), ['owner_words', 'owner_words', 'ai_added']);
+  assert.deepEqual(ops[2]!.source, { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'Expire after one day' });
 });

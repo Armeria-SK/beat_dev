@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
-import { normalizeQuote, prepareSpeech, verifySource, type OwnerPick } from '../projects/acceptance.ts';
+import { askedCardsIn, normalizeQuote, ownerTypedRows, prepareSpeech, verifySource, type OwnerPick } from '../projects/acceptance.ts';
 import type { SpeechRow } from '../db/conversations.ts';
 import { normalizeUrl, quoteHasName, sourceKey, type PartKind } from './evidence.ts';
 import { checkLabel, ResearchError, type LabelKind } from './labels.ts';
@@ -234,12 +234,12 @@ export class ResearchStore {
   #markOwnerSaid(id: string): void {
     const run = this.get(id)!;
     if (!run.source_conversation_id) return;
-    const rows = this.#db.prepare(`SELECT id, conversation_id, role, text, 0 AS generated FROM messages
+    const messages = this.#db.prepare(`SELECT id, conversation_id, role, text, 0 AS generated, COALESCE(json_extract(parts, '$.askAnswer'), 0) AS askAnswer FROM messages
       WHERE conversation_id = ? AND role = 'user'
         AND COALESCE(json_extract(parts, '$.generated'), 0) IS NOT 1
         AND json_extract(parts, '$.note') IS NULL
-        AND COALESCE(json_extract(parts, '$.askAnswer'), 0) IS NOT 1
       ORDER BY id`).all(run.source_conversation_id) as unknown as SpeechRow[];
+    const rows = ownerTypedRows(messages, messages.some(row => row.askAnswer === 1) ? askedCardsIn(this.#db, run.source_conversation_id) : []);
     if (!rows.length) return;
     const mark = this.#db.prepare("UPDATE research_items SET default_checked = 1, default_reason = 'owner_said' WHERE id = ?");
     for (const item of this.items(id)) {

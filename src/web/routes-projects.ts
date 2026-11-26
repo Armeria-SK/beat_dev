@@ -2,7 +2,7 @@ import type { App } from '../app.ts';
 import { APP_ROOT } from '../paths.ts';
 import { checkCommandOf, defaultProjectName, folderMissing, languageTagOf, PROJECT_ID, ProjectError, projectName, SCOUT_MODES, type ProjectRow, type ScoutMode } from '../projects/store.ts';
 import { ownerSpeech } from '../db/conversations.ts';
-import { AcceptanceError, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
+import { AcceptanceError, askedCards, coverageOf, frozenHash, ownerChanges, type AcceptanceChangeRow, type AcceptanceDoc } from '../projects/acceptance.ts';
 import { BuildError, startBuild, unbuilt } from '../projects/build.ts';
 import { settleAwaiting } from '../projects/gate.ts';
 import { DeviationError, readDeviations } from '../projects/deviations.ts';
@@ -239,7 +239,7 @@ export function registerProjectRoutes(router: Router, app: App): void {
     const doc = accepted(() => app.acceptance.read(project.id, conversationId));
     sendJson(res, 200, {
       acceptance: acceptanceWire(project.id, conversationId, doc),
-      coverage: coverageOf(doc, ownerSpeech(app.db, project.id), rawBefore === null ? undefined : Number(rawBefore)),
+      coverage: coverageOf(doc, ownerSpeech(app.db, project.id), rawBefore === null ? undefined : Number(rawBefore), askedCards(app.db, project.id)),
     });
   });
 

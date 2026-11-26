@@ -14,6 +14,7 @@ import { languageOf } from '../shared/language.ts';
 import { researchText } from '../shared/messages/research.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import { stripAttachments } from '../uploads/store.ts';
+import { askedCardsIn, ownerTypedRows } from '../projects/acceptance.ts';
 import { ResearchSession, type Candidate, type PartKind, type ResearchBudget } from './evidence.ts';
 import { CONFIRM_MESSAGE_MAX, confirmMessage, librariesFollowUp, planConfirm, type ConfirmInput, type ConfirmResult } from './confirm.ts';
 import { addResearchDecisions, type ResearchDecision } from '../mesh/decisions.ts';
@@ -232,11 +233,12 @@ export class ResearchRunner {
     return researchSettings(this.#d.config());
   }
 
-  // 頼みに写す持ち主の文（守り 2・R3.11 M4 (a)・L4 (a)）: 元の会話 1 つの、generated・note・askAnswer でない発言だけ。添付は外し、合わせて 2,000 字まで
+  // 頼みに写す持ち主の文（守り 2・R3.11 M4 (a)・L4 (a)）: 元の会話 1 つの、generated・note でない発言。札の答え（askAnswer）は、AI が書いた選択肢と見出しの文を外した、持ち主が書いた部分だけ。添付は外し、合わせて 2,000 字まで
   ownerText(conversationId: string): string {
-    const rows = this.#d.db.prepare(`SELECT text FROM messages WHERE conversation_id = ? AND role = 'user'
-      AND COALESCE(json_extract(parts, '$.generated'), 0) IS NOT 1 AND json_extract(parts, '$.note') IS NULL AND COALESCE(json_extract(parts, '$.askAnswer'), 0) IS NOT 1
-      ORDER BY id`).all(conversationId) as Array<{ text: string }>;
+    const found = this.#d.db.prepare(`SELECT id, conversation_id, text, COALESCE(json_extract(parts, '$.askAnswer'), 0) AS askAnswer FROM messages WHERE conversation_id = ? AND role = 'user'
+      AND COALESCE(json_extract(parts, '$.generated'), 0) IS NOT 1 AND json_extract(parts, '$.note') IS NULL
+      ORDER BY id`).all(conversationId) as unknown as Array<{ id: number; conversation_id: string; text: string; askAnswer: number }>;
+    const rows = ownerTypedRows(found, found.some(row => row.askAnswer === 1) ? askedCardsIn(this.#d.db, conversationId) : []);
     let text = '';
     for (const row of rows) {
       const part = stripAttachments(row.text).trim();
