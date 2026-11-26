@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, providerModels, type AppConfig, type Language } from '../config/schema.ts';
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import { Runs } from '../db/runs.ts';
@@ -424,7 +424,7 @@ export class Worker {
       const eligible = (t: Task): boolean => (own || this.#ownerWork(t)) && this.#familyFreeAt(t, now, true, familyCache) === undefined;
       const pick = (accept: (t: Task) => boolean): Task | undefined => tasks.pickNext({ accept: t => eligible(t) && accept(t), ...(this.#d.places ? { placeFree: (t: Task) => !this.#busy(t) } : {}) });
       // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
-      if (!c.models.length) { reschedule(); return 'no_model'; }
+      if (!providerModels(c).length) { reschedule(); return 'no_model'; }
 
       // 予定から実行用のタスクを作る（モデルは呼ばない）
       tasks.spawnDueSchedules();
@@ -675,7 +675,7 @@ export class Worker {
 
   #whileScout(c: AppConfig): void {
     const now = this.#now();
-    if (c.models.length) this.#d.tasks.spawnDueSchedules();
+    if (providerModels(c).length) this.#d.tasks.spawnDueSchedules();
     this.#guardScout(c);
     if (this.#stopped || this.#d.autoSchedule === false || !this.#scoutRunning()) return;
     const at = Math.min(this.#d.tasks.nextWakeAt({ mayBranch: mayBranch(c) }) ?? Infinity, this.#budgetFreeAt(c, now) ?? Infinity, now + IDLE_POLL_MS);

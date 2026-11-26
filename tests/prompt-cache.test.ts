@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { ModelConfig } from '../src/config/schema.ts';
+import type { ModelConfig, ProviderModelConfig } from '../src/config/schema.ts';
 import type { ChatMessage, ThinkingBlock } from '../src/engine/types.ts';
 import { estimateRequest } from '../src/engine/tokens.ts';
 import { fenceTail, isFencedTail, nextTail, STATUS_LINE, TAIL_TIME_MINUTES } from '../src/engine/workspace.ts';
@@ -55,7 +55,7 @@ async function replay(t: { after: (fn: () => void) => void }) {
   return { requests, times };
 }
 
-const replayTarget = (req: ModelRequest) => ({ provider: req.model.provider, model: req.model.model });
+const replayTarget = (req: ModelRequest) => ({ provider: (req.model as ProviderModelConfig).provider, model: req.model.model });
 const noCache = (value: unknown): unknown => JSON.parse(JSON.stringify(value, (key, v) => (key === 'cache_control' ? undefined : v)));
 // tail は実行ごとの nonce の印で囲まれている（最初と最後の行）
 const unfence = (tail: string) => tail.split('\n').slice(1, -1).join('\n');

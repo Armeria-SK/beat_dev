@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
-import { AppConfig } from '../config/schema.ts';
+import { AppConfig, isRuntimeModel, providerOf } from '../config/schema.ts';
 import { ConfigError, parseConfig, resetConfig } from '../config/store.ts';
 import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
 import { modelEfforts } from '../engine/efforts.ts';
@@ -105,8 +105,8 @@ function modelsView(app: App) {
       const { capacity, maxOutput } = app.status.limits(m);
       const probe = app.status.get(m.id);
       return {
-        id: m.id, label: m.label ?? m.id, provider: m.provider, model: m.model,
-        providerKind: config.providers.find(p => p.id === m.provider)?.kind,
+        id: m.id, label: m.label ?? m.id, provider: isRuntimeModel(m) ? '' : m.provider, model: m.model,
+        providerKind: providerOf(config, m)?.kind,
         contextLength: m.contextLength, maxOutputTokens: m.maxOutputTokens,
         limits: {
           context: capacity > 0 ? capacity : null,

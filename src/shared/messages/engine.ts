@@ -17,6 +17,7 @@ const en = {
   'run.model_no_answer': 'Nothing arrived from the model in {minutes} min. Check that the model server is running, or choose another model',
   'problem.not_in_config': 'Not found in the settings',
   'problem.unchecked': 'Not checked yet',
+  'problem.runtime_unavailable': 'This model runs through an external runtime, which cannot be used yet',
   'problem.hint_suffix': ' ({hint})',
   'problem.line': '- {id}: {message}{hintPart}',
   'problem.none': '- No model has been set up yet (add one in the first-run setup screen)',

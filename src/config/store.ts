@@ -13,7 +13,7 @@ import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
 import { DEFAULT_PROTECT_FILES } from '../tools/hooks/protect-files.ts';
 import { friendlyIssue } from './friendly.ts';
 import { dropLegacy } from './legacy.ts';
-import { AppConfig, BuiltinHookConfig, CommandHookConfig, HookConfig as HookSchema, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, ToolsConfig as ToolsConfigSchema, type HookConfig, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
+import { AppConfig, BuiltinHookConfig, CommandHookConfig, HookConfig as HookSchema, isRuntimeModel, MCP_ENV_NAME_PATTERN, MCP_HEADER_NAME_PATTERN, MCP_TOOL_KEY_PATTERN, providerOf, ToolsConfig as ToolsConfigSchema, type HookConfig, type ProviderConfig, type ProviderModelConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
 
@@ -82,12 +82,27 @@ function findings(config: AppConfig): Finding[] {
       if ('problem' in checked) add(`providers.${provider.id}.baseUrl`, checked.problem);
     }
   }
+  const runtimeIds = new Set<string>();
+  for (const runtime of config.runtimes ?? []) {
+    if (runtimeIds.has(runtime.id)) add(`runtimes.${runtime.id}.id`, `ID "${runtime.id}" is duplicated`, 'runtimes');
+    runtimeIds.add(runtime.id);
+    if (runtime.executablePath !== undefined && !isAbsolute(runtime.executablePath)) add(`runtimes.${runtime.id}.executablePath`, 'Write the location of the executable as an absolute path');
+  }
   const modelIds = new Set<string>();
+  const runtimeModelIds = new Set<string>();
   for (const model of config.models) {
     if (modelIds.has(model.id)) add(`models.${model.id}.id`, `ID "${model.id}" is duplicated`, 'models');
     modelIds.add(model.id);
-    const provider = config.providers.find(p => p.id === model.provider);
-    if (!provider) { add(`models.${model.id}.provider`, `Provider "${model.provider}" does not exist`, `models.${model.id}`); continue; }
+    const named = model as { provider?: string; runtime?: string };
+    if (named.provider !== undefined && named.runtime !== undefined) { add(`models.${model.id}.runtime`, 'A model points to a provider or to a runtime, not both', `models.${model.id}`); continue; }
+    if (named.runtime !== undefined) {
+      runtimeModelIds.add(model.id);
+      if (!runtimeIds.has(named.runtime)) add(`models.${model.id}.runtime`, `Runtime "${named.runtime}" does not exist`, `models.${model.id}`);
+      continue;
+    }
+    if (named.provider === undefined) { add(`models.${model.id}.provider`, 'A model needs a provider (or a runtime)', `models.${model.id}`); continue; }
+    const provider = config.providers.find(p => p.id === named.provider);
+    if (!provider) { add(`models.${model.id}.provider`, `Provider "${named.provider}" does not exist`, `models.${model.id}`); continue; }
     // 長さが足りないことは保存を止めない（使う前の確認で「使えない」と知らせる）。
     // 起動や保存を拒否すると、メタデータの誤りで全体が止まってしまう
     if (model.contextLength !== undefined && model.maxOutputTokens !== undefined && model.maxOutputTokens >= model.contextLength) {
@@ -95,7 +110,10 @@ function findings(config: AppConfig): Finding[] {
     }
   }
   for (const route of ['chat', 'background', 'judge', 'scout', 'research'] as const) {
-    for (const id of config.routing[route] ?? []) if (!modelIds.has(id)) add(`routing.${route}`, `Model "${id}" does not exist`);
+    (config.routing[route] ?? []).forEach((id, index) => {
+      if (!modelIds.has(id)) add(`routing.${route}`, `Model "${id}" does not exist`);
+      else if (runtimeModelIds.has(id) && !(route === 'chat' && index === 0)) add(`routing.${route}`, `Model "${id}" runs through a runtime. A runtime model can only be the first model of routing.chat (the conversation)`);
+    });
   }
   config.tools.shell.allow.forEach((entry, i) => {
     if (!parseAllowEntry(entry)) add('tools.shell.allow', `Entry ${i + 1} "${entry}" cannot be written this way. Write only a fixed command (a single statement with no quotes, variables, wildcards, substitutions, redirections or separators)`);
@@ -395,8 +413,9 @@ export class ConfigStore {
   }
 }
 
-export function findModel(config: AppConfig, id: string): { model: ModelConfig; provider: ProviderConfig } | undefined {
+export function findModel(config: AppConfig, id: string): { model: ProviderModelConfig; provider: ProviderConfig } | undefined {
   const model = config.models.find(m => m.id === id);
-  const provider = model && config.providers.find(p => p.id === model.provider);
-  return model && provider ? { model, provider } : undefined;
+  if (!model || isRuntimeModel(model)) return undefined;
+  const provider = providerOf(config, model);
+  return provider ? { model, provider } : undefined;
 }

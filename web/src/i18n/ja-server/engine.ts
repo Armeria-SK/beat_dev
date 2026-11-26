@@ -17,6 +17,7 @@ export const engineJa = {
   'run.model_no_answer': "モデルから {minutes} 分たっても何も届きませんでした。モデルのサーバーが動いているか確かめるか、別のモデルを選んでください",
   'problem.not_in_config': "設定にありません",
   'problem.unchecked': "まだ確かめていません",
+  'problem.runtime_unavailable': "外の実行役を通すモデルです。まだ使えません",
   'problem.hint_suffix': "（{hint}）",
   'problem.line': "- {id}: {message}{hintPart}",
   'problem.none': "- まだモデルが設定されていません（はじめの設定の画面で足してください）",

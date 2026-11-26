@@ -30,10 +30,32 @@ export const ProviderConfig = Type.Object({
 
 const EFFORT_PATTERN = '^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$';
 
+// 外の実行役（Claude Code・Codex など、モデルの呼び出しも道具の実行も自分でやる各社の公式のプログラム）の種類。窓口と、種類ごとの作り手の置き場は src/runtimes/registry.ts
+export const RUNTIME_KINDS = ['claude-code', 'codex'] as const;
+export const RuntimeKind = Type.Union(RUNTIME_KINDS.map(kind => Type.Literal(kind)));
+export type RuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+// 提供元の ID と同じ書き方（誤りの文も、同じ pattern の文を使う）
+const RUNTIME_ID_PATTERN = '^[a-z0-9][a-z0-9_-]{0,39}$';
+
+export const RuntimeConfig = Type.Object({
+  id: Type.String({ pattern: RUNTIME_ID_PATTERN }),
+  kind: RuntimeKind,
+  // 書かなければ切れている（使う人が入れて、確かめてから入れる）
+  enabled: Type.Boolean({ default: false }),
+  // 実行ファイルの場所（任意。絶対パス）。書かなければ PATH の名前から探す
+  executablePath: Type.Optional(Type.String({ maxLength: 1024 })),
+  // 起こすときの許可の設定。値は実行役ごとの決まった一覧（src/runtimes/types.ts の PERMISSIONS）だけ。無い・知らない値は既定の設定で起こす
+  permission: Type.Optional(Type.String({ maxLength: 40 })),
+}, { additionalProperties: false });
+
+// モデルの 1 件は、提供元（provider）か外の実行役（runtime）のどちらか 1 つを指す（両方・どちらも無しは設定の誤り。store.ts の findings）。
+// 形の検査は両方を任意にして、型のほうで 2 つの形の和にする。実行役のモデルは型の上で provider を持たないので、読み手が提供元の存在を前提にすると tsc が挙げる
 export const ModelConfig = Type.Object({
   id: Type.String({ pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }),
   label: Type.Optional(Type.String({ maxLength: 80 })),
-  provider: Type.String(),
+  provider: Type.Optional(Type.String()),
+  runtime: Type.Optional(Type.String()),
   model: Type.String({ minLength: 1, maxLength: 200 }),
   contextLength: Type.Optional(Type.Integer({ minimum: 1024, maximum: 10_000_000 })),
   maxOutputTokens: Type.Optional(Type.Integer({ minimum: 256, maximum: 200_000 })),
@@ -260,6 +282,8 @@ export const AppConfig = Type.Object({
   server: ServerConfig,
   providers: Type.Array(ProviderConfig, { default: [] }),
   models: Type.Array(ModelConfig, { default: [] }),
+  // 外の実行役。書かなければ無し（設定ファイルに書き足さない）
+  runtimes: Type.Optional(Type.Array(RuntimeConfig, { maxItems: 8 })),
   routing: RoutingConfig,
   tools: ToolsConfig(),
   profile: Type.Object({
@@ -300,8 +324,27 @@ export const AppConfig = Type.Object({
 }, { additionalProperties: false });
 
 export type ProviderConfig = Static<typeof ProviderConfig>;
-export type ModelConfig = Static<typeof ModelConfig>;
-export type AppConfig = Static<typeof AppConfig>;
+export type RuntimeConfig = Static<typeof RuntimeConfig>;
+type ModelFields = Omit<Static<typeof ModelConfig>, 'provider' | 'runtime'>;
+export type ProviderModelConfig = ModelFields & { provider: string };
+export type RuntimeModelConfig = ModelFields & { runtime: string };
+export type ModelConfig = ProviderModelConfig | RuntimeModelConfig;
+export type AppConfig = Omit<Static<typeof AppConfig>, 'models'> & { models: ModelConfig[] };
+
+// 外の実行役を指すモデルか。設定を読んだあとの値は、provider か runtime のどちらか 1 つだけを持つ
+export function isRuntimeModel(model: ModelConfig): model is RuntimeModelConfig {
+  return 'runtime' in model && typeof model.runtime === 'string';
+}
+
+// モデルの提供元。外の実行役を指すモデルには無い（提供元を前提にする読み手は、これを通して「無い」を扱う）
+export function providerOf(config: Pick<AppConfig, 'providers'>, model: ModelConfig): ProviderConfig | undefined {
+  return isRuntimeModel(model) ? undefined : config.providers.find(p => p.id === model.provider);
+}
+
+// 提供元を指すモデルだけ（外の実行役を指すモデルは、提供元のモデルの数に入らない）
+export function providerModels(config: Pick<AppConfig, 'models'>): ProviderModelConfig[] {
+  return config.models.filter((model): model is ProviderModelConfig => !isRuntimeModel(model));
+}
 export type ToolsConfig = Static<ReturnType<typeof ToolsConfig>>;
 export type HookConfig = Static<typeof HookConfig>;
 export type CommandHookConfig = Static<typeof CommandHookConfig>;

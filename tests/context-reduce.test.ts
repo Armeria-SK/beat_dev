@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { test } from 'node:test';
+import type { ProviderModelConfig } from '../src/config/schema.ts';
 import type { ChatMessage, ThinkingBlock } from '../src/engine/types.ts';
 import { anthropicBody } from '../src/providers/anthropic.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
@@ -54,7 +55,7 @@ function assertPrefixStable(requests: ModelRequest[], at: Array<ReturnType<typeo
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 function readShare(requests: ModelRequest[], from: number) {
   const sim = new AnthropicCacheSim();
-  for (const req of requests) sim.call(anthropicBody(req, { provider: req.model.provider, model: req.model.model }) as unknown as Json);
+  for (const req of requests) sim.call(anthropicBody(req, { provider: (req.model as ProviderModelConfig).provider, model: req.model.model }) as unknown as Json);
   const part = totals(sim.calls, from);
   return { share: part.readShare, weighted: Math.round(part.calls.reduce((n, c) => n + c.read * 0.1 + c.write * 1.25 + c.input, 0)), calls: part.calls.length };
 }

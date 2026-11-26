@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join, resolve, sep } from 'node:path';
-import { DEFAULT_LANGUAGE, type AppConfig, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, isRuntimeModel, providerModels, providerOf, type AppConfig, type Language, type ModelConfig, type ProviderConfig, type ProviderModelConfig } from '../config/schema.ts';
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
 import type { KV } from '../db/kv.ts';
@@ -263,7 +263,7 @@ export type SendOutcome =
   | { ok: true; runId: string; messageId?: number; queued?: boolean; pendingId?: string }
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail; problems?: ModelProblem[] };
 
-type Route = { model: ModelConfig; provider: ProviderConfig; backup?: boolean };
+type Route = { model: ProviderModelConfig; provider: ProviderConfig; backup?: boolean };
 
 interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[]; generated?: true; askAnswer?: true }
 
@@ -290,7 +290,7 @@ export function usualTools(tools: readonly ToolDef[], inProduct: boolean, mode: 
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
 export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
   const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
-  return preferred.length ? [...preferred] : config.models.map(m => m.id);
+  return preferred.length ? [...preferred] : providerModels(config).map(m => m.id);
 }
 
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
@@ -951,7 +951,8 @@ export class ChatEngine {
     const problems: ModelProblem[] = [];
     for (const id of ids) {
       const model = config.models.find(m => m.id === id);
-      const provider = model && config.providers.find(p => p.id === model.provider);
+      if (model && isRuntimeModel(model)) { problems.push({ modelId: id, status: 'error', message: engineText(language, 'problem.runtime_unavailable'), messageCode: 'engine.problem.runtime_unavailable' }); continue; }
+      const provider = model && providerOf(config, model);
       if (!model || !provider) { problems.push({ modelId: id, status: 'error', message: engineText(language, 'problem.not_in_config'), messageCode: 'engine.problem.not_in_config' }); continue; }
       const probe = this.#d.status.get(id);
       if (probe?.status === 'ok') (this.#d.status.coolingDown(id, this.#d.now?.().getTime()) ? cooling : usable).push({ model, provider });
@@ -1440,8 +1441,8 @@ export class ChatEngine {
     const routes: Route[] = named.length
       ? named.flatMap(id => {
         const model = config.models.find(m => m.id === id);
-        const provider = model && config.providers.find(p => p.id === model.provider);
-        return model && provider ? [{ model, provider }] : [];
+        const provider = model && providerOf(config, model);
+        return model && !isRuntimeModel(model) && provider ? [{ model, provider }] : [];
       })
       : [route];
     if (!routes.length) throw new NoJudge('no judge model is set up');
@@ -1702,7 +1703,7 @@ export class ChatEngine {
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
   // startedMode: 実行を始めたときの権限モード（実行の中でだけ渡す。使用量の数え方は次の実行のためなので、会話のいまのモードで数える）
-  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined; sendTail?: boolean }) {
+  #assemble(p: { runId?: string | undefined; conversationId: string; snapshot: string; model: ProviderModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined; sendTail?: boolean }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
@@ -1840,7 +1841,7 @@ export class ChatEngine {
 
   // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
   // そのモデルの available から引いた余裕の一部（context-budget.ts の toolResultTokens）。モデルの容量が分からなければ undefined（文字数の上限だけ）。何も書かない
-  #toolResultTokens(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): { tokens: number | undefined; available: number | undefined } {
+  #toolResultTokens(p: { runId: string; conversationId: string; snapshot: string; model: ProviderModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): { tokens: number | undefined; available: number | undefined } {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return { tokens: undefined, available: undefined };
     const { tokens } = irreducibleEstimate({ system: systemText(built.system), messages: built.history, tools: built.apiTools, factor: built.factor, tail: built.pending });
@@ -1848,7 +1849,7 @@ export class ChatEngine {
   }
 
   // タスクの実行を区切るか: いまのやり取り（固定の分を除く）が、使える量から固定の分を引いた余裕の SPLIT_EXCHANGE_RATIO を超えた。容量が分からなければ区切らない
-  #exchangeTooLong(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): boolean {
+  #exchangeTooLong(p: { runId: string; conversationId: string; snapshot: string; model: ProviderModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }): boolean {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return false;
     const system = `${built.system.frozen}\n${built.system.dynamic}`;
@@ -1857,7 +1858,7 @@ export class ChatEngine {
     return exchange > SPLIT_EXCHANGE_RATIO * (built.available - fixed);
   }
 
-  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }, pending: ChatMessage[]): boolean {
+  #continuationFits(p: { runId: string; conversationId: string; snapshot: string; model: ProviderModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined; project?: ToolContext['project']; memoryProject?: string | undefined }, pending: ChatMessage[]): boolean {
     const built = this.#assemble(p);
     if (!(built.capacity > 0)) return true;
     const { tokens } = irreducibleEstimate({ system: systemText(built.system), messages: [...built.history, ...pending], tools: built.apiTools, factor: built.factor, tail: built.pending });
@@ -1898,16 +1899,18 @@ export class ChatEngine {
     const d = this.#d;
     const config = d.config();
     const language = languageOf(config);
-    let model: ModelConfig | undefined;
+    let model: ProviderModelConfig | undefined;
     const existing = d.conversations.get(conversationId);
     // 数えるモデル: 指定されたもの → 会話で選んだもの → 設定の順番の先頭の使えるもの。選んだモデルが使えなくても、ほかのモデルで数えない
     const wanted = modelId ?? existing?.model_id ?? undefined;
     if (wanted !== undefined) {
-      model = config.models.find(m => m.id === wanted);
-      if (!model) {
+      const found = config.models.find(m => m.id === wanted);
+      if (!found) {
         if (modelId === undefined) return this.#noUsableModel(this.#chain('chat', wanted).problems);
         return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: wanted }), errorCode: 'engine.usage.model_missing', errorParams: { id: wanted } };
       }
+      if (isRuntimeModel(found)) return this.#noUsableModel(this.#chain('chat', wanted).problems);
+      model = found;
       if (!(d.status.limits(model).capacity > 0)) {
         return this.#noUsableModel([{ modelId: model.id, status: 'unknown', message: engineText(language, 'problem.unchecked'), messageCode: 'engine.problem.unchecked' }]);
       }

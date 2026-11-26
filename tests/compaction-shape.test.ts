@@ -7,6 +7,7 @@ import { compactOutputTokens, ownerWordsTokens } from '../src/engine/context-bud
 import { compactPrompt, composeSummary, hasSummarySections, quoteOwner, summarySection } from '../src/engine/prompts.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { stripHidden } from '../src/shared/plain-text.ts';
+import type { ProviderModelConfig } from '../src/config/schema.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
 import { anthropicBody } from '../src/providers/anthropic.ts';
 import { providerError, type ModelRequest } from '../src/providers/types.ts';
@@ -92,7 +93,7 @@ test('前半を読み直す形: 要求の最後が要約の頼みで、その前
   // available = floor(40,000 × 0.95) − 4,096 = 33,904 → 8% は 2,712
   assert.equal(ask.maxOutputTokens, 2712, '要約の返事の上限');
   const sim = new AnthropicCacheSim();
-  for (const { req } of log.slice(0, at + 1)) sim.call(anthropicBody(req, { provider: req.model.provider, model: req.model.model }) as unknown as Json);
+  for (const { req } of log.slice(0, at + 1)) sim.call(anthropicBody(req, { provider: (req.model as ProviderModelConfig).provider, model: req.model.model }) as unknown as Json);
   const cost = sim.calls.at(-1)!;
   const share = cost.read / (cost.read + cost.write + cost.input);
   assert.ok(share >= 0.9, `要約の呼び出しの読みの割合 ${(share * 100).toFixed(1)}%`);
