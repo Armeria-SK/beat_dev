@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AppConfig, ProviderConfig } from './config/schema.ts';
+import type { AppConfig, ModelConfig, ProviderConfig } from './config/schema.ts';
 import { ConfigStore } from './config/store.ts';
 import { Conversations } from './db/conversations.ts';
 import { openDatabase } from './db/database.ts';
@@ -9,7 +9,7 @@ import { KV } from './db/kv.ts';
 import { MIGRATIONS } from './db/migrations.ts';
 import { Runs } from './db/runs.ts';
 import { RunBus } from './engine/bus.ts';
-import { ChatEngine } from './engine/chat.ts';
+import { candidateModelIds, ChatEngine } from './engine/chat.ts';
 import { HealthMonitor } from './engine/health.ts';
 import { ModelStatus } from './engine/status.ts';
 import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
@@ -240,7 +240,7 @@ export class App {
     });
     this.registry.reload(config);
     this.botMemory = options.botMemory === true;
-    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: () => this.baseTokens(), memoryTokens: () => this.memoryTokens(), log: this.log });
+    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: model => this.baseTokens(model), memoryTokens: () => this.memoryTokens(), log: this.log });
     this.bus = new RunBus();
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
@@ -509,18 +509,29 @@ export class App {
     this.#rewrittenReported = rewritten;
   }
 
-  baseTokens(): number {
+  baseTokens(model?: Pick<ModelConfig, 'id'>): number {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
     // agent_run は設定で有効なときだけモデルに渡る（無効なら数えない。#toolsFor と同じ）
-    const exclude = (tool: ToolDef) => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen';
-    const all = this.tools?.forRun('chat', { exclude }) ?? [];
-    const defers = all.some(tool => tool.name === 'tool_search' && tool.mcp === undefined);
-    const full = this.tools?.forRun('chat', { exclude: tool => exclude(tool) || tool.name === 'tool_search' }) ?? [];
-    const tools = !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : full.length ? estimateToolTokens(ToolRegistry.specs(full, config)) : 0;
+    const exclude = (tool: ToolDef) => (tool.name === 'agent_run' && !config.tools.agent.enabled) || (isBrowserTool(tool.name) && !config.tools.browser.enabled) || tool.acceptanceState === 'frozen' || tool.scoutOnly === true || tool.researchOnly === true;
+    const toolTokens = (kind: 'chat' | 'task'): number => {
+      const all = this.tools?.forRun(kind, { exclude }) ?? [];
+      const defers = all.some(tool => tool.name === 'tool_search' && tool.mcp === undefined);
+      const full = this.tools?.forRun(kind, { exclude: tool => exclude(tool) || tool.name === 'tool_search' }) ?? [];
+      return !all.length ? 0 : defers ? estimateToolTokens(ToolRegistry.specs(all.filter(isCore), config)) + estimateTextTokens(deferredSection(all.filter(tool => !isCore(tool)), config)) : full.length ? estimateToolTokens(ToolRegistry.specs(full, config)) : 0;
+    };
+    const tools = Math.max(...this.#rolesOf(model?.id, config).map(toolTokens));
     return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + estimateTextTokens(fenceTail(buildTail(config.timezone, language), PLACEHOLDER_NONCE)) + 64;
+  }
+
+  #rolesOf(modelId: string | undefined, config: AppConfig): Array<'chat' | 'task'> {
+    if (modelId === undefined) return ['chat'];
+    const roles: Array<'chat' | 'task'> = [];
+    if (candidateModelIds(config, 'chat').includes(modelId)) roles.push('chat');
+    if (candidateModelIds(config, 'background').includes(modelId)) roles.push('task');
+    return roles.length ? roles : ['chat'];
   }
 
   // 記憶を全部入れたときの見積もり。必要な長さには、各モデルの available の 12% までだけが数えられる（requiredContext）
