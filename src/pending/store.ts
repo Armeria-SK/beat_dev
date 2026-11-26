@@ -13,8 +13,8 @@ import { identityOf } from '../projects/created.ts';
 import { outsideRule, pushRule, storedCandidate, type RuleCandidate } from '../tools/approval-rules.ts';
 import { boundFacts, destinationFacts, fileFacts, pushFacts, takeSnapshot, type PathFact, type Snapshot } from './snapshot.ts';
 
-export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed';
-export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled';
+export type PendingKind = 'send' | 'delete' | 'hook' | 'policy' | 'owner' | 'judge' | 'judge_failed' | 'runtime';
+export type PendingStatus = 'waiting' | 'running' | 'ran' | 'failed' | 'rejected' | 'stale' | 'cancelled' | 'answered';
 
 export class PendingError extends LocalizedError<PendingMessageKey> {
   constructor(code: PendingMessageKey, params?: MessageParams) { super(pendingText, code, params); }
@@ -47,6 +47,25 @@ export interface ParkInput {
   rule?: RuleCandidate | undefined;
 }
 
+// A request an outside runtime (Claude Code, Codex) is waiting on. beat never runs it: the owner's answer is only passed back (status answered)
+export interface ParkRuntimeInput {
+  runtimeId: string;
+  tool: string;
+  requestId: string;
+  title: string;
+  body: string | null;
+  cwd: string | null;
+  extra: string | null;
+  reason: string;
+  checks?: string[] | undefined;
+  // the runtime holds the answer "do not ask again until this reply ends"
+  reply: boolean;
+  root: string;
+  runId: string;
+  conversationId: string;
+  projectId: string | null;
+}
+
 export interface ParkedOutbound { kind: string; reason?: string; targets: string[] }
 
 export interface Recheck { decision: Decision; kinds: string[]; reasons: string[]; paths: string[] }
@@ -72,6 +91,7 @@ export interface PendingState {
   rule?: RuleCandidate;
   rest?: RestingCard;
   held?: string[];
+  runtime?: { id: string; request: string; reply: boolean; run: string };
 }
 
 export interface RestingCard { shown: string; masked: number; parts: PendingParts; preview?: PreviewFile[] }
@@ -97,6 +117,7 @@ export interface PendingView {
   project_id: string | null; project_name: string | null; tainted: boolean; status: PendingStatus; reject_reason: string | null;
   exit_code: number | null; output_preview: string | null; created_at: number; decided_at: number | null; ran_at: number | null;
   rule: { shown: string; push?: true; outside?: true } | null;
+  runtime: { id: string; reply: boolean } | null;
 }
 
 export interface PendingChange { id: number; status: PendingStatus; projectId: string | null; conversationId: string; taskId: string | null }
@@ -121,7 +142,7 @@ export interface PendingCounts {
 
 export interface JudgedCounts { allowed: number; parked: Record<string, number>; notParked: number; ruled: Record<string, number> }
 
-export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined; reason?: string | undefined }
+export interface FinishInput { status: 'ran' | 'failed' | 'stale' | 'cancelled' | 'answered'; exitCode?: number | undefined; output?: string | undefined; fullRef?: string | undefined; fetched?: boolean | undefined; reason?: string | undefined }
 
 const OUTPUT_TAIL = 2000;
 const REASON_MAX = 500;
@@ -448,6 +469,37 @@ export class PendingStore {
     return this.#view(row);
   }
 
+  // A request of an outside runtime goes to the owner as a row of its own kind. Nothing is stored that beat could run: the card is masked first, and the row only remembers who is waiting
+  parkRuntime(input: ParkRuntimeInput): PendingView {
+    const held = this.#allHeld();
+    const marker = heldMarker(held);
+    const exact = held.map(h => h.value).filter(v => v.trim().length >= HELD_MIN);
+    // While it waits, the card marks the values beat holds and shows the rest as the runtime asked (the owner decides on it); once decided, it keeps the pattern-redacted form (rest)
+    const mask = (text: string): string => marker.mark(redactSecrets(text, exact, { keepLines: true }));
+    const card = (via: (text: string) => string): { title: string; parts: PendingParts; shown: string } => {
+      const parts: PendingParts = { body: input.body === null ? null : via(input.body), cwd: input.cwd === null ? null : via(input.cwd), extra: input.extra === null ? null : via(input.extra) };
+      const title = via(input.title);
+      const lines = [title, ...(parts.cwd === null ? [] : [pendingText('en', 'cwd_line', { path: parts.cwd })]), ...[parts.body, parts.extra].filter((v): v is string => v !== null)];
+      return { title, parts, shown: lines.join('\n') };
+    };
+    const { title, parts, shown } = card(text => marker.mark(text));
+    const masked = marker.sources.length;
+    const rest = card(text => redactSecrets(text, exact, { keepLines: true }));
+    const state: PendingState = {
+      title, parts, ...(masked ? { held: [...new Set(marker.sources)].sort() } : {}),
+      rest: { shown: rest.shown, masked: Math.max(0, marks(rest.shown) - marks(shown)), parts: rest.parts },
+      runtime: { id: input.runtimeId, request: input.requestId, reply: input.reply, run: input.runId },
+    };
+    const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'runtime', ?, ?, NULL, ?, NULL, ?, 'chat', ?, NULL, ?, 1, 'waiting', ?)`).run(
+      input.tool, JSON.stringify({ request: input.requestId }), shown, masked, input.root, mask(input.reason), JSON.stringify((input.checks ?? []).map(mask)),
+      JSON.stringify(state), input.runId, input.conversationId, input.projectId, this.#now(),
+    );
+    const row = this.row(Number(result.lastInsertRowid))!;
+    this.#changed(row);
+    return this.#view(row);
+  }
+
   row(id: number): PendingRow | undefined {
     return this.#db.prepare('SELECT * FROM pending_actions WHERE id = ?').get(id) as PendingRow | undefined;
   }
@@ -471,6 +523,7 @@ export class PendingStore {
       status: row.status, reject_reason: row.reject_reason, exit_code: row.exit_code, output_preview: row.output_preview,
       created_at: row.created_at, decided_at: row.decided_at, ran_at: row.ran_at,
       rule: this.rememberableNow(row, state) ? ruleView(storedCandidate(state.rule)!) : null,
+      runtime: row.kind === 'runtime' && state.runtime ? { id: state.runtime.id, reply: state.runtime.reply } : null,
     };
   }
 
@@ -633,12 +686,22 @@ export class PendingStore {
     return rows.filter(row => this.withdraw(Number(row.id), reason)).length;
   }
 
+  // beat started again: the runtimes that asked for an answer are gone, so the requests still waiting can never be answered
+  closeRuntimeWaiting(reason: string): number {
+    let closed = 0;
+    for (const row of this.#db.prepare("SELECT id FROM pending_actions WHERE kind = 'runtime' AND status = 'waiting' ORDER BY id").all() as Array<{ id: number }>) {
+      if (this.closeStale(Number(row.id), reason)) closed += 1;
+    }
+    return closed;
+  }
+
   closeInterrupted(): number {
     let closed = 0;
     for (const row of this.#db.prepare("SELECT * FROM pending_actions WHERE status = 'running'").all() as unknown as PendingRow[]) {
       const rest = settled(row, parseJson<PendingState | null>(row.state, null), this.#heldOf(row.tool));
-      const result = this.#db.prepare(`UPDATE pending_actions SET status = 'failed', output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'running'`)
-        .run(pendingText('en', 'interrupted'), this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, row.id);
+      const runtime = row.kind === 'runtime';
+      const result = this.#db.prepare(`UPDATE pending_actions SET status = ?, reject_reason = ?, output_preview = CASE WHEN input = '' THEN NULL ELSE ? END, ran_at = ?, input = '', shown = ?, masked = ?, state = ?, reason = ?, checks = ? WHERE id = ? AND status = 'running'`)
+        .run(runtime ? 'stale' : 'failed', runtime ? pendingText('en', 'runtime_restarted') : null, pendingText('en', runtime ? 'runtime_restarted' : 'interrupted'), runtime ? null : this.#now(), rest.shown, rest.masked, rest.state, rest.reason, rest.checks, row.id);
       closed += Number(result.changes);
     }
     return closed;

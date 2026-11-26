@@ -19,7 +19,7 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; pendingWaitMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean; folderDialog?: FolderDialogOptions; runtimeFactories?: AppOptions['runtimeFactories']; runtimeStopGraceMs?: number } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined>; agentTimeoutMs?: number; pendingWaitMs?: number; judgeLimits?: JudgeLimitSet; judge?: string; fetch?: typeof fetch; mcpConnect?: McpConnect; browserDriver?: BrowserDriver; browserDisplay?: boolean; projectFolderExempt?: readonly string[]; downloadNetwork?: DownloadNetwork; webNetwork?: PageNetwork; now?: () => number; paths?: (paths: AppPaths) => AppPaths; botMemory?: boolean; folderDialog?: FolderDialogOptions; runtimeFactories?: AppOptions['runtimeFactories']; runtimeStopGraceMs?: number; runtimeApprovalWaitMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
   let stop = async (): Promise<void> => undefined;
   t.after(async () => { await stop(); await removeDir(dir); });
@@ -56,6 +56,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     ...(options.folderDialog ? { folderDialog: options.folderDialog } : {}),
     ...(options.runtimeFactories ? { runtimeFactories: options.runtimeFactories } : {}),
     ...(options.runtimeStopGraceMs !== undefined ? { runtimeStopGraceMs: options.runtimeStopGraceMs } : {}),
+    ...(options.runtimeApprovalWaitMs !== undefined ? { runtimeApprovalWaitMs: options.runtimeApprovalWaitMs } : {}),
   });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);

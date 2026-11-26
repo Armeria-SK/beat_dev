@@ -10,6 +10,7 @@ import { MIGRATIONS } from './db/migrations.ts';
 import { Runs } from './db/runs.ts';
 import { RunBus } from './engine/bus.ts';
 import { candidateModelIds, ChatEngine } from './engine/chat.ts';
+import { RuntimeApprovals } from './engine/runtime-approvals.ts';
 import { HealthMonitor } from './engine/health.ts';
 import { ModelStatus } from './engine/status.ts';
 import { RuntimeChecks } from './runtimes/checks.ts';
@@ -145,6 +146,8 @@ export interface AppOptions {
   // 試験用: 承認待ちだけが残った実行が決めを待つ時間（ミリ秒）。書かなければ 4 分
   pendingWaitMs?: number;
   runtimeStopGraceMs?: number;
+  // 試験用: 実行役の承認の求めを持ち主が決めるのを待つ時間（ミリ秒）。書かなければ 30 分
+  runtimeApprovalWaitMs?: number;
   judgeLimits?: JudgeLimitSet;
   // 試験用: 外の MCP サーバーへのつなぎ方（書かなければ SDK でつなぐ）
   mcpConnect?: McpConnect;
@@ -182,6 +185,7 @@ export class App {
   readonly tools: ToolRegistry;
   readonly approvals: ApprovalBroker;
   readonly pending: PendingStore;
+  readonly runtimeApprovals: RuntimeApprovals;
   readonly #replayStop = new AbortController();
   readonly #gitNoticeOff: () => void;
   readonly memory: MemoryStore;
@@ -260,7 +264,8 @@ export class App {
     for (const tool of options.tools ?? builtinTools()) if (this.botMemory || !MEMORY_TOOL_NAMES.includes(tool.name)) this.tools.register(tool);
     if (!this.botMemory && !options.tools) for (const tool of memoryFileTools) this.tools.register(tool);
     this.approvals = new ApprovalBroker(this.db);
-    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, held: () => this.registry.held(), onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.#pendingChanged(change.id); this.#pendingWake(change); } });
+    this.pending = new PendingStore(this.db, { tools: this.tools, dataDir: this.paths.data, now, held: () => this.registry.held(), onChange: change => { this.bus.publish({ type: 'pendingAction.changed', ...change }); this.runtimeApprovals.relay(change.id, change.status); this.#pendingChanged(change.id); this.#pendingWake(change); } });
+    this.runtimeApprovals = new RuntimeApprovals({ pending: this.pending, log: this.log, waitMs: options.runtimeApprovalWaitMs });
     const interrupted = this.pending.closeInterrupted();
     if (interrupted) this.log(`[INFO] Marked ${interrupted} pending item(s) that were running at the last shutdown as failed`);
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
@@ -338,6 +343,7 @@ export class App {
       ...(options.pendingWaitMs !== undefined ? { pendingWaitMs: options.pendingWaitMs } : {}),
       runtimes: { registry: this.runtimes, checks: this.runtimeChecks },
       ...(options.runtimeStopGraceMs !== undefined ? { runtimeStopGraceMs: options.runtimeStopGraceMs } : {}),
+      runtimeApprovals: this.runtimeApprovals,
       ...(options.judgeLimits ? { judgeLimits: options.judgeLimits } : {}),
     });
     this.worker = new Worker({
@@ -411,6 +417,8 @@ export class App {
       }
       this.worker.poke();
     };
+    const gone = this.pending.closeRuntimeWaiting(pendingText('en', 'runtime_restarted'));
+    if (gone) this.log(`[INFO] Closed ${gone} request(s) of outside runtimes that were waiting for an answer when beat stopped`);
   }
 
   // Web サーバーを起動するときに呼ぶ（動いているサーバーと同じ DB を開くだけの使い方では呼ばない。呼ぶと動いている承認待ちの通知まで既読になる）。
@@ -653,8 +661,20 @@ export class App {
     };
   }
 
-  replayPending(row: PendingRow): void {
+  replayPending(row: PendingRow, options: { reply?: boolean } = {}): void {
+    if (row.kind === 'runtime') { void this.#answerRuntime(row, options.reply === true); return; }
     void replayAction(row, this.#replayDeps()).catch(error => this.log(`[ERROR] Failed to run pending item #${row.id}: ${(error as Error).message}`));
+  }
+
+  // 実行役の承認の求め: beat は何も動かさず、持ち主の答えを実行役へ返すだけ。返せなければ（実行役がもういない）「古くなった」で閉じる
+  async #answerRuntime(row: PendingRow, reply: boolean): Promise<void> {
+    try {
+      const sent = await this.runtimeApprovals.accept(row.id, reply);
+      this.pending.finish(row.id, sent === undefined ? { status: 'stale', reason: pendingText('en', 'runtime_gone') } : { status: 'answered', ...(sent === 'accept_for_reply' ? { reason: pendingText('en', 'runtime_answered_reply') } : {}) });
+    } catch (error) {
+      this.log(`[WARN] Could not pass the answer of pending item #${row.id} back to its runtime: ${(error as Error).message}`);
+      this.pending.finish(row.id, { status: 'stale', reason: pendingText('en', 'runtime_gone') });
+    }
   }
 
   #backgroundOpen(owner: JobOwner): boolean {
@@ -692,6 +712,7 @@ export class App {
     if (this.#mergeTimer) clearInterval(this.#mergeTimer);
     this.#gitNoticeOff();
     this.#replayStop.abort();
+    this.runtimeApprovals.close();
     this.background.closeAll();
     void this.mcp.stop().catch(() => undefined);
     void this.browser.close().catch(() => undefined);

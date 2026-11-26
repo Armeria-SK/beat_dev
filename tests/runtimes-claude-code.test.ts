@@ -451,17 +451,18 @@ test('if the first message says an API key is in use, or a different permission 
 
 // ---------------------------------------------------------------- 承認
 
-test('decline and cancel are answered as denials (cancel also stops the reply); an unknown decision is a denial too', async t => {
+test('decline, a decline by beat and cancel are answered as denials (cancel also stops the reply; a decline by beat says beat did it, not the owner); an unknown decision is a denial too', async t => {
   const report: Report = { answers: [] };
-  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a' }, { toolUseID: 'b' }, { toolUseID: 'c' }]) });
+  const s = setup(t, { script: approvalScript(report, [{ toolUseID: 'a' }, { toolUseID: 'b' }, { toolUseID: 'c' }, { toolUseID: 'd' }]) });
   const session = await s.start();
   await s.runtime.send(session.id, { text: 'go' });
-  const decisions: Record<string, string> = { a: 'decline', b: 'cancel', c: 'allow-everything' };
+  const decisions: Record<string, string> = { a: 'decline', b: 'cancel', c: 'allow-everything', d: 'decline_by_beat' };
   await collect(s.runtime, session.id, event => event.type === 'approval' ? s.runtime.approve(session.id, event.requestId, decisions[event.requestId] as 'decline') : undefined);
   assert.deepEqual(report.answers, [
     { behavior: 'deny', message: 'The owner declined this request.' },
     { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true },
     { behavior: 'deny', message: 'The owner declined this request.' },
+    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." },
   ]);
 });
 
@@ -491,6 +492,27 @@ test('accept_for_reply returns only allow rules that stay inside this reply; use
   assert.deepEqual(report.answers[1], { behavior: 'allow', updatedInput: bash('echo hi') }, 'nothing session-only to return: no updatedPermissions at all');
   assert.deepEqual(report.answers[2], { behavior: 'allow', updatedInput: bash('echo hi') }, 'a rule wider than the ask (suppressAlwaysAllowRule) is not returned');
   assert.deepEqual(report.answers[3], { behavior: 'allow', updatedInput: bash('echo hi') }, 'only a mode change on offer: a plain accept');
+});
+
+test('the approval event says it can be answered "do not ask again in this reply" only when a session-only rule is on offer (user, project and local settings never count)', async t => {
+  const sessionRule: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'echo *' }], behavior: 'allow', destination: 'session' };
+  const local: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'localSettings' };
+  const user: PermissionUpdate = { type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'userSettings' };
+  const mode: PermissionUpdate = { type: 'setMode', mode: 'acceptEdits', destination: 'session' };
+  const report: Report = { answers: [] };
+  const s = setup(t, { script: approvalScript(report, [
+    { toolUseID: 'with-rule', suggestions: [local, sessionRule] }, { toolUseID: 'settings-only', suggestions: [local, user] },
+    { toolUseID: 'mode-only', suggestions: [mode] }, { toolUseID: 'none' }, { toolUseID: 'too-wide', suggestions: [sessionRule], suppress: true },
+  ]) });
+  const session = await s.start();
+  await s.runtime.send(session.id, { text: 'go' });
+  const flags: Record<string, boolean> = {};
+  await collect(s.runtime, session.id, async event => {
+    if (event.type !== 'approval') return;
+    flags[event.requestId] = event.forReply === true;
+    await s.runtime.approve(session.id, event.requestId, 'accept');
+  });
+  assert.deepEqual(flags, { 'with-rule': true, 'settings-only': false, 'mode-only': false, none: false, 'too-wide': false });
 });
 
 test('an approval is answered once; an unknown or already answered id, and a second ask with the same id while one waits, are refused', async t => {
@@ -665,6 +687,22 @@ test('every secret-path deny rule goes through the command line check of the pro
     assert.ok(rules.includes(`Edit(${glob})`), `Edit(${glob})`);
   }
   assert.deepEqual(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []), rules, 'the child received exactly the rules, in one comma-joined argument like the real SDK (nothing was redacted or split)');
+});
+
+test('beat の待ち受けのポートが渡されたとき、そのポートへの接続を含む Bash・PowerShell・Monitor の命令は deny の決まりで断る（使う人の allow より先に効く）。渡されなければ決まりを足さない', async t => {
+  const port = 47811;
+  const s = setup(t);
+  const session = await s.start({ beatPort: port });
+  const rules = s.sdk.last.ctx.options.disallowedTools ?? [];
+  const expected = ['Bash', 'PowerShell', 'Monitor'].flatMap(tool => ['127.0.0.1', 'localhost', '[::1]'].map(host => `${tool}(*${host}:${port}*)`));
+  assert.equal(expected.length, 9);
+  for (const rule of expected) assert.ok(rules.includes(rule), rule);
+  assert.ok(rules.every(rule => !/[,\s]/u.test(rule)), 'no rule holds a comma or a space, so the comma-joined argument stays whole');
+  assert.deepEqual(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []), rules, 'the child received exactly the rules');
+  for (const rule of expected) assert.ok(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []).includes(rule), `${rule} reached the child command line`);
+  const plain = setup(t);
+  await plain.start();
+  assert.ok((plain.sdk.last.ctx.options.disallowedTools ?? []).every(rule => !rule.includes('127.0.0.1') && !rule.includes('localhost')), 'no port, no rule');
 });
 
 // 本物の SDK は、外す道具と決まりを 1 つの引数 `--disallowedTools=a,b,c`（コンマでつなぐ）で渡す

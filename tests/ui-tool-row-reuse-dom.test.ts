@@ -24,3 +24,20 @@ test('runlog: 決めたのが judge-reuse の道具の行は、コードでは�
   const { decidedByLabel } = await import('../web/src/runlog-meta.ts');
   assert.equal(decidedByLabel('judge-reuse'), 'Auto-approve (earlier answer in this run)');
 });
+
+test('ui/ToolRow（DOM）（AR-8a）: 実行役の求めの行は、beat が持ち主に聞かず断ったものを「Stopped by beat」、持ち主が決めたものを「You allowed it / You declined it」と出し、決めた行へのリンクを付ける', async () => {
+  const row = (key: string, gate: unknown, isError: boolean) => ({ key, name: 'claude-code:Write', input: JSON.stringify({ file_path: 'src/a.ts', content: 'x' }), result: { text: 'result', isError }, gate });
+  const { container } = await render(createElement(ToolGroup, {
+    rows: [row('a', { by: 'guard', key: 'secret' }, true), row('b', { by: 'owner', id: 7, allowed: true }, false), row('c', { by: 'owner', id: 8, allowed: false }, true), row('d', { by: 'owner', id: 9, allowed: false, closed: true }, true)], isNew: () => false,
+  }));
+  const lines = [...container.querySelectorAll('details.bt-tool')];
+  const text = (index: number) => lines[index]?.textContent ?? '';
+  assert.match(text(0), /Stopped by beat/u);
+  assert.match(text(1), /You allowed it/u);
+  assert.match(text(2), /You declined it/u);
+  assert.match(text(3), /Closed without your answer/u, 'a request that ended with no answer from the owner is not shown as declined by the owner');
+  assert.doesNotMatch(text(3), /You declined it/u);
+  const links = [...container.querySelectorAll('a.ui-tool__open')].map(a => a.textContent);
+  assert.equal(links.length, 3, 'the three the owner was asked about link to Pending; the one beat stopped has nothing to open');
+  assert.ok(links[0]!.includes('7') && links[1]!.includes('8') && links[2]!.includes('9'), links.join(' | '));
+});

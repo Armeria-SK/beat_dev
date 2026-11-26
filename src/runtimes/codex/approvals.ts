@@ -12,7 +12,8 @@ import {
 
 export type ApprovalKind = 'command' | 'writeStdin' | 'fileChange' | 'permissions';
 
-export interface FileChangeSummary { path: string; kind: 'add' | 'delete' | 'update'; movePath?: string }
+// diff: 持ち主に見せる変更の中身（1 つあたり・1 項目ぜんぶで長さを切る。切ったことは文の中に書く）
+export interface FileChangeSummary { path: string; kind: 'add' | 'delete' | 'update'; movePath?: string; diff?: string }
 
 // RuntimeEvent の approval の input の形（承認の橋 AR-8a が読む）。tool は commandExecution / fileChange / permissions
 export interface CommandApprovalInput {
@@ -50,6 +51,8 @@ export type Classified = { approval: Extract<RuntimeEvent, { type: 'approval' }>
 const MAX_ITEMS = 200;
 const MAX_CHANGES = 500;
 const MAX_ACTIONS = 20;
+const MAX_DIFF = 8000;
+const MAX_DIFF_TOTAL = 64000;
 export const NOT_SUPPORTED = -32601;
 const INVALID_PARAMS = -32602;
 
@@ -58,7 +61,7 @@ export const requestIdFor = (id: RequestId): string => (typeof id === 'number' ?
 const text = (value: unknown): string | null => asString(value) ?? null;
 
 // 閉じた一覧（ApprovalDecision の全部をここで写す。足りなければ tsc が落ちる）
-const COMMAND_DECISION: Record<ApprovalDecision, CommandDecision> = { accept: 'accept', accept_for_reply: 'acceptForSession', decline: 'decline', cancel: 'cancel' };
+const COMMAND_DECISION: Record<ApprovalDecision, CommandDecision> = { accept: 'accept', accept_for_reply: 'acceptForSession', decline: 'decline', decline_by_beat: 'decline', cancel: 'cancel' };
 
 function knownDecision(decision: unknown): ApprovalDecision {
   if (typeof decision !== 'string' || !Object.hasOwn(COMMAND_DECISION, decision)) throw new CodexRefused('protocol', 'That is not an answer beat can give to Codex');
@@ -93,9 +96,20 @@ function refusal(method: string, reply: RefusedRequest['reply'], row = true): Re
 
 const SILENT_ERRORS: ReadonlySet<string> = new Set(['account/chatgptAuthTokens/refresh', 'attestation/generate']);
 
+function shownDiff(diff: string | undefined, room: number): string | undefined {
+  if (diff === undefined || diff === '') return undefined;
+  const limit = Math.min(MAX_DIFF, room);
+  if (limit <= 0) return '[the diff is not kept]';
+  if (diff.length <= limit) return diff;
+  const lead = diff.slice(0, limit);
+  const last = lead.charCodeAt(lead.length - 1);
+  return `${last >= 0xd800 && last <= 0xdbff ? lead.slice(0, -1) : lead}\n[${diff.length - limit} more characters of this change not shown]`;
+}
+
 function summarize(changes: unknown): FileChangeSummary[] | undefined {
   if (!Array.isArray(changes)) return undefined;
   const out: FileChangeSummary[] = [];
+  let kept = 0;
   for (const change of changes.slice(0, MAX_CHANGES)) {
     const record = asRecord(change);
     const path = asString(record?.path);
@@ -103,7 +117,9 @@ function summarize(changes: unknown): FileChangeSummary[] | undefined {
     const type = asString(kind?.type);
     if (path === undefined || (type !== 'add' && type !== 'delete' && type !== 'update')) return undefined;
     const movePath = asString(kind?.move_path);
-    out.push({ path, kind: type, ...(movePath !== undefined ? { movePath } : {}) });
+    const diff = shownDiff(asString(record?.diff), MAX_DIFF_TOTAL - kept);
+    kept += diff?.length ?? 0;
+    out.push({ path, kind: type, ...(movePath !== undefined ? { movePath } : {}), ...(diff !== undefined ? { diff } : {}) });
   }
   return changes.length > MAX_CHANGES ? undefined : out;
 }
@@ -148,12 +164,12 @@ export class ApprovalTable {
           kind, itemId, command: text(p.command), cwd: text(p.cwd), reason: text(p.reason), actions,
           network: network ? { host: asString(network.host) ?? '', protocol: asString(network.protocol) ?? '' } : null,
         };
-        return this.#park(requestId, id, kind, undefined, 'commandExecution', input);
+        return this.#park(requestId, id, kind, undefined, 'commandExecution', input, kind === 'command' && !network);
       }
       case SERVER_REQUEST.fileChange: {
         if (!p || itemId === undefined) return bad();
         const input: FileChangeApprovalInput = { itemId, reason: text(p.reason), grantRoot: text(p.grantRoot), changes: this.#changes.get(itemId) ?? null };
-        return this.#park(requestId, id, 'fileChange', undefined, 'fileChange', input);
+        return this.#park(requestId, id, 'fileChange', undefined, 'fileChange', input, input.grantRoot === null);
       }
       case SERVER_REQUEST.permissions: {
         const permissions = asRecord(p?.permissions);
@@ -172,9 +188,9 @@ export class ApprovalTable {
     }
   }
 
-  #park(requestId: string, rpcId: RequestId, kind: ApprovalKind, requested: JsonObject | undefined, tool: string, input: unknown): Classified {
+  #park(requestId: string, rpcId: RequestId, kind: ApprovalKind, requested: JsonObject | undefined, tool: string, input: unknown, forReply = false): Classified {
     this.#pending.set(requestId, { requestId, rpcId, kind, requested });
-    return { approval: { type: 'approval', requestId, tool, input } };
+    return { approval: { type: 'approval', requestId, tool, input, ...(forReply ? { forReply: true as const } : {}) } };
   }
 
   // 持ち主の答えを Codex への返事にして、待ちから外す。知らない・もう答えた求めは断る（2 回めの答えは受け付けない）

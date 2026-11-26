@@ -12,6 +12,7 @@ const TITLE_MAX = 200;
 const settledElsewhere = (row: PendingRow): boolean => row.status === 'cancelled' && row.reject_reason === pendingText('en', 'settled_elsewhere');
 
 export function pendingNote(row: PendingRow, view: PendingView): PendingNote | undefined {
+  if (row.kind === 'runtime') return undefined;
   if (row.status === 'waiting' || row.status === 'running' || (row.status === 'cancelled' && !settledElsewhere(row)) || closedByBeat(row)) return undefined;
   const head: NoteHead = settledElsewhere(row) ? 'settled' : row.status === 'ran' ? 'ran' : row.status === 'failed' ? 'failed' : row.status === 'stale' ? 'stale' : 'rejected';
   const title = (view.title ?? row.tool).replace(CONTROL, ' ').slice(0, TITLE_MAX);
@@ -29,5 +30,5 @@ export function pendingNote(row: PendingRow, view: PendingView): PendingNote | u
 }
 
 export function closedEvent(row: PendingRow): string | undefined {
-  return closedByBeat(row) ? pendingText('en', 'event_closed', { id: row.id, tool: row.tool.replace(CONTROL, ' ').slice(0, TITLE_MAX) }) : undefined;
+  return row.kind !== 'runtime' && closedByBeat(row) ? pendingText('en', 'event_closed', { id: row.id, tool: row.tool.replace(CONTROL, ' ').slice(0, TITLE_MAX) }) : undefined;
 }

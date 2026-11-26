@@ -26,7 +26,7 @@ export async function staleReason(row: PendingRow, deps: ReplayDeps): Promise<st
 
 // このタスクの待ちの行のうち、古くなったものを stale で閉じる。閉じた行の番号と理由を返す
 export async function sweepStale(taskId: string, deps: ReplayDeps): Promise<Array<{ id: number; reason: string }>> {
-  const rows = deps.db.prepare("SELECT * FROM pending_actions WHERE task_id = ? AND status = 'waiting' ORDER BY id").all(taskId) as unknown as PendingRow[];
+  const rows = deps.db.prepare("SELECT * FROM pending_actions WHERE task_id = ? AND status = 'waiting' AND kind != 'runtime' ORDER BY id").all(taskId) as unknown as PendingRow[];
   const closed: Array<{ id: number; reason: string }> = [];
   for (const row of rows) {
     let reason: string | undefined;
