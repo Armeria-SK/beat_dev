@@ -319,9 +319,13 @@ async function readAccount(conn: CodexConnection): Promise<{ type: string | unde
   return { type, requiresLogin: type === undefined && raw?.requiresOpenaiAuth === true };
 }
 
+export function checksWindowsSandbox(platformOs: string | undefined, platform: string = process.platform): boolean {
+  return platform === 'win32' || /^win/iu.test(platformOs ?? '');
+}
+
 // Windows の囲いが ready か。ready でなければ「読むだけ」が効いているか分からないので、会話は始めない。Windows 以外では確かめない（その OS の囲いは Codex が持つ）
 async function readSandbox(conn: CodexConnection): Promise<string> {
-  if (process.platform !== 'win32') return 'not_checked';
+  if (!checksWindowsSandbox(conn.platformOs)) return 'not_checked';
   return asString(asRecord(await conn.request('windowsSandbox/readiness', undefined))?.status) ?? 'unknown';
 }
 

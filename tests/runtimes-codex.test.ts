@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeConfig } from '../src/config/schema.ts';
-import { CodexRuntime, createCodexRuntime, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
+import { checksWindowsSandbox, CodexRuntime, createCodexRuntime, type CodexRuntimeSession } from '../src/runtimes/codex/adapter.ts';
 import { CodexRefused } from '../src/runtimes/codex/app-server.ts';
 import { wirePermission } from '../src/runtimes/codex/protocol.ts';
 import { ProcessManager } from '../src/runtimes/process-manager.ts';
@@ -166,17 +166,27 @@ test('the Windows sandbox must be ready: not ready means no conversation, no thr
     assert.ok(!methods.includes('thread/start') && !methods.includes('turn/start'), `${readiness}: a thread was started`);
     assert.equal(alive(r.pid()), false, 'the process was stopped');
   }
-  // 決めるのは beat 自身の OS。Codex の自己申告の platformOs が何の文字列でも、Windows の beat は確かめ、それ以外の beat は確かめない
-  for (const platform of WINDOWS ? ['linux', 'Windows', 'win32', 'windows'] : []) {
+  // beat 自身の OS か Codex の自己申告のどちらかが Windows なら確かめる。Windows の beat は、Codex が何の文字列を名乗っても確かめる
+  for (const platform of WINDOWS ? ['linux', 'Windows', 'win32', 'windows'] : ['Windows', 'win32', 'windows']) {
     const reported = rig(t, 'text', ['--platform', platform, '--readiness', 'updateRequired']);
     await assert.rejects(reported.runtime.start(reported.request()), refused('sandbox_not_ready'), `Codex says ${platform}`);
     assert.ok(reported.requests().some(message => message.method === 'windowsSandbox/readiness'), `Codex says ${platform}: the check was made`);
   }
   if (!WINDOWS) {
-    const other = rig(t, 'text', ['--platform', 'windows', '--readiness', 'updateRequired']);
+    const other = rig(t, 'text', ['--platform', 'linux', '--readiness', 'updateRequired']);
     await reply(other);
-    assert.ok(!other.requests().some(message => message.method === 'windowsSandbox/readiness'), 'the Windows check is only for a Windows beat');
+    assert.ok(!other.requests().some(message => message.method === 'windowsSandbox/readiness'), 'neither a Windows beat nor a Windows Codex: no Windows check');
   }
+});
+
+test('the Windows sandbox check applies when beat or Codex says Windows (a Windows Codex started from a non-Windows beat is checked too)', () => {
+  for (const platformOs of ['windows', 'Windows', 'WINDOWS', 'win32', 'winnt']) assert.equal(checksWindowsSandbox(platformOs, 'linux'), true, `Codex says ${platformOs}, beat is on linux`);
+  for (const platformOs of ['linux', 'macos', 'darwin', 'unix', '', undefined, 'wsl-linux']) {
+    assert.equal(checksWindowsSandbox(platformOs, 'win32'), true, `beat is on win32, Codex says ${String(platformOs)}`);
+    assert.equal(checksWindowsSandbox(platformOs, 'linux'), false, `neither says Windows: ${String(platformOs)}`);
+    assert.equal(checksWindowsSandbox(platformOs, 'darwin'), false, `neither says Windows: ${String(platformOs)}`);
+  }
+  assert.equal(checksWindowsSandbox('linux'), WINDOWS, 'the default for beat is the real platform');
 });
 
 test('the login must be a ChatGPT subscription: not signed in or an API key means no conversation', { timeout: 60_000 }, async t => {
