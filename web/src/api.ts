@@ -153,11 +153,27 @@ export interface Probe {
 }
 export interface ModelView {
   id: string; label: string; provider: string; model: string; providerKind?: string;
+  // 外の実行役を指すモデルのとき、その実行役の ID（提供元のモデルは null）
+  runtime?: string | null;
   contextLength?: number; maxOutputTokens?: number; inChat: boolean; probe: Probe | null;
   // サーバーが決めた、いま使っている値（書いた値か自動の値）。長さが分からなければ null
   limits: { context: number | null; maxOutput: number | null; required: number | null };
   // そのモデルで選べる考える深さ（無ければ選ばせない）
   efforts?: string[];
+}
+// 外の実行役（Claude Code・Codex）の 1 行。確かめは持ち主が押したときだけ起こす（check が null = まだ確かめていない）
+export type RuntimeIssueCode = 'too_old' | 'sandbox_not_ready' | 'world_writable' | 'tools_unreviewed';
+export interface RuntimeIssue { code: RuntimeIssueCode; detail?: string }
+export interface RuntimeView {
+  id: string; kind: 'claude-code' | 'codex';
+  configured: boolean; enabled: boolean;
+  permission: string; permissions: string[];
+  check: null | {
+    checkedAt: number; installed: boolean; version: string | null; verified: boolean;
+    auth: 'ok' | 'login_required' | 'unknown'; login: 'subscription' | 'other' | null;
+    issues: RuntimeIssue[]; stop: RuntimeIssue | null; usable: boolean;
+  };
+  models: Array<{ id: string; label: string; efforts: string[] }> | null;
 }
 export interface SettingsView {
   config: Record<string, any>;
@@ -470,6 +486,9 @@ export const api = {
   saveSettings: (config: unknown, signal?: AbortSignal) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }), signal: signal ?? null }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
+  runtimes: () => call<{ runtimes: RuntimeView[] }>('/api/runtimes'),
+  checkRuntime: (id: string) => call<RuntimeView>(`/api/runtimes/${encodeURIComponent(id)}/check`, { method: 'POST', body: '{}' }),
+  loadRuntimeModels: (id: string) => call<RuntimeView>(`/api/runtimes/${encodeURIComponent(id)}/models`, { method: 'POST', body: '{}' }),
   memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext | null }>('/api/memories'),
   addMemory: (book: Book, content: string) => call<{ memory: MemoryItem; eventId: number }>('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
   editMemory: (id: number, content: string) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),

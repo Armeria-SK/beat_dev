@@ -182,7 +182,10 @@ reader.on('line', async line => {
       else reply({ account: { type: 'chatgpt', email: 'secret-person@example.com', planType: 'plus', workspaceName: null }, userId: 'user-secret-id', requiresOpenaiAuth: true, workspaceRouting: { chatgptAccountId: 'acct-secret' } });
       break;
     }
-    case 'windowsSandbox/readiness': reply({ status: opt('readiness', 'ready') }); break;
+    case 'windowsSandbox/readiness':
+      if (flag('world-writable')) notify('windows/worldWritableWarning', { threadId: THREAD, samplePaths: ['C:/shared/a', 'C:/shared/b', 'C:/shared/c', 'C:/shared/d'], extraCount: 7, failedScan: false });
+      reply({ status: opt('readiness', 'ready') });
+      break;
     case 'model/list':
       if (params.cursor === undefined) reply({ data: [model('m-one', { isDefault: true }), model('m-hidden', { hidden: true }), model('m-one')], nextCursor: 'page2' });
       else reply({ data: [model('m-two', { supportedReasoningEfforts: [] })], nextCursor: null });

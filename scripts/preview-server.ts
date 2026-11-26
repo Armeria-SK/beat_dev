@@ -8,6 +8,8 @@ import { defaultConfig } from '../src/config/store.ts';
 import type { ToolCall } from '../src/engine/types.ts';
 import { APP_ROOT, resolvePaths } from '../src/paths.ts';
 import { checkWorkFolder } from '../src/projects/work-folder.ts';
+import type { RuntimeConfig } from '../src/config/schema.ts';
+import { PERMISSIONS, type AgentRuntime, type RuntimeModel, type RuntimeStatus } from '../src/runtimes/types.ts';
 import { providerError, type ModelRequest, type ProviderAdapter, type StreamEvent } from '../src/providers/types.ts';
 import { isSensitiveName } from '../src/shared/redaction.ts';
 import { BrowserFailure } from '../src/tools/browser/driver.ts';
@@ -124,6 +126,27 @@ function script(request: ModelRequest): AsyncGenerator<StreamEvent> {
   if (said.includes('/demo skill')) return call('skill_draft', { name: 'preview-skill', description: 'A skill the preview model wrote', body: '1. Read the note.\n2. Say what it says.', reason: 'To try Ask before registering.' });
   if (said.includes('/demo fail')) return (async function* (): AsyncGenerator<StreamEvent> { throw providerError('timeout', 'timeout', {}, { retryable: false }); })();
   return words(HELP);
+}
+
+// Runtimes (AR-6): scripted stand-ins, so the Runtimes rows can be looked at without starting Claude Code or Codex.
+// Claude Code answers as a checked version signed in with a subscription; Codex as an unchecked version with a Windows sandbox that is not ready.
+const PREVIEW_STATUS: Record<RuntimeConfig['kind'], RuntimeStatus> = {
+  'claude-code': { installed: true, version: '2.1.331', verified: true, auth: 'ok', login: 'subscription' },
+  codex: { installed: true, version: '0.199.0', verified: false, auth: 'ok', login: 'subscription', issues: [{ code: 'sandbox_not_ready', detail: 'updateRequired' }, { code: 'world_writable', detail: 'C:/shared/a, C:/shared/b (+7)' }] },
+};
+const PREVIEW_MODELS: Record<RuntimeConfig['kind'], RuntimeModel[]> = {
+  'claude-code': [{ id: 'sonnet', label: 'Sonnet', efforts: ['low', 'medium', 'high'] }, { id: 'opus', label: 'Opus', efforts: ['low', 'high'] }, { id: 'haiku', label: 'Haiku' }],
+  codex: [{ id: 'gpt-5-codex', label: 'GPT-5 Codex', efforts: ['low', 'medium', 'high'] }],
+};
+function fakeRuntime(config: RuntimeConfig): AgentRuntime {
+  const refuse = async (): Promise<never> => { throw new Error('The preview runtimes only answer checks and model lists'); };
+  return {
+    id: config.id, kind: config.kind,
+    capabilities: { streaming: true, resume: true, interrupt: true, approvals: true, fileChanges: true, commandExecution: true, nativeTools: true, listsModels: true, externalApprovals: true, permissions: PERMISSIONS[config.kind] },
+    probe: async () => PREVIEW_STATUS[config.kind],
+    models: async () => PREVIEW_MODELS[config.kind],
+    start: refuse, send: refuse, interrupt: refuse, approve: refuse, events: () => { throw new Error('no events'); }, close: refuse,
+  };
 }
 
 function fakeAdapter(provider: ProviderAdapter['provider']): ProviderAdapter {
@@ -290,6 +313,7 @@ async function start(): Promise<void> {
     { id: 'preview-small', label: 'Preview small', provider: 'preview', model: 'preview-small', contextLength: 4096, maxOutputTokens: 2048, vision: false },
   ];
   config.routing = { chat: ['preview-a', 'preview-b'], background: ['preview-a'], retriesPerModel: 0 };
+  config.runtimes = [{ id: 'claude-code', kind: 'claude-code', enabled: true }];
   config.tools.roots = [{ path: WORK, mode: 'write' }];
   config.tools.deny = [...config.tools.deny, join(APP_ROOT, 'data'), join(APP_ROOT, '.env')];
   config.tools.agent = { ...config.tools.agent, enabled: true };
@@ -298,6 +322,7 @@ async function start(): Promise<void> {
   const app = new App({
     paths, log, env: {},
     adapterOverride: fakeAdapter,
+    runtimeFactories: { 'claude-code': fakeRuntime, codex: fakeRuntime },
     fetch: (async (input: Parameters<typeof fetch>[0]) => {
       if (String(input) === 'http://127.0.0.1:8000/v1/models') return Response.json({ data: ['preview-a', 'preview-b', 'preview-small', 'preview-new'].map(id => ({ id })) });
       throw new Error('The preview server makes no network requests');

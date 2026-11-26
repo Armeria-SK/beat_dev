@@ -1,9 +1,11 @@
-import { providerModels, type AppConfig, type ModelConfig } from '../config/schema.ts';
+import { isRuntimeModel, providerModels, type AppConfig, type ModelConfig, type RuntimeModelConfig } from '../config/schema.ts';
 import type { KV } from '../db/kv.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import type { ProbeResult } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { redactSecrets } from '../shared/redaction.ts';
+import type { RuntimeChecks } from '../runtimes/checks.ts';
+import { BLOCKING_ISSUES } from '../runtimes/types.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { contextAvailable, maxOutputFor, MEMORY_BUDGET_RATIO } from './context-budget.ts';
 
@@ -32,6 +34,8 @@ export interface ModelStatusDeps {
   kv: KV;
   baseTokens: (model: ModelConfig) => number;
   memoryTokens?: (() => number) | undefined;
+  // 外の実行役の確かめの結果。無ければ、実行役のモデルは「確かめていない」になる
+  runtimes?: RuntimeChecks | undefined;
   log?: (line: string) => void;
 }
 
@@ -44,7 +48,8 @@ export class ModelStatus {
   async probeAll(config: AppConfig): Promise<ProbeResult[]> {
     const memory = this.#deps.memoryTokens?.() ?? 0;
     const language = languageOf(config);
-    // 外の実行役を指すモデルは提供元で確かめない（実行役の確かめの結果を状態にするのは、実行役を画面につなぐ段）
+    // 外の実行役を指すモデルは提供元で確かめない（実行役の確かめの結果を、下で状態にする）
+    this.#deps.runtimes?.prune(config);
     const results = await Promise.all(providerModels(config).map(async model => {
       const required = requiredContext(model, this.#deps.baseTokens(model), memory);
       const adapter = this.#deps.registry.get(model.provider);
@@ -57,13 +62,51 @@ export class ModelStatus {
         return { modelId: model.id, status: 'error', server: adapter.provider.kind, required, message: providerText(language, 'probe.check_failed', { detail }), messageCode: 'provider.probe.check_failed', messageParams: { detail }, checkedAt: Date.now() } satisfies ProbeResult;
       }
     }));
-    this.#results = new Map(results.map(r => [r.modelId, r]));
+    const runtimeResults = this.#runtimeResults(config);
+    this.#results = new Map([...results, ...runtimeResults].map(r => [r.modelId, r]));
     this.#cooldowns.clear();
+    for (const r of [...results, ...runtimeResults]) this.#deps.kv.delete(`truncation:${r.modelId}`);
     for (const r of results) {
-      this.#deps.kv.delete(`truncation:${r.modelId}`);
       if (r.status !== 'ok') this.#deps.log?.(`[ERROR] model ${r.modelId}: ${r.message}${r.hint ? ` / ${r.hint}` : ''}`);
     }
-    return results;
+    return [...results, ...runtimeResults];
+  }
+
+  // 実行役のモデルの状態だけ作り直す（確かめを押したあと。提供元には触れない）
+  refreshRuntimes(config: AppConfig): ProbeResult[] {
+    this.#deps.runtimes?.prune(config);
+    const fresh = this.#runtimeResults(config);
+    const ids = new Set(config.models.filter(isRuntimeModel).map(model => model.id));
+    for (const id of [...this.#results.keys()]) if (ids.has(id)) this.#results.delete(id);
+    for (const r of fresh) this.#results.set(r.modelId, r);
+    return fresh;
+  }
+
+  #runtimeResults(config: AppConfig): ProbeResult[] {
+    const language = languageOf(config);
+    return config.models.filter(isRuntimeModel).map(model => this.#runtimeResult(config, model, language));
+  }
+
+  // 実行役のモデルの状態は、その実行役の確かめの結果から決める（モデルの枠は測らない）。使える = 入っていて・ログイン済みで・会話を始められない注意が無い
+  #runtimeResult(config: AppConfig, model: RuntimeModelConfig, language: ReturnType<typeof languageOf>): ProbeResult {
+    const runtime = config.runtimes?.find(candidate => candidate.id === model.runtime);
+    const checked = this.#deps.runtimes?.get(model.runtime);
+    const make = (status: ProbeResult['status'], code: 'no_runtime' | 'runtime_off' | 'runtime_unchecked' | 'runtime_missing' | 'runtime_login' | 'runtime_unknown' | 'runtime_blocked' | 'runtime_ok'): ProbeResult => {
+      const params = { id: model.runtime };
+      const efforts = checked?.models?.find(entry => entry.id === model.model)?.efforts;
+      return {
+        modelId: model.id, status, server: runtime?.kind ?? '?', required: 0, message: providerText(language, `probe.${code}`, params), messageCode: `provider.probe.${code}`, messageParams: params,
+        ...(efforts && efforts.length > 0 ? { efforts: [...efforts] } : {}), checkedAt: checked?.checkedAt ?? Date.now(),
+      };
+    };
+    if (!runtime) return make('error', 'no_runtime');
+    if (!runtime.enabled) return make('unreachable', 'runtime_off');
+    if (!checked) return make('unreachable', 'runtime_unchecked');
+    const { status } = checked;
+    if (!status.installed) return make('not_found', 'runtime_missing');
+    if (status.auth === 'login_required') return make('error', 'runtime_login');
+    if ((status.issues ?? []).some(issue => BLOCKING_ISSUES.has(issue.code))) return make('error', 'runtime_blocked');
+    return status.auth === 'ok' ? make('ok', 'runtime_ok') : make('unreachable', 'runtime_unknown');
   }
 
   get(modelId: string): ProbeResult | undefined { return this.#results.get(modelId); }

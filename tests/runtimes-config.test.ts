@@ -127,10 +127,10 @@ test('the model list shows a runtime model without a provider and leaves provide
   assert.equal(rows.rt.model, 'fake-large');
 });
 
-test('a runtime model is not checked against any provider; the provider models are checked as before', async t => {
+test('a runtime model is not checked against any provider (its state is the runtime check); the provider models are checked as before', async t => {
   const s = await startApp(t, { configure: config => { withRuntime(config); config.routing.chat = ['m1', 'm2']; } });
-  assert.deepEqual(s.app.status.all().map(r => r.modelId).sort(), ['m1', 'm2']);
-  assert.equal(s.app.status.get('rt'), undefined);
+  assert.deepEqual(s.app.status.all().map(r => r.modelId).sort(), ['m1', 'm2', 'rt']);
+  assert.equal(s.app.status.get('rt')?.messageCode, 'provider.probe.runtime_unchecked', 'its state comes from the runtime check, which has not been run');
   assert.equal(s.adapter().probeLanguages.length, 2, 'two provider models were probed, the runtime model was not');
 });
 

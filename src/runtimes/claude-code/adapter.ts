@@ -19,7 +19,7 @@ import {
 } from '../types.ts';
 import { findClaudeExecutable } from './executable.ts';
 import { answerFor, claudeMode, disallowedTools, isCodexPermission, KEPT_TOOLS, STOPPED_ANSWER, toolHooks, type ClaudePermissionMode } from './permissions.ts';
-import { apiKeyInUse, EventTranslator, MIN_CLAUDE_CODE_VERSION, safeText, versionAtLeast, versionParts } from './protocol.ts';
+import { apiKeyInUse, EventTranslator, MIN_CLAUDE_CODE_VERSION, safeText, VERIFIED_CLAUDE_CODE_VERSION, versionAtLeast, versionParts } from './protocol.ts';
 
 export interface ClaudeCodeSdk {
   query(params: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }): Query;
@@ -195,14 +195,21 @@ class ClaudeCodeRuntime implements AgentRuntime {
     const parts = versionParts((await this.#ask(found.path, ['--version']))?.join(' '));
     if (!parts) return { installed: true, auth: 'unknown', reason: 'The Claude Code version could not be read' };
     const version = parts.join('.');
-    if (!versionAtLeast(version)) return { installed: true, version, auth: 'unknown', reason: `Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer is needed. Update Claude Code` };
-    // ログインの状態だけ読む。本人の情報（メール・組織など）は読み捨てる
+    const verified = version === VERIFIED_CLAUDE_CODE_VERSION;
+    if (!versionAtLeast(version)) return { installed: true, version, verified, auth: 'unknown', reason: `Claude Code ${MIN_CLAUDE_CODE_VERSION} or newer is needed. Update Claude Code`, issues: [{ code: 'too_old', detail: MIN_CLAUDE_CODE_VERSION }] };
+    // ログインの状態と、どの認証かだけ読む（apiProvider が firstParty = 契約のログイン。apiKeySource の 'none' は「キーが無い」だけで、ログインの証拠ではない）。本人の情報（メール・組織など）は読み捨てる
     const raw = await this.#ask(found.path, ['auth', 'status', '--json']);
     let loggedIn: unknown;
-    try { loggedIn = (JSON.parse(raw?.join('\n') ?? '') as { loggedIn?: unknown }).loggedIn; } catch { loggedIn = undefined; }
-    if (loggedIn === true) return { installed: true, version, auth: 'ok' };
-    if (loggedIn === false) return { installed: true, version, auth: 'login_required', reason: 'Claude Code is not signed in. Run "claude auth login" in a terminal' };
-    return { installed: true, version, auth: 'unknown', reason: 'The Claude Code login state could not be read' };
+    let provider: unknown;
+    try {
+      const parsed = JSON.parse(raw?.join('\n') ?? '') as { loggedIn?: unknown; apiProvider?: unknown };
+      loggedIn = parsed.loggedIn;
+      provider = parsed.apiProvider;
+    } catch { loggedIn = undefined; }
+    const login = typeof provider === 'string' ? (provider === 'firstParty' ? 'subscription' : 'other') : undefined;
+    if (loggedIn === true) return { installed: true, version, verified, auth: 'ok', ...(login ? { login } : {}) };
+    if (loggedIn === false) return { installed: true, version, verified, auth: 'login_required', reason: 'Claude Code is not signed in. Run "claude auth login" in a terminal' };
+    return { installed: true, version, verified, auth: 'unknown', reason: 'The Claude Code login state could not be read' };
   }
 
   // 出せるモデルの一覧。設定も MCP も読まず、発言なしで起こして SDK の supportedModels() だけ読む（モデルの枠を使わない）

@@ -456,17 +456,25 @@ test('close stops the process; one reply per process', { timeout: 60_000 }, asyn
 
 test('probe: signed in + verified version is ok with no reason; an unchecked version, a login problem and a sandbox that is not ready are said', { timeout: 90_000 }, async t => {
   const ok = await rig(t).runtime.probe();
-  assert.deepEqual(ok, { installed: true, version: '0.172.0', auth: 'ok' });
+  assert.deepEqual(ok, { installed: true, version: '0.172.0', verified: true, auth: 'ok', login: 'subscription' });
   const newer = await rig(t, 'text', ['--version', '0.199.0']).runtime.probe();
   assert.equal(newer.auth, 'ok');
+  assert.equal(newer.verified, false, 'a version beat has not checked is said so');
   assert.match(newer.reason ?? '', /only checked Codex 0\.172\.0 \(this is 0\.199\.0\)/u);
   const loggedOut = await rig(t, 'text', ['--account', 'none']).runtime.probe();
   assert.equal(loggedOut.auth, 'login_required');
   const apiKey = await rig(t, 'text', ['--account', 'apiKey']).runtime.probe();
   assert.equal(apiKey.auth, 'unknown');
+  assert.equal(apiKey.login, 'other', 'an API key login is not the subscription login');
+  assert.equal(loggedOut.login, undefined);
   assert.match(apiKey.reason ?? '', /not with a ChatGPT subscription/u);
   const sandbox = await rig(t, 'text', ['--readiness', 'updateRequired']).runtime.probe();
   assert.match(sandbox.reason ?? '', /Windows sandbox for Codex is not ready \(updateRequired\)/u);
+  assert.deepEqual(sandbox.issues, [{ code: 'sandbox_not_ready', detail: 'updateRequired' }]);
+  assert.equal(ok.issues, undefined);
+  const writable = await rig(t, 'text', ['--world-writable']).runtime.probe();
+  assert.deepEqual(writable.issues, [{ code: 'world_writable', detail: 'C:/shared/a, C:/shared/b, C:/shared/c (+7)' }], 'the folders the sandbox cannot protect are kept short');
+  assert.equal(writable.auth, 'ok');
   assert.ok(!JSON.stringify([ok, newer, loggedOut, apiKey, sandbox]).includes(ACCOUNT_EMAIL));
 });
 

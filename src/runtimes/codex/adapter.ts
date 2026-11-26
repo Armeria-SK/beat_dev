@@ -13,7 +13,7 @@ import { ProcessRefused, type ExitInfo, type LaunchRecord, type ProcessScope, ty
 import type { RuntimeDeps } from '../registry.ts';
 import {
   PERMISSIONS, permissionFor, type AgentRuntime, type ApprovalDecision, type RuntimeCapabilities, type RuntimeEvent, type RuntimeInput, type RuntimeModel,
-  type RuntimePermission, type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
+  type RuntimeIssue, type RuntimePermission, type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
 import { ApprovalTable, requestIdFor } from './approvals.ts';
 import { asRecord, asString, CodexConnection, CodexRefused, isRecord, safeLabel, type ConnectionHandlers } from './app-server.ts';
@@ -312,6 +312,20 @@ const PROBE_HANDLERS: ConnectionHandlers = {
   ended: () => undefined,
 };
 
+// windows/worldWritableWarning: 囲い（サンドボックス）が守れない、誰でも書けるフォルダの知らせ。状態の行に出すため、確かめのあいだだけ拾う。フォルダの名前を数件と、残りの数だけ短く残す
+function worldWritableCapture(onWarning: (detail: string) => void): ConnectionHandlers {
+  return {
+    ...PROBE_HANDLERS,
+    notification: (_conn, method, params) => {
+      if (method !== 'windows/worldWritableWarning') return;
+      const record = asRecord(params);
+      const sample = (Array.isArray(record?.samplePaths) ? record.samplePaths : []).flatMap(path => (typeof path === 'string' ? [safeLabel(path)] : [])).slice(0, 3);
+      const extra = typeof record?.extraCount === 'number' && Number.isFinite(record.extraCount) ? Math.max(0, Math.floor(record.extraCount)) : 0;
+      onWarning(`${sample.join(', ')}${extra > 0 ? ` (+${extra})` : ''}`);
+    },
+  };
+}
+
 async function readAccount(conn: CodexConnection): Promise<{ type: string | undefined; requiresLogin: boolean }> {
   // 本人の情報（email・workspace・id）は読み捨てる。残すのは account.type と、ログインが要るかだけ
   const raw = asRecord(await conn.request('account/read', { refreshToken: false }));
@@ -388,24 +402,36 @@ export class CodexRuntime implements AgentRuntime {
 
   async probe(): Promise<RuntimeStatus> {
     let opened;
+    let worldWritable: string | undefined;
+    const handlers = worldWritableCapture(detail => { worldWritable = detail; });
     try {
-      opened = await this.#open(tmpdir(), PROBE_HANDLERS);
+      opened = await this.#open(tmpdir(), handlers);
     } catch (error) {
       if (error instanceof CodexRefused) return { installed: error.reason !== 'not_installed', auth: 'unknown', reason: error.message };
       throw error;
     }
+    const verified = opened.version === VERIFIED_VERSION;
     try {
       const account = await readAccount(opened.conn);
       const sandbox = await readSandbox(opened.conn);
       const notes: string[] = [];
-      if (opened.version !== VERIFIED_VERSION) notes.push(`beat has only checked Codex ${VERIFIED_VERSION}${opened.version ? ` (this is ${opened.version})` : ''}.`);
-      if (sandbox !== 'ready' && sandbox !== 'not_checked') notes.push(`The Windows sandbox for Codex is not ready (${short(sandbox, 40)}), so beat will not start a conversation yet.`);
+      const issues: RuntimeIssue[] = [];
+      if (!verified) notes.push(`beat has only checked Codex ${VERIFIED_VERSION}${opened.version ? ` (this is ${opened.version})` : ''}.`);
+      if (sandbox !== 'ready' && sandbox !== 'not_checked') {
+        notes.push(`The Windows sandbox for Codex is not ready (${short(sandbox, 40)}), so beat will not start a conversation yet.`);
+        issues.push({ code: 'sandbox_not_ready', detail: safeLabel(sandbox, 40) });
+      }
+      if (worldWritable !== undefined) issues.push({ code: 'world_writable', ...(worldWritable ? { detail: worldWritable } : {}) });
       if (account.requiresLogin) notes.unshift('Codex is not signed in. Sign in with Codex itself.');
       else if (account.type !== 'chatgpt') notes.unshift(`Codex is signed in with ${short(account.type ?? 'an unknown method', 40)}, not with a ChatGPT subscription.`);
       const auth = account.requiresLogin ? 'login_required' : account.type === 'chatgpt' ? 'ok' : 'unknown';
-      return { installed: true, ...(opened.version ? { version: opened.version } : {}), auth, ...(notes.length > 0 ? { reason: notes.join(' ') } : {}) };
+      const login = account.type === undefined ? undefined : account.type === 'chatgpt' ? 'subscription' : 'other';
+      return {
+        installed: true, ...(opened.version ? { version: opened.version } : {}), verified, auth, ...(login ? { login } : {}),
+        ...(notes.length > 0 ? { reason: notes.join(' ') } : {}), ...(issues.length > 0 ? { issues } : {}),
+      };
     } catch (error) {
-      if (error instanceof CodexRefused) return { installed: true, ...(opened.version ? { version: opened.version } : {}), auth: 'unknown', reason: error.message };
+      if (error instanceof CodexRefused) return { installed: true, ...(opened.version ? { version: opened.version } : {}), verified, auth: 'unknown', reason: error.message };
       throw error;
     } finally {
       await opened.scope.finish();
