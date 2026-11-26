@@ -344,7 +344,7 @@ async function toolApp(t: Parameters<typeof startApp>[0]) {
     await settled(s.app, sent.body.runId);
   };
   const draft = () => (JSON.parse(readFileSync(join(s.paths.projects, projectId, 'conversation-plans', `${uuid(1)}.acceptance.json`), 'utf8')) as { items: Array<{ result: string; source: Record<string, unknown> }> }).items;
-  return { ...s, send, draft };
+  return { ...s, send, draft, projectId };
 }
 
 const row = (result: string, source: Record<string, unknown>) => ({ result, check: 'look', ...source });
@@ -606,4 +606,31 @@ test('札の答えの中の AI の文: 問いごとの自分で書いた文は�
   assert.equal(hit('notes stay readable offline always'), answer);
   assert.equal(hit('home page stays very simple'), answer);
   assert.deepEqual(f.check(words('readable offline always home page stays')), notFound('readable offline always home page stays'));
+});
+
+// 札を出す → 持ち主が答える → acceptance_write で選んだ選択肢を owner_choice で書く → 本物の画面の経路（GET /api/projects/:id/acceptance）の coverage
+async function coverageAfter(t: Parameters<typeof startApp>[0], answer: string) {
+  const s = await toolApp(t);
+  s.adapter().scripts = [call('ask_owner', ASK)];
+  await s.send('I want a notes app, please');
+  s.adapter().scripts = [call('acceptance_write', { items: [row('Notes are kept in SQLite', { source: 'owner_choice', question: STORAGE, answer: 'SQLite' })] }), reply('saved')];
+  await s.send(answer);
+  const written = s.draft();
+  assert.equal(written[0]!.source['kind'], 'owner_choice');
+  const view = await s.json(`/api/projects/${s.projectId}/acceptance?conversationId=${uuid(1)}`, 'GET');
+  assert.equal(view.status, 200, JSON.stringify(view.body));
+  return { coverage: view.body.coverage as { owner_choice: number; unreferenced: Array<{ message_id: number; text: string }> }, answerId: written[0]!.source['answerMessageId'] as number };
+}
+
+test('受け入れの一覧の「まだ引用されていない発言」（札の答え・画面の経路）: 選んだ選択肢と持ち主が書いた文が同じ答えにあれば、選んだ選択肢を引用しても、その答えは引用されていないまま', async t => {
+  const { coverage, answerId } = await coverageAfter(t, CARD_ANSWER('SQLite (Recommended)', 'Notes must sync over the train wifi offline'));
+  assert.equal(coverage.owner_choice, 1);
+  assert.deepEqual(coverage.unreferenced.map(m => m.message_id).filter(id => id === answerId), [answerId]);
+  assert.match(coverage.unreferenced.find(m => m.message_id === answerId)!.text, /train wifi offline/u);
+});
+
+test('受け入れの一覧の「まだ引用されていない発言」（札の答え・画面の経路）: 選んだ選択肢だけの答えは、選んだ選択肢を引用すると引用済みになる', async t => {
+  const { coverage, answerId } = await coverageAfter(t, CARD_ANSWER('SQLite (Recommended)', 'List'));
+  assert.equal(coverage.owner_choice, 1);
+  assert.ok(!coverage.unreferenced.some(m => m.message_id === answerId));
 });
