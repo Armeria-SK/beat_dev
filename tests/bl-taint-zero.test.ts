@@ -13,6 +13,7 @@ import { replayAction, type ReplayDeps } from '../src/pending/replay.ts';
 import { PendingStore } from '../src/pending/store.ts';
 import { AcceptanceStore } from '../src/projects/acceptance.ts';
 import { PlanStore } from '../src/projects/plan.ts';
+import { toolText } from '../src/shared/messages/tools.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import { planWrite } from '../src/tools/builtin/plan.ts';
 import { webFetch, webSearch } from '../src/tools/builtin/web.ts';
@@ -44,6 +45,8 @@ function network(search: 'empty' | 'hits'): PageNetwork {
     },
   };
 }
+
+const NO_HITS = toolText('en', 'web.no_hits', { query: 'nothing matches this' });
 
 const web = (net: PageNetwork) => ({ network: net, throttle: new SearchThrottle(), health: new EngineHealth() });
 
@@ -81,7 +84,7 @@ test('L102: 0 件の検索は結果に外の文字が入らないので「外を
   const none = s.makeCtx(network('empty'));
   const zero = await s.call('web_search', { query: 'nothing matches this' }, none);
   assert.equal(zero.decision, 'allow');
-  assert.match(zero.output.content, /There were no search results for "nothing matches this"/u);
+  assert.equal(zero.output.content, NO_HITS, '0 件の答えは決まった文そのもの（これ以外の文を足したら noRemoteContent は付けられない）');
   assert.deepEqual([zero.output.isError, zero.output.noRemoteContent], [undefined, true], '0 件の答えは決まった文だけ');
   assert.deepEqual(none.taint, { tainted: false, sources: [] }, '0 件では付かない');
 
@@ -134,7 +137,7 @@ test('L102: 持ち主が承認して動かした検索も同じ。0 件なら fe
   const f = replayFixture(t);
   const zero = await f.run(webSearch, { query: 'nothing matches this' }, network('empty'));
   assert.equal(zero.outcome.status, 'ran', zero.outcome.output);
-  assert.match(zero.row.output_preview ?? '', /no search results/u);
+  assert.equal(zero.row.output_preview, NO_HITS, '0 件の答えは決まった文そのもの');
   assert.equal(zero.outcome.fetched, false, '0 件');
   assert.equal(zero.row.fetched, false, '行にも残さない');
 

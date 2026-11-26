@@ -10,6 +10,7 @@ import { webFailure, webFetch, webSearch } from '../src/tools/builtin/web.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { htmlText } from '../src/tools/web/html-text.ts';
 import { decodeText, defaultNetwork, fetchPublic, mediaTypeOf, pageUrl, publicIPv4, RetrievalFailure, type PageNetwork, type PageResponse } from '../src/tools/web/public-page.ts';
+import { toolText } from '../src/shared/messages/tools.ts';
 import { SearchFailure, SearchThrottle } from '../src/tools/web/search.ts';
 import { readSafely } from '../src/tools/web/search/engine.ts';
 import { bing } from '../src/tools/web/search/engines/bing.ts';
@@ -465,7 +466,7 @@ test('0 件の検索のあとは、外を読んだ扱いにならない（判定
   const s = await setupApp(t, scriptedNetwork('empty'), steppingClock());
   s.adapter().scripts.push(toolCall('web_search', { query: '見つからない言葉' }), probeShell(), reply('書けませんでした'));
   assert.equal(await judgedTainted(s, '調べて書いて'), false, '外を読んだ扱いの確かめにならない');
-  assert.match(String(toolTexts(s)[0]), /There were no search results for "見つからない言葉"/u, '期待した 0 件の返事だった');
+  assert.equal(toolTexts(s)[0], toolText('en', 'web.no_hits', { query: '見つからない言葉' }), '0 件の返事は決まった文そのもの（これ以外の文を足したら noRemoteContent は付けられない）');
   assert.equal((s.app.db.prepare('SELECT tainted FROM engine_runs ORDER BY started_at DESC LIMIT 1').get() as { tainted: number }).tainted, 0, '実行に印は付かない');
 });
 
