@@ -133,13 +133,13 @@ export type BuildAction = { kind: 'build'; label: 'ui.plan.build' | 'ui.plan.sta
 
 const ACTIVE: ReadonlySet<Task['status']> = new Set(['ready', 'running', 'waiting']);
 
-export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: Acceptance | null; task: Task | null; isGit: boolean; pending?: boolean }): BuildAction | null {
+export function buildAction(i: { state: PlanState; mode: 'read' | 'edit'; acc: Acceptance | null; task: Task | null; isGit: boolean; pending?: boolean; noProvider?: boolean }): BuildAction | null {
   if (!i.acc) return null;
   const active = i.task !== null && ACTIVE.has(i.task.status);
   if (active) return { kind: 'building' };
   if (i.acc.frozen && !buildLeft(i.acc)) return null;
   if (i.mode === 'edit' || (i.state !== 'ready' && i.state !== 'writing')) return null;
-  return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' || i.pending === true };
+  return { kind: 'build', label: i.isGit ? 'ui.plan.build' : 'ui.plan.start', disabled: i.state === 'writing' || i.pending === true || i.noProvider === true };
 }
 
 export const buildPill = (status: Task['status'] | undefined): { label: 'ui.plan.queued' | 'ui.plan.building' | 'ui.plan.waiting'; tone?: 'running' | 'waiting' } =>

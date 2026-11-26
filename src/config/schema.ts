@@ -345,6 +345,11 @@ export function providerOf(config: Pick<AppConfig, 'providers'>, model: ModelCon
 export function providerModels(config: Pick<AppConfig, 'models'>): ProviderModelConfig[] {
   return config.models.filter((model): model is ProviderModelConfig => !isRuntimeModel(model));
 }
+// 切っていない実行役を指すモデル（AR-10: 提供元のモデルが 1 つも無いとき、会話の既定はこの先頭になる）
+export function enabledRuntimeModels(config: Pick<AppConfig, 'models' | 'runtimes'>): RuntimeModelConfig[] {
+  const on = new Set((config.runtimes ?? []).filter(runtime => runtime.enabled).map(runtime => runtime.id));
+  return config.models.filter((model): model is RuntimeModelConfig => isRuntimeModel(model) && on.has(model.runtime));
+}
 export type ToolsConfig = Static<ReturnType<typeof ToolsConfig>>;
 export type HookConfig = Static<typeof HookConfig>;
 export type CommandHookConfig = Static<typeof CommandHookConfig>;

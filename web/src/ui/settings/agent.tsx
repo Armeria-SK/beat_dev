@@ -7,7 +7,7 @@ import { probeMessage, serverText } from '../../server-text.ts';
 import type { Access } from '../../settings/access.ts';
 import { slugId, uniqueSlug } from '../../settings/ids.ts';
 import {
-  addModel, GEMINI_URL, isRuntimeEntry, keyEnvEdit, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
+  addModel, GEMINI_URL, isRuntimeEntry, keyEnvEdit, noProviderConfig, keyEnvUnsafe, newAnthropicProvider, openAfterRename, providerInUse, removeModel, removeProvider, renameModel, renameProvider, secondsOf, trimKey, uniqueId, updateAt, updateListItem, type Config,
 } from '../../settings/model.ts';
 import { toolCounts } from '../library.ts';
 import { Button, Pill, type PillTone } from '../parts.tsx';
@@ -393,6 +393,7 @@ export function ModelsPanel() {
         </Row>
       </Group>
       <Group title={t('ui.set.models.roles')}>
+        {noProviderConfig(ctx.config) && <p className="bt-meta" data-no-provider="roles">{t('ui.np.roles')}</p>}
         <Row k="roles:conversation" title={t('ui.set.models.conversation')} desc={t('ui.set.models.conversationDesc')}>
           <Select value={roles.conversation} options={modelOptions} label={t('ui.set.models.conversation')} placeholder={t('ui.set.models.auto')} onChange={id => void ctx.commit('roles:conversation', c => setConversation(c, id))} />
         </Row>
@@ -478,7 +479,8 @@ export function SkillsPanel() {
   return (
     <>
       <Group title={t('ui.set.skills.title')}>
-        <Row k="skills:grow" title={t('ui.set.skills.grow')} desc={grow ? t('ui.set.skills.growOn') : t('ui.set.skills.growOff')}>
+        <Row k="skills:grow" title={t('ui.set.skills.grow')} desc={grow ? t('ui.set.skills.growOn') : t('ui.set.skills.growOff')}
+          below={noProviderConfig(ctx.config) && <span className="bt-meta" data-no-provider="grow">{t('ui.np.grow')}</span>}>
           <Switch checked={grow} label={t('ui.set.skills.grow')} disabled={busy} onChange={next => void ctx.commit('skills:grow', c => {
             const { grow: _drop, ...rest } = (c.skills ?? {}) as Json;
             const skills = next ? rest : { ...rest, grow: false };
@@ -532,6 +534,7 @@ export function BackgroundPanel() {
   const set = (row: string, patch: Json) => void ctx.commit(row, c => updateAt(c, 'worker', patch));
   return (
     <Group title={t('ui.set.bg.title')}>
+      {noProviderConfig(ctx.config) && <p className="bt-meta" data-no-provider="background">{t('ui.np.background')}</p>}
       <Row k="bg:on" title={t('ui.set.bg.on')} desc={t('ui.set.bg.onDesc')}>
         <Switch checked={worker.enabled !== false} label={t('ui.set.bg.on')} disabled={ctx.busy !== null} onChange={enabled => set('bg:on', { enabled })} />
       </Row>

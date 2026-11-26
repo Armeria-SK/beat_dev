@@ -48,6 +48,8 @@ const en = {
   'folder_secret': 'Folders that hold secrets cannot be a product folder',
   'folder_denied': 'This folder is on the blocked list in the settings',
   'folder_link': 'This link cannot be followed. Paste the full path of the folder it points to',
+
+  'scout_no_provider': 'The scout needs a model from a provider, and none is set. Add a provider in Settings › Models › Providers first',
 } as const;
 
 export type ProjectMessageKey = keyof typeof en;

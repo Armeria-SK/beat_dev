@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type ResearchItem, type ResearchRecord, type ResearchView } from '../../api.ts';
 import { useT } from '../../i18n/index.ts';
+import { useNoProvider } from '../../provider-state.ts';
 import { latestOnly } from '../latest.ts';
 import { Button, Icon, Notice, Pill } from '../parts.tsx';
 import { apiDetail } from '../plan.ts';
@@ -246,6 +247,7 @@ function Record({ record, onChanged, onStart }: { record: ResearchRecord; onChan
 
 export function ResearchSection({ productId, conversationId, revision }: { productId: string; conversationId: string | undefined; revision: string }) {
   const t = useT();
+  const noProvider = useNoProvider();
   const [view, setView] = useState<ResearchView | null>(null);
   const [failed, setFailed] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -275,7 +277,7 @@ export function ResearchSection({ productId, conversationId, revision }: { produ
   if (failed) return <Notice tone="fail" alert={false} title={t('ui.rs.loadFailed')} action={{ label: t('ui.fail.retry'), run: () => void load() }} />;
   if (!view) return null;
   const products = view.products;
-  const startable = conversationId !== undefined && canStart(products) && !starting ? () => void start() : null;
+  const startable = conversationId !== undefined && canStart(products) && !starting && !noProvider ? () => void start() : null;
   return (
     <section className="bt-section ui-rs" aria-label={t('ui.rs.title')}>
       <div className="bt-section__head"><span className="bt-label">{t('ui.rs.title')}</span></div>
@@ -283,6 +285,12 @@ export function ResearchSection({ productId, conversationId, revision }: { produ
         <div className="ui-rs__start">
           <p className="bt-meta">{t(view.settings.when === 'new' ? 'ui.rs.startAuto' : 'ui.rs.startButton')}</p>
           {startable && <Button small onClick={startable}>{t('ui.rs.start')}</Button>}
+          {noProvider && conversationId !== undefined && canStart(products) && (
+            <>
+              <Button small disabled>{t('ui.rs.start')}</Button>
+              <p className="bt-meta" data-no-provider="research">{t('ui.np.research')}</p>
+            </>
+          )}
         </div>
       ) : <Record key={products.id} record={products} onChanged={() => void load()} onStart={startable} />}
       {view.libraries && <Record key={view.libraries.id} record={view.libraries} onChanged={() => void load()} onStart={null} />}

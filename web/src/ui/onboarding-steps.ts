@@ -10,7 +10,7 @@ export type OnboardStep = typeof ONBOARD_STEPS[number];
 export const STYLES = ['calm', 'friendly', 'direct', 'none'] as const;
 export type StyleId = typeof STYLES[number];
 
-export const PROVIDERS = ['anthropic', 'openai', 'custom'] as const;
+export const PROVIDERS = ['anthropic', 'openai', 'custom', 'runtime'] as const;
 export type ProviderChoice = typeof PROVIDERS[number];
 
 export const OPENAI_URL = 'https://api.openai.com/v1';
@@ -47,10 +47,11 @@ export function escapeAction(state: { busy: boolean; confirming: boolean }): 'ig
 export interface ConnectForm { provider: ProviderChoice; model: string; baseUrl: string; context: string; key: string }
 
 export const emptyConnect = (provider: ProviderChoice = 'anthropic'): ConnectForm =>
-  ({ provider, model: '', baseUrl: provider === 'custom' ? 'http://127.0.0.1:8000/v1' : '', context: provider === 'anthropic' ? '' : '32768', key: '' });
+  ({ provider, model: '', baseUrl: provider === 'custom' ? 'http://127.0.0.1:8000/v1' : '', context: provider === 'anthropic' || provider === 'runtime' ? '' : '32768', key: '' });
 
 export function connectProblem(form: ConnectForm, keySet: boolean): 'model' | 'baseUrl' | 'context' | 'key' | null {
   if (!form.model.trim()) return 'model';
+  if (form.provider === 'runtime') return null;
   if (form.provider === 'custom' && !/^https?:\/\/\S+$/iu.test(form.baseUrl.trim())) return 'baseUrl';
   if (form.provider !== 'anthropic') {
     const n = Number(form.context);

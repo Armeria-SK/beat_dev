@@ -1,12 +1,14 @@
 import type { App } from '../app.ts';
-import { providerModels } from '../config/schema.ts';
+import { enabledRuntimeModels, isRuntimeModel, providerModels } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
+import { candidateModelIds } from '../engine/chat.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import {
   isInitialPersona, normalizePersonaInput, startsWithHash, PERSONA_MAX_CHARS, PersonaError, personaTexts, readPersona, STYLE_NOTE_MAX_CHARS, STYLES, USER_NAME_MAX_CHARS, NAME_MAX_CHARS,
   writePersonaFile, type PersonaInput, type Style,
 } from '../engine/persona.ts';
 import { reloadEnvFile } from '../paths.ts';
+import { usableCheck } from '../runtimes/checks.ts';
 import { languageOf } from '../shared/language.ts';
 import { configProblem, problem, readJson, requireObject, requireString, type Router, sendJson } from './http.ts';
 
@@ -22,6 +24,17 @@ function personaProblem(error: unknown): never {
 }
 
 export function registerOnboardingRoutes(router: Router, app: App): void {
+  // AR-10: 提供元のモデルが無くても、会話の既定（会話の順番の先頭）が入れた実行役のモデルで、その実行役の最後の確かめが「使える」なら、会話を始められる（確かめが無い・ログアウト・切った間は満たさない）
+  const usableRuntime = (config: ReturnType<App['config']>): boolean => {
+    const first = enabledRuntimeModels(config).find(model => model.id === candidateModelIds(config, 'chat')[0]);
+    const check = first && app.runtimeChecks.get(first.runtime);
+    return check !== undefined && usableCheck(check.status);
+  };
+  // 会話の既定（会話の順番の先頭）が実行役のモデルなら、その実行役の確かめで決まる（後ろに提供元のモデルがあっても、先頭が使えなければ会話は始まらない）。そうでなければ、提供元のモデルがあるか
+  const modelConnected = (config: ReturnType<App['config']>): boolean => {
+    const first = config.models.find(model => model.id === candidateModelIds(config, 'chat')[0]);
+    return first !== undefined && isRuntimeModel(first) ? usableRuntime(config) : providerModels(config).length > 0;
+  };
   const state = () => {
     const config = app.config();
     const flags = app.kv.getJson<StepFlags>(STEPS_KEY) ?? {};
@@ -34,7 +47,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     const done = app.kv.get(DONE_KEY) !== undefined || (!started && usedAlready);
     return {
       done,
-      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: providerModels(config).length > 0 },
+      steps: { user: Boolean(flags.user), identity: Boolean(flags.identity), persona: Boolean(flags.persona), model: modelConnected(config) },
     };
   };
 

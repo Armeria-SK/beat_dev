@@ -37,6 +37,11 @@ export interface ComposerView {
   canAttach: boolean;
 }
 
+// 外の実行役のモデルが、最後の確かめで「使えない」と分かっているか（ログアウト・入っていない・切った・使えない注意）。確かめていない・分からないは使えるものとして数える（再起動で確かめが消えても、会話を止めない）
+const RUNTIME_DOWN = new Set(['provider.probe.runtime_login', 'provider.probe.runtime_missing', 'provider.probe.runtime_off', 'provider.probe.runtime_blocked', 'provider.probe.no_runtime']);
+export const runtimeDown = (m: Pick<ModelView, 'runtime' | 'probe'>): boolean => Boolean(m.runtime) && RUNTIME_DOWN.has(m.probe?.messageCode ?? '');
+export const chatModelCount = (models: readonly ModelView[]): number => models.filter(m => m.inChat && !runtimeDown(m)).length;
+
 export function composerView(i: ComposerInput): ComposerView {
   const noModel = i.chatModels === 0;
   const placeholder: Placeholder = noModel ? 'noModel' : i.running ? 'busy' : i.mode === 'plan' && (i.hasConversation || !i.planless) ? 'plan' : i.hasConversation ? 'reply' : i.product ? 'build' : 'message';

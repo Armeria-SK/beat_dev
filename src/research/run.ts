@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AppConfig } from '../config/schema.ts';
+import { providerModels, type AppConfig } from '../config/schema.ts';
 import { transaction } from '../db/database.ts';
 import type { Conversations } from '../db/conversations.ts';
 import type { ChatEngine } from '../engine/chat.ts';
@@ -130,6 +130,7 @@ export class ResearchRunner {
     if (!settings) throw new ResearchError('not_found', { id: input.projectId });
     const source = this.#d.conversations.get(input.sourceConversationId);
     if (!source || source.kind !== 'chat' || source.project_id !== input.projectId || source.parent_run_id) throw new ResearchError('source_gone');
+    if (!providerModels(this.#d.config()).length) throw new ResearchError('no_provider');
     if (source.runtime_id !== null) throw new ResearchError('runtime_source');
     const route = this.#d.engine.researchRoute(source.model_id ?? null);
     if (!route) throw new ResearchError('no_model');

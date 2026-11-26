@@ -11,7 +11,7 @@ type T = ReturnType<typeof useT>;
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
 
 // Claude Code・Codex（外の実行役）の行。確かめは「Check」を押したときだけ（設定を保存するたびには起こさない）。ログインは公式の手順の案内だけで、beat はログインもログイン情報も扱わない
-const NAME = { 'claude-code': 'ui.set.runtime.claude-code', codex: 'ui.set.runtime.codex' } as const;
+export const NAME = { 'claude-code': 'ui.set.runtime.claude-code', codex: 'ui.set.runtime.codex' } as const;
 
 const PILL = {
   off: 'ui.set.runtime.pillOff', unchecked: 'ui.set.runtime.pillUnchecked', ready: 'ui.set.runtime.pillReady', missing: 'ui.set.runtime.pillMissing',
@@ -78,7 +78,7 @@ export function issueLine(t: T, issue: RuntimeIssue): string {
   }
 }
 
-const PERM_LABEL: Record<string, 'ui.set.runtime.permLabel.default' | 'ui.set.runtime.permLabel.acceptEdits' | 'ui.set.runtime.permLabel.read-only' | 'ui.set.runtime.permLabel.workspace-write'> = {
+export const PERM_LABEL: Record<string, 'ui.set.runtime.permLabel.default' | 'ui.set.runtime.permLabel.acceptEdits' | 'ui.set.runtime.permLabel.read-only' | 'ui.set.runtime.permLabel.workspace-write'> = {
   default: 'ui.set.runtime.permLabel.default', acceptEdits: 'ui.set.runtime.permLabel.acceptEdits', 'read-only': 'ui.set.runtime.permLabel.read-only', 'workspace-write': 'ui.set.runtime.permLabel.workspace-write',
 };
 

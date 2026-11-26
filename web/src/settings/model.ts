@@ -116,6 +116,9 @@ export function uniqueId(base: string, taken: readonly string[]): string {
 // 外の実行役を指すモデルか（設定の 1 件に runtime があれば）。実行役のモデルは、会話の先頭にだけ置ける
 export const isRuntimeEntry = (model: { runtime?: unknown }): boolean => typeof model.runtime === 'string';
 
+// 提供元のモデルが 1 つも無い設定か（実行役のモデルだけ、または何も無い）。Build・定期の仕事・考える役・調べものなどが動かない（AR-10）
+export const noProviderConfig = (config: Config): boolean => !((config.models as Array<{ runtime?: unknown }> | undefined) ?? []).some(m => !isRuntimeEntry(m));
+
 export function addModel(config: Config): { config: Config; id: string } {
   const providers = config.providers as Array<{ id: string }>;
   const id = uniqueId('new-model', (config.models as Array<{ id: string }>).map(m => m.id));

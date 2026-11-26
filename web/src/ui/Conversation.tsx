@@ -26,6 +26,7 @@ import { Button, EmptyState, Icon, Notice } from './parts.tsx';
 import { reportOpError } from './task-ops.ts';
 import { notePath } from './memory-notes.ts';
 import { messageTarget, parseRoute, routeHash } from './routes.ts';
+import { RuntimeNote } from './RuntimeNote.tsx';
 import { SessionMenu } from './SessionMenu.tsx';
 import { buildStage, contextMeter, isRising, messageStamp, replyMeta, thinkingSeconds, threadGutter, threadItems, type ThreadItem, type ToolItem } from './thread.ts';
 import { ToolGroup, type PendingLink } from './ToolRow.tsx';
@@ -632,6 +633,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         {conversation?.has_summary && (
           <Notice title={t('ui.notice.summary')} action={{ label: summaryOpen ? t('ui.notice.hideSummary') : t('ui.notice.readSummary'), run: () => setSummaryOpen(open => !open) }} />
         )}
+        {conversation?.runtime_id && <RuntimeNote runtimeId={conversation.runtime_id} />}
         {summaryOpen && id && <Summary id={id} />}
         {gone && <EmptyState title={t('ui.session.gone')} text={t('ui.session.goneText')} />}
         {empty && !gone && product && !product.has_plan && <EmptyState title={t('ui.product.empty.title')} text={t('ui.product.empty.text')} />}
