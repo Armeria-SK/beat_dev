@@ -7,7 +7,7 @@ import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
 import { eraseConversation } from '../src/db/erase.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
-import { seedSkillUpto } from '../src/memory/review.ts';
+import { reviewPolicyLines, reviewPrompt, seedSkillUpto } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { FakeAdapter, reply, type Script, tempDir, testConfig, withLoad } from './helpers.ts';
 
@@ -292,6 +292,38 @@ test('S-1b: without bot memory no memory review is queued (idle, long chat, task
   s.app.worker.start();
   s.app.worker.stop();
   assert.equal(s.app.reviews.get(pendingAtStart.id)!.status, 'done', 'start closes waiting memory reviews');
+});
+
+const SKILL_BAR = 'Use skill_draft only when (a) the user corrected how the work should be done, or asked for this to be kept or repeated, or (b) the same procedure appears in this record and in at least one earlier conversation (check with history_search).';
+const SKILL_NOT_DRAFT = 'Do not draft a procedure that a capable model would follow anyway, one already covered by a listed skill, or one that only fits this task';
+
+test('S-1b bar: a skill review drafts only on a correction, a request to keep it, or a repeat, and most reviews end with No changes; the memory review gets none of it', () => {
+  for (const skillsAutoRegister of [false, true]) {
+    const skill = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill', skillsAutoRegister });
+    assert.ok(skill.includes(SKILL_BAR), `the bar is in the skill review (auto-register ${skillsAutoRegister})`);
+    assert.ok(skill.includes(SKILL_NOT_DRAFT), 'the skill-only line is in the skill review');
+    assert.ok(skill.split('\n')[0]!.includes("Most reviews should end with 'No changes'"), 'the intro says what most reviews end with');
+    assert.doesNotMatch(skill, /looks reusable/u);
+    assert.doesNotMatch(skill, /a procedure that worked and will be useful again/u);
+    const memory = reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'memory', skillsAutoRegister });
+    assert.equal(memory.includes(SKILL_NOT_DRAFT), false, 'the memory review does not get the skill-only line');
+    assert.equal(memory.includes(SKILL_BAR), false);
+    assert.doesNotMatch(memory, /Most reviews should end with/u);
+  }
+  assert.doesNotMatch(reviewPrompt({ trigger: 'idle', forgotten: [], kind: 'skill' }), /not used until the user approves it/u, 'the policy line no longer says a wrong draft is harmless; the tool description keeps that sentence');
+  assert.equal(reviewPolicyLines('en').find(line => line.text === `- ${SKILL_NOT_DRAFT}`)?.skillOnly, true, 'marked skill-only');
+});
+
+test('S-1b bar: the prompt a skill review run actually sends carries the bar', async t => {
+  const s = await setup(t);
+  s.app.conversations.create({ id: 'c1' });
+  s.app.conversations.append('c1', { role: 'tool', toolCallId: 'k1', name: 'calculate', content: '2' });
+  s.app.reviews.enqueue('manual', 'skill:manual:c1', { conversationId: 'c1', kind: 'skill' });
+  s.adapter().scripts.push(reply('No changes'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const prompt = String(s.adapter().calls.at(-1)!.messages.at(-1)?.content);
+  assert.ok(prompt.includes(SKILL_BAR) && prompt.includes(SKILL_NOT_DRAFT), prompt);
+  assert.doesNotMatch(prompt, /looks reusable/u);
 });
 
 test('S-1b R9: a skill with a token in it is refused, from a draft or a save; a plain one is kept', async t => {
