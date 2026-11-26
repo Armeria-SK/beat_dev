@@ -110,7 +110,7 @@ export const IGNORED_NOTIFICATIONS: ReadonlySet<string> = new Set([
   'thread/compacted', 'thread/closed', 'thread/queue/changed', 'thread/goal/updated', 'thread/goal/cleared', 'thread/prediction/updated',
   'turn/started', 'turn/diff/updated', 'turn/plan/updated', 'turn/moderationMetadata',
   'item/reasoning/summaryTextDelta', 'item/reasoning/summaryPartAdded', 'item/reasoning/textDelta', 'item/plan/delta',
-  'item/commandExecution/outputDelta', 'item/commandExecution/terminalInteraction', 'item/fileChange/outputDelta', 'item/fileChange/patchUpdated', 'item/mcpToolCall/progress',
+  'item/commandExecution/outputDelta', 'item/commandExecution/terminalInteraction', 'item/fileChange/outputDelta', 'item/mcpToolCall/progress',
   'item/autoApprovalReview/started', 'item/autoApprovalReview/completed', 'autoApprovalReview/strictReviewRequired',
   'rawResponseItem/completed', 'rawResponse/completed', 'hook/started', 'hook/completed', 'skills/changed',
   'account/updated', 'account/rateLimits/updated', 'remoteControl/status/changed', 'mcpServer/startupStatus/updated', 'mcpServer/oauthLogin/completed',

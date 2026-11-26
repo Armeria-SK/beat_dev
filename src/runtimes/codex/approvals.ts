@@ -4,7 +4,7 @@
 // 使う人の設定や決まりを書き換える答え（acceptWithExecpolicyAmendment・applyNetworkPolicyAmendment）と scope: session は、型の上でも作れない。
 // 答えられない求め（質問・フォーム・動的な道具・トークンの更新など）は、beat が断りで答え、会話に行を残す（Codex を待たせたままにしない）。
 import type { ApprovalDecision, RuntimeEvent } from '../types.ts';
-import { asRecord, asString, CodexRefused } from './app-server.ts';
+import { asRecord, asString, CodexRefused, safeLabel } from './app-server.ts';
 import {
   SERVER_REQUEST, type CommandApprovalAnswer, type CommandDecision, type ElicitationDeclineAnswer, type FileChangeApprovalAnswer, type JsonObject,
   type PermissionsApprovalAnswer, type RequestId, type UserInputEmptyAnswer,
@@ -39,6 +39,8 @@ export interface PendingApproval { requestId: string; rpcId: RequestId; kind: Ap
 
 export interface RefusedRequest {
   reply: { result: unknown } | { error: { code: number; message: string } };
+  // 記録に出すための、整えた求めの名前
+  label: string;
   // 会話に残す行（道具の始めと終わりの 1 組。isError）。無ければ記録だけ
   row: { name: string; message: string } | undefined;
 }
@@ -84,7 +86,9 @@ export function answerFor(kind: ApprovalKind, decision: ApprovalDecision, reques
 }
 
 function refusal(method: string, reply: RefusedRequest['reply'], row = true): RefusedRequest {
-  return { reply, row: row ? { name: method, message: `beat cannot answer this request from Codex (${method}), so it was declined` } : undefined };
+  // method は Codex が決めた文字なので、そのまま行の名前や文に使わない（長さ・制御文字・秘密）
+  const label = safeLabel(method);
+  return { reply, label, row: row ? { name: label, message: `beat cannot answer this request from Codex (${label}), so it was declined` } : undefined };
 }
 
 const SILENT_ERRORS: ReadonlySet<string> = new Set(['account/chatgptAuthTokens/refresh', 'attestation/generate']);
@@ -114,6 +118,11 @@ export class ApprovalTable {
     if (summary === undefined) { this.#changes.delete(itemId); return; }
     if (!this.#changes.has(itemId) && this.#changes.size >= MAX_ITEMS) this.#changes.delete(this.#changes.keys().next().value as string);
     this.#changes.set(itemId, summary);
+  }
+
+  // 変更の一覧が後から書き換わった（item/fileChange/patchUpdated）。新しい一覧を信用して写さず、この項目の道は「分からない」に戻す（古い一覧を出さない）
+  forgetChanges(itemId: string): void {
+    this.#changes.delete(itemId);
   }
 
   get size(): number { return this.#pending.size; }

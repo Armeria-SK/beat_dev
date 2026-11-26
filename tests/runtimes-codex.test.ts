@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeConfig } from '../src/config/schema.ts';
@@ -19,6 +19,15 @@ const ACCOUNT_EMAIL = 'secret-person@example.com';
 
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+async function gone(pid: number, ms = 10_000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (!alive(pid)) return true;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return !alive(pid);
 }
 
 function rig(t: { after: (fn: () => void | Promise<void>) => void }, scenario = 'text', extra: string[] = [], config: Partial<RuntimeConfig> = {}, options: { initializeTimeoutMs?: number } = {}) {
@@ -85,7 +94,7 @@ test('a normal reply: text, tools, no experimental API, and every request carrie
   assert.equal(record.account, 'chatgpt');
   assert.equal(record.sandboxReadiness, 'ready');
   assert.deepEqual(record.sent, { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only' });
-  assert.deepEqual(record.effective, { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'readOnly' });
+  assert.deepEqual(record.effective, { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'readOnly', modelProvider: 'openai' });
   assert.equal(record.threadId, 'thr-1');
   assert.equal(session.runtimeSession, 'thr-1');
   const everything = JSON.stringify([record, events, r.lines]);
@@ -159,6 +168,23 @@ test('the settings Codex says are in effect must be the ones beat asked for', { 
     assert.ok(!r.requests().some(message => message.method === 'turn/start'));
     assert.equal(alive(r.pid()), false);
   }
+});
+
+test('the conversation must go to OpenAI and nothing else may be in force: another provider, a missing answer or a named permission profile stop the start', { timeout: 90_000 }, async t => {
+  const cases: Array<[string[], CodexRefused['reason']]> = [[['--provider', 'azure'], 'auth_mismatch'], [['--omit-provider'], 'auth_mismatch'], [['--omit-effective'], 'config_mismatch'], [['--active-profile'], 'config_mismatch']];
+  for (const [extra, reason] of cases) {
+    const r = rig(t, 'text', extra);
+    await assert.rejects(r.runtime.start(r.request()), refused(reason), extra.join(' '));
+    assert.ok(!r.requests().some(message => message.method === 'turn/start'), `${extra.join(' ')}: no reply was started`);
+    assert.equal(alive(r.pid()), false, `${extra.join(' ')}: the process was stopped`);
+  }
+});
+
+test('a resume that answers with a different conversation than the one asked for is an error, with nothing left running', { timeout: 30_000 }, async t => {
+  const r = rig(t, 'text', ['--resume-other']);
+  await assert.rejects(r.runtime.start(r.request({ resume: 'thr-9' })), refused('protocol'));
+  assert.ok(!r.requests().some(message => message.method === 'thread/start' || message.method === 'turn/start'), 'no other conversation was started or used');
+  assert.equal(alive(r.pid()), false);
 });
 
 test('resume sends thread/resume without history; a refused resume is an error, never a silent new conversation', { timeout: 60_000 }, async t => {
@@ -241,6 +267,29 @@ test('a file change approval gets its paths from the item that started it; witho
   assert.ok(!JSON.stringify(seen).includes('@@'), 'the diff itself is not carried');
 });
 
+test('a file change list that changed (patchUpdated) before the approval is not shown stale: the paths become unknown (null)', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'patch-updated');
+  const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
+  const { events } = await reply(r, {}, event => { seen.push(event); return 'decline'; });
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0]?.input, { itemId: 'f1', reason: null, grantRoot: null, changes: null });
+  assert.equal(events.some(event => event.type === 'unknown'), false, 'patchUpdated is known, not a new kind of event');
+});
+
+test('a request name from Codex is cut, cleaned of control characters and secrets before it reaches a log line or a row name', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'odd-method');
+  const { events } = await reply(r);
+  const control = /[\p{Cc}\p{Cf}]/u;
+  const start = events.find(event => event.type === 'tool_start') as Extract<RuntimeEvent, { type: 'tool_start' }>;
+  const end = events.find(event => event.type === 'tool_end') as Extract<RuntimeEvent, { type: 'tool_end' }>;
+  assert.ok(start.name.length <= 100 && !control.test(start.name), start.name);
+  assert.ok(end.output.length < 250 && !control.test(end.output), end.output);
+  const logged = r.lines.filter(line => line.includes('asked for something'));
+  assert.equal(logged.length, 1);
+  assert.ok(logged[0]!.length < 250 && !control.test(logged[0]!), logged[0]);
+  assert.ok(!logged[0]!.includes('abcdefgh12345678') && !start.name.includes('abcdefgh12345678') && !end.output.includes('abcdefgh12345678'), 'a secret in the name is hidden');
+});
+
 test('network and stdin requests are carried for the owner, flagged; permission requests are granted only as asked and only for the turn', { timeout: 90_000 }, async t => {
   const net = rig(t, 'network-and-stdin');
   const seen: Array<Extract<RuntimeEvent, { type: 'approval' }>> = [];
@@ -302,6 +351,52 @@ test('the process dying mid-reply is a failure (not a success), with its message
   assert.ok(!last.message.includes(SECRET));
   assert.equal(events.some(event => event.type === 'done'), false);
   assert.equal(alive(r.pid()), false);
+});
+
+test('a long message is accepted: a full pipe is not a failure, the whole text arrives, and the reply ends', { timeout: 90_000 }, async t => {
+  for (const size of [20_000, 200_000]) {
+    const r = rig(t);
+    const session = await r.runtime.start(r.request());
+    await r.runtime.send(session.id, { text: 'x'.repeat(size) });
+    const events = await collect(r.runtime, session.id);
+    assert.equal(events.at(-1)?.type, 'done', `${size} characters`);
+    const turn = r.requests().find(message => message.method === 'turn/start');
+    assert.equal(turn.params.input[0].text.length, size, 'every character arrived');
+    await r.runtime.close(session.id);
+  }
+});
+
+test('a reply that cannot be started ends as failed, stops the process, and the caller is told', { timeout: 60_000 }, async t => {
+  const r = rig(t, 'text', ['--turn-error']);
+  const session = await r.runtime.start(r.request());
+  await assert.rejects(r.runtime.send(session.id, { text: 'go' }), (error: unknown) => refused('protocol')(error) && !(error as Error).message.includes(SECRET));
+  const events = await collect(r.runtime, session.id);
+  assert.deepEqual(events.map(event => event.type), ['failed']);
+  const failure = events[0] as Extract<RuntimeEvent, { type: 'failed' }>;
+  assert.equal(failure.kind, 'process');
+  assert.ok(!failure.message.includes(SECRET));
+  assert.ok(await gone(r.pid()), 'the process was stopped');
+  await r.runtime.close(session.id);
+});
+
+test('when the reply ends Codex gets its input closed and exits by itself, without waiting for close()', { timeout: 60_000 }, async t => {
+  const r = rig(t);
+  const session = await r.runtime.start(r.request());
+  await r.runtime.send(session.id, { text: 'go' });
+  const events = await collect(r.runtime, session.id);
+  assert.equal(events.at(-1)?.type, 'done');
+  assert.ok(await gone(r.pid(), 5000), 'the process ended after the reply, before close()');
+  await r.runtime.close(session.id);
+});
+
+test('a bare "codex" is never taken from the work folder: empty and relative PATH entries are skipped', { timeout: 30_000 }, async t => {
+  const dir = tempDir(t);
+  const work = join(dir, 'work');
+  mkdirSync(work);
+  writeFileSync(join(work, WINDOWS ? 'codex.exe' : 'codex'), '');
+  const processes = new ProcessManager({ env: { PATH: ['', '.', 'relative-bin'].join(delimiter) } });
+  const runtime = new CodexRuntime({ id: 'cx', kind: 'codex', enabled: true }, { processes, log: () => undefined });
+  await assert.rejects(runtime.start({ conversationId: 'c1', cwd: work, permission: 'read-only', signal: new AbortController().signal }), refused('not_installed'));
 });
 
 test('interrupt asks Codex to stop the turn and the reply ends; waiting approvals are cancelled, not answered', { timeout: 60_000 }, async t => {

@@ -19,6 +19,11 @@ export const isRecord = (value: unknown): value is JsonObject => typeof value ==
 export const asString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 export const asRecord = (value: unknown): JsonObject | undefined => (isRecord(value) ? value : undefined);
 
+// Codex が送ってくる名前（メソッド名など）を、ログと画面の行に出すときの形: 制御文字・改行・見えない書式文字は ? にし、秘密は伏せ、長さを切る
+export function safeLabel(value: string, limit = 100): string {
+  return redactSecrets(value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '?')).slice(0, limit);
+}
+
 export const CLIENT_INFO = { name: 'beat', title: null, version: '0.1.0' } as const;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -155,6 +160,4 @@ export class CodexConnection {
   resolved(id: RequestId): void {
     this.#open.delete(keyOf(id));
   }
-
-  isWaitingFor(id: RequestId): boolean { return this.#open.has(keyOf(id)); }
 }

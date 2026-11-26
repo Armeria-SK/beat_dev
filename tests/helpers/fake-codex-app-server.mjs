@@ -1,6 +1,7 @@
 // AR-4 のにせの Codex app-server。1 行 1 JSON の JSON-RPC を標準入出力で話す小さな node のスクリプト（本物の Codex は起こさない）。
 // 使い方: node fake-codex-app-server.mjs [--log <file>] [--scenario <name>] [--account chatgpt|apiKey|none] [--readiness ready|updateRequired|notConfigured|none]
 //          [--platform windows|linux] [--version 0.172.0] [--eff-approval <値>] [--eff-reviewer <値>] [--eff-sandbox <モード>] [--eff-network true] [--resume-fails] [--hang-initialize]
+//          [--provider <名前>] [--omit-provider] [--omit-effective] [--active-profile] [--resume-other] [--turn-error]
 // --log: 受け取った行（in）と、求めへの返事（answer）と、起動した pid を 1 行 1 JSON で残す。試験が「beat が何を送ったか」を見るのに使う
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -28,6 +29,13 @@ const sandboxOf = mode => {
   return { type: 'dangerFullAccess' };
 };
 const model = (id, extra = {}) => ({ id, model: id, upgrade: null, displayName: `Name ${id}`, description: 'd', hidden: false, supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }], defaultReasoningEffort: 'low', isDefault: false, ...extra });
+// thread/start・thread/resume の返り。--omit-effective は「いま効いている設定」を返さない、--provider は会話の行き先（既定 openai）、--omit-provider は行き先を返さない、--active-profile は名前つきの許可の組が効いている
+const threadReply = (params, threadId) => ({
+  thread: { id: threadId }, model: 'gpt-fake',
+  modelProvider: flag('omit-provider') ? undefined : opt('provider', 'openai'),
+  ...(flag('omit-effective') ? {} : { approvalPolicy: opt('eff-approval', params.approvalPolicy), approvalsReviewer: opt('eff-reviewer', params.approvalsReviewer), sandbox: sandboxOf(opt('eff-sandbox', params.sandbox)) }),
+  activePermissionProfile: flag('active-profile') ? { id: 'full-access', extends: null } : null,
+});
 const item = (type, id, extra = {}) => ({ type, id, ...extra });
 let THREAD = 'thr-1';
 const TURN = 'turn-1';
@@ -81,6 +89,21 @@ async function play() {
       out({ id: 110, method: 'item/fileChange/requestApproval', params: { threadId: THREAD, turnId: TURN, itemId: 'f1', startedAtMs: 1, reason: 'needs write', grantRoot: 'D:\\work' } });
       out({ id: 111, method: 'item/fileChange/requestApproval', params: { threadId: THREAD, turnId: TURN, itemId: 'ghost', startedAtMs: 1 } });
       await Promise.all([waitAnswer(110), waitAnswer(111)]);
+      finish();
+      break;
+    }
+    case 'patch-updated': {
+      const change = path => ({ path, kind: { type: 'update', move_path: null }, diff: '@@' });
+      started(item('fileChange', 'f1', { status: 'inProgress', changes: [change('src/a.ts')] }));
+      notify('item/fileChange/patchUpdated', { threadId: THREAD, turnId: TURN, itemId: 'f1', changes: [change('src/a.ts'), change('src/b.ts')] });
+      out({ id: 160, method: 'item/fileChange/requestApproval', params: { threadId: THREAD, turnId: TURN, itemId: 'f1', startedAtMs: 1, reason: null, grantRoot: null } });
+      await waitAnswer(160);
+      finish();
+      break;
+    }
+    case 'odd-method': {
+      out({ id: 170, method: `odd/sk-ant-abcdefgh12345678\n[INFO] forged line \u0007${'y'.repeat(300)}`, params: {} });
+      await waitAnswer(170);
       finish();
       break;
     }
@@ -165,14 +188,15 @@ reader.on('line', async line => {
       else reply({ data: [model('m-two', { supportedReasoningEfforts: [] })], nextCursor: null });
       break;
     case 'thread/start':
-      reply({ thread: { id: THREAD }, model: 'gpt-fake', approvalPolicy: opt('eff-approval', params.approvalPolicy), approvalsReviewer: opt('eff-reviewer', params.approvalsReviewer), sandbox: sandboxOf(opt('eff-sandbox', params.sandbox)) });
+      reply(threadReply(params, THREAD));
       break;
     case 'thread/resume':
       if (flag('resume-fails')) { out({ id, error: { code: -32600, message: 'no rollout found for thread id sk-ant-abcdefgh12345678' } }); break; }
       THREAD = params.threadId;
-      reply({ thread: { id: params.threadId }, model: 'gpt-fake', approvalPolicy: opt('eff-approval', params.approvalPolicy), approvalsReviewer: opt('eff-reviewer', params.approvalsReviewer), sandbox: sandboxOf(opt('eff-sandbox', params.sandbox)) });
+      reply(threadReply(params, flag('resume-other') ? 'thr-other' : params.threadId));
       break;
     case 'turn/start':
+      if (flag('turn-error')) { out({ id, error: { code: -32000, message: 'turn refused, token sk-ant-abcdefgh12345678' } }); break; }
       reply({ turn: { id: TURN, items: [], status: 'inProgress', error: null } });
       play().catch(() => process.exit(9));
       break;

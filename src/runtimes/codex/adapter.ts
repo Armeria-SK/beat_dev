@@ -16,7 +16,7 @@ import {
   type RuntimePermission, type RuntimeRequest, type RuntimeSession, type RuntimeStatus,
 } from '../types.ts';
 import { ApprovalTable, requestIdFor } from './approvals.ts';
-import { asRecord, asString, CodexConnection, CodexRefused, isRecord, type ConnectionHandlers } from './app-server.ts';
+import { asRecord, asString, CodexConnection, CodexRefused, isRecord, safeLabel, type ConnectionHandlers } from './app-server.ts';
 import {
   IGNORED_NOTIFICATIONS, isClaudeCodePermission, QUIET_ITEM_TYPES, TOOL_ITEM_TYPES, VERIFIED_VERSION, WARNING_NOTIFICATIONS, wirePermission, type PermissionParams, type RequestId,
 } from './protocol.ts';
@@ -36,8 +36,8 @@ export interface CodexRunRecord {
   sandboxReadiness: string;
   permission: RuntimePermission;
   sent: Pick<PermissionParams, 'approvalPolicy' | 'approvalsReviewer' | 'sandbox'>;
-  // Codex が返した、実際に効いている設定
-  effective: { approvalPolicy: string; approvalsReviewer: string; sandbox: string };
+  // Codex が返した、実際に効いている設定（modelProvider は、会話がどこの口へ行くか。openai だけ通す）
+  effective: { approvalPolicy: string; approvalsReviewer: string; sandbox: string; modelProvider: string };
   threadId: string;
   resumed: boolean;
 }
@@ -170,6 +170,14 @@ class CodexSession {
     this.finished = true;
     this.queue.push(event);
     this.queue.close();
+    // 返事が終わったら入力を閉じる（Codex はそれで自分で終わる）。閉じるまで、この返事の中で出した「この返事のあいだ許す」が生き残らないように
+    try { this.proc?.closeInput(); } catch { /* もう終わっている */ }
+  }
+
+  // 返事を始められなかった・途中で壊れた。出来事を failed で終えて、プロセスを止める
+  fail(message: string): void {
+    this.#finish({ type: 'failed', kind: 'process', message: short(message) });
+    try { this.proc?.kill(); } catch { /* もう終わっている */ }
   }
 
   #unknownEvent(raw: string): void {
@@ -203,6 +211,12 @@ class CodexSession {
       case 'error': {
         const error = asRecord(p?.error);
         this.#lastError = { message: short(asString(error?.message) ?? 'Codex reported an error'), kind: failureKind(error?.codexErrorInfo) };
+        return;
+      }
+      case 'item/fileChange/patchUpdated': {
+        // 承認の前に変更の一覧が変わった。承認の札に古い一覧を出さない（道は「分からない」にして持ち主へ）
+        const itemId = asString(p?.itemId);
+        if (itemId !== undefined) this.approvals.forgetChanges(itemId);
         return;
       }
       case 'serverRequest/resolved': {
@@ -267,14 +281,14 @@ class CodexSession {
       }
       const { reply, row } = classified.refused;
       if ('result' in reply) conn.respond(id, reply.result); else conn.respondError(id, reply.error.code, reply.error.message);
-      this.#log(`[INFO] Codex asked for something beat does not answer (${method}); it was declined`);
+      this.#log(`[INFO] Codex asked for something beat does not answer (${classified.refused.label}); it was declined`);
       if (row) {
         const rowId = `${requestIdFor(id)}-declined`;
         this.#push({ type: 'tool_start', id: rowId, name: row.name, input: {} });
         this.#push({ type: 'tool_end', id: rowId, output: row.message, isError: true });
       }
     } catch (error) {
-      this.#log(`[WARN] Codex request ${method} could not be answered: ${short((error as Error).message)}`);
+      this.#log(`[WARN] Codex request ${safeLabel(method)} could not be answered: ${short((error as Error).message)}`);
     }
   }
 
@@ -314,10 +328,21 @@ async function readSandbox(conn: CodexConnection): Promise<string> {
 function checkEffective(response: unknown, wire: PermissionParams): CodexRunRecord['effective'] {
   const r = asRecord(response);
   const sandbox = asRecord(r?.sandbox);
-  const effective = { approvalPolicy: asString(r?.approvalPolicy) ?? 'unknown', approvalsReviewer: asString(r?.approvalsReviewer) ?? 'unknown', sandbox: asString(sandbox?.type) ?? 'unknown' };
+  const effective = {
+    approvalPolicy: asString(r?.approvalPolicy) ?? 'unknown', approvalsReviewer: asString(r?.approvalsReviewer) ?? 'unknown', sandbox: asString(sandbox?.type) ?? 'unknown',
+    modelProvider: asString(r?.modelProvider) ?? 'unknown',
+  };
   const sameSandbox = effective.sandbox === wire.sandboxPolicy.type && sandbox?.networkAccess !== true;
   if (effective.approvalPolicy !== wire.approvalPolicy || effective.approvalsReviewer !== wire.approvalsReviewer || !sameSandbox) {
-    throw new CodexRefused('config_mismatch', `Codex is not using the permission settings beat asked for (approval ${effective.approvalPolicy}, reviewer ${effective.approvalsReviewer}, sandbox ${effective.sandbox}), so it was not started`);
+    throw new CodexRefused('config_mismatch', `Codex is not using the permission settings beat asked for (approval ${short(effective.approvalPolicy, 40)}, reviewer ${short(effective.approvalsReviewer, 40)}, sandbox ${short(effective.sandbox, 40)}), so it was not started`);
+  }
+  // 名前つきの許可の組（profile）が効いていると、送った sandbox の意味が変わる。何も効いていない（null・無い）ときだけ通す
+  if (r?.activePermissionProfile !== null && r?.activePermissionProfile !== undefined) {
+    throw new CodexRefused('config_mismatch', 'Codex is using a named permission profile, which beat did not ask for, so it was not started');
+  }
+  // 会話の行き先は、契約（ChatGPT のログイン）の OpenAI だけ。設定やプロジェクトの .codex で別の口に向けられていたら、始めない
+  if (effective.modelProvider !== 'openai') {
+    throw new CodexRefused('auth_mismatch', `Codex is sending the conversation to a model provider other than OpenAI (${short(effective.modelProvider, 40)}), so beat did not start it`);
   }
   return effective;
 }
@@ -470,11 +495,17 @@ export class CodexRuntime implements AgentRuntime {
     if (session.turnStarted) throw new CodexRefused('busy', 'This Codex process already has a reply. Each reply starts its own process');
     session.turnStarted = true;
     const { approvalPolicy, approvalsReviewer, sandboxPolicy } = session.wire;
-    const reply = asRecord(await session.conn.request('turn/start', {
-      threadId: session.threadId, input: [{ type: 'text', text: input.text, text_elements: [] }], cwd: session.cwd,
-      approvalPolicy, approvalsReviewer, sandboxPolicy, ...(session.model ? { model: session.model } : {}),
-    }, START_TIMEOUT_MS));
-    session.turnId = asString(asRecord(reply?.turn)?.id);
+    try {
+      const reply = asRecord(await session.conn.request('turn/start', {
+        threadId: session.threadId, input: [{ type: 'text', text: input.text, text_elements: [] }], cwd: session.cwd,
+        approvalPolicy, approvalsReviewer, sandboxPolicy, ...(session.model ? { model: session.model } : {}),
+      }, START_TIMEOUT_MS));
+      session.turnId = asString(asRecord(reply?.turn)?.id);
+    } catch (error) {
+      // 返事を始められなかった（書けない・Codex が断った・時間切れ）。出来事を failed で終え、プロセスを止めてから、呼んだ側にも知らせる
+      session.fail(error instanceof Error ? error.message : 'Codex could not start the reply');
+      throw error;
+    }
   }
 
   async interrupt(sessionId: string): Promise<void> {

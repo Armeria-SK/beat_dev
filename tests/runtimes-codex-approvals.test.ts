@@ -78,6 +78,18 @@ test('the file table keeps paths only, caps its size, and forgets a malformed it
   assert.equal(((forgotten as { approval: { input: { changes: unknown } } }).approval.input).changes, null, 'the oldest entries were dropped');
 });
 
+test('forgetChanges drops the paths of one item, so a changed list is never shown stale', () => {
+  const table = new ApprovalTable();
+  table.rememberChanges('f1', [{ path: 'a.ts', kind: { type: 'add' } }]);
+  table.rememberChanges('f2', [{ path: 'b.ts', kind: { type: 'add' } }]);
+  table.forgetChanges('f1');
+  table.forgetChanges('never-seen');
+  const f1 = table.classify(1, 'item/fileChange/requestApproval', { itemId: 'f1' }) as { approval: { input: { changes: unknown } } };
+  const f2 = table.classify(2, 'item/fileChange/requestApproval', { itemId: 'f2' }) as { approval: { input: { changes: unknown } } };
+  assert.equal(f1.approval.input.changes, null);
+  assert.deepEqual(f2.approval.input.changes, [{ path: 'b.ts', kind: 'add' }], 'only that item was forgotten');
+});
+
 test('unreadable and unknown requests are declined, never parked as approvals', () => {
   const table = new ApprovalTable();
   for (const [method, params] of [
