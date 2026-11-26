@@ -42,7 +42,6 @@ async function gone(pid: number, ms = 10_000): Promise<boolean> {
 const survivors = (pids: number[]): number[] => pids.filter(alive);
 
 function setup(t: Parameters<typeof tempDir>[0], options: ProcessManagerOptions = {}) {
-  const dir = tempDir(t);
   const lines: string[] = [];
   const manager = new ProcessManager({ log: line => lines.push(line), env: basics(), ...options });
   const extra: number[] = [];
@@ -50,6 +49,7 @@ function setup(t: Parameters<typeof tempDir>[0], options: ProcessManagerOptions 
     await manager.closeAll();
     for (const pid of extra) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
   });
+  const dir = tempDir(t);
   const start = async (args: string[] = [], signal?: AbortSignal) => {
     const scope = await manager.open();
     const child = scope.spawn({ file: process.execPath, args: [FAKE_RUNTIME_SCRIPT, ...args], cwd: dir, ...(signal ? { signal } : {}) });
@@ -213,6 +213,21 @@ test('a bare program name is never looked up in the work folder: empty, "." and 
   assert.equal(resolveExecutable('codex', { PATH: ['', '.', dir].join(delimiter) }, dir), join(dir, name), 'an absolute entry is still searched');
   const mixedCase = WINDOWS ? { Path: ['', '.'].join(delimiter) } : { PATH: ['', '.'].join(delimiter) };
   assert.throws(() => resolveExecutable('codex', mixedCase, dir), (error: unknown) => error instanceof ProcessRefused && error.reason === 'not_found', 'Path is the same name as PATH');
+});
+
+test('PATH and Path together: a PATH with no absolute entry is dropped, so it cannot hide the other one or send the lookup to the work folder', t => {
+  const work = tempDir(t);
+  const bin = tempDir(t);
+  const name = WINDOWS ? 'codex.exe' : 'codex';
+  writeFileSync(join(work, name), '');
+  writeFileSync(join(bin, name), '');
+  const empty = ['', '.', 'relative-bin'].join(delimiter);
+  for (const env of [{ PATH: empty, Path: bin }, { Path: bin, PATH: empty }, { PATH: '', Path: bin }, { PATH: bin, Path: empty }]) {
+    assert.equal(resolveExecutable('codex', env, work), join(bin, name), JSON.stringify(env));
+  }
+  for (const env of [{ PATH: empty, Path: empty }, { PATH: '', Path: '' }, { PATH: empty, Path: '.' }]) {
+    assert.throws(() => resolveExecutable('codex', env, work), (error: unknown) => error instanceof ProcessRefused && error.reason === 'not_found', JSON.stringify(env));
+  }
 });
 
 test('writeLine: a large line is accepted and arrives whole (a full pipe is not a refusal); only an input that can no longer be written gives false', async t => {

@@ -321,7 +321,7 @@ async function readAccount(conn: CodexConnection): Promise<{ type: string | unde
 
 // Windows の囲いが ready か。ready でなければ「読むだけ」が効いているか分からないので、会話は始めない。Windows 以外では確かめない（その OS の囲いは Codex が持つ）
 async function readSandbox(conn: CodexConnection): Promise<string> {
-  if (conn.platformOs !== 'windows') return 'not_checked';
+  if (process.platform !== 'win32') return 'not_checked';
   return asString(asRecord(await conn.request('windowsSandbox/readiness', undefined))?.status) ?? 'unknown';
 }
 
@@ -446,11 +446,13 @@ export class CodexRuntime implements AgentRuntime {
   async start(request: RuntimeRequest): Promise<CodexRuntimeSession> {
     // Claude Code の許可の設定を Codex に渡さない（呼ぶ側の取り違え）。そのほかの知らない値・無い値は既定（read-only + on-request）に倒す
     if (isClaudeCodePermission(request.permission)) throw new CodexRefused('permission', 'A Claude Code permission setting cannot be used for Codex');
-    const permission = permissionFor('codex', request.permission);
-    const wire = wirePermission(permission);
+    const requested = permissionFor('codex', request.permission);
     if (request.signal.aborted) throw new CodexRefused('process', 'The reply was stopped before Codex started');
     const session = new CodexSession(`codex-${(this.#next += 1)}`, this.#deps.log);
     const opened = await this.#open(request.cwd, session.handlers, request.signal);
+    const permission: RuntimePermission = opened.version === VERIFIED_VERSION ? requested : 'read-only';
+    const wire = wirePermission(permission);
+    if (permission !== requested) this.#deps.log(`[WARN] Codex ${opened.version ?? 'of an unknown version'} is not a version beat has checked, so it was started with ${permission} instead of ${requested}`);
     session.scope = opened.scope;
     session.proc = opened.proc;
     session.conn = opened.conn;

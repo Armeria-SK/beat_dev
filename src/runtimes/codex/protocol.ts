@@ -114,12 +114,12 @@ export const IGNORED_NOTIFICATIONS: ReadonlySet<string> = new Set([
   'item/autoApprovalReview/started', 'item/autoApprovalReview/completed', 'autoApprovalReview/strictReviewRequired',
   'rawResponseItem/completed', 'rawResponse/completed', 'hook/started', 'hook/completed', 'skills/changed',
   'account/updated', 'account/rateLimits/updated', 'remoteControl/status/changed', 'mcpServer/startupStatus/updated', 'mcpServer/oauthLogin/completed',
-  'model/rerouted', 'model/verification', 'model/safetyBuffering/updated', 'app/list/updated', 'fs/changed', 'windows/worldWritableWarning',
+  'model/rerouted', 'model/verification', 'model/safetyBuffering/updated', 'app/list/updated', 'fs/changed',
   'modelProvider/authRecoveryStarted', 'modelProvider/authRecoveryCompleted',
 ]);
 
 // 記録だけして続ける知らせ（文は伏せて 1 行）
-export const WARNING_NOTIFICATIONS: ReadonlySet<string> = new Set(['warning', 'configWarning', 'guardianWarning', 'deprecationNotice']);
+export const WARNING_NOTIFICATIONS: ReadonlySet<string> = new Set(['warning', 'configWarning', 'guardianWarning', 'deprecationNotice', 'windows/worldWritableWarning']);
 
 // 道具として扱う項目の種類（item/started・item/completed）。ほかの種類は読み捨てるか、知らない出来事として残す
 export const TOOL_ITEM_TYPES: ReadonlySet<string> = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'collabAgentToolCall', 'subAgentActivity']);
