@@ -47,6 +47,7 @@ export interface ToolOutput {
   content: string;
   isError?: boolean;
   fullRef?: string;
+  // この結果の文に、相手側の文字が 1 つも入らないとき（アプリの決まった文と、自分が書いたものだけ）にだけ付ける。成功した結果でも「外から読んだ」印を付けない。相手の文字が 1 字でも入りうるなら付けない
   noRemoteContent?: boolean;
   // この結果が外の中身を持ち込んだ（実行の結果を見てからでないと分からないとき。file_search が downloads/ の下の行を返したときなど）。パイプラインは「外から読んだ」印を付ける。印を付ける向きにしか働かない（付けない・外す効果は無い）
   fetched?: boolean;

@@ -268,7 +268,7 @@ export async function replayAction(row: PendingRow, deps: ReplayDeps): Promise<R
     if (signal.aborted && deps.signal?.aborted) output = { content: `${output.content}\n\n${pendingText('en', 'cancelled_stop')}`, isError: true };
     const network = tool.effect === 'network' || (() => { try { return tool.networkCall?.(args as never) === true; } catch { return true; } })();
     const egress = again?.decision === 'ask' && again.askKinds?.includes('egress') === true;
-    const fetched = (network && !(output.isError && output.noRemoteContent)) || again?.fetched === true || output.fetched === true || egress;
+    const fetched = (network && !output.noRemoteContent) || again?.fetched === true || output.fetched === true || egress;
     const kept = deps.conversationExists(row.conversation_id);
     if (!kept) new KV(deps.db).delete(`file-reads:${row.conversation_id}`);
     if (!kept && output.fullRef && resolve(output.fullRef).startsWith(resolve(join(deps.paths.data, 'tool_outputs')) + sep)) {
