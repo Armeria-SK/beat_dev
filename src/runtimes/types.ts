@@ -71,6 +71,8 @@ export interface RuntimeRequest {
   // 製品のフォルダ
   cwd: string;
   model?: string;
+  // 考える深さ（そのモデルの一覧にある値。呼ぶ側が一覧と突き合わせて渡す。実行役の作り手は、知らない形の値を渡さない）
+  effort?: string;
   // 製品の CLAUDE.md の全文（持ち主の決め Q-AR-13。beat が読んで渡す。Claude Code だけが system の文への追加として使い、ほかの実行役は使わない）
   instructions?: string;
   // 続きの会話の ID（実行役が持つもの）

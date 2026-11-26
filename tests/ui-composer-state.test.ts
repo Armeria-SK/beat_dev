@@ -5,7 +5,7 @@ import { SLASH_COMMANDS } from '../web/src/chat-logic.ts';
 import type { FeedbackItem } from '../web/src/feedback.ts';
 import { t } from '../web/src/i18n/index.ts';
 import {
-  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modelInEffect, modelOptions, NEW_DRAFT, NO_RUNTIME, runtimeInEffect, runtimeShown, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
+  attachLeftOut, attachRoom, bareCommand, cancelClearsInterrupt, composerView, createDrafts, depthOptions, enterAction, firstMode, MAX_ATTACHMENTS, MODE_LABEL, modeHint, modelInEffect, modelOptions, NEW_DRAFT, NO_RUNTIME, runtimeInEffect, runtimeShown, PLACEHOLDER, queuedLine, queueRow, replaceTargets,
   slashAvailable, slashItems,
   submitMessage, toastLift, UI_SLASH,
   type ComposerInput, type RuntimeUse, type SubmitDeps, type SubmitInput,
@@ -328,7 +328,7 @@ test('ui/composer-state: トーストを入力欄の上へ持ち上げる高さ�
   assert.equal(toastLift(900, 950), 0);
 });
 
-test('ui/composer-state（AR-7）: 実行役のモデルは、まだ発言の無い製品の会話でだけ選べる。結ばれた会話はその実行役のモデルだけ。実行役の会話では権限モードの切り替えを出さない', () => {
+test('ui/composer-state（AR-7）: 実行役のモデルは、まだ発言の無い製品の会話でだけ選べる。結ばれた会話はその実行役のモデルだけ。権限モードの切り替えは実行役の会話でも出し、説明だけ実行役用にする', () => {
   const models = [model('a'), model('cc', { runtime: 'claude-code', provider: '' }), model('cx', { runtime: 'codex', provider: '' })];
   const ids = (use: RuntimeUse) => modelOptions(models, null, use).map(o => o.id);
   assert.deepEqual(ids(NO_RUNTIME), [null, 'a'], 'a conversation with no product, or one already started with a provider, does not offer runtimes');
@@ -343,4 +343,6 @@ test('ui/composer-state（AR-7）: 実行役のモデルは、まだ発言の無
   assert.equal(runtimeInEffect({ bound: null, allowed: false }, cc), false, 'a runtime model that cannot be used here is not "in effect"');
   assert.equal(runtimeInEffect({ bound: null, allowed: true }, models[0]), false);
   assert.deepEqual(runtimeShown(models, { bound: null, allowed: false }).map(m => m.id), ['a']);
+  assert.deepEqual([modeHint('auto', false), modeHint('plan', false)], ['mode.autoDesc', 'mode.planDesc']);
+  assert.deepEqual([modeHint('auto', true), modeHint('plan', true)], ['mode.runtimeAutoDesc', 'mode.runtimePlanDesc'], 'the plan mode of a runtime conversation is not described as the tool filter of beat');
 });

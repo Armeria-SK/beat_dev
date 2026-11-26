@@ -150,7 +150,7 @@ function readChoice(app: App, body: Record<string, unknown>, current: { id?: str
     choice.modelId = modelId;
   }
   if (effort !== undefined) choice.effort = effort;
-  const { efforts } = app.engine.effortChoices(modelId !== undefined ? modelId : current?.model_id ?? null);
+  const { efforts } = app.engine.effortChoices(modelId !== undefined ? modelId : current?.model_id ?? null, current?.runtime_id ?? null);
   if (effort) {
     if (!efforts.includes(effort)) throw problem(400, 'invalid_field', 'bad_effort', { field: 'effort', params: { effort, values: efforts.join(' / ') || '-' } });
     return { choice, effortReset: false };

@@ -79,9 +79,11 @@ export class RuntimeRegistry {
   }
 
   // 起こすたびに、設定から決めた許可の設定を必ず渡す（呼ぶ側は許可の設定を決めない。無い・知らない値は既定）
-  async start(config: Pick<AppConfig, 'runtimes'>, id: string, request: Omit<RuntimeRequest, 'permission'>): Promise<RuntimeSession> {
+  // cautious: 設定の許可より厳しい側へ（実行役ごとの一覧の先頭。設定の値が先頭より緩くても、先頭で起こす）。計画モードの会話に使う
+  async start(config: Pick<AppConfig, 'runtimes'>, id: string, request: Omit<RuntimeRequest, 'permission'> & { cautious?: true }): Promise<RuntimeSession> {
     const found = this.find(config, id);
     if (!found.ok) throw new RuntimeUnavailable(found.reason, found.detail);
-    return found.runtime.start({ ...request, permission: found.permission });
+    const { cautious, ...rest } = request;
+    return found.runtime.start({ ...rest, permission: cautious ? permissionFor(found.runtime.kind, undefined) : found.permission });
   }
 }

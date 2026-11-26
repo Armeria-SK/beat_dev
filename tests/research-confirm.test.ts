@@ -153,6 +153,20 @@ test('確定（R3.11 M8 (a)）: 元の会話が消えた・しまった・ほか
   assert.equal(s.app.research.store.get(r.record.id)!.status, 'done');
 });
 
+test('確定: 元の会話が外の実行役に結ばれていれば 409 runtime_source で断り、状態は done のまま・何も書かず、返事も始めない（beat の発言だけが残って次の実行役の返事に混ざらない）', async t => {
+  const s = await setup(t);
+  const r = seed(s);
+  assert.equal(s.app.conversations.bindRuntime(uuid(1), 'claude-code'), true);
+  const before = s.app.conversations.messages(uuid(1)).length;
+  const out = await s.confirm(r.record.id, { shownHash: r.hash(), picks: [{ id: r.tags.id, decision: 'picked' }] });
+  assert.deepEqual([out.status, out.body.code], [409, 'research.runtime_source'], JSON.stringify(out.body));
+  assert.equal(s.app.research.store.get(r.record.id)!.status, 'done');
+  assert.ok(s.app.research.store.items(r.record.id).every(i => i.decision === null));
+  assert.equal(s.app.conversations.messages(uuid(1)).length, before, 'no message was added to the conversation');
+  assert.equal(s.generated().length, 0);
+  assert.equal(s.app.engine.activeRuns().length, 0, 'no reply was started');
+});
+
 test('確定（R3.13 の 1）: 計画の会話が返事をしている間は 409 conversation_running で行が増えず done のまま。終わってから押すと通り、道具を呼んだ assistant の行のすぐあとに必ず tool の行が並ぶ', async t => {
   let release!: () => void;
   const s = await setup(t, { hold: { search: new Promise<void>(resolve => { release = resolve; }) } });

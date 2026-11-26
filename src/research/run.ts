@@ -183,6 +183,7 @@ export class ResearchRunner {
     if (!['done', 'failed', 'cancelled'].includes(record.status)) throw new ResearchError('finished', { id });
     const source = record.source_conversation_id ? d.conversations.get(record.source_conversation_id) : undefined;
     if (!source || source.kind !== 'chat' || source.project_id !== record.project_id || source.archived === 1 || source.parent_run_id) throw new ResearchError('source_gone');
+    if (source.runtime_id !== null) throw new ResearchError('runtime_source');
     if (d.engine.activeRuns().some(run => run.conversationId === source.id)) throw new ResearchError('conversation_running');
     const items = this.store.items(id);
     const plan = planConfirm(record, items, input.picks);

@@ -210,6 +210,8 @@ export const ja = {
   'ui.ask.lead': '回答:',
   'ui.ask.consequenceStep': '答えは、最後の問いのあとにまとめて送ります。',
   'mode.autoDesc': '判定役が操作を 1 つずつ確かめます。外への送信・取り消せない削除・判定役が通せないものは、Pending であなたを待ちます',
+  'mode.runtimeAutoDesc': '外の実行役は、実行役の設定で決めた許可で動きます。beat は実行役の操作を判定しません',
+  'mode.runtimePlanDesc': '外の実行役を、設定の許可にかかわらず一番慎重な許可で始めます: 読むことはできますが、承認が要る操作は返事が止まります',
   'mode.planDesc': '何も変えません: 調べて計画を書くだけです。使えるのは読む道具と Web の読み取りだけです（Web を読むとき、URL の中の文字はこの PC の外に出ることがあります）',
   'ui.composer.queueHint': '次の自然な区切りで送ります',
   'ui.composer.forceHint': '今すぐ割り込みます',

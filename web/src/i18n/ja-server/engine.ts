@@ -77,7 +77,7 @@ export const engineJa = {
   'runtime.not_fresh': "この会話には、ほかのモデルとのやり取りがもうあります。「{id}」を使うなら、新しい会話を始めてください",
   'runtime.no_retry': "外の実行役を通す会話では、返事のやり直しはできません（実行役がメッセージをもう受け取っているかもしれないため）。続けるには、メッセージを送ってください",
   'runtime.no_model': "外の実行役「{id}」のモデルが、設定にひとつもありません",
-  'runtime.start_failed': "外の実行役を始められませんでした: {detail}",
+  'runtime.no_images': "外の実行役を通す会話では、まだ画像を渡せないので、何も送っていません。画像なしで送るか、画像を読めるモデルで新しい会話を始めてください",  'runtime.start_failed': "外の実行役を始められませんでした: {detail}",
   'runtime.resume_failed': "外の実行役が、この会話の続きを始められませんでした: {detail}。続けるには、新しい会話を始めてください",
   'runtime.auth': "外の実行役が、ログインの問題を知らせてきました: {detail}",
   'runtime.rate_limit': "外の実行役が、使える量の上限を知らせてきました: {detail}",

@@ -592,6 +592,8 @@ export const en = {
   'ui.composer.modePlan': 'Plan',
   'mode.autoDesc': 'The judge checks each action; sending out, deleting for good and anything it cannot clear wait in Pending for you',
   'mode.planDesc': 'Changes nothing: investigates and writes a plan only. Only tools that read, and reading the web, are available (text in a URL can leave this PC when reading the web)',
+  'mode.runtimeAutoDesc': 'The runtime works with the permission you set for it in the runtime settings. beat does not judge its actions',
+  'mode.runtimePlanDesc': 'The runtime is started with its most careful permission, whatever the runtime settings say: it can read, but anything that needs approval stops the reply',
   'ui.composer.send': 'Send',
   'ui.composer.queue': 'Queue',
   'ui.composer.queueHint': 'Send at the next natural break',

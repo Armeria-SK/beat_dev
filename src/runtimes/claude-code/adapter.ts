@@ -110,6 +110,7 @@ interface Session {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/u;
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -242,6 +243,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
     // 別の実行役（Codex）の許可の値は、倒さずに断る（何も起こす前に）。それ以外の知らない値は、Claude Code の一覧への絞りで default に倒れる
     if (isCodexPermission(request.permission)) throw new ClaudeCodeError('permission', 'This permission value belongs to another runtime. Choose a Claude Code permission');
     const permission = claudeMode(request.permission);
+    const effort = EFFORT_LEVELS.find(level => level === request.effort);
     if (isRemotePath(request.cwd) || windowsHazard(request.cwd) !== undefined) throw new ClaudeCodeError('cwd', 'The working folder cannot be a network path or a device path');
     if (!isAbsolute(request.cwd) || !statSync(request.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new ClaudeCodeError('cwd', 'The working folder must be an existing folder given as an absolute path');
     const overlap = ownFolderOverlap(request.cwd, (this.#options.paths ?? resolvePaths)());
@@ -291,6 +293,7 @@ class ClaudeCodeRuntime implements AgentRuntime {
             return spawned;
           },
           ...(request.model !== undefined ? { model: request.model } : {}),
+          ...(effort !== undefined ? { effort } : {}),
           ...(request.resume !== undefined ? { resume: request.resume } : { sessionId: runtimeSession }),
         },
       });

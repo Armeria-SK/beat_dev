@@ -7,6 +7,9 @@ export const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg
 
 export const MODE_LABEL = { auto: 'ui.composer.modeNormal', plan: 'ui.composer.modePlan' } as const satisfies Record<PermissionMode, string>;
 export const MODE_HINT = { auto: 'mode.autoDesc', plan: 'mode.planDesc' } as const satisfies Record<PermissionMode, string>;
+// 外の実行役の会話では、モードの意味が違う（beat の道具の絞りではなく、実行役を起こす許可の厳しさ）ので、説明も別にする
+export const RUNTIME_MODE_HINT = { auto: 'mode.runtimeAutoDesc', plan: 'mode.runtimePlanDesc' } as const satisfies Record<PermissionMode, string>;
+export const modeHint = (mode: PermissionMode, byRuntime: boolean) => (byRuntime ? RUNTIME_MODE_HINT : MODE_HINT)[mode];
 
 export type Placeholder = 'noModel' | 'busy' | 'plan' | 'reply' | 'message' | 'build';
 export const PLACEHOLDER = {

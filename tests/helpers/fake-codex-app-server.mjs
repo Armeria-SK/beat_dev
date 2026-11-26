@@ -49,7 +49,7 @@ async function play() {
   notify('thread/tokenUsage/updated', { threadId: THREAD, turnId: TURN, tokenUsage: {} });
   switch (scenario) {
     case 'text':
-      notify('configWarning', { summary: 'a warning with sk-ant-abcdefgh12345678 in it', details: null });
+      notify('configWarning', { summary: 'a warning‮ with sk-ant-abcdefgh12345678 in it', details: null });
       notify('something/new', { threadId: THREAD, x: 1 });
       notify('windows/worldWritableWarning', { threadId: THREAD, samplePaths: ['D:/open-folder'], extraCount: 2, failedScan: false });
       started(item('agentMessage', 'a1', { text: '' }));

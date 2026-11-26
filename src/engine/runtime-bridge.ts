@@ -14,7 +14,7 @@ import type { ProjectStore } from '../projects/store.ts';
 import { usableCheck, type RuntimeChecks } from '../runtimes/checks.ts';
 import { ownFolderOverlap } from '../runtimes/claude-code/adapter.ts';
 import type { RuntimeRegistry } from '../runtimes/registry.ts';
-import { BLOCKING_ISSUES, type AgentRuntime, type RuntimeEvent, type RuntimeIssue, type RuntimeSession, type RuntimeStatus } from '../runtimes/types.ts';
+import { BLOCKING_ISSUES, permissionFor, type AgentRuntime, type RuntimeEvent, type RuntimeIssue, type RuntimeSession, type RuntimeStatus } from '../runtimes/types.ts';
 import { previewJson } from '../shared/json-preview.ts';
 import { languageOf } from '../shared/language.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
@@ -57,11 +57,13 @@ const STOP_GRACE_MS = 15_000;
 const CLAUDE_MD_MAX_BYTES = 256 * 1024;
 const OPEN_INPUT_LIMIT = 20_000;
 const FAILURE_TEXT_MAX = 500;
+const CLEAN_INPUT_MAX = 50_000;
 const UNKNOWN_LOG_LIMIT = 5;
 
-// 実行役が言ってきた文（失敗・断りの理由）を、ログ・画面に渡す前に整える: 見えない文字・向きを変える文字・制御文字を消し、鍵を伏せ、長さを切る
+// 実行役が言ってきた文（失敗・断りの理由）を、ログ・画面に渡す前に整える: 見えない文字・向きを変える文字・制御文字を消し、鍵を伏せ、そのあとで長さを切る
+// （先に切ると、切り口にかかった鍵の頭だけが残る。整える前の長さの上限 CLEAN_INPUT_MAX は、鍵の長さより十分大きい）
 export function cleanRuntimeText(text: string, secrets: readonly string[], max: number = FAILURE_TEXT_MAX): string {
-  return redactSecrets(plainBlock(text, max), secrets);
+  return plainBlock(redactSecrets(plainBlock(text, CLEAN_INPUT_MAX), secrets), max);
 }
 
 // 実行役を起こす作業フォルダ（製品のフォルダ）。製品が無い・フォルダが無い・beat 自身の入っている場所やデータのフォルダと重なるときは断る（理由つき）
@@ -153,11 +155,24 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   const fail = (kind: EngineErrorKind, key: EngineMessageKey, params: MessageParams = {}): Outcome => ({ ok: false, kind, key, params });
   const cancelled = (): Outcome => ({ ok: false, kind: 'cancelled', key: 'runtime.stopped_partway', params: {}, cancelled: true });
 
+  // 実行役への呼びかけ（断る・止める・閉じる）を順に呼び、待つ時間は全部で止める猶予まで。応えない実行役のせいで、止めた返事が終わらないままにしない。呼びかけは必ず全部出す
+  const bounded = async (calls: ReadonlyArray<readonly [string, () => Promise<void>]>): Promise<void> => {
+    let timer: NodeJS.Timeout | undefined;
+    const expiry = new Promise<void>(resolve => { timer = setTimeout(resolve, deps.stopGraceMs ?? STOP_GRACE_MS); });
+    try {
+      for (const [what, call] of calls) {
+        await Promise.race([(async () => call())().catch((error: unknown) => log(`[WARN] Could not ${what} of runtime ${runtimeId}: ${clean((error as Error).message)}`)), expiry]);
+      }
+    } finally { clearTimeout(timer); }
+  };
+
   const held: { runtime: AgentRuntime | undefined; session: RuntimeSession | undefined } = { runtime: undefined, session: undefined };
   let launch: unknown;
   let permission = 'unknown';
+  let effort: string | undefined;
   let sessionStart: string | undefined;
   let resumed = false;
+  let previousSession: string | null = null;
   let toolCount = 0;
   let unknownCount = 0;
   let paragraph = '';
@@ -237,8 +252,12 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
       }
       case 'approval': {
         // 承認の橋は AR-8a。それまでは、何も許さずに返事を止める
-        try { await held.runtime!.approve(held.session!.id, event.requestId, 'cancel'); } catch (error) { log(`[WARN] Could not decline the approval request of runtime ${runtimeId}: ${clean((error as Error).message)}`); }
-        try { await held.runtime!.interrupt(held.session!.id); } catch { /* もう終わっている */ }
+        const { runtime, session } = held;
+        await bounded([
+          ['decline the approval request', () => runtime!.approve(session!.id, event.requestId, 'cancel')],
+          ['interrupt the reply', () => runtime!.interrupt(session!.id)],
+        ]);
+        if (signal.aborted) return cancelled();
         log(`[INFO] Runtime ${runtimeId} asked for approval (${clean(plainLine(event.tool, 80), 80)}); the reply was stopped because approvals are not bridged yet`);
         return fail('provider_error', 'runtime.approval_bridge', { tool: clean(plainLine(event.tool, 80) || 'tool', 80) });
       }
@@ -265,10 +284,14 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     }
   };
 
+  const stopped = new Promise<'stopped'>(resolve => { if (signal.aborted) resolve('stopped'); else signal.addEventListener('abort', () => resolve('stopped'), { once: true }); });
+
   const drive = async (): Promise<Outcome> => {
     let check = deps.runtimes.checks.get(runtimeId);
     if (!check) {
-      const checked = await deps.runtimes.checks.check(config, runtimeId);
+      // 最初の確かめは最長 60 秒かかる。止めると言われたら、確かめの終わりを待たずに終える
+      const checked = await Promise.race([deps.runtimes.checks.check(config, runtimeId), stopped]);
+      if (checked === 'stopped') return cancelled();
       if (!checked.ok) return fail('provider_error', 'runtime.unavailable', { id: runtimeId, reason: clean(checked.detail) });
       check = checked.check;
     }
@@ -281,17 +304,24 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     const found = deps.runtimes.registry.find(config, runtimeId);
     if (!found.ok) return fail('provider_error', 'runtime.unavailable', { id: runtimeId, reason: clean(found.detail) });
     held.runtime = found.runtime;
-    permission = found.permission;
+    // 計画モードの会話は、設定の許可より厳しい側（実行役ごとの一覧の先頭）で起こす。Claude Code の plan は選べる許可の一覧に無いので、default を使う
+    const cautious = deps.conversations.modeOf(conversationId) === 'plan';
+    permission = cautious ? permissionFor(found.runtime.kind, undefined) : found.permission;
+    // 考える深さは、会話に覚えた値が、このモデルの一覧にあるときだけ渡す（無ければ実行役の既定）
+    const stored = deps.conversations.get(conversationId)?.effort ?? null;
+    effort = stored !== null && (config.models.find(m => m.id === input.modelId)?.efforts ?? []).includes(stored) ? stored : undefined;
     const folder = runtimeFolder(deps, input.projectId);
     if (!folder.ok) return fail('provider_error', folder.refusal.key, folder.refusal.params ?? {});
     const message = unansweredText(deps.conversations, conversationId);
     if (message.trim() === '') return fail('provider_error', 'runtime.start_failed', { detail: 'There is no message to send' });
     const previous = deps.conversations.runtimeOf(conversationId).session;
+    previousSession = previous;
     resumed = previous !== null;
     const instructions = found.runtime.kind === 'claude-code' ? productInstructions(folder.root, log) : undefined;
     try {
       held.session = await deps.runtimes.registry.start(config, runtimeId, {
         conversationId, cwd: folder.root, model: input.model, signal,
+        ...(effort !== undefined ? { effort } : {}), ...(cautious ? { cautious: true as const } : {}),
         ...(instructions !== undefined ? { instructions } : {}), ...(previous !== null ? { resume: previous } : {}),
       });
     } catch (error) {
@@ -358,12 +388,16 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   } catch (error) { log(`[WARN] Could not save the last part of the reply of run ${runId}: ${clean((error as Error).message)}`); }
   const sessionEnd = held.session?.runtimeSession;
   if (held.session && held.runtime) {
-    try { await held.runtime.close(held.session.id); } catch (error) { log(`[WARN] Could not close the runtime session of run ${runId}: ${clean((error as Error).message)}`); }
+    const closing = { runtime: held.runtime, session: held.session };
+    await bounded([['close the runtime session', () => closing.runtime.close(closing.session.id)]]);
   }
   if (sessionEnd) { try { deps.conversations.setRuntimeSession(conversationId, sessionEnd); } catch (error) { log(`[WARN] Could not remember the runtime session of ${conversationId}: ${clean((error as Error).message)}`); } }
   try {
-    const record = redactJsonValue({ runtime: runtimeId, kind: held.runtime?.kind ?? null, model: input.model, permission, resumed, sessionStart: sessionStart ?? null, sessionEnd: sessionEnd ?? null, contained: held.session ? held.session.containReason === undefined : null, launch: launch ?? null });
-    deps.runs.setRuntime(runId, JSON.parse(redactExact(JSON.stringify(record), secrets)) as unknown);
+    // 続きに使う会話の ID（beat が付けたもの・実行役が付けたもの）は、記録に残さない（起動の引数・thread の ID に入っていても伏せる）。一覧の API はこの記録をそのまま返す
+    const sessionIds = [sessionStart, sessionEnd, previousSession].filter((id): id is string => typeof id === 'string' && id !== '');
+    const record = redactJsonValue({ runtime: runtimeId, kind: held.runtime?.kind ?? null, model: input.model, effort: effort ?? null, permission, resumed, contained: held.session ? held.session.containReason === undefined : null, launch: launch ?? null });
+    const hidden = sessionIds.reduce((json, id) => json.split(id).join('[session]'), redactExact(JSON.stringify(record), secrets));
+    deps.runs.setRuntime(runId, JSON.parse(hidden) as unknown);
   } catch (error) { log(`[WARN] Could not record the runtime launch of run ${runId}: ${clean((error as Error).message)}`); }
 
   if (outcome.ok) {

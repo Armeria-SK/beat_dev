@@ -30,6 +30,11 @@ export class ScriptedRuntime implements AgentRuntime {
   status: RuntimeStatus = OK_STATUS;
   script: Script = feed => feed.done();
   startError: Error | undefined;
+  // 応えない実行役（呼ばれても終わらない）を作る
+  hang: { probe?: boolean; approve?: boolean; interrupt?: boolean } = {};
+  // 応えない呼び出しを、試験の終わりに解く（待っている確かめの時計も道連れに残さない）
+  readonly release!: () => void;
+  readonly #gate = new Promise<void>(resolve => { (this as { release: () => void }).release = resolve; });
   runtimeSession: string | undefined = 'sess-1';
   containReason: string | undefined;
   launch: unknown;
@@ -45,7 +50,11 @@ export class ScriptedRuntime implements AgentRuntime {
     };
   }
 
-  async probe(): Promise<RuntimeStatus> { this.probes += 1; return this.status; }
+  async probe(): Promise<RuntimeStatus> {
+    this.probes += 1;
+    if (this.hang.probe) await this.#gate;
+    return this.status;
+  }
   async models(): Promise<RuntimeModel[]> { return [{ id: 'sonnet' }]; }
 
   async start(request: RuntimeRequest): Promise<RuntimeSession> {
@@ -71,8 +80,16 @@ export class ScriptedRuntime implements AgentRuntime {
     void Promise.resolve(this.script(feed, input.text)).catch(error => { open.queue.push({ type: 'failed', kind: 'process', message: String((error as Error).message) }); open.ended = true; open.wake?.(); });
   }
 
-  async interrupt(sessionId: string): Promise<void> { this.interrupts += 1; this.#open.get(sessionId)?.stop(); }
-  async approve(_sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> { this.approvals.push({ requestId, decision }); }
+  async interrupt(sessionId: string): Promise<void> {
+    this.interrupts += 1;
+    this.#open.get(sessionId)?.stop();
+    if (this.hang.interrupt) await this.#gate;
+  }
+
+  async approve(_sessionId: string, requestId: string, decision: ApprovalDecision): Promise<void> {
+    this.approvals.push({ requestId, decision });
+    if (this.hang.approve) await this.#gate;
+  }
 
   async *events(sessionId: string): AsyncIterable<RuntimeEvent> {
     const open = this.#open.get(sessionId)!;

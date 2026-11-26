@@ -5,7 +5,7 @@ import { toast } from '../feedback.ts';
 import { useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
 import {
-  ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_HINT, MODE_LABEL, modelInEffect, modelName, modelOptions, NO_RUNTIME, PLACEHOLDER,
+  ATTACH_ACCEPT, attachLeftOut, attachRoom, bareCommand, composerDrafts, composerView, depthOptions, enterAction, escStops, MAX_ATTACHMENTS, MODE_LABEL, modeHint, modelInEffect, modelName, modelOptions, NO_RUNTIME, PLACEHOLDER,
   queuedLine, queueRow, runtimeInEffect, runtimeShown, slashAvailable, slashItems, toastLift,
   type RuntimeUse, type SlashContext, type SubmitKind, type UiSlash,
 } from './composer-state.ts';
@@ -93,7 +93,7 @@ export function Composer(props: ComposerProps) {
   const use = props.runtime ?? NO_RUNTIME;
   const current = modelInEffect(runtimeShown(models ?? [], use), chatOrder, modelId);
   const byRuntime = runtimeInEffect(use, current);
-  const view = composerView({ hasConversation, running, mode: byRuntime ? 'auto' : mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
+  const view = composerView({ hasConversation, running, mode, chatModels: models ? models.filter(m => m.inChat).length : null, text, attachments: attached.length, uploading, sending, product: Boolean(props.product), planless: Boolean(props.planless) });
   const depths = depthOptions(current);
   const commands = slashClosed ? [] : slashItems(text, props.slash, slashForced);
   const active = Math.min(slashIndex, Math.max(0, commands.length - 1));
@@ -273,11 +273,11 @@ export function Composer(props: ComposerProps) {
           )}
         </span>
         <span className="bt-composer__spacer" />
-        {!byRuntime && <span className="bt-seg" role="group" aria-label={t('ui.composer.mode')}>
+        <span className="bt-seg" role="group" aria-label={t('ui.composer.mode')}>
           {PERMISSION_MODES.map(value => (
-            <button key={value} type="button" className="bt-seg__opt" title={t(MODE_HINT[value])} aria-pressed={mode === value} disabled={view.disabled} onClick={() => { if (value !== mode) props.onChoose({ permissionMode: value }); }}>{t(MODE_LABEL[value])}</button>
+            <button key={value} type="button" className="bt-seg__opt" title={t(modeHint(value, byRuntime))} aria-pressed={mode === value} disabled={view.disabled} onClick={() => { if (value !== mode) props.onChoose({ permissionMode: value }); }}>{t(MODE_LABEL[value])}</button>
           ))}
-        </span>}
+        </span>
         {view.actions === 'busy' ? (
           <>
             <button type="button" className="bt-btn bt-btn--sm" title={t('ui.composer.queueHint')} disabled={!view.canSubmit} onClick={() => void submit('queue')}>{t('ui.composer.queue')}</button>

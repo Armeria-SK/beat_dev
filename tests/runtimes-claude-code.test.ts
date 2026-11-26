@@ -171,6 +171,18 @@ test('a permission value of the other runtime (Codex) is refused before anything
   assert.equal(s.sdk.queries.length, 1);
 });
 
+test('the thinking depth is passed to the SDK only when it is one of the levels the SDK knows; anything else is left out', async t => {
+  const s = setup(t);
+  for (const given of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    await s.start({ effort: given });
+    assert.equal(s.sdk.last.ctx.options.effort, given);
+  }
+  for (const given of [undefined, '', 'ultra', 'HIGH', 'high\nlow']) {
+    await s.start(given === undefined ? {} : { effort: given });
+    assert.equal('effort' in s.sdk.last.ctx.options, false, JSON.stringify(given));
+  }
+});
+
 test('a session continues with the saved id (resume, no sessionId); a bad id or model name is refused before the SDK is called', async t => {
   const s = setup(t);
   const saved = '99999999-8888-4777-8666-555555555555';
