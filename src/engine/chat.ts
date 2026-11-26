@@ -85,8 +85,6 @@ export const MAX_CONTINUATIONS = 3;
 const PENDING_WAIT_MS = 4 * 60_000;
 // モデルを呼んでから（提供元の枠を取ったあと）最初の出来事が来ないまま、これだけたったら「黙っている」と知らせる。知らせるだけで打ち切らない
 const MODEL_SILENT_MS = 60_000;
-// 標準の fetch（undici）が、返事の頭・本文が来ないまま 300 秒で切るときの理由（classifyFetchError が connect.code にする）
-const SILENT_FETCH_TIMEOUTS: ReadonlySet<string> = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 const RESUME_WORD_MAX = 40;
 // 自動承認の判定役の呼び出しの出力の上限。考えを文で書くモデルは、答え（最後の行の JSON）の前に切れていた。切れたときだけ、同じ枠のまま 1 回、JUDGE_OUTPUT_RAISED まで上げて呼び直す（どちらもモデルの上限までで、それ以上は上げない）
 export const JUDGE_OUTPUT_TOKENS = 1024;
@@ -1786,8 +1784,8 @@ export class ChatEngine {
           if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
           last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}), ...(e.upstream ? { upstream: e.upstream } : {}) };
           // 上限まで 1 つも出来事が来ないまま時間切れで終わった呼び出しは、同じモデルで待ち直しても同じなので試し直さない（鎖に次があればそこへ、無ければここで終える）。
-          // 時間切れは、提供元の部品の timeout のほか、標準の fetch（undici）が先に切る 300 秒の頭・本文の時間切れ。出来事が届いてからの失敗・上限より前の失敗は、今までどおり試し直す
-          if (events === 0 && silent && (e.kind === 'timeout' || (e.code === 'connect.code' && SILENT_FETCH_TIMEOUTS.has(String(e.params.code))))) {
+          // 時間切れは kind が timeout のもの（標準の fetch〔undici〕が先に切る 300 秒の頭・本文の時間切れも、classifyFetchError が timeout にして返す）。出来事が届いてからの失敗・上限より前の失敗は、今までどおり試し直す
+          if (events === 0 && silent && e.kind === 'timeout') {
             const minutes = Math.max(0.1, Math.round((Date.now() - waitStarted) / 6000) / 10);
             last = { kind: 'timeout', message: engineText(language, 'run.model_no_answer', { minutes }), code: 'engine.run.model_no_answer', params: { minutes }, retryable: e.retryable, route };
             break;

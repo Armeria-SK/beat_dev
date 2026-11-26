@@ -187,13 +187,13 @@ test('ui/ChangesPane（DOM）: 欄を開く前の Undo（サーバーが覚え�
 });
 
 test('ui/ChangesPane（DOM）: タスクが動いているあいだの 409 は、塊を残したまま理由を出す。会話には知らせない', async () => {
-  const busy = { status: 409, body: { error: 'project', code: 'project.changes_busy', message: 'A task or conversation of this product is running. Undo or redo after it stops' } };
+  const busy = { status: 409, body: { error: 'project', code: 'project.changes_busy', message: 'A task or conversation that can write to this product folder is running (it may belong to another product, or to none). Undo or redo after it stops' } };
   const { container, notices } = await show([queue], {}, { undo: busy });
   await click(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo'));
   await wait(50);
   const warn = container.querySelector('.bt-notice--warn');
   assert.ok(warn, '知らせが出る');
-  assert.match(text(warn)!, /^Could not undo · A task or conversation of this product is running/u);
+  assert.match(text(warn)!, /^Could not undo · A task or conversation that can write to this product folder is running/u);
   assert.ok(block(container, 'src/upload/queue.ts') && !block(container, 'src/upload/queue.ts')!.classList.contains('is-leaving'), '塊は残る');
   assert.deepEqual(notices, []);
   assert.ok(!(byText(block(container, 'src/upload/queue.ts')!, 'button', 'Undo') as HTMLButtonElement).disabled, 'もう一度押せる');

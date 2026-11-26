@@ -635,7 +635,7 @@ export const ja = {
   'ui.changes.why.too_large': '前の中身が大きすぎて控えていません',
   'ui.changes.why.cannot_keep': 'Redo のために今の中身を控えられませんでした',
   'ui.changes.why.same_file': '同じファイルが 2 回ありました',
-  'ui.changes.why.changed': '元に戻したあとにまた変わりました',
+  'ui.changes.why.changed': 'そのあいだに中身が変わりました',
   'ui.changes.why.failed': '書き込みに失敗しました',
   'ui.notice.undid': (n: number) => `${n} 個のファイルを元に戻しました`,
   'ui.notice.undidRefused': (n: number) => `${n} 個は戻せませんでした`,

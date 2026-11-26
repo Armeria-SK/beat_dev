@@ -423,12 +423,9 @@ export function ModelsPanel() {
 
 const RULE_KIND = { judge: 'ui.set.rules.kind.judge', policy: 'ui.set.rules.kind.policy', send: 'ui.set.rules.kind.send', delete: 'ui.set.rules.kind.delete' } as const satisfies Record<ApprovalRule['kind'], string>;
 
-// inactive: 持ち主の Ask の一覧から作った古い決まり。その一覧はいつも持ち主に聞くので、決まりは当たらない（サーバーが付ける印。型は api.ts の ApprovalRule に足すまでここで持つ）
-type RuleRow = ApprovalRule & { inactive?: true };
-
 export function RulesGroup() {
   const t = useT();
-  const [rules, setRules] = useState<RuleRow[] | null | 'failed'>(null);
+  const [rules, setRules] = useState<ApprovalRule[] | null | 'failed'>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const load = () => { api.approvalRules().then(r => setRules(r.items)).catch(() => setRules('failed')); };
   useEffect(load, []);

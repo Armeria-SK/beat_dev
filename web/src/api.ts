@@ -78,7 +78,7 @@ export interface PendingAction {
   runtime?: { id: string; reply: boolean } | null;
 }
 export interface JudgedCounts { allowed: number; parked: Partial<Record<PendingKind, number>>; notParked: number; ruled?: Record<string, number> }
-export interface ApprovalRule { id: number; project_id: string; project_name: string | null; archived: boolean; kind: 'judge' | 'send' | 'delete' | 'policy'; tool: string; shown: string; created_at: number; push?: true; outside?: true }
+export interface ApprovalRule { id: number; project_id: string; project_name: string | null; archived: boolean; kind: 'judge' | 'send' | 'delete' | 'policy'; tool: string; shown: string; created_at: number; push?: true; outside?: true; inactive?: true }
 export interface PendingCounts { waiting: number; byProject: Record<string, number>; acceptanceChanges: Record<string, number>; judgedToday: { allowed: number; parked: number } }
 export type QuestionKind = 'ai' | 'stuck' | 'check_failed' | 'submit_refused';
 export type QuestionFix = 'queued' | 'running' | 'done' | 'failed';
