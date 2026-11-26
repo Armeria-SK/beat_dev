@@ -636,23 +636,95 @@ test('every secret-path deny rule goes through the command line check of the pro
     assert.ok(rules.includes(`Read(${glob})`), `Read(${glob})`);
     assert.ok(rules.includes(`Edit(${glob})`), `Edit(${glob})`);
   }
-  const args = s.runtime.launchOf(session.id)?.record?.args ?? [];
-  assert.ok(args.includes('Read(**/.env*)') && args.includes('Edit(**/*.pem)'), 'the fake child received the rules as arguments (nothing was redacted)');
+  assert.deepEqual(commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []), rules, 'the child received exactly the rules, in one comma-joined argument like the real SDK (nothing was redacted or split)');
 });
 
-test('the tools that ask a question, schedule later work, start remote work, publish or notify are turned off for a reply, for the model list, and on the child command line', async t => {
-  const turnedOff = ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback', 'ShareOnboardingGuide', 'EnterWorktree', 'ExitWorktree'];
+// 本物の SDK は、外す道具と決まりを 1 つの引数 `--disallowedTools=a,b,c`（コンマでつなぐ）で渡す
+function commandLineRules(args: readonly string[]): string[] {
+  const joined = args.filter(arg => arg.startsWith('--disallowedTools='));
+  assert.equal(joined.length, 1, 'exactly one --disallowedTools argument');
+  return joined[0]!.slice('--disallowedTools='.length).split(',');
+}
+
+test('the tools that ask a question, schedule later work, start remote work, publish, notify or make worktrees are turned off for a reply, for the model list, and on the child command line', async t => {
+  const turnedOff = [
+    'AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger', 'Artifact', 'ClaudeDesign', 'PushNotification', 'SendUserMessage', 'SendUserFile', 'SendMessage', 'SendFeedback',
+    'ShareOnboardingGuide', 'EnterWorktree', 'ExitWorktree', 'Workflow', 'Projects',
+  ];
   const s = setup(t);
   const session = await s.start();
   const reply = s.sdk.last.ctx.options.disallowedTools ?? [];
-  const args = s.runtime.launchOf(session.id)?.record?.args ?? [];
+  const onCommandLine = commandLineRules(s.runtime.launchOf(session.id)?.record?.args ?? []);
   for (const name of turnedOff) {
     assert.ok(reply.includes(name), `${name} is turned off for a reply`);
-    assert.ok(args.includes(name), `${name} reached the child command line`);
+    assert.ok(onCommandLine.includes(name), `${name} reached the child command line`);
   }
+  assert.ok(reply.every(rule => !/[,\s]/u.test(rule)), 'no rule holds a comma or a space, so the comma-joined argument stays whole');
   await s.runtime.models();
   const listing = s.sdk.last.ctx.options.disallowedTools ?? [];
   for (const name of turnedOff) assert.ok(listing.includes(name), `${name} is turned off for the model list`);
+});
+
+// 本物の SDK は、PreToolUse のフックを、道具が動く前に名前の合う分だけ呼ぶ
+async function callHooks(options: { hooks?: Record<string, Array<{ matcher?: string; hooks: Array<(input: never, id: string | undefined, extra: { signal: AbortSignal }) => Promise<unknown>>; onFailure?: string }>> }, toolName: string, toolInput: unknown): Promise<unknown[]> {
+  const results: unknown[] = [];
+  for (const matcher of options.hooks?.PreToolUse ?? []) {
+    if (matcher.matcher !== undefined && !new RegExp(`^(?:${matcher.matcher})$`, 'u').test(toolName)) continue;
+    for (const hook of matcher.hooks) {
+      results.push(await hook({ hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: toolInput, tool_use_id: 'toolu_1', session_id: 's', transcript_path: 't', cwd: 'c' } as never, 'toolu_1', { signal: new AbortController().signal }));
+    }
+  }
+  return results;
+}
+
+const denied = (reason: RegExp) => (results: unknown[]): boolean => {
+  assert.equal(results.length, 1, 'the hook ran once');
+  const output = (results[0] as { hookSpecificOutput?: { hookEventName?: string; permissionDecision?: string; permissionDecisionReason?: string } }).hookSpecificOutput;
+  assert.equal(output?.hookEventName, 'PreToolUse');
+  assert.equal(output?.permissionDecision, 'deny');
+  assert.match(output?.permissionDecisionReason ?? '', reason);
+  return true;
+};
+
+test('an agent that asks for its own worktree or a remote run is refused by a hook that blocks the call if the hook itself fails; an agent without that option goes through', async t => {
+  const s = setup(t);
+  await s.start();
+  const options = s.sdk.last.ctx.options as unknown as Parameters<typeof callHooks>[0];
+  const matchers = options.hooks?.PreToolUse ?? [];
+  assert.equal(matchers.length, 1, 'one PreToolUse matcher');
+  assert.equal(matchers[0]?.onFailure, 'block', 'a failing hook blocks the call instead of letting it through');
+  assert.deepEqual(Object.keys(options.hooks ?? {}), ['PreToolUse']);
+  for (const tool of ['Agent', 'Task']) {
+    for (const isolation of ['worktree', 'remote', 'anything', '', null]) {
+      assert.ok(denied(/worktree or remotely/u)(await callHooks(options, tool, { description: 'x', prompt: 'y', isolation })), `${tool} with isolation ${String(isolation)}`);
+    }
+    assert.deepEqual(await callHooks(options, tool, { description: 'x', prompt: 'y' }), [{}], `${tool} without isolation goes through`);
+    assert.deepEqual(await callHooks(options, tool, { description: 'x', prompt: 'y', subagent_type: 'general-purpose', run_in_background: false }), [{}]);
+  }
+  for (const unreadable of [undefined, null, 'isolation', ['isolation']]) {
+    assert.ok(denied(/could not read/u)(await callHooks(options, 'Agent', unreadable)), `an unreadable input (${JSON.stringify(unreadable)}) is refused`);
+  }
+  assert.deepEqual(await callHooks(options, 'Bash', { command: 'echo hi', isolation: 'worktree' }), [], 'other tools do not even reach the hook');
+  assert.deepEqual(await callHooks(options, 'AgentX', { isolation: 'worktree' }), [], 'only the agent tool names match');
+});
+
+test('the hook function itself ignores other tools and other events, and still answers a tool name that the matcher would not send', async () => {
+  const { refuseIsolation } = await import('../src/runtimes/claude-code/permissions.ts');
+  const signal = new AbortController().signal;
+  const call = (over: object) => refuseIsolation({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: {}, tool_use_id: 't', session_id: 's', transcript_path: 'p', cwd: 'c', ...over } as never, 't', { signal });
+  assert.deepEqual(await call({ tool_name: 'Read', tool_input: { isolation: 'worktree' } }), {});
+  assert.deepEqual(await call({ hook_event_name: 'PostToolUse', tool_input: { isolation: 'worktree' } }), {});
+  assert.deepEqual(await call({ tool_input: { isolation: undefined } }), {});
+  assert.equal(((await call({ tool_name: 'Task', tool_input: { isolation: 'remote' } })) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision, 'deny');
+});
+
+test('the model list process answers any permission ask with a stop, so nothing it does can be approved', async t => {
+  const s = setup(t);
+  await s.runtime.models();
+  const canUseTool = s.sdk.last.ctx.options.canUseTool;
+  assert.equal(typeof canUseTool, 'function');
+  const answer = await canUseTool!('Bash', { command: 'echo hi' }, { signal: new AbortController().signal, toolUseID: 'toolu_1', requestId: 'req_1' });
+  assert.deepEqual(answer, { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true });
 });
 
 // ---------------------------------------------------------------- 状態・一覧

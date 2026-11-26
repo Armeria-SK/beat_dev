@@ -79,7 +79,7 @@ export class FakeQuery {
     try {
       child = options.spawnClaudeCodeProcess?.({
         command: options.pathToClaudeCodeExecutable as string,
-        args: [FAKE_RUNTIME_SCRIPT, ...(config.childArgs ?? []), '--permission-mode', String(options.permissionMode), '--disallowedTools', ...(options.disallowedTools ?? [])],
+        args: [FAKE_RUNTIME_SCRIPT, ...(config.childArgs ?? []), '--permission-mode', String(options.permissionMode), ...(options.disallowedTools?.length ? [`--disallowedTools=${options.disallowedTools.join(',')}`] : [])],
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         env: options.env ?? {},
         signal: this.#abort.signal,
