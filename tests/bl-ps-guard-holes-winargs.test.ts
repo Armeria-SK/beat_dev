@@ -78,6 +78,7 @@ test('実機（Windows PowerShell 5.1）: 子の powershell の引数に " が�
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, /rules for passing them to a program on Windows/u, command);
+    assert.match(outcome.output.content, /write the argument without a double quote inside it \(use single quotes\)/u, `${command}: 断る文に、" を使わずに書き直す案内がある`);
     assert.ok(existsSync(victim), `${command}: victim.txt が消えた（動いてしまった）`);
   }
   assert.deepEqual(s.judged, [], '断った形は判定役に回さない');

@@ -308,9 +308,10 @@ const isPsHost = (t: string): boolean => /^(?:powershell|pwsh)(?:\.exe)?$/iu.tes
 // Windows PowerShell 5.1 は、外のプログラムへ引数を渡すとき中の " を落とす（'"Remove-Item x"' は、ガードには文字列を出すだけに見えるが、子の powershell には命令として渡る。
 // 本物の 5.1 で確かめた: tests/bl-ps-guard-holes-winargs.test.ts）。子の powershell・pwsh の引数に " があれば、ガードの読みと子の受け取りがずれるので断る（ほかのプログラムの list.winargs と同じ）。
 // Start-Process の -ArgumentList は " を落とさないが、ガードは空白で分けて読むので、同じく断る
-function psHostArgs(args: readonly Word[], deny: (w: Word) => void): void {
+const PS_QUOTE_HINT = ' -- Windows PowerShell 5.1 drops a double quote inside an argument it passes to a program; write the argument without a double quote inside it (use single quotes)';
+function psHostArgs(args: readonly Word[], deny: (w: Word, hint?: string) => void): void {
   const w = args.find(x => !x.dynamic && x.text.includes('"'));
-  if (w) deny(w);
+  if (w) deny(w, PS_QUOTE_HINT);
 }
 
 function cmdExeArgs(args: readonly Word[], st: Statement, acc: Acc, deny: (w: Word) => void): void {
@@ -323,7 +324,7 @@ function cmdExeArgs(args: readonly Word[], st: Statement, acc: Acc, deny: (w: Wo
 
 export function cmdHostArgs(name: string, st: Statement, cmdTarget: (t: string) => boolean, acc: Acc): void {
   const words = st.words;
-  const deny = (w: Word) => acc.add('deny', 'list.winargs', { detail: `${name}: ${w.text}` }, false);
+  const deny = (w: Word, hint = '') => acc.add('deny', 'list.winargs', { detail: `${name}: ${w.text}${hint}` }, false);
   if (isCmdExe(name)) { cmdExeArgs(words.slice(1), st, acc, deny); return; }
   if (isPsHost(name)) { psHostArgs(words.slice(1), deny); return; }
   if (isConhost(name)) {
