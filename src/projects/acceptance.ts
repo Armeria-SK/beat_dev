@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { SpeechRow } from '../db/conversations.ts';
 import { transaction } from '../db/database.ts';
+import { previewJson } from '../shared/json-preview.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { acceptanceText, type AcceptanceMessageKey } from '../shared/messages/acceptance.ts';
 import { stripHidden } from '../shared/plain-text.ts';
-import { sanitizeModelInputText } from '../shared/redaction.ts';
+import { redactJsonValue, sanitizeModelInputText } from '../shared/redaction.ts';
 import { stripAttachments } from '../uploads/store.ts';
 import { conversationDraftFile, CONVERSATION_ID, isPlanConversation } from './plan.ts';
 import { CHECK_COMMAND_MAX, checkCommandOf, PROJECT_ID, projectDir, type ProjectStore } from './store.ts';
@@ -108,8 +109,10 @@ interface Spoken { id: number; conversationId: string; raw: string; view?: Owner
 export interface OwnerPick { researchId: string; itemId: number; label: string; lines?: readonly string[] }
 
 // ask_owner の札: 持ち主に見せた問いと、その答え。options と header は AI が書いた文。
-// 選択肢を選んだことが示すのは「その選択肢を選んだ」ことだけで、文の中身は持ち主の言葉ではない（owner_words にはしない）
-export interface AskedQuestion { question: string; header: string; options: readonly string[]; multiSelect: boolean }
+// 選択肢を選んだことが示すのは「その選択肢を選んだ」ことだけで、文の中身は持ち主の言葉ではない（owner_words にはしない）。
+// 画面には伏せ字（redactJsonValue → previewJson。src/web/server.ts の messages）を通した形で出て、持ち主の答えの文はその形（shown）で組まれる。AI が書いた形と両方を持つ
+interface WrittenQuestion { question: string; header: string; options: readonly string[]; multiSelect: boolean }
+export interface AskedQuestion extends WrittenQuestion { shown: { question: string; header: string; options: readonly string[] } }
 export interface AskedCard { conversationId: string; questionMessageId: number; answerMessageId: number | null; questions: readonly AskedQuestion[] }
 interface AnsweredCard { card: AskedCard; answer: Spoken }
 
@@ -146,16 +149,40 @@ export function askedCardsIn(db: DatabaseSync, conversationId: string): AskedCar
   return cardsOf(db.prepare(`${CARD_ROWS} WHERE m.conversation_id = ? AND ${CARD_KEPT}`).all(conversationId) as unknown as CardRow[]);
 }
 
-function questionsOf(args: unknown): AskedQuestion[] | undefined {
+function questionsOf(args: unknown): WrittenQuestion[] | undefined {
   const list = (args as { questions?: unknown } | null)?.questions;
   if (!Array.isArray(list) || list.length === 0) return undefined;
-  const out: AskedQuestion[] = [];
+  const out: WrittenQuestion[] = [];
   for (const entry of list) {
     const { question, header, options, multiSelect } = (entry ?? {}) as Record<string, unknown>;
     if (typeof question !== 'string' || typeof header !== 'string' || !Array.isArray(options)) return undefined;
     const labels = options.map(option => (option as { label?: unknown } | null)?.label);
     if (!labels.every((label): label is string => typeof label === 'string')) return undefined;
     out.push({ question, header, options: labels, multiSelect: multiSelect === true });
+  }
+  return out;
+}
+
+// src/web/server.ts の messages が ask_owner の呼び出しを画面に出す上限（previewJson の第 2 引数）と同じ
+const ASK_PREVIEW_CHARS = 16_000;
+
+// 伏せ字を通す作業は 1 枚あたり 0.1 ms ほどかかり、同じ呼び出しを acceptance_write のたびにやり直すので、結果を覚えておく（同じ入力なら同じ結果）
+const askedMemo = new Map<string, AskedQuestion[] | undefined>();
+const ASKED_MEMO_MAX = 500;
+
+function askedQuestionsOf(args: unknown): AskedQuestion[] | undefined {
+  const key = JSON.stringify(args);
+  if (key !== undefined && askedMemo.has(key)) return askedMemo.get(key);
+  const written = questionsOf(args);
+  let shown: WrittenQuestion[] | undefined;
+  try { shown = questionsOf(JSON.parse(previewJson(redactJsonValue(args), ASK_PREVIEW_CHARS))); } catch { shown = undefined; }
+  let out: AskedQuestion[] | undefined;
+  if (written && shown && written.length === shown.length && written.every((q, i) => q.options.length === shown![i]!.options.length)) {
+    out = written.map((q, i) => ({ ...q, shown: { question: shown![i]!.question, header: shown![i]!.header, options: shown![i]!.options } }));
+  }
+  if (key !== undefined) {
+    if (askedMemo.size >= ASKED_MEMO_MAX) askedMemo.clear();
+    askedMemo.set(key, out);
   }
   return out;
 }
@@ -177,7 +204,7 @@ function cardsOf(rows: readonly CardRow[]): AskedCard[] {
     try { message = JSON.parse(row.parts ?? 'null') ?? {}; } catch { continue; }
     if (row.role === 'assistant') {
       for (const call of Array.isArray(message.toolCalls) ? message.toolCalls as Array<{ id?: unknown; name?: unknown; arguments?: unknown }> : []) {
-        const questions = call?.name === 'ask_owner' && typeof call.id === 'string' ? questionsOf(call.arguments) : undefined;
+        const questions = call?.name === 'ask_owner' && typeof call.id === 'string' ? askedQuestionsOf(call.arguments) : undefined;
         if (questions) asked.set(`${row.conversation_id}\0${call.id}`, questions);
       }
     } else if (message.name === 'ask_owner' && message.isError !== true && typeof message.toolCallId === 'string') {
@@ -191,16 +218,42 @@ function cardsOf(rows: readonly CardRow[]): AskedCard[] {
   return cards;
 }
 
-// 札の答えの形（先頭に 1 行、問いごとに "- header: 選んだ選択肢を ', ' でつないだもの"。web/src/ui/ask.ts の answerText）なら、問いごとの行
+// 札の答えの形（先頭に 1 行、問いごとに "- header: 選んだ選択肢を ', ' でつないだもの、そのあとに持ち主が書いた文"。web/src/ui/ask.ts の answerText）なら、問いごとの "- header: " より後ろ。header は画面に出た形・AI が書いた形のどちらでも
 function answerLines(card: AskedCard, text: string): string[] | undefined {
   const lines = text.split(/\r?\n/u);
-  return lines.length === card.questions.length + 1 && card.questions.every((q, i) => lines[i + 1]!.startsWith(`- ${q.header}: `)) ? lines.slice(1) : undefined;
+  if (lines.length !== card.questions.length + 1) return undefined;
+  const contents: string[] = [];
+  for (const [i, q] of card.questions.entries()) {
+    const prefix = [q.shown.header, q.header].map(header => `- ${header}: `).find(head => lines[i + 1]!.startsWith(head));
+    if (prefix === undefined) return undefined;
+    contents.push(lines[i + 1]!.slice(prefix.length));
+  }
+  return contents;
 }
 
-// 札が開いている間に届いた発言のうち、持ち主が自分で書いた部分だけ（card の選択肢と header の文を外した残り。文字のない切れ端も捨てる）
+// 1 つの問いの行の中身の分け方: 選択肢（画面に出た形・AI が書いた形のどちらでも）を option の順に ', ' でつないだ頭と、そのあとの持ち主が書いた文（複数選べる問いだけ）。頭の無い分け方（全部が書いた文）も含め、成り立つ分け方を全部返す
+interface LineParse { picked: readonly number[]; typed: string; exact: boolean }
+function lineParses(q: AskedQuestion, content: string): LineParse[] {
+  const parses: LineParse[] = [{ picked: [], typed: content, exact: false }];
+  for (const options of [q.shown.options, q.options]) {
+    for (let mask = 1; mask < 1 << options.length; mask++) {
+      const picked = options.flatMap((_, i) => (mask & (1 << i) ? [i] : []));
+      if (!q.multiSelect && picked.length !== 1) continue;
+      const head = picked.map(i => options[i]!).join(', ');
+      if (content === head) parses.push({ picked, typed: '', exact: true });
+      else if (q.multiSelect && content.startsWith(`${head}, `)) parses.push({ picked, typed: content.slice(head.length + 2), exact: false });
+    }
+  }
+  return parses;
+}
+
+// 札が開いている間に届いた発言のうち、持ち主が自分で書いた部分だけ。札の答えの形なら、問いごとに選択肢の頭を取り除いた残り（選択肢の文がまたいで残らない）、そうでなければ発言まるごとから、札の選択肢と header の文（どちらの形も）を外した残り。文字のない切れ端は捨てる
 export function ownerTypedParts(text: string, card: AskedCard): string[] {
-  const written = [...new Set(card.questions.flatMap(q => [q.header, ...q.options]))].filter(Boolean).sort((a, b) => b.length - a.length);
-  let parts = [answerLines(card, text)?.join('\n') ?? text];
+  const written = [...new Set(card.questions.flatMap(q => [q.header, q.shown.header, ...q.options, ...q.shown.options]))].filter(Boolean).sort((a, b) => b.length - a.length);
+  const contents = answerLines(card, text);
+  let parts = contents
+    ? contents.map((content, i) => lineParses(card.questions[i]!, content).reduce((typed, parse) => (parse.typed.length < typed.length ? parse.typed : typed), content))
+    : [text];
   for (const piece of written) parts = parts.flatMap(part => part.split(piece));
   return parts.map(part => part.trim()).filter(part => /[\p{L}\p{N}]/u.test(part));
 }
@@ -217,17 +270,11 @@ export function ownerTypedRows<T extends { id: number; conversation_id: string; 
 const RECOMMENDED = /\s*\(recommended\)\s*$/iu;
 const optionKey = (text: string): string => fold(text.replace(RECOMMENDED, ''));
 
-// 札の答えの、index 番目の問いで持ち主が選んだ選択肢。自分で書いた文（Something else）が混じる・形が違うときは、選んだと言い切れないので undefined
-function pickedIn(card: AskedCard, index: number, text: string): string[] | undefined {
-  const q = card.questions[index]!;
-  const line = answerLines(card, text)?.[index];
-  if (line === undefined) return undefined;
-  const content = line.slice(`- ${q.header}: `.length);
-  for (let mask = 1; mask < 1 << q.options.length; mask++) {
-    const chosen = q.options.filter((_, i) => mask & (1 << i));
-    if ((q.multiSelect || chosen.length === 1) && chosen.join(', ') === content) return chosen;
-  }
-  return undefined;
+// 札の答えの、index 番目の問いで持ち主が選んだ選択肢の番号。自分で書いた文（Something else）が混じる・形が違うときは、選んだと言い切れないので undefined。分け方が何通りも成り立つときは、どの分け方でも選ばれている番号だけ
+function pickedIn(card: AskedCard, index: number, text: string): number[] | undefined {
+  const content = answerLines(card, text)?.[index];
+  const exact = content === undefined ? [] : lineParses(card.questions[index]!, content).filter(parse => parse.exact);
+  return exact.length === 0 ? undefined : exact[0]!.picked.filter(i => exact.every(parse => parse.picked.includes(i)));
 }
 
 // owner_choice の主張を、持ち主が札で選んだものと照らす。問い・選択肢の文は札のものとまるごと同じ（部分は不可）で、その選択肢が答えの文に選ばれた形である
@@ -237,8 +284,9 @@ function chosenOption(speech: Speech, claimed: { question: string; answer: strin
   for (const { card, answer: reply } of speech.cards ?? []) {
     const index = card.questions.findIndex(q => fold(q.question) === question);
     if (index < 0) continue;
-    const option = pickedIn(card, index, reply.raw)?.find(label => optionKey(label) === answer);
-    if (option !== undefined) return { kind: 'owner_choice', question: card.questions[index]!.question, questionMessageId: card.questionMessageId, answer: option, answerMessageId: reply.id, conversationId: card.conversationId };
+    const q = card.questions[index]!;
+    const option = pickedIn(card, index, reply.raw)?.find(i => optionKey(q.options[i]!) === answer || optionKey(q.shown.options[i]!) === answer);
+    if (option !== undefined) return { kind: 'owner_choice', question: q.shown.question, questionMessageId: card.questionMessageId, answer: q.shown.options[option]!, answerMessageId: reply.id, conversationId: card.conversationId };
   }
   return undefined;
 }
@@ -548,7 +596,8 @@ function clip(text: string): string {
   return text.slice(0, end);
 }
 
-export function coverageOf(doc: AcceptanceDoc | undefined, rows: readonly SpeechRow[], before?: number): Coverage {
+// cards: 札の答え（askedCards）。選んだ選択肢を引用した答えでも、持ち主が自分で書いた文が混じっていれば、その発言は「まだ引用されていない」に残す
+export function coverageOf(doc: AcceptanceDoc | undefined, rows: readonly SpeechRow[], before?: number, cards: readonly AskedCard[] = []): Coverage {
   const items = (doc?.items ?? []).filter(entry => entry.removedIn === null);
   const counts = { owner_words: 0, owner_choice: 0, owner_edit: 0, owner_pick: 0, ai_added: 0 };
   const origin = (source: AcceptanceSource | undefined): FirstSource | undefined => (source?.kind === 'owner_answer' ? source.was : source);
@@ -557,10 +606,15 @@ export function coverageOf(doc: AcceptanceDoc | undefined, rows: readonly Speech
     if (kind !== undefined && Object.hasOwn(counts, kind)) counts[kind]++;
   }
   const cited = new Set<number>();
+  const typedLeft = (messageId: number): boolean => {
+    const card = cards.find(c => c.answerMessageId === messageId);
+    const row = rows.find(r => r.id === messageId);
+    return card !== undefined && row !== undefined && ownerTypedParts(stripAttachments(row.text), card).length > 0;
+  };
   for (const entry of [...items, ...(doc?.notDoing ?? [])]) {
     const source = origin(entry.source);
     if (source?.kind === 'owner_words') cited.add(source.messageId);
-    if (source?.kind === 'owner_choice') cited.add(source.answerMessageId);
+    if (source?.kind === 'owner_choice' && !typedLeft(source.answerMessageId)) cited.add(source.answerMessageId);
   }
   const at = (row: SpeechRow) => row.created_at ?? 0;
   const loose = rows.filter(row => row.role === 'user' && row.generated !== 1 && !cited.has(row.id)).sort((a, b) => at(b) - at(a) || b.id - a.id);

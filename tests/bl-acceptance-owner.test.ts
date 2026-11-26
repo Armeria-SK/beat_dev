@@ -9,8 +9,11 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { ChatMessage, StopReason, ToolCall } from '../src/engine/types.ts';
 import { askedCards, buildDraft, coverageOf, prepareSpeech, SCAN_BUDGET, verifySource, type ClaimedSource } from '../src/projects/acceptance.ts';
 import { ResearchStore } from '../src/research/store.ts';
+import { previewJson } from '../src/shared/json-preview.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
+import { redactJsonValue } from '../src/shared/redaction.ts';
 import { ATTACHMENT_OPEN } from '../src/uploads/store.ts';
+import { answerText, parseAsk } from '../web/src/ui/ask.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir, withLoad, type Script } from './helpers.ts';
 import { researchApp } from './helpers/research-app.ts';
@@ -425,4 +428,182 @@ test('札の答えの中の AI の文（P-R3-8）: 札は同じ会話のもの�
   f.owner(withCard, `Answers:\n- Storage layout: ${LONG_A}\n- Screens: List`, { askAnswer: true });
   f.owner(f.chat(), 'Exports must keep the original file names', { askAnswer: true });
   assert.deepEqual(f.check(words('exports must keep the original file names')), notFound('exports must keep the original file names'));
+});
+
+const SIGN_IN = 'How should sign-in work?';
+const PASSWORD = 'Password: at least 12 characters';
+const ASK_SIGN_IN = {
+  questions: [{ question: SIGN_IN, header: 'Auth: Okta', options: [{ label: PASSWORD }, { label: 'Email magic link only' }] }],
+};
+// 画面が実際に出す形（src/web/server.ts の messages と同じ伏せ字 → previewJson）から、持ち主が押して送る答えの文を組む
+const shownAnswer = (ask: unknown, picked: readonly number[][]): string => {
+  const questions = parseAsk(previewJson(redactJsonValue(ask), 16_000))!;
+  return answerText(questions, questions.map((q, i) => ({ labels: picked[i]!.map(n => q.options[n]!.label), other: false, text: '' })), 'Answers:');
+};
+
+test('札の答えの中の AI の文（伏せ字）: 画面で伏せ字になった選択肢・見出しを選んでも、その文は持ち主の言葉にならず、選んだ選択肢としては owner_choice で認める', () => {
+  const f = fixture();
+  const c = f.chat();
+  const asked = f.ask(c, ASK_SIGN_IN);
+  const text = shownAnswer(ASK_SIGN_IN, [[0]]);
+  assert.equal(text, 'Answers:\n- Auth: [REDACTED]: Password: [REDACTED] least 12 characters', '画面は選択肢と見出しを伏せ字にして出す');
+  const answer = f.owner(c, text, { askAnswer: true });
+  for (const quote of ['least 12 characters', 'Password: [REDACTED] least 12 characters', 'Auth: [REDACTED]']) assert.deepEqual(f.check(words(quote)), notFound(quote), quote);
+  const shown = 'Password: [REDACTED] least 12 characters';
+  const expected = { kind: 'owner_choice', question: SIGN_IN, questionMessageId: asked, answer: shown, answerMessageId: answer, conversationId: c };
+  assert.deepEqual(f.check(choice(SIGN_IN, PASSWORD)), expected, 'AI が書いた形で言っても、画面に出た形で言っても同じ');
+  assert.deepEqual(f.check(choice(SIGN_IN, shown)), expected);
+  assert.deepEqual(f.check(choice(SIGN_IN, 'Email magic link only')), unverified(SIGN_IN, 'Email magic link only'), '選んでいない選択肢');
+});
+
+test('札の答えの中の AI の文（伏せ字・調べもの）: 伏せ字になった選択肢の文は、機能の名前に「あなたが言った」を付けない。持ち主が書いた文は付く', () => {
+  const ask = { questions: [{ question: 'How should people sign in?', header: 'Sign-in', multiSelect: true, options: [{ label: 'Auth: OAuth with Google sign-in' }, { label: 'Email magic link only' }] }] };
+  const f = fixture();
+  const store = new ResearchStore(f.db);
+  const c = f.chat('p1');
+  f.ask(c, ask);
+  assert.equal(shownAnswer(ask, [[0]]), 'Answers:\n- Sign-in: Auth: [REDACTED] with Google sign-in');
+  f.owner(c, shownAnswer(ask, [[0]]), { askAnswer: true });
+  f.owner(c, 'Answers:\n- Sign-in: Auth: [REDACTED] with Google sign-in, Passkeys for every account', { askAnswer: true });
+  assert.deepEqual(reasons(store, c, ['Google sign-in', 'Passkeys for every account']), { 'Google sign-in': null, 'Passkeys for every account': 'owner_said' });
+});
+
+test('札の答えの中の AI の文（伏せ字・調べものの頼み）: 頼みに写す持ち主の文に、伏せ字になった選択肢の文は入らない', async t => {
+  const s = await researchApp(t);
+  s.adapter().scripts.push(reply('ok'));
+  await s.send(1, 'I want a notes app with accounts.');
+  const c = uuid(1);
+  s.app.conversations.append(c, { role: 'assistant', content: '', toolCalls: [{ id: 'call_card', name: 'ask_owner', arguments: ASK_SIGN_IN }] });
+  s.app.conversations.append(c, { role: 'tool', toolCallId: 'call_card', name: 'ask_owner', content: 'shown' });
+  s.app.conversations.append(c, { role: 'user', content: shownAnswer(ASK_SIGN_IN, [[0]]), askAnswer: true } as ChatMessage);
+  await s.settle();
+  assert.equal(s.app.research.ownerText(c), 'I want a notes app with accounts.');
+});
+
+test('札の答えの中の AI の文（伏せ字・画面の通し）: 本物の画面の経路で伏せ字になった選択肢を選んでも、その文は AI が足したのまま。選んだ選択肢は owner_choice', async t => {
+  const s = await toolApp(t);
+  const ask = { questions: [{ question: SIGN_IN, header: 'Sign-in', options: [{ label: PASSWORD }, { label: 'Email magic link only' }] }] };
+  s.adapter().scripts = [call('ask_owner', ask)];
+  await s.send('I want a notes app with accounts, please');
+  const messages = await s.json(`/api/conversations/${uuid(1)}/messages`, 'GET');
+  const shownCall = (messages.body.messages as Array<{ toolCalls?: Array<{ name: string; input: string }> }>).flatMap(m => m.toolCalls ?? []).find(c => c.name === 'ask_owner')!;
+  assert.match(shownCall.input, /Password: \[REDACTED\] least 12 characters/u, '本物の画面の経路は選択肢を伏せ字にして出す');
+  const questions = parseAsk(shownCall.input)!;
+  s.adapter().scripts = [
+    call('acceptance_write', { items: [
+      row('Sign-in uses a password of at least 12 characters', { source: 'owner_choice', question: SIGN_IN, answer: PASSWORD }),
+      row('Sign-in is by email link only', { source: 'owner_choice', question: SIGN_IN, answer: 'Email magic link only' }),
+      row('Passwords need at least 12 characters', { source: 'owner_words', quote: 'least 12 characters' }),
+    ] }),
+    reply('saved'),
+  ];
+  await s.send(answerText(questions, [{ labels: [questions[0]!.options[0]!.label], other: false, text: '' }], 'Answers:'));
+  assert.deepEqual(s.draft().map(item => item.source['kind']), ['owner_choice', 'ai_added', 'ai_added']);
+  assert.equal(s.draft()[0]!.source['answer'], 'Password: [REDACTED] least 12 characters');
+  assert.deepEqual(s.draft()[2]!.source, { kind: 'ai_added', claimed: 'owner_words', reason: 'not_found', quote: 'least 12 characters' });
+});
+
+test('札の答えの中の AI の文（選択肢が境目をまたぐ）: 見出しを含む選択肢を選んでも、その選択肢の後ろの文は持ち主の言葉にならない', () => {
+  const ask = { questions: [{ question: 'Where are notes kept?', header: 'Where notes are kept', options: [{ label: 'Keep them in local JSON files' }, { label: 'Where notes are kept: Keep them' }] }] };
+  const f = fixture();
+  const c = f.chat();
+  const asked = f.ask(c, ask);
+  const answer = f.owner(c, 'Answers:\n- Where notes are kept: Keep them in local JSON files', { askAnswer: true });
+  assert.deepEqual(f.check(words('in local JSON files')), notFound('in local JSON files'));
+  assert.deepEqual(f.check(choice('Where are notes kept?', 'Keep them in local JSON files')), { kind: 'owner_choice', question: 'Where are notes kept?', questionMessageId: asked, answer: 'Keep them in local JSON files', answerMessageId: answer, conversationId: c });
+});
+
+test('札の答えの中の AI の文（選択肢が境目をまたぐ）: 複数選べる問いで、つなぎ目の ", " をまたぐ別の選択肢があっても、選んだ選択肢の前の文は持ち主の言葉にならない', () => {
+  const ask = { questions: [{ question: 'What should happen to data?', header: 'Plan', multiSelect: true, options: [{ label: 'Store data in the cloud now' }, { label: 'please confirm this choice ok' }, { label: 'now, please confirm this choice ok' }] }] };
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, ask);
+  const answer = f.owner(c, 'Answers:\n- Plan: Store data in the cloud now, please confirm this choice ok', { askAnswer: true });
+  for (const quote of ['Store data in the cloud', 'please confirm this choice ok']) assert.deepEqual(f.check(words(quote)), notFound(quote), quote);
+  assert.equal((f.check(choice('What should happen to data?', 'Store data in the cloud now')) as { answerMessageId?: number }).answerMessageId, answer);
+  assert.equal((f.check(choice('What should happen to data?', 'please confirm this choice ok')) as { answerMessageId?: number }).answerMessageId, answer);
+  assert.equal(f.check(choice('What should happen to data?', 'now, please confirm this choice ok')).kind, 'ai_added', '選ばなかった選択肢');
+  const typed = f.owner(c, 'Answers:\n- Plan: Store data in the cloud now, Keep a local copy of everything', { askAnswer: true });
+  const hit = f.check(words('keep a local copy of everything'));
+  assert.deepEqual(hit.kind === 'owner_words' ? hit.messageId : hit, typed, '持ち主が書いた文は、選択肢のあとでも当たる');
+});
+
+test('受け入れの一覧の「まだ引用されていない発言」（札の答え）: 選んだ選択肢だけの答えは引用済み。持ち主が書いた文が混じる答えは、選んだ選択肢を引用しても引用されていないまま', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c);
+  const pure = f.owner(c, CARD_ANSWER('JSON files', 'List'), { askAnswer: true });
+  f.ask(c);
+  const mixed = f.owner(c, CARD_ANSWER('SQLite (Recommended)', 'Notes must sync over the train wifi offline'), { askAnswer: true });
+  const input = { items: [
+    { result: 'Notes are kept in JSON files', source: choice(STORAGE, 'JSON files'), check: { kind: 'look' as const } },
+    { result: 'Notes are kept in SQLite', source: choice(STORAGE, 'SQLite'), check: { kind: 'look' as const } },
+  ] };
+  const { doc, verified } = buildDraft(input, f.speech(), { language: null, taintedRuns: [] });
+  assert.equal(verified, 2);
+  const left = coverageOf(doc, ownerSpeech(f.db, PROJECT), undefined, askedCards(f.db, PROJECT)).unreferenced.map(row => row.message_id);
+  assert.deepEqual(left, [mixed]);
+  assert.ok(!left.includes(pure));
+});
+
+test('札の答えの中の AI の文（伏せ字）: 伏せ字になる前の形（AI が書いた見出し・選択肢）で組まれた答えも、同じに扱う', () => {
+  const f = fixture();
+  const c = f.chat();
+  const asked = f.ask(c, ASK_SIGN_IN);
+  const answer = f.owner(c, `Answers:\n- Auth: Okta: ${PASSWORD}`, { askAnswer: true });
+  assert.deepEqual(f.check(words('least 12 characters')), notFound('least 12 characters'));
+  assert.deepEqual(f.check(choice(SIGN_IN, PASSWORD)), { kind: 'owner_choice', question: SIGN_IN, questionMessageId: asked, answer: 'Password: [REDACTED] least 12 characters', answerMessageId: answer, conversationId: c });
+});
+
+test('札の答えの中の AI の文（伏せ字）: 伏せ字で同じ文になる選択肢・つなぎ方が何通りにも読める答えは、どの選択肢を選んだとも言い切れないので owner_choice にしない', () => {
+  const hosting = { questions: [{ question: 'Which hosting?', header: 'Hosting', options: [{ label: 'Password: abc1' }, { label: 'Password: xyz2' }] }] };
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, hosting);
+  f.owner(c, shownAnswer(hosting, [[0]]), { askAnswer: true });
+  assert.equal(shownAnswer(hosting, [[0]]), shownAnswer(hosting, [[1]]), '伏せ字で 2 つの選択肢が同じ文になる');
+  for (const answer of ['Password: abc1', 'Password: xyz2']) assert.deepEqual(f.check(choice('Which hosting?', answer)), unverified('Which hosting?', answer), answer);
+  const plan = { questions: [{ question: 'Which plan?', header: 'Plan', multiSelect: true, options: [{ label: 'Keep notes' }, { label: 'Keep notes, sync' }, { label: 'sync' }] }] };
+  const g = fixture();
+  const d = g.chat();
+  g.ask(d, plan);
+  g.owner(d, 'Answers:\n- Plan: Keep notes, sync', { askAnswer: true });
+  for (const answer of ['Keep notes', 'Keep notes, sync', 'sync']) assert.deepEqual(g.check(choice('Which plan?', answer)), unverified('Which plan?', answer), answer);
+});
+
+test('札の答えの中の AI の文（伏せ字）: 画面に出す上限の近くまで大きな札でも、伏せ字を通した形で選んだ選択肢が owner_choice になる', () => {
+  const long = (n: number) => 'x'.repeat(n);
+  const big = { questions: Array.from({ length: 4 }, (_, q) => ({
+    question: `Question ${q}? ${long(470)}`, header: `Part ${q}`,
+    options: Array.from({ length: 4 }, (_, o) => ({ label: q === 0 && o === 0 ? `Password: at least 12 characters ${long(30)}` : `Option ${q}-${o} ${long(60)}`, description: long(290) })),
+  })) };
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, big);
+  assert.ok(JSON.stringify(big).length > 4000 && JSON.stringify(big).length < 16_000);
+  const answer = f.owner(c, shownAnswer(big, [[0], [1], [2], [3]]), { askAnswer: true });
+  for (const q of [0, 3]) {
+    const claimed = big.questions[q]!;
+    assert.equal((f.check(choice(claimed.question, claimed.options[q === 0 ? 0 : 3]!.label)) as { answerMessageId?: number }).answerMessageId, answer, `question ${q}`);
+  }
+  assert.match(shownAnswer(big, [[0], [1], [2], [3]]), /Password: \[REDACTED\] least 12 characters x+/u, '伏せ字を通した形で組まれる');
+});
+
+test('札の答えの中の AI の文（伏せ字）: 札の答えの形でない発言（札が開いている間の自由な返事）に画面に出た選択肢の文をそのまま写しても、持ち主の言葉にならない', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, ASK_SIGN_IN);
+  f.owner(c, 'Password: [REDACTED] least 12 characters', { askAnswer: true });
+  assert.deepEqual(f.check(words('least 12 characters')), notFound('least 12 characters'));
+});
+
+test('札の答えの中の AI の文: 問いごとの自分で書いた文は別々の発言のように扱い、2 つの問いにまたがる引用は当てない', () => {
+  const f = fixture();
+  const c = f.chat();
+  f.ask(c, ASK_LONG);
+  const answer = f.owner(c, 'Answers:\n- Storage layout: Notes stay readable offline always\n- Screens: Home page stays very simple', { askAnswer: true });
+  const hit = (quote: string) => { const source = f.check(words(quote)); return source.kind === 'owner_words' ? source.messageId : source; };
+  assert.equal(hit('notes stay readable offline always'), answer);
+  assert.equal(hit('home page stays very simple'), answer);
+  assert.deepEqual(f.check(words('readable offline always home page stays')), notFound('readable offline always home page stays'));
 });
