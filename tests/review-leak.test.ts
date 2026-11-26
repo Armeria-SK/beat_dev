@@ -93,7 +93,11 @@ test('止められてやり直された振り返りは、前の回の振り返�
   const external = await asRun(s, uuid(30), 'ext1', call('history_search', { query: WORD }), 'ext');
   assert.match(external, /手元でだけ話した/u);
   assert.equal(external.includes(first), true);
-  const read = await asRun(s, uuid(31), 'ext1', call('history_read', { conversation_id: first }), 'ext');
+  // history_read without message_id cuts each message at 1,500 characters and the record comes after the policy lines, so the source's words are read with message_id (the documented way to read one whole message)
+  const page = await asRun(s, uuid(31), 'ext1', call('history_read', { conversation_id: first }), 'ext');
+  assert.match(page, /\[Review\] Trigger/u, 'the review conversation is readable (the default read returns its messages)');
+  const instruction = s.app.conversations.messages(first).find(m => m.role === 'user')!;
+  const read = await asRun(s, uuid(32), 'ext1', call('history_read', { conversation_id: first, message_id: instruction.id }), 'ext');
   assert.match(read, new RegExp(WORD, 'u'));
 });
 
