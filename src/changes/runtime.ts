@@ -11,7 +11,6 @@ import type { KV } from '../db/kv.ts';
 import { withGit } from '../mesh/folders.ts';
 import type { AppPaths } from '../paths.ts';
 import { parseNameStatus } from '../projects/diff-flags.ts';
-import { mainGitChanges, mainGitPrint, type MainGitPrint } from '../projects/worktree.ts';
 import { gitFolder } from '../projects/work-folder.ts';
 import { languageOf } from '../shared/language.ts';
 import { plainLine } from '../shared/plain-text.ts';
@@ -20,13 +19,15 @@ import { runProtectFiles } from '../tools/hooks/protect-files.ts';
 import { isSecretPath, placePath, writeApprovalKind, type ScopePolicy } from '../tools/hooks/scope.ts';
 import { buildPolicy } from '../tools/policy.ts';
 import { hiddenPath, MAX_FILES, readUpTo, safeRel, walkCurrent } from './diff.ts';
+import { GIT_ALERT_PARTS, gitChanges, readGitPrint, submoduleHead, type GitPrint } from './git-print.ts';
 import { KEEP_MAX_BYTES } from './record.ts';
 
 // 画面と記録に出す印。protected: 守っているファイル（秘密の名前・beat のデータ・持ち主の守る一覧）。unsafe: 安全に扱えないパス。link: リンク・ジャンクション・別名を通る（たどらない）。
 // outside: 製品のフォルダの外へ出る。guarded: beat のファイルの道具が書く前に持ち主に聞く場所（CLAUDE.md・AGENTS.md など）
 export type RunMark = 'protected' | 'unsafe' | 'link' | 'outside' | 'guarded';
-// 前後の差を出せた（ok）か、出せなかった理由。no_git: 製品が git でない。git_unusable: git を安全に動かせない。too_many: 前に書きかけが多すぎる。timeout・failed: 時間切れ・git の失敗
-export type RunChangeState = 'ok' | 'no_git' | 'git_unusable' | 'too_many' | 'timeout' | 'failed';
+// 前後の差を出せた（ok）か、出せなかった理由。no_git: 製品が git でない。git_unusable: git を安全に動かせない。too_many: 返事の前に書きかけが多すぎる。too_many_after: 返事のあとに書きかけが多すぎる（実行役が増やした）。
+// timeout・failed: 時間切れ・git の失敗。unknown: 実行役がまだ動いているかもしれないので、返事のあとの状態を取っていない
+export type RunChangeState = 'ok' | 'no_git' | 'git_unusable' | 'too_many' | 'too_many_after' | 'timeout' | 'failed' | 'unknown';
 export type RunOutcome = 'ok' | 'failed' | 'stopped';
 
 export interface RuntimeChangeFile { path: string; status: 'added' | 'modified' | 'deleted'; marks: RunMark[] }
@@ -47,14 +48,15 @@ export interface RuntimeRunChanges {
   unchecked: number;
   // この返事のあいだに変わった git の状態（head・branch・refs・stash・config・hooks・worktrees・git）。config・hooks は後でコマンドを動かせる所
   git: string[];
-  // 守りに当たる変更（protected・unsafe・link・outside の印、または git の config・hooks の変化）があったか
+  // 守りに当たる変更（protected・unsafe・link・outside の印、または git の config・hooks・modules・exclude・index・link の変化）があったか。返事の前が取れたのに後が取れなかったとき（unseen）も立てる
   alert: boolean;
+  // 返事の前は取れたのに、後が取れなかった（または取らなかった）ので、変えたファイルの一覧が無い。前が取れなかったときは立てない（状態に理由が出る）
+  unseen: boolean;
 }
 
 export const MAX_DIRTY = 2000;
 const READ_BUDGET = 64 * 1024 * 1024;
 const WATCH_TIMEOUT_MS = 20_000;
-const CODE_CONFIG = new Set(['config', 'hooks']);
 const ALERT_MARKS: ReadonlySet<RunMark> = new Set<RunMark>(['protected', 'unsafe', 'link', 'outside']);
 
 const sha = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -116,7 +118,7 @@ export interface ReadBudget { left: number }
 
 const linkId = (at: string): string => { try { return `link:${sha(readlinkSync(at))}`; } catch { return 'link:unreadable'; } };
 
-// 1 つのパスの指紋。中身を読むのは、守りに当たらない・5MB 以下・予算が残っているふつうのファイルだけ。それ以外のファイルは大きさと時刻だけ。リンクは先を読まずリンクの文字だけ
+// 1 つのパスの指紋。中身を読むのは、守りに当たらない・5MB 以下・予算が残っているふつうのファイルだけ。それ以外のファイルは大きさ・更新と変更の時刻・ファイルの番号（時刻を戻して同じ大きさで書き換えても、変更の時刻と番号は戻せない）。リンクは先を読まずリンクの文字だけ
 export function fingerprint(realRoot: string, rel: string, readable: boolean, budget: ReadBudget, read: typeof readUpTo = readUpTo): Print {
   const walked = walkCurrent(realRoot, rel);
   if (walked.kind === 'absent') return { present: false, id: '-' };
@@ -125,7 +127,7 @@ export function fingerprint(realRoot: string, rel: string, readable: boolean, bu
     if (walked.why === 'alias') return { present: true, id: null, link: true };
     return { present: true, id: null };
   }
-  const stat = `stat:${walked.size}:${walked.mtimeMs}`;
+  const stat = `stat:${walked.size}:${walked.mtimeMs}:${walked.ctimeMs}:${walked.ino}`;
   if (!readable || walked.size > KEEP_MAX_BYTES || walked.size > budget.left) return { present: true, id: stat };
   const bytes = read(walked.path, walked.size);
   if (!Buffer.isBuffer(bytes)) return { present: true, id: stat };
@@ -136,16 +138,38 @@ export function fingerprint(realRoot: string, rel: string, readable: boolean, bu
 // ---- 取る ----
 
 interface Dirty { code: string; print: Print }
-export interface Snapshot { head: string | null; dirty: Map<string, Dirty>; later: Map<string, Print>; headDiff: Map<string, string> }
-type Captured = { ok: true; snapshot: Snapshot } | { ok: false; state: Exclude<RunChangeState, 'ok'> };
+// nested: 中に別の .git があるフォルダ（git は中を見ない）。gitlinks: サブモジュールの指紋（索引のコミットと、中の今の HEAD）
+export interface Snapshot {
+  head: string | null;
+  dirty: Map<string, Dirty>;
+  later: Map<string, Print>;
+  headDiff: Map<string, string>;
+  nested: ReadonlySet<string>;
+  gitlinks: ReadonlyMap<string, string>;
+}
+type Captured = { ok: true; snapshot: Snapshot } | { ok: false; state: Exclude<RunChangeState, 'ok' | 'unknown' | 'too_many_after'> };
 
-function parseStatus(raw: string): Map<string, string> {
-  const out = new Map<string, string>();
+function parseStatus(raw: string): { entries: Map<string, string>; nested: Set<string> } {
+  const entries = new Map<string, string>();
+  const nested = new Set<string>();
   for (const part of raw.split('\0')) {
     if (part.length < 4 || part[2] !== ' ') continue;
     const code = part.slice(0, 2);
     if (code === '!!') continue;
-    out.set(part.slice(3), code);
+    const path = part.slice(3);
+    if (path.endsWith('/')) nested.add(path);
+    else entries.set(path, code);
+  }
+  return { entries, nested };
+}
+
+const GITLINK_CAP = 200;
+// git ls-files -s -z の行（<mode> <oid> <stage>\t<path>）のうち、サブモジュール（モード 160000）だけ
+function parseGitlinks(raw: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const line of raw.split('\0')) {
+    const match = /^160000 ([0-9a-f]+) \d\t(.+)$/su.exec(line);
+    if (match && out.size < GITLINK_CAP) out.set(match[2]!, match[1]!);
   }
   return out;
 }
@@ -154,23 +178,30 @@ const timed = async <T>(work: Promise<T>, ms: number): Promise<T | 'timeout'> =>
   let timer: NodeJS.Timeout | undefined;
   try { return await Promise.race([work, new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), ms); })]); } finally { clearTimeout(timer); }
 };
+const yieldNow = (): Promise<void> => new Promise(resolve => { setImmediate(resolve); });
+const TICK = 64;
 
 // 無視されているファイル（.gitignore）は git の書きかけの一覧に出ないが、.env のような秘密の名前は多くが無視されている。そこだけは別に探して、守るファイルの変更を見落とさない（'!!' の印で書きかけに足す）。
 // ほかの無視されるファイル（ビルドの出力など）は見ない。フォルダごと無視されているものは、中を見ない
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
 
-// git の今の状態を取る。since: 前の HEAD（動いていたら 2 つのコミットの差を足す。null は前に HEAD が無かった＝今あるコミットの全ファイルが足された）。also: 前に書きかけだったパス（今は書きかけでなくても、今の指紋を取る）
-export async function captureSnapshot(guard: Guard, dataDir: string, options: { since?: string | null | undefined; also?: Iterable<string> } = {}): Promise<Captured> {
+// git の今の状態を取る。since: 前の HEAD（動いていたら 2 つのコミットの差を足す。null は前に HEAD が無かった＝今あるコミットの全ファイルが足された）。also: 前に書きかけだったパス（今は書きかけでなくても、今の指紋を取る）。
+// 指紋を取る繰り返しは、一定の数ごとに手を空け、時間切れ（limitMs）を過ぎたら止める（同じ処理の中で回り続けて、時間切れの印が出ないのを避ける）
+export async function captureSnapshot(guard: Guard, dataDir: string, options: { since?: string | null | undefined; also?: Iterable<string>; limitMs?: number } = {}): Promise<Captured> {
   const { realRoot } = guard;
+  const deadline = Date.now() + (options.limitMs ?? WATCH_TIMEOUT_MS);
   const listed = await withGit(realRoot, dataDir, async git => {
     const head = (await git(['rev-parse', '--verify', '-q', 'HEAD^{commit}']))?.toString('utf8').trim() ?? '';
     const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames', '--ignore-submodules=all']);
     if (!status) return 'failed' as const;
-    const entries = parseStatus(status.toString('utf8'));
+    const { entries, nested } = parseStatus(status.toString('utf8'));
     if (entries.size > MAX_DIRTY) return 'too_many' as const;
     const ignored = await git(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--directory']);
     if (!ignored) return 'failed' as const;
     for (const path of ignored.toString('utf8').split('\0')) if (path && !path.endsWith('/') && isSecretPath(path) && !entries.has(path)) entries.set(path, '!!');
+    if (entries.size > MAX_DIRTY) return 'too_many' as const;
+    const staged = await git(['ls-files', '-s', '-z']);
+    if (!staged) return 'failed' as const;
     const headDiff = new Map<string, string>();
     if (options.since !== undefined && OID.test(head) && head !== options.since) {
       const diff = options.since === null
@@ -180,18 +211,33 @@ export async function captureSnapshot(guard: Guard, dataDir: string, options: { 
       if (options.since === null) for (const path of diff.toString('utf8').split('\0')) { if (path) headDiff.set(path, 'A'); }
       else for (const entry of parseNameStatus(diff.toString('utf8'))) if (entry.path) headDiff.set(entry.path, entry.status);
     }
-    return { head: OID.test(head) ? head : null, entries, headDiff };
+    return { head: OID.test(head) ? head : null, entries, nested, headDiff, gitlinks: parseGitlinks(staged.toString('utf8')) };
   });
   if (listed === undefined) return { ok: false, state: gitFolder(realRoot) ? 'git_unusable' : 'no_git' };
   if (listed === 'failed' || listed === 'too_many') return { ok: false, state: listed };
   const budget: ReadBudget = { left: READ_BUDGET };
   const dirty = new Map<string, Dirty>();
+  let count = 0;
+  const late = async (): Promise<boolean> => {
+    if (++count % TICK !== 0) return false;
+    await yieldNow();
+    return Date.now() >= deadline;
+  };
   for (const [path, code] of [...listed.entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (await late()) return { ok: false, state: 'timeout' };
     dirty.set(path, { code, print: fingerprint(realRoot, path, guard.inspect(path).readable, budget) });
   }
   const later = new Map<string, Print>();
-  for (const path of options.also ?? []) if (!dirty.has(path)) later.set(path, fingerprint(realRoot, path, guard.inspect(path).readable, budget));
-  return { ok: true, snapshot: { head: listed.head, dirty, later, headDiff: listed.headDiff } };
+  for (const path of options.also ?? []) {
+    if (await late()) return { ok: false, state: 'timeout' };
+    if (!dirty.has(path)) later.set(path, fingerprint(realRoot, path, guard.inspect(path).readable, budget));
+  }
+  const gitlinks = new Map<string, string>();
+  for (const [path, oid] of listed.gitlinks) {
+    if (await late()) return { ok: false, state: 'timeout' };
+    gitlinks.set(path, `${oid}:${submoduleHead(realRoot, path)}`);
+  }
+  return { ok: true, snapshot: { head: listed.head, dirty, later, headDiff: listed.headDiff, nested: listed.nested, gitlinks } };
 }
 
 // ---- 比べる ----
@@ -201,6 +247,10 @@ export interface Compared { files: RuntimeChangeFile[]; more: number; unchecked:
 const statusOf = (before: boolean, after: boolean): RuntimeChangeFile['status'] => (!before && after ? 'added' : before && !after ? 'deleted' : 'modified');
 const codeStatus = (code: string): RuntimeChangeFile['status'] => (code === '??' || code === '!!' || code[0] === 'A' || code[1] === 'A' ? 'added' : code.includes('D') ? 'deleted' : 'modified');
 const diffStatus = (letter: string): RuntimeChangeFile['status'] => (letter === 'A' || letter === 'C' ? 'added' : letter === 'D' ? 'deleted' : 'modified');
+
+// 守りに当たるか確かめる（guard.inspect）数の上限。これを超える変更は、名前だけで分かる守りに近いもの（秘密の名前・安全でないパス）を先に確かめ、残りは確かめずに unchecked に数える
+export const INSPECT_MAX = 1000;
+const nameFirst = (path: string): number => (isSecretPath(path) || !safeRel(path) ? 0 : 1);
 
 export function compareSnapshots(guard: Guard, before: Snapshot, after: Snapshot): Compared {
   const paths = new Set<string>([...before.dirty.keys(), ...after.dirty.keys(), ...after.headDiff.keys()]);
@@ -225,7 +275,15 @@ export function compareSnapshots(guard: Guard, before: Snapshot, after: Snapshot
       changed.push({ path, status: diffStatus(after.headDiff.get(path) ?? 'M'), link: false });
     }
   }
-  const named = changed.map(entry => {
+  // 中に別の .git があるフォルダ・サブモジュールは、中を見ない。現れた・消えた・指す先が変わったことだけ、確かめられないものとして数える
+  for (const path of new Set([...before.nested, ...after.nested])) if (before.nested.has(path) !== after.nested.has(path)) unchecked += 1;
+  for (const path of new Set([...before.gitlinks.keys(), ...after.gitlinks.keys()])) if (before.gitlinks.get(path) !== after.gitlinks.get(path)) unchecked += 1;
+  let inspected = changed;
+  if (changed.length > INSPECT_MAX) {
+    inspected = [...changed].sort((a, b) => nameFirst(a.path) - nameFirst(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, INSPECT_MAX);
+    unchecked += changed.length - inspected.length;
+  }
+  const named = inspected.map(entry => {
     const verdict = guard.inspect(entry.path);
     const shown = plainLine(entry.path, 300);
     const marks = new Set<RunMark>(verdict.marks);
@@ -247,14 +305,14 @@ export interface RunWatch {
   dataDir: string;
   before: Captured;
   // .git の設定・フック・HEAD などの指紋（書きかけの一覧が取れなくても、ファイルで読める分は比べる）
-  git: MainGitPrint | undefined;
+  git: GitPrint | undefined;
 }
 
 export interface WatchInput { config: AppConfig; paths: AppPaths; root: string; runId: string; conversationId: string }
 
-const gitPrint = async (root: string, dataDir: string): Promise<MainGitPrint | undefined> => {
+const gitPrint = async (root: string, dataDir: string): Promise<GitPrint | undefined> => {
   try {
-    const got = await timed(mainGitPrint(root, dataDir), WATCH_TIMEOUT_MS);
+    const got = await timed(readGitPrint(root, dataDir), WATCH_TIMEOUT_MS);
     return got === 'timeout' ? undefined : got;
   } catch { return undefined; }
 };
@@ -275,21 +333,24 @@ export async function beginWatch(input: WatchInput): Promise<RunWatch> {
 
 export type Ended = Omit<RuntimeRunChanges, 'v' | 'runId' | 'conversationId' | 'projectId' | 'runtime' | 'kind' | 'at' | 'outcome'>;
 
-// 返事が終わって実行役を閉じたあとに取り、前と比べる。落ちない。ファイルの差が出せなくても、.git の設定・フックの変化は伝える
-export async function endWatch(watch: RunWatch): Promise<Ended> {
+// 返事が終わって実行役を閉じたあとに取り、前と比べる。落ちない。ファイルの差が出せなくても、.git の設定・フックなどの変化は伝える。
+// 前が取れたのに後が取れなかった（too_many_after・timeout・failed・git_unusable）、または実行役がまだ動いているかもしれない（stillRunning）ときは、一覧が無いことを守りの印（alert・unseen）にする
+export async function endWatch(watch: RunWatch, options: { stillRunning?: boolean } = {}): Promise<Ended> {
   const after = await gitPrint(watch.guard.realRoot, watch.dataDir);
-  const git = watch.git && after ? mainGitChanges(watch.git, after) : watch.git && !after ? ['git'] : [];
-  const gitAlert = git.some(part => CODE_CONFIG.has(part));
-  const nothing = (state: RunChangeState): Ended => ({ state, files: [], more: 0, unchecked: 0, git, alert: gitAlert });
+  const git = watch.git && after ? gitChanges(watch.git, after) : watch.git && !after ? ['git'] : [];
+  const gitAlert = git.some(part => GIT_ALERT_PARTS.has(part));
+  const nothing = (state: RunChangeState): Ended => ({ state, files: [], more: 0, unchecked: 0, git, alert: gitAlert, unseen: false });
+  const unseen = (state: RunChangeState): Ended => ({ state, files: [], more: 0, unchecked: 0, git, alert: true, unseen: true });
   if (!watch.before.ok) return nothing(watch.before.state);
+  if (options.stillRunning) return unseen('unknown');
   const before = watch.before.snapshot;
   try {
     const got = await timed(captureSnapshot(watch.guard, watch.dataDir, { since: before.head, also: before.dirty.keys() }), WATCH_TIMEOUT_MS);
-    if (got === 'timeout') return nothing('timeout');
-    if (!got.ok) return nothing(got.state);
+    if (got === 'timeout') return unseen('timeout');
+    if (!got.ok) return unseen(got.state === 'too_many' ? 'too_many_after' : got.state);
     const compared = compareSnapshots(watch.guard, before, got.snapshot);
-    return { state: 'ok', files: compared.files, more: compared.more, unchecked: compared.unchecked, git, alert: compared.alert || gitAlert };
-  } catch { return nothing('failed'); }
+    return { state: 'ok', files: compared.files, more: compared.more, unchecked: compared.unchecked, git, alert: compared.alert || gitAlert, unseen: false };
+  } catch { return unseen('failed'); }
 }
 
 // ---- kv に実行ごとに持つ（移行は足さない。キーの終わりが会話の ID なので、会話を消すと db/erase.ts が一緒に消す） ----
@@ -299,7 +360,7 @@ export const RUN_KEEP = 20;
 export const RUN_SHOWN = 10;
 const keyOf = (runId: string, conversationId: string): string => `${PREFIX}${runId}:${conversationId}`;
 
-const STATES: ReadonlySet<string> = new Set(['ok', 'no_git', 'git_unusable', 'too_many', 'timeout', 'failed']);
+const STATES: ReadonlySet<string> = new Set(['ok', 'no_git', 'git_unusable', 'too_many', 'too_many_after', 'timeout', 'failed', 'unknown']);
 const OUTCOMES: ReadonlySet<string> = new Set(['ok', 'failed', 'stopped']);
 const MARKS: ReadonlySet<string> = new Set(['protected', 'unsafe', 'link', 'outside', 'guarded']);
 const STATUSES: ReadonlySet<string> = new Set(['added', 'modified', 'deleted']);
@@ -324,7 +385,7 @@ function revive(raw: string): RuntimeRunChanges | undefined {
   return {
     v: 1, runId: r.runId, conversationId: r.conversationId, projectId: r.projectId, runtime: r.runtime, kind: r.kind === 'claude-code' || r.kind === 'codex' ? r.kind : null,
     at: r.at, outcome: r.outcome as RunOutcome, state: r.state as RunChangeState, files, more: count(r.more), unchecked: count(r.unchecked),
-    git: (Array.isArray(r.git) ? r.git : []).filter((p): p is string => typeof p === 'string').slice(0, 10).map(p => p.slice(0, 20)), alert: r.alert === true,
+    git: (Array.isArray(r.git) ? r.git : []).filter((p): p is string => typeof p === 'string').slice(0, 10).map(p => p.slice(0, 20)), alert: r.alert === true, unseen: r.unseen === true,
   };
 }
 

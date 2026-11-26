@@ -10,7 +10,7 @@ import { BEAT_BRANCH } from '../projects/worktree.ts';
 import { gitFolder } from '../projects/work-folder.ts';
 import { isInside } from '../tools/hooks/scope.ts';
 import { buildPolicy } from '../tools/policy.ts';
-import { problem, readJson, requireObject, sendJson, type Router } from './http.ts';
+import { HttpProblem, problem, readJson, requireObject, sendJson, type Router } from './http.ts';
 import { projectProblem } from './routes-projects.ts';
 
 const ID = /^[0-9a-f-]{36}$/u;
@@ -105,7 +105,11 @@ export function registerChangeRoutes(router: Router, app: App): void {
   router.add('GET', '/api/projects/:id/changes', async ({ res, params, url }) => {
     const { project, realRoot } = projectOf(params[0]!);
     const scope = scopeOf(project, { base: url.searchParams.get('base'), task: url.searchParams.get('task'), conversation: url.searchParams.get('conversation') });
-    const made = await load(project, realRoot, scope);
+    // git が使えないときも、実行役の返事ごとの一覧は返す（使えなくなったそのときが、持ち主がいちばん見たいとき）。エラーの本体に足して、画面が失敗の知らせの下に出す
+    const made = await load(project, realRoot, scope).catch((error: unknown) => {
+      if (error instanceof HttpProblem) error.body.runtime = { runs: listRunChanges(app.kv, project.id, scope.conversation) };
+      throw error;
+    });
     const files = present(made.entries, { undo: true }).map((file, i) => {
       const after = made.entries[i]!.after;
       return file.undo && (after === null || Buffer.isBuffer(after)) ? { ...file, hash: after === null ? null : sha256(after) } : file;

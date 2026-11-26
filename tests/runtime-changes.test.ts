@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
-import { test } from 'node:test';
-import { fingerprint, listRunChanges, MAX_DIRTY, makeGuard, compareSnapshots, RUN_KEEP, RUN_SHOWN, saveRunChanges, type Guard, type Print, type RuntimeRunChanges, type Snapshot } from '../src/changes/runtime.ts';
+import { mock, test } from 'node:test';
+import { gitChanges, readGitPrint, submoduleHead } from '../src/changes/git-print.ts';
+import { captureSnapshot, fingerprint, INSPECT_MAX, listRunChanges, MAX_DIRTY, makeGuard, compareSnapshots, RUN_KEEP, RUN_SHOWN, saveRunChanges, type Guard, type Print, type RuntimeRunChanges, type Snapshot } from '../src/changes/runtime.ts';
 import { walkCurrent } from '../src/changes/diff.ts';
 import { KEEP_MAX_BYTES } from '../src/changes/record.ts';
 import type { RunEvent } from '../src/engine/types.ts';
@@ -86,7 +88,7 @@ test('返事のあいだに変えたファイルを、beat が git の前後か�
   assert.ok(res.body.files.some((f: { path: string }) => f.path === 'a.txt'));
   // 実行の記録には、数と印だけが残る
   const recorded = JSON.parse(r.s.app.runs.get(runId)!.runtime!) as { changes: { state: string; files: number; alert: boolean } };
-  assert.deepEqual(recorded.changes, { state: 'ok', files: 4, unchecked: 0, git: [], alert: false });
+  assert.deepEqual(recorded.changes, { state: 'ok', files: 4, unchecked: 0, git: [], alert: false, unseen: false });
   assert.deepEqual(JSON.parse(r.s.app.runs.get(runId)!.flags), ['runtime']);
 });
 
@@ -271,13 +273,13 @@ test('返事の前に書きかけが多すぎるときは、比べずに「多�
   const { runId } = await turn(r, projectId);
   assert.equal(r.s.app.runs.get(runId)!.ok, 1);
   const run = seen(r, projectId)[0]!;
-  assert.deepEqual({ state: run.state, files: run.files }, { state: 'too_many', files: [] });
+  assert.deepEqual({ state: run.state, files: run.files, alert: run.alert, unseen: run.unseen }, { state: 'too_many', files: [], alert: false, unseen: false });
 });
 
 test('実行ごとの一覧は、製品ごとに新しい RUN_KEEP 件だけ残り、画面へは RUN_SHOWN 件まで。会話で絞れる。会話を消すと一緒に消える', async t => {
   const s = await startApp(t);
   const base = (i: number, conversationId: string, projectId = 'p1'): RuntimeRunChanges => ({
-    v: 1, runId: `run${i}`, conversationId, projectId, runtime: 'claude-code', kind: 'claude-code', at: 1000 + i, outcome: 'ok', state: 'ok', files: [{ path: `f${i}.txt`, status: 'added', marks: [] }], more: 0, unchecked: 0, git: [], alert: false,
+    v: 1, runId: `run${i}`, conversationId, projectId, runtime: 'claude-code', kind: 'claude-code', at: 1000 + i, outcome: 'ok', state: 'ok', files: [{ path: `f${i}.txt`, status: 'added', marks: [] }], more: 0, unchecked: 0, git: [], alert: false, unseen: false,
   });
   for (let i = 0; i < RUN_KEEP + 5; i += 1) saveRunChanges(s.app.kv, base(i, i % 2 === 0 ? 'c-even' : 'c-odd'));
   saveRunChanges(s.app.kv, base(900, 'c-other', 'p2'));
@@ -367,7 +369,7 @@ test('比べる: 中身が同じなら出さず、比べられないものは数
   const gone: Print = { present: false, id: '-' };
   const snap = (dirty: Record<string, Print>, extra: { later?: Record<string, Print>; headDiff?: Record<string, string>; codes?: Record<string, string> } = {}): Snapshot => ({
     head: 'h', dirty: new Map(Object.entries(dirty).map(([path, print]) => [path, { code: extra.codes?.[path] ?? ' M', print }])),
-    later: new Map(Object.entries(extra.later ?? {})), headDiff: new Map(Object.entries(extra.headDiff ?? {})),
+    later: new Map(Object.entries(extra.later ?? {})), headDiff: new Map(Object.entries(extra.headDiff ?? {})), nested: new Set(), gitlinks: new Map(),
   });
   const before = snap({ same: sha('1'), edited: sha('1'), vanished: sha('1'), 'link-a': { present: true, id: null, link: true }, 'link-b': { present: true, id: null, link: true }, 'secret.key': { present: true, id: 'stat:1:1' } });
   const after = snap({ same: sha('1'), edited: sha('2'), 'link-a': { present: true, id: null, link: true }, 'link-b': gone, fresh: sha('9'), 'secret.key': { present: true, id: 'stat:2:2' } }, { later: { vanished: gone }, headDiff: { committed: 'M', same: 'M' }, codes: { fresh: '??' } });
@@ -399,4 +401,327 @@ test('makeGuard: 守りは Changes の欄と同じ部品。秘密の名前・.gi
   assert.equal(marks('a\\b.txt'), 'unsafe');
   assert.equal(guard.inspect('.env').readable, false);
   assert.equal(guard.inspect('src/app.ts').readable, true);
+});
+
+// ---- 安全審査の指摘（M1〜M6・L1・L2・V1）。どれも、その行を壊すと赤くなることを確かめてある ----
+
+// 実行役が「更新の時刻を元に戻した」ときの時刻（秒）。ミリ秒より細かい端数を持たない値にして、戻したあとも同じ時刻になるようにする
+const SAME_TIME = 1_700_000_000;
+
+// 台本で 1 回の返事のあいだに何かをさせ、その返事の一覧を返す
+async function change(r: Rig, projectId: string, script: () => void): Promise<{ runId: string; run: RuntimeRunChanges }> {
+  r.runtime.script = feed => { script(); feed.done(); };
+  const done = await turn(r, projectId);
+  const run = seen(r, projectId).find(x => x.runId === done.runId);
+  assert.ok(run, 'the run was recorded');
+  return { runId: done.runId, run };
+}
+const warned = (r: Rig, runId: string, code: string): boolean => r.events.some(e => e.type === 'warning' && e.runId === runId && e.code === code);
+const flagsOf = (r: Rig, runId: string): string[] => JSON.parse(r.s.app.runs.get(runId)!.flags) as string[];
+
+test('M1: 返事のあとに書きかけが多すぎて一覧を作れなかったら、「何が変わったか分からない」を守りの印と知らせにする（返事の前が多すぎたときは、前から分かっていたので立てない）', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  await r.check();
+  const { runId, run } = await change(r, projectId, () => {
+    mkdirSync(join(root, 'many'));
+    for (let i = 0; i <= MAX_DIRTY; i += 1) writeFileSync(join(root, 'many', `f${i}.txt`), 'x');
+  });
+  assert.deepEqual({ state: run.state, files: run.files, alert: run.alert, unseen: run.unseen }, { state: 'too_many_after', files: [], alert: true, unseen: true });
+  assert.deepEqual(flagsOf(r, runId), ['runtime', 'runtime_changes_guarded']);
+  assert.ok(warned(r, runId, 'runtime_changes_unseen'), 'the screen is told that the list is missing');
+  const recorded = JSON.parse(r.s.app.runs.get(runId)!.runtime!) as { changes: { unseen: boolean; alert: boolean } };
+  assert.deepEqual({ unseen: recorded.changes.unseen, alert: recorded.changes.alert }, { unseen: true, alert: true });
+  // 次の返事は、すでに多い状態から始まる: 前が取れないので、状態に理由が出るだけ（印は立てない）
+  const next = await change(r, projectId, () => undefined);
+  assert.deepEqual({ state: next.run.state, alert: next.run.alert, unseen: next.run.unseen }, { state: 'too_many', alert: false, unseen: false });
+  assert.ok(!warned(r, next.runId, 'runtime_changes_unseen'));
+});
+
+test('M1: .git/config.worktree も .git/config と同じに見る。変わったら設定の変化として守りに当たる', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  await r.check();
+  const { runId, run } = await change(r, projectId, () => writeFileSync(join(root, '.git', 'config.worktree'), '[core]\n\tquotepath = false\n'));
+  assert.deepEqual({ state: run.state, git: run.git, alert: run.alert }, { state: 'ok', git: ['config'], alert: true });
+  assert.ok(warned(r, runId, 'runtime_git_config'));
+});
+
+test('M2: .git/info/exclude が変わったら、git の無視の決まりの変化として守りに当たる（変えたファイルを git の一覧から隠せる）', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  await r.check();
+  const { runId, run } = await change(r, projectId, () => appendFileSync(join(root, '.git', 'info', 'exclude'), 'secret-work/\n'));
+  assert.deepEqual({ git: run.git, alert: run.alert }, { git: ['exclude'], alert: true });
+  assert.ok(warned(r, runId, 'runtime_git_other'));
+  assert.ok(flagsOf(r, runId).includes('runtime_changes_guarded'));
+});
+
+test('M2: skip-worktree・assume-unchanged の印が付いたら、その変更は git の一覧に出ないので、印が付いたこと自体を守りに当たる変化にする。もとから付いていて変わらないものは出さない', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n', 'b.txt': 'b\n' });
+  await r.check();
+  const hidden = await change(r, projectId, () => {
+    git(root, 'update-index', '--skip-worktree', 'a.txt');
+    writeFileSync(join(root, 'a.txt'), 'changed behind the flag\n');
+  });
+  assert.deepEqual({ files: names(hidden.run), git: hidden.run.git, alert: hidden.run.alert }, { files: [], git: ['index'], alert: true });
+  assert.ok(warned(r, hidden.runId, 'runtime_git_other'));
+  const quiet = await change(r, projectId, () => undefined);
+  assert.deepEqual({ git: quiet.run.git, alert: quiet.run.alert }, { git: [], alert: false });
+  const assumed = await change(r, projectId, () => git(root, 'update-index', '--assume-unchanged', 'b.txt'));
+  assert.deepEqual({ git: assumed.run.git, alert: assumed.run.alert }, { git: ['index'], alert: true });
+});
+
+test('M2: サブモジュールの中のフック・設定が変わったら modules の変化として守りに当たる', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  mkdirSync(join(root, '.git', 'modules', 'x', 'hooks'), { recursive: true });
+  writeFileSync(join(root, '.git', 'modules', 'x', 'config'), '[core]\n\tbare = false\n');
+  await r.check();
+  const hook = await change(r, projectId, () => writeFileSync(join(root, '.git', 'modules', 'x', 'hooks', 'pre-commit'), '#!/bin/sh\necho hi\n'));
+  assert.deepEqual({ git: hook.run.git, alert: hook.run.alert }, { git: ['modules'], alert: true });
+  const config = await change(r, projectId, () => appendFileSync(join(root, '.git', 'modules', 'x', 'config'), '[core]\n\teditor = vim\n'));
+  assert.deepEqual({ git: config.run.git, alert: config.run.alert }, { git: ['modules'], alert: true });
+  const quiet = await change(r, projectId, () => undefined);
+  assert.deepEqual(quiet.run.git, []);
+});
+
+test('M2: サブモジュール（git の目に入らない）は、指す先のコミットが変わった・中の HEAD が動いたことを「確かめられないもの」として数える。変わらなければ数えない', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  const head = git(root, 'rev-parse', 'HEAD');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${head},lib/sub`);
+  git(root, 'commit', '-q', '-m', 'add a submodule pointer');
+  mkdirSync(join(root, 'lib', 'sub', '.git'), { recursive: true });
+  writeFileSync(join(root, 'lib', 'sub', '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  await r.check();
+  const quiet = await change(r, projectId, () => undefined);
+  assert.deepEqual({ state: quiet.run.state, unchecked: quiet.run.unchecked, alert: quiet.run.alert }, { state: 'ok', unchecked: 0, alert: false });
+  const inside = await change(r, projectId, () => writeFileSync(join(root, 'lib', 'sub', '.git', 'HEAD'), 'ref: refs/heads/other\n'));
+  assert.deepEqual({ files: names(inside.run), unchecked: inside.run.unchecked }, { files: [], unchecked: 1 });
+  const pointer = await change(r, projectId, () => git(root, 'update-index', '--cacheinfo', `160000,${'1'.repeat(40)},lib/sub`));
+  assert.deepEqual({ files: names(pointer.run), unchecked: pointer.run.unchecked }, { files: [], unchecked: 1 });
+});
+
+test('M3: .git/hooks がリンクやジャンクションに差し替えられたら、link の変化として守りに当たる。先の中身は読まず、記録にも出ない', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  const outside = join(r.products, 'outside-hooks');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'pre-commit'), `#!/bin/sh\n# ${SECRET}\n`);
+  await r.check();
+  const { runId, run } = await change(r, projectId, () => { rmSync(join(root, '.git', 'hooks'), { recursive: true }); link(outside, join(root, '.git', 'hooks')); });
+  assert.ok(run.git.includes('hooks') && run.git.includes('link'), `git: ${run.git.join(',')}`);
+  assert.equal(run.alert, true);
+  assert.ok(warned(r, runId, 'runtime_git_hooks'));
+  assert.ok(warned(r, runId, 'runtime_git_other'));
+  assert.ok(!JSON.stringify([run, r.events]).includes(SECRET));
+});
+
+// 部品を直接動かす試験で、プロセスの中のファイルの開き方を見張る（beat の git が使う道だけ。子プロセスの git は別）
+function watchFs(t: { after: (fn: () => void) => void }, names: ReadonlyArray<'openSync' | 'lstatSync' | 'readdirSync' | 'readlinkSync' | 'statSync' | 'readFileSync'>): string[] {
+  const touched: string[] = [];
+  for (const name of names) {
+    const original = fs[name] as (...a: unknown[]) => unknown;
+    const patched = mock.method(fs, name, ((path: unknown, ...rest: unknown[]) => {
+      if (typeof path === 'string') touched.push(`${name} ${path}`);
+      return original(path, ...rest);
+    }) as never);
+    t.after(() => { patched.mock.restore(); syncBuiltinESMExports(); });
+  }
+  syncBuiltinESMExports();
+  return touched;
+}
+
+// 部品の試験用の、コミットまで済んだ git の製品（beat の製品としては登録しない）
+async function plainRepo(t: Parameters<typeof startApp>[0]): Promise<{ root: string; dir: string }> {
+  const dir = (await startApp(t)).app.paths.data;
+  const root = join(dir, `gp${++n}`);
+  mkdirSync(root, { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, 'a.txt'), 'a\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'first');
+  return { root, dir };
+}
+
+test('M3: git の指紋は、リンクの先を開かない。先の中身が変わっても指紋は変わらず、リンクだったことだけ残る', { skip: !gitAvailable }, async t => {
+  const { root, dir } = await plainRepo(t);
+  const outside = join(dir, 'outside-hooks');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'pre-commit'), SECRET);
+  rmSync(join(root, '.git', 'hooks'), { recursive: true });
+  link(outside, join(root, '.git', 'hooks'));
+  const opened = watchFs(t, ['openSync', 'readdirSync']);
+  const one = await readGitPrint(root, dir);
+  writeFileSync(join(outside, 'pre-commit'), `${SECRET} and more`);
+  const two = await readGitPrint(root, dir);
+  assert.ok(one && two);
+  assert.deepEqual(one.links, ['hooks']);
+  assert.equal(one.hooks, two.hooks, 'what is behind the link is not part of the print');
+  assert.ok(!opened.some(entry => entry.includes('outside-hooks')), opened.filter(entry => entry.includes('outside-hooks')).join(', '));
+});
+
+test('M3: 大きすぎる .git/config は開かない（大きさと時刻だけ）。中身を同じ大きさで書き換えても、時刻と番号で変化は分かる', { skip: !gitAvailable }, async t => {
+  const { root, dir } = await plainRepo(t);
+  const config = join(root, '.git', 'config');
+  appendFileSync(config, `# ${'x'.repeat(2 * 1024 * 1024)}\n`);
+  utimesSync(config, SAME_TIME, SAME_TIME);
+  const opened = watchFs(t, ['openSync']);
+  const one = await readGitPrint(root, dir);
+  assert.ok(one);
+  assert.ok(!opened.some(entry => entry === `openSync ${config}`), 'a config over the cap is not opened');
+  const until = Date.now() + 60;
+  while (Date.now() < until) { /* 時刻の粒度を越える */ }
+  const bytes = readFileSync(config);
+  bytes[bytes.length - 3] = 'y'.charCodeAt(0);
+  writeFileSync(config, bytes);
+  utimesSync(config, SAME_TIME, SAME_TIME);
+  const two = await readGitPrint(root, dir);
+  assert.ok(two);
+  assert.notEqual(one.config, two.config);
+});
+
+test('M3: フォルダは見る数に上限を置く。ただしフックの決まった名前は、埋め草のファイルで押し出されても必ず見る', { skip: !gitAvailable }, async t => {
+  const { root, dir } = await plainRepo(t);
+  const hooks = join(root, '.git', 'hooks');
+  for (let i = 0; i < 500; i += 1) writeFileSync(join(hooks, `a${String(i).padStart(3, '0')}`), 'x');
+  const opened = watchFs(t, ['openSync']);
+  const one = await readGitPrint(root, dir);
+  assert.ok(one);
+  assert.ok(opened.filter(entry => entry.startsWith(`openSync ${hooks}`)).length < 450, 'the walk stops at its cap');
+  writeFileSync(join(hooks, 'pre-commit'), '#!/bin/sh\necho hi\n');
+  const two = await readGitPrint(root, dir);
+  assert.ok(two);
+  assert.ok(gitChanges(one, two).includes('hooks'), 'a real hook name sorted behind the padding is still seen');
+});
+
+test('M3: ネットワークの先を指す gitdir: は、見ない（接続しない）。サブモジュールの gitdir: も同じ', { skip: !gitAvailable || !WINDOWS }, async t => {
+  const dir = (await startApp(t)).app.paths.data;
+  const root = join(dir, `remote${++n}`);
+  mkdirSync(join(root, 'sub'), { recursive: true });
+  writeFileSync(join(root, '.git'), 'gitdir: \\\\evil-host\\share\\repo\n');
+  writeFileSync(join(root, 'sub', '.git'), 'gitdir: //evil-host/share/repo\n');
+  const touched = watchFs(t, ['openSync', 'lstatSync', 'readdirSync', 'readlinkSync', 'statSync', 'readFileSync']);
+  assert.equal(await readGitPrint(root, dir), undefined);
+  assert.equal(submoduleHead(root, 'sub'), 'remote');
+  assert.deepEqual(touched.filter(entry => /^\w+ [\\/]{2}/u.test(entry)), []);
+});
+
+test('M4: 無視されている秘密の名前のファイルも、書きかけの数の上限に数える（無視で上限を迂回して、読む数を増やさせない）', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'cfg/keep.txt': 'k\n' }, { ignore: '.env.*\n' });
+  mkdirSync(join(root, 'cfg'), { recursive: true });
+  for (let i = 0; i <= MAX_DIRTY; i += 1) writeFileSync(join(root, 'cfg', `.env.${i}`), 'v');
+  await r.check();
+  const { run } = await change(r, projectId, () => undefined);
+  assert.equal(run.state, 'too_many');
+});
+
+test('M4: 変わったパスが多いときは、守りに当たるか確かめる数に上限を置き、名前で分かる守り（秘密の名前）を先に確かめる。残りは確かめられないものとして数える', () => {
+  let inspected = 0;
+  const guard: Guard = { realRoot: '/r', inspect: rel => { inspected += 1; return rel.includes('secret') ? { marks: ['protected'], readable: false } : { marks: [], readable: true }; } };
+  const empty = (headDiff: Record<string, string> = {}): Snapshot => ({ head: 'h', dirty: new Map(), later: new Map(), headDiff: new Map(Object.entries(headDiff)), nested: new Set(), gitlinks: new Map() });
+  const diff = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`src/f${String(i).padStart(4, '0')}.ts`, 'M']));
+  diff['zzz/secret.key'] = 'M';
+  const result = compareSnapshots(guard, empty(), empty(diff));
+  assert.ok(inspected <= INSPECT_MAX, `inspected ${inspected}`);
+  assert.equal(result.unchecked, 5001 - INSPECT_MAX);
+  assert.equal(result.files[0]?.path, 'zzz/secret.key', 'the secret name sorted last is still looked at, and listed first');
+  assert.deepEqual(result.files[0]?.marks, ['protected']);
+  assert.equal(result.alert, true);
+});
+
+test('M4: 指紋を取る繰り返しは、一定の数ごとに手を空け、時間切れを過ぎたら止まる', { skip: !gitAvailable }, async t => {
+  const { root, dir } = await plainRepo(t);
+  for (let i = 0; i < 200; i += 1) writeFileSync(join(root, `u${String(i).padStart(3, '0')}.txt`), 'x');
+  const real = realpathSync.native(root);
+  assert.deepEqual(await captureSnapshot({ realRoot: real, inspect: () => ({ marks: [], readable: true }) }, dir, { limitMs: 0 }), { ok: false, state: 'timeout' });
+  // 手を空けているか: 順番に 1 つずつ回る setImmediate の列が、64 個ごとの区切りで進む
+  let ticks = 0;
+  let running = true;
+  const pump = (): void => { ticks += 1; if (running) setImmediate(pump); };
+  setImmediate(pump);
+  const at: number[] = [];
+  const done = await captureSnapshot({ realRoot: real, inspect: () => { at.push(ticks); return { marks: [], readable: true }; } }, dir, { limitMs: 60_000 });
+  running = false;
+  assert.equal(done.ok, true);
+  assert.ok(at.length >= 128, `${at.length} paths were looked at`);
+  assert.ok(at[63]! > at[62]!, 'it gave way after 64 paths');
+  assert.equal(at[1], at[0], 'and not between every path');
+});
+
+test('M6: 実行役を閉じる呼びかけに時間内に答えない・閉じ込めに失敗した実行役は、まだ動いているかもしれないので、返事のあとのファイルを取らず、「分からない」を守りの印と知らせにする', { skip: !gitAvailable }, async t => {
+  const hung = await rig(t);
+  const a = await repo(hung, { 'a.txt': 'a\n' });
+  await hung.check();
+  hung.runtime.hang.close = true;
+  t.after(() => hung.runtime.release());
+  const one = await change(hung, a.id, () => writeFileSync(join(a.root, 'a.txt'), 'changed while it may still run\n'));
+  assert.deepEqual({ state: one.run.state, files: one.run.files, alert: one.run.alert, unseen: one.run.unseen }, { state: 'unknown', files: [], alert: true, unseen: true });
+  assert.ok(warned(hung, one.runId, 'runtime_changes_unseen'));
+  assert.ok(flagsOf(hung, one.runId).includes('runtime_changes_guarded'));
+
+  const loose = await rig(t);
+  const b = await repo(loose, { 'a.txt': 'a\n' });
+  await loose.check();
+  loose.runtime.containReason = 'no job object here';
+  const two = await change(loose, b.id, () => writeFileSync(join(b.root, 'a.txt'), 'changed\n'));
+  assert.deepEqual({ state: two.run.state, files: two.run.files, alert: two.run.alert, unseen: two.run.unseen }, { state: 'unknown', files: [], alert: true, unseen: true });
+  assert.ok(warned(loose, two.runId, 'runtime_changes_unseen'));
+});
+
+test('L1: 守って中身を読まないファイルは、同じ大きさで書き換えて更新の時刻を元に戻しても、変更の時刻とファイルの番号で違いが分かる', async t => {
+  const dir = (await startApp(t)).app.paths.data;
+  const root = join(dir, `l1-${++n}`);
+  mkdirSync(root, { recursive: true });
+  const file = join(root, '.env');
+  writeFileSync(file, 'TOKEN=aaaa\n');
+  utimesSync(file, SAME_TIME, SAME_TIME);
+  const budget = { left: 1 << 30 };
+  const one = fingerprint(root, '.env', false, budget);
+  const until = Date.now() + 60;
+  while (Date.now() < until) { /* 時刻の粒度を越える */ }
+  writeFileSync(file, 'TOKEN=bbbb\n');
+  utimesSync(file, SAME_TIME, SAME_TIME);
+  const two = fingerprint(root, '.env', false, budget);
+  const head = (id: string | null): string => (id ?? '').split(':').slice(0, 3).join(':');
+  assert.equal(head(one.id), head(two.id), 'the same size and the same update time, as a hiding runtime would leave it');
+  assert.notEqual(one.id, two.id);
+});
+
+test('L2: 中に別の .git があるフォルダ（入れ子のリポジトリ）は、安全でないパスとして警告せず、「確かめられないもの」として数える。もとからあって変わらなければ数えない', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  mkdirSync(join(root, 'lib'));
+  git(join(root, 'lib'), 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, 'lib', 'x.txt'), 'x\n');
+  await r.check();
+  const quiet = await change(r, projectId, () => undefined);
+  assert.deepEqual({ state: quiet.run.state, files: names(quiet.run), unchecked: quiet.run.unchecked, alert: quiet.run.alert }, { state: 'ok', files: [], unchecked: 0, alert: false });
+  const appeared = await change(r, projectId, () => {
+    mkdirSync(join(root, 'vendor'));
+    git(join(root, 'vendor'), 'init', '-q', '-b', 'main');
+    writeFileSync(join(root, 'vendor', 'y.txt'), 'y\n');
+  });
+  assert.deepEqual({ files: names(appeared.run), unchecked: appeared.run.unchecked, alert: appeared.run.alert }, { files: [], unchecked: 1, alert: false });
+});
+
+test('V1: git が使えなくなって変更の一覧が 409 で失敗しても、実行役の返事ごとのまとまりは返す（使えなくなった返事そのものが入る）', { skip: !gitAvailable }, async t => {
+  const r = await rig(t);
+  const { id: projectId, root } = await repo(r, { 'a.txt': 'a\n' });
+  await r.check();
+  const first = await change(r, projectId, () => writeFileSync(join(root, 'a.txt'), 'changed\n'));
+  const poisoned = await change(r, projectId, () => appendFileSync(join(root, '.git', 'config'), '[alias]\n\tx = !echo hi\n'));
+  assert.equal(poisoned.run.state, 'git_unusable');
+  for (const query of ['', '?base=commit']) {
+    const res = await r.s.json(`/api/projects/${projectId}/changes${query}`, 'GET');
+    assert.equal(res.status, 409, `${query}: ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.code, 'project.changes_git_unusable');
+    const runs = (res.body.runtime?.runs ?? []) as RuntimeRunChanges[];
+    assert.deepEqual(runs.map(x => x.runId).sort(), [first.runId, poisoned.runId].sort(), query);
+    assert.deepEqual(runs.find(x => x.runId === poisoned.runId)?.state, 'git_unusable');
+    assert.deepEqual(names(runs.find(x => x.runId === first.runId)!), ['a.txt:modified']);
+  }
 });

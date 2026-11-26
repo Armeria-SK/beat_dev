@@ -466,6 +466,20 @@ test('remote の名前: remote.<名前>.url がある名前だけ（名前にド
   assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = fetchonly\n'))).configOk, false, 'url の無い名前は宛先として使えない');
 });
 
+test('場所を取る項目（core.excludesFile・core.attributesFile・diff.orderFile）が、ネットワークの先（UNC・// の書き方）を指していたら、ふつうでない項目として止める（git が開くと、サーバーへ接続して認証情報を渡す）。Windows 以外ではネットワークの先という見方が無いので止めない。手元の場所はいつもふつう', () => {
+  const WINDOWS = process.platform === 'win32';
+  for (const key of ['excludesFile', 'attributesFile'] as const) {
+    for (const value of ['//evil-host/share/x', '"\\\\\\\\evil-host\\\\share\\\\x"', '  //evil-host/share/x  ']) {
+      const config = `[core]\n\t${key} = ${value}\n`;
+      assert.equal(unusualKey(parseGitConfig(config)!)?.startsWith(`core.${key.toLowerCase()} = `) ?? false, WINDOWS, config);
+    }
+    for (const value of ['~/.gitignore_global', 'C:/Users/x/ignore', '/etc/ignore', 'rel/ignore']) assert.equal(unusualKey(parseGitConfig(`[core]\n\t${key} = ${value}\n`)!), null, value);
+  }
+  const order = '[diff]\n\torderFile = //evil-host/share/order\n';
+  assert.equal(unusualKey(parseGitConfig(order)!)?.startsWith('diff.orderfile = ') ?? false, WINDOWS, order);
+  assert.equal(unusualKey(parseGitConfig('[diff]\n\torderFile = order.txt\n')!), null);
+});
+
 test('コードを動かさない表示・動作の項目は、リポジトリの設定でもふつう（core.quotepath・excludesFile など）', () => {
   for (const config of ['[core]\n\tquotepath = false\n', '[core]\n\texcludesFile = ~/.gitignore_global\n', '[core]\n\tattributesFile = ~/.ga\n', '[core]\n\twhitespace = trailing-space\n', '[diff]\n\talgorithm = histogram\n\trenames = copies\n', '[merge]\n\tconflictStyle = zdiff3\n',
     '[rerere]\n\tenabled = true\n', '[branch]\n\tsort = -committerdate\n', '[push]\n\tfollowTags = true\n', '[commit]\n\tverbose = true\n']) {

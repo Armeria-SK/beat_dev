@@ -101,4 +101,6 @@ export const engineJa = {
   'warn.runtime_changes_guarded': "この返事のあいだに、beat が守っているファイル、または安全にたどれないファイルが変わったことを git で確かめました: {paths}。続ける前に Changes で確かめてください",
   'warn.runtime_git_hooks': "この返事のあいだに、この製品の git のフックが変わりました。フックはあとでコマンドを動かせるので、ここで git を使う前に確かめてください",
   'warn.runtime_git_config': "この返事のあいだに、この製品の git の設定（.git/config）が変わりました。ここで git を使う前に確かめてください",
+  'warn.runtime_changes_unseen': "この返事のあいだに変わったファイルの一覧を作れませんでした（あとでフォルダを読めなかったか、実行役がまだ動いているかもしれません）。続ける前に、製品のフォルダを自分で確かめてください",
+  'warn.runtime_git_other': "この返事のあいだに、beat の目から変更を隠せる、またはコマンドを動かせる .git の中身が変わりました（{parts}）。ここで git を使う前に確かめてください",
 } satisfies JaTable<typeof engineText>;

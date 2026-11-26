@@ -122,6 +122,9 @@ const PLAIN_PLAIN: Record<string, ReadonlySet<string>> = {
 // remote.<名前>.url が transport helper（ext::sh -c … など）のとき、押す・取るでコードが動く
 const HELPER_URL = /^[A-Za-z0-9_.+-]+::/u;
 
+// ファイルの場所を取る項目。git はこの場所を開いて読むので、ネットワークの先（UNC。// の書き方も）だと、beat の git が開いたときにサーバーへ接続して認証情報を渡してしまう
+const PATH_KEYS = new Set(['core.excludesfile', 'core.attributesfile', 'diff.orderfile']);
+
 // ふつうでない項目の名前を返す（無ければ null）
 export function unusualKey(entries: readonly ConfigEntry[]): string | null {
   for (const { key, value } of entries) {
@@ -132,6 +135,7 @@ export function unusualKey(entries: readonly ConfigEntry[]): string | null {
       ? (section === 'core' ? PLAIN_CORE.has(name) : PLAIN_WHOLE.has(section) || (PLAIN_PLAIN[section]?.has(name) ?? false))
       : (PLAIN_BY_SUB[section]?.has(name) ?? (PLAIN_WHOLE.has(section) && section !== 'extensions'));
     if (!plain) return key;
+    if (PATH_KEYS.has(key) && isRemotePath(value.trim())) return `${key} = ${value.slice(0, 20)}`;
     if (section === 'remote' && parts.length > 2 && (name === 'url' || name === 'pushurl') && (HELPER_URL.test(value.trim()) || value.trim().startsWith('-'))) return `${key} = ${value.slice(0, 20)}`;
   }
   return null;

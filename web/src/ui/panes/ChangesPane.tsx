@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { api, type ChangedFile, type ChangesScope, type ChangesView, type RuntimeChangeFile, type RuntimeChangeRun } from '../../api.ts';
+import { api, ApiError, type ChangedFile, type ChangesScope, type ChangesView, type RuntimeChangeFile, type RuntimeChangeRun } from '../../api.ts';
 import { changesTouched, ownUndo, rememberUndo, useChangesRevision } from '../../changes-undo.ts';
 import { formatRelative } from '../../i18n/format.ts';
 import { useT } from '../../i18n/index.ts';
@@ -16,10 +16,13 @@ export type ChangesSource =
 export interface ChangesFocus { path: string; n: number }
 export interface UndoneNotice { projectId: string; batch: string | null; undone: number; refused: number; more: number }
 
-type Loaded = { state: 'loading' } | { state: 'failed'; message: string } | { state: 'ok'; data: ChangesView; asked: ChangesPick | null; seq: number };
+type Loaded = { state: 'loading' } | { state: 'failed'; message: string; runs: RuntimeChangeRun[] } | { state: 'ok'; data: ChangesView; asked: ChangesPick | null; seq: number };
 type Problem = { title: string; text: string } | null;
 
 const LEAVE_MS = 240;
+
+// 読めなかったときの返事にも、実行役の返事ごとの一覧が付いてくることがある（git が使えなくなったとき）
+const runsOf = (error: unknown): RuntimeChangeRun[] => (error instanceof ApiError && Array.isArray(error.body?.runtime?.runs) ? error.body.runtime.runs as RuntimeChangeRun[] : []);
 
 const SINCE = { build: 'ui.changes.since.build', commit: 'ui.changes.since.commit', records: 'ui.changes.since.records', conversation: 'ui.changes.since.conversation' } as const;
 export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: { source: ChangesSource; revision: string; focus?: ChangesFocus | null | undefined; onFocusUsed?: (() => void) | undefined; onUndone?: ((notice: UndoneNotice) => void) | undefined }) {
@@ -59,7 +62,7 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
       setNotHere(null);
       setLoaded({ state: 'ok', data, asked: pick, seq: gen });
     } catch (error) {
-      if (gen === generation.current) setLoaded({ state: 'failed', message: error instanceof Error ? error.message : String(error) });
+      if (gen === generation.current) setLoaded({ state: 'failed', message: error instanceof Error ? error.message : String(error), runs: runsOf(error) });
     } finally {
       if (gen === generation.current) {
         busy.current = null;
@@ -124,6 +127,7 @@ export function ChangesPane({ source, revision, focus, onFocusUsed, onUndone }: 
       <div className="ui-changes" ref={root}>
         {select && <div className="bt-pane__bar"><span className="bt-meta" />{select}</div>}
         <Notice tone="warn" icon="alert" title={t('ui.changes.loadFailed')} text={loaded.message} action={{ label: t('ui.fail.retry'), run: () => void load() }} />
+        {loaded.runs.length > 0 && <RuntimeGroup runs={loaded.runs} />}
       </div>
     );
   }
@@ -217,8 +221,8 @@ function FileDiff({ file, leaving, enter, focused, undoable, canUndo, onUndo }: 
 
 const RUNTIME_NAME: Record<string, 'ui.set.runtime.claude-code' | 'ui.set.runtime.codex'> = { 'claude-code': 'ui.set.runtime.claude-code', codex: 'ui.set.runtime.codex' };
 const RUNTIME_MARK = { protected: 'ui.changes.runtime.mark.protected', guarded: 'ui.changes.runtime.mark.guarded', link: 'ui.changes.runtime.mark.link', outside: 'ui.changes.runtime.mark.outside', unsafe: 'ui.changes.runtime.mark.unsafe' } as const;
-const RUNTIME_STATE = { no_git: 'ui.changes.runtime.state.no_git', git_unusable: 'ui.changes.runtime.state.git_unusable', too_many: 'ui.changes.runtime.state.too_many', timeout: 'ui.changes.runtime.state.timeout', failed: 'ui.changes.runtime.state.failed' } as const;
-const RUNTIME_GIT = { head: 'ui.changes.runtime.git.head', branch: 'ui.changes.runtime.git.branch', refs: 'ui.changes.runtime.git.refs', stash: 'ui.changes.runtime.git.stash', config: 'ui.changes.runtime.git.config', hooks: 'ui.changes.runtime.git.hooks', worktrees: 'ui.changes.runtime.git.worktrees', git: 'ui.changes.runtime.git.git' } as const;
+const RUNTIME_STATE = { no_git: 'ui.changes.runtime.state.no_git', git_unusable: 'ui.changes.runtime.state.git_unusable', too_many: 'ui.changes.runtime.state.too_many', too_many_after: 'ui.changes.runtime.state.too_many_after', unknown: 'ui.changes.runtime.state.unknown', timeout: 'ui.changes.runtime.state.timeout', failed: 'ui.changes.runtime.state.failed' } as const;
+const RUNTIME_GIT = { head: 'ui.changes.runtime.git.head', branch: 'ui.changes.runtime.git.branch', refs: 'ui.changes.runtime.git.refs', stash: 'ui.changes.runtime.git.stash', config: 'ui.changes.runtime.git.config', hooks: 'ui.changes.runtime.git.hooks', worktrees: 'ui.changes.runtime.git.worktrees', git: 'ui.changes.runtime.git.git', exclude: 'ui.changes.runtime.git.exclude', modules: 'ui.changes.runtime.git.modules', index: 'ui.changes.runtime.git.index', link: 'ui.changes.runtime.git.link' } as const;
 
 // beat AR-9: 外の実行役の返事ごとに、beat 自身が git の前後から割り出した変更。差分の行も Undo もない（元に戻す対象ではない）
 function RuntimeGroup({ runs }: { runs: RuntimeChangeRun[] }) {
@@ -253,7 +257,8 @@ function RuntimeRun({ run }: { run: RuntimeChangeRun }) {
       {run.more > 0 && <p className="bt-meta ui-changes__note">{t('ui.changes.more', run.more)}</p>}
       {run.unchecked > 0 && <p className="bt-meta ui-changes__note">{t('ui.changes.runtime.unchecked', run.unchecked)}</p>}
       {git.length > 0 && <p className="bt-meta ui-changes__note">{t('ui.changes.runtime.git', git.join(', '))}</p>}
-      {run.alert && <p className="bt-meta ui-changes__note ui-changes__alert" role="status">{t('ui.changes.runtime.alert')}</p>}
+      {run.unseen && <p className="bt-meta ui-changes__note ui-changes__alert" role="status">{t('ui.changes.runtime.unseen')}</p>}
+      {run.alert && !run.unseen && <p className="bt-meta ui-changes__note ui-changes__alert" role="status">{t('ui.changes.runtime.alert')}</p>}
     </div>
   );
 }

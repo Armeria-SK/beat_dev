@@ -618,9 +618,9 @@ export type ChangeHashes = Record<string, string | null>;
 export interface ChangedFile { path: string; status: 'modified' | 'added' | 'deleted'; added: number; removed: number; hunks: string[][] | null; hidden: boolean; undo: boolean; hash?: string | null | undefined }
 // beat AR-9: 外の実行役（Claude Code・Codex）の返事のあとに beat 自身が git の前後から割り出した、変わったファイル。元に戻す対象ではない（file_changes には入らない）
 export type RuntimeChangeMark = 'protected' | 'unsafe' | 'link' | 'outside' | 'guarded';
-export type RuntimeChangeState = 'ok' | 'no_git' | 'git_unusable' | 'too_many' | 'timeout' | 'failed';
+export type RuntimeChangeState = 'ok' | 'no_git' | 'git_unusable' | 'too_many' | 'too_many_after' | 'timeout' | 'failed' | 'unknown';
 export interface RuntimeChangeFile { path: string; status: 'added' | 'modified' | 'deleted'; marks: RuntimeChangeMark[] }
-export interface RuntimeChangeRun { runId: string; conversationId: string; runtime: string; kind: string | null; at: number; outcome: 'ok' | 'failed' | 'stopped'; state: RuntimeChangeState; files: RuntimeChangeFile[]; more: number; unchecked: number; git: string[]; alert: boolean }
+export interface RuntimeChangeRun { runId: string; conversationId: string; runtime: string; kind: string | null; at: number; outcome: 'ok' | 'failed' | 'stopped'; state: RuntimeChangeState; files: RuntimeChangeFile[]; more: number; unchecked: number; git: string[]; alert: boolean; unseen?: boolean | undefined }
 export interface ChangesView { base: { kind: ChangeBaseKind; ref: string | null; at: number | null }; files: ChangedFile[]; more: number; redo?: { id: string; created_at: number; paths: string[] } | null; runtime?: { runs: RuntimeChangeRun[] } | undefined }
 export type ChangeRefusal = 'not_changed' | 'hidden' | 'unsafe_path' | 'link' | 'not_kept' | 'too_large' | 'cannot_keep' | 'same_file' | 'changed' | 'failed';
 export interface RefusedChange { path: string; reason: ChangeRefusal }

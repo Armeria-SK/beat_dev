@@ -83,7 +83,7 @@ test('ui/ChangesPane（DOM）: 守りの印（protected・asks first・link・ou
   assert.equal(text(group.querySelector('.ui-changes__runhead .bt-tag')), 'ended with an error');
   const notes = [...group.querySelectorAll('.ui-changes__note')].map(text);
   assert.ok(notes.includes('3 more files are not shown.'), JSON.stringify(notes));
-  assert.ok(notes.includes('2 files could not be compared (a link or an unsafe path), so they may have changed.'), JSON.stringify(notes));
+  assert.ok(notes.includes('2 files could not be checked (a link, an unsafe path, a nested repository, a submodule, or too many files), so they may have changed.'), JSON.stringify(notes));
   assert.ok(notes.includes('git changed during this reply: git hooks, git settings, weird'), JSON.stringify(notes));
   assert.ok(notes.some(note => note?.startsWith('Files that beat protects or cannot follow safely changed.')), JSON.stringify(notes));
   assert.equal(group.querySelector('.ui-changes__run')!.getAttribute('data-alert'), 'true');
@@ -98,6 +98,8 @@ test('ui/ChangesPane（DOM）: 割り出せなかった返事は、分かった�
     run({ runId: 'e', state: 'failed' }),
     run({ runId: 'f' }),
     run({ runId: 'g', outcome: 'stopped' }),
+    run({ runId: 'h', state: 'too_many_after', alert: true, unseen: true }),
+    run({ runId: 'i', state: 'unknown', alert: true, unseen: true }),
   ];
   const { container } = await show([], runs);
   const note = (id: string) => text(container.querySelector(`.ui-changes__run[data-run="${id}"] .ui-changes__note`));
@@ -107,6 +109,14 @@ test('ui/ChangesPane（DOM）: 割り出せなかった返事は、分かった�
   assert.match(note('d')!, /took too long/u);
   assert.match(note('e')!, /could not read git/u);
   assert.equal(note('f'), 'No file changes found.');
+  assert.equal(note('h'), 'Too many files had changed by the end of this reply, so no list could be made.');
+  assert.equal(note('i'), 'The runtime may still be running, so the files were not looked at after this reply.');
+  for (const id of ['h', 'i']) {
+    const unseenNotes = [...container.querySelectorAll(`.ui-changes__run[data-run="${id}"] .ui-changes__note`)].map(text);
+    assert.ok(unseenNotes.includes('What this reply changed is not known. Check the product folder yourself before you go on.'), JSON.stringify(unseenNotes));
+    assert.ok(!unseenNotes.some(n => n?.startsWith('Files that beat protects')), 'the unknown reply is not told as "files changed"');
+    assert.equal(container.querySelector(`.ui-changes__run[data-run="${id}"]`)!.getAttribute('data-alert'), 'true');
+  }
   assert.equal(text(container.querySelector('.ui-changes__run[data-run="g"] .ui-changes__runhead .bt-tag')), 'stopped');
   assert.equal(container.querySelector('.ui-changes__run[data-run="f"] .ui-changes__runhead .bt-tag'), null, 'a reply that ended normally has no outcome tag');
   assert.equal(container.querySelectorAll('.ui-changes__run[data-run="a"] .ui-changes__runfile').length, 0);
@@ -126,4 +136,24 @@ test('ui/ChangesPane（DOM）: ふつうのファイルが無くても、実行�
   await cleanup();
   const branch = await show([own], [run()], { kind: 'branch', productId: 'p1', worktreeId: 'ab12cd34' });
   assert.equal(branch.container.querySelector('.ui-changes__runtime'), null, 'the task branch view never has it');
+});
+
+test('ui/ChangesPane（DOM）: .git の中の新しい変化（無視の決まり・サブモジュール・skip-worktree の印・リンク）にも一言の名前が付く。一覧の説明は、持ち主や別の会話の変更も入ることを言う', async () => {
+  const { container } = await show([], [run({ alert: true, git: ['exclude', 'modules', 'index', 'link'] })]);
+  const notes = [...container.querySelectorAll('.ui-changes__note')].map(text);
+  assert.ok(notes.includes('git changed during this reply: git ignore rules (.git/info/exclude), submodule settings, skip-worktree or assume-unchanged flags, a link inside .git'), JSON.stringify(notes));
+  assert.match(text(container.querySelector('.ui-changes__runtime'))!, /Anything else changed while the reply ran, by you or another conversation, is listed too\./u);
+});
+
+test('ui/ChangesPane（DOM）: git が使えなくて読み込みが失敗しても、実行役の返事ごとのまとまりは残る（失敗の知らせの下に出る）。Retry もそのまま', async () => {
+  const runs = [run({ runId: 'x', state: 'git_unusable', alert: true, unseen: true, git: ['config', 'git'] }), run({ runId: 'y', files: [{ path: 'kept.ts', status: 'modified', marks: [] }] })];
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: 'project', code: 'project.changes_git_unusable', message: 'git could not be run safely in this product folder, so the changes cannot be shown', runtime: { runs } }), { status: 409, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const { container } = await render(createElement(ChangesPane, { source: { kind: 'product', productId: 'p1', conversationId: 'c1', isGit: true }, revision: '0' }));
+  await settle();
+  assert.match(text(container.querySelector('.bt-notice--warn'))!, /^Could not load the changes · git could not be run safely/u);
+  const group = container.querySelector('.ui-changes__runtime');
+  assert.ok(group, 'the runs are still shown');
+  assert.deepEqual([...group.querySelectorAll('.ui-changes__run')].map(el => el.getAttribute('data-run')), ['x', 'y']);
+  assert.deepEqual([...group.querySelectorAll('.ui-changes__runfile')].map(row), [['kept.ts', 'changed']]);
+  assert.ok([...container.querySelectorAll('button')].some(button => text(button) === 'Retry'));
 });

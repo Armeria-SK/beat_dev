@@ -69,7 +69,7 @@ export function readUpTo(path: string, size: number): Buffer | 'unknown' | 'larg
 export type Walked =
   | { kind: 'absent' }
   | { kind: 'unknown'; why: 'unsafe' | 'link' | 'alias' | 'special' | 'error'; at: string }
-  | { kind: 'file'; path: string; size: number; mtimeMs: number };
+  | { kind: 'file'; path: string; size: number; mtimeMs: number; ctimeMs: number; ino: number };
 
 export function walkCurrent(realRoot: string, rel: string): Walked {
   if (!safeRel(rel)) return { kind: 'unknown', why: 'unsafe', at: realRoot };
@@ -85,7 +85,7 @@ export function walkCurrent(realRoot: string, rel: string): Walked {
     if (i < parts.length - 1 && !st.isDirectory()) return { kind: 'absent' };
     if (i === parts.length - 1) {
       if (!st.isFile()) return st.isDirectory() ? { kind: 'absent' } : { kind: 'unknown', why: 'special', at: path };
-      return { kind: 'file', path, size: st.size, mtimeMs: st.mtimeMs };
+      return { kind: 'file', path, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino };
     }
   }
   return { kind: 'unknown', why: 'error', at: path };
