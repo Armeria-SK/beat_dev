@@ -55,11 +55,13 @@ test('裏の仕事だけのモデルは、会話だけの道具が増えても�
   assert.equal(s.app.status.get('bg-m')!.status, 'ok', s.app.status.get('bg-m')!.message);
   assert.equal(s.app.status.get('bg-m')!.required, needs);
   assert.equal(s.app.status.get('chat-m')!.status, 'ok');
+  assert.equal(s.app.engine.backgroundBlocked(), undefined, '裏の仕事を始める側（エンジン）も、このモデルを使える先として数える');
 
   await s.reroute({ chat: ['chat-m', 'bg-m'], background: ['bg-m'] });
   const asBoth = s.app.status.get('bg-m')!;
   assert.equal(asBoth.status, 'too_small', '会話にも入れたら、会話の道具で数える（今までと同じ）');
   assert.equal(asBoth.required, asChat);
+  assert.ok(s.app.engine.backgroundBlocked(), '会話の道具の大きさでは入らないので、裏の仕事の先としても使えない');
 });
 
 test('会話に割り当てたモデルは、今までと同じ数え方（会話の道具）で判定する', async t => {
