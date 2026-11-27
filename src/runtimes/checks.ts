@@ -114,10 +114,15 @@ export class RuntimeChecks {
   }
 
   // 起動のとき（main.ts）に 1 回だけ。入っている実行役を確かめ、使えると分かった実行役だけ一覧も読む（確かめと一覧は覚えるだけで、起動をまたいで残らないため）
-  async checkEnabled(config: Pick<AppConfig, 'runtimes'>): Promise<void> {
-    await Promise.all((config.runtimes ?? []).map(async runtime => {
-      const outcome = await this.check(config, runtime.id);
-      if (outcome.ok && usableCheck(outcome.check.status)) await this.loadModels(config, runtime.id);
+  // 待つあいだに設定が変わりうるので、各段の前に今の設定を読み（current）、各段のあとに状態を作り直す（settled。そこで古い結果は prune で捨てられる）。
+  // 一覧は、確かめの結果が今の設定のまま残っているときだけ読む（切られた・入れる先が変わった実行役を起こさない）
+  async checkEnabled(current: () => Pick<AppConfig, 'runtimes'>, settled: () => void): Promise<void> {
+    await Promise.all((current().runtimes ?? []).map(async runtime => {
+      const outcome = await this.check(current(), runtime.id);
+      settled();
+      if (!outcome.ok || !usableCheck(outcome.check.status) || this.get(runtime.id) !== outcome.check) return;
+      await this.loadModels(current(), runtime.id);
+      settled();
     }));
   }
 

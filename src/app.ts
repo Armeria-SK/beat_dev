@@ -421,10 +421,9 @@ export class App {
     if (gone) this.log(`[INFO] Closed ${gone} request(s) of outside runtimes that were waiting for an answer when beat stopped`);
   }
 
-  // 起動のときに 1 回（main.ts。待たない）。入っている外の実行役を確かめ、終わったときの設定で実行役のモデルの状態を作り直す（待つあいだに切られた実行役の結果は捨てる）
+  // 起動のときに 1 回（main.ts。待たない）。入っている外の実行役を確かめ、1 つ終わるたびに、その時の設定で実行役のモデルの状態を作り直す（待つあいだに切られた実行役の結果は捨てる）
   async checkRuntimes(): Promise<void> {
-    await this.runtimeChecks.checkEnabled(this.config());
-    this.status.refreshRuntimes(this.config());
+    await this.runtimeChecks.checkEnabled(() => this.config(), () => { this.status.refreshRuntimes(this.config()); });
   }
 
   // Web サーバーを起動するときに呼ぶ（動いているサーバーと同じ DB を開くだけの使い方では呼ばない。呼ぶと動いている承認待ちの通知まで既読になる）。

@@ -10,7 +10,7 @@ type T = ReturnType<typeof useT>;
 
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
 
-// Claude Code・Codex（外の実行役）の行。確かめは「Check」を押したときだけ（設定を保存するたびには起こさない）。ログインは公式の手順の案内だけで、beat はログインもログイン情報も扱わない
+// Claude Code・Codex（外の実行役）の行。確かめは起動のときと「Check」を押したときだけ（設定を保存するたびには起こさない）。ログインは公式の手順の案内だけで、beat はログインもログイン情報も扱わない
 export const NAME = { 'claude-code': 'ui.set.runtime.claude-code', codex: 'ui.set.runtime.codex' } as const;
 
 const PILL = {

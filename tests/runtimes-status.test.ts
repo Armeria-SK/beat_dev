@@ -19,6 +19,8 @@ interface Plan {
   failProbe?: string;
   failModels?: string;
   hold?: Promise<void>;
+  // models() を呼ばれたときの、起こした実行役の executablePath
+  listedPaths?: Array<string | undefined>;
 }
 
 const OK: RuntimeStatus = { installed: true, version: '2.1.331', verified: true, auth: 'ok', login: 'subscription' };
@@ -40,6 +42,7 @@ function factory(p: Plan): RuntimeFactory {
       },
       async models() {
         p.lists += 1;
+        (p.listedPaths ??= []).push(config.executablePath);
         if (p.failModels) throw new Error(p.failModels);
         return p.models;
       },
@@ -70,7 +73,7 @@ test('a runtime model is not checked against a provider: before any check it say
   assert.equal(before.inChat, true, 'the runtime model first in the chat list is counted as a chat model, as the composer needs');
   assert.deepEqual([before.probe.status, before.probe.messageCode], ['unreachable', 'provider.probe.runtime_unchecked']);
   await s.app.status.probeAll(s.app.config());
-  assert.equal(s.claude.probes, 0, 'only the owner pressing Check starts a check');
+  assert.equal(s.claude.probes, 0, 'a settings save does not start a check (only start-up and the owner pressing Check do)');
   assert.equal(s.claude.built, 0);
   assert.equal(s.app.status.usable('cc'), false);
   assert.equal(s.app.status.usable('m1'), true, 'a provider model is untouched');
@@ -386,5 +389,44 @@ test('a runtime turned off while the start-up check runs keeps no result', async
   await pending;
   assert.equal(s.app.runtimeChecks.get(RT), undefined);
   assert.equal(s.app.runtimeChecks.models(RT), null);
+  assert.equal(p.lists, 0, 'the list step does not start a runtime that was turned off');
   assert.equal((await s.model()).probe.messageCode, 'provider.probe.runtime_off');
+});
+
+test('a runtime pointed at another program while the start-up check runs: the old program is not started for its list, and no result is kept', async t => {
+  const p = plan();
+  let release = (): void => undefined;
+  p.hold = new Promise<void>(resolve => { release = resolve; });
+  const s = await start(t, p);
+  const pending = s.app.checkRuntimes();
+  for (let i = 0; i < 200 && p.probes === 0; i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  const config = (await s.json('/api/settings', 'GET')).body.config;
+  config.runtimes[0].executablePath = process.execPath;
+  assert.equal((await s.json('/api/settings', 'PUT', { config })).status, 200);
+  release();
+  await pending;
+  assert.ok(!(p.listedPaths ?? []).includes(undefined), 'models() was never called on the old program');
+  assert.equal(p.lists, 0, 'and a check made for the old program does not lead to reading a list at all');
+  assert.equal(s.app.runtimeChecks.get(RT), undefined);
+  assert.equal((await s.model()).probe.messageCode, 'provider.probe.runtime_unchecked');
+});
+
+test('the start-up pass updates each runtime model as soon as its own check is done: a fast runtime is usable while a slow one is still being checked', async t => {
+  const slow = plan();
+  let release = (): void => undefined;
+  slow.hold = new Promise<void>(resolve => { release = resolve; });
+  const fast = plan({ installed: true, version: '0.172.0', verified: true, auth: 'ok', login: 'subscription' });
+  const s = await startApp(t, {
+    models: [{ id: 'cc', runtime: RT, model: 'sonnet', vision: false }, { id: 'cx', runtime: 'codex', model: 'sonnet', vision: false }, fakeModel('m1')],
+    configure: config => { config.runtimes = [{ id: RT, kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }]; config.routing.chat = ['cc', 'm1']; },
+    runtimeFactories: { 'claude-code': factory(slow), codex: factory(fast) },
+  });
+  const pending = s.app.checkRuntimes();
+  for (let i = 0; i < 200 && !(fast.lists === 1 && s.app.status.get('cx')?.efforts); i += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(s.app.status.usable('cx'), true, 'the fast runtime is usable before the slow one answers');
+  assert.deepEqual(s.app.status.get('cx')?.efforts, ['low', 'high'], 'and its list is used as soon as it is read');
+  assert.equal(s.app.status.usable('cc'), false, 'the slow one is still not checked');
+  release();
+  await pending;
+  assert.equal(s.app.status.usable('cc'), true);
 });
