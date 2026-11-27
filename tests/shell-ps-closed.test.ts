@@ -167,7 +167,8 @@ test('Invoke-WebRequest・Invoke-RestMethod: パイプで流れてくる値が -
 });
 
 test('シェルの道具の説明が、PowerShell の書き込みは毎回確認が要ることと、書くなら file_write を使うことを、モデルに伝える。既存の制限モードの注意も残る', () => {
-  assert.match(shellRun.description, /In Windows PowerShell, cmdlets that write[^.]*need the user's confirmation every time[^.]*\. To write a file, use the[^.]*file_write/u);
+  assert.match(shellRun.description, /On Windows only:[\s\S]*- Cmdlets that write[^.]*need the user's confirmation every time/u);
+  assert.match(shellRun.description, /- To write a file, use the file_write \/ file_edit tools, not the shell\./u);
   assert.match(shellRun.description, /the result of Get-ChildItem -Filter[^.]*needs confirmation every time/u);
   assert.match(shellRun.description, /Forms of curl or wget that save to a file[^.]*need the user's confirmation every time[^.]*\. When a curl URL contains[^.]*-g/u);
   assert.match(shellRun.description, /constrained mode, so do not use \.NET type syntax \([^)]*\[pscustomobject\]/u);

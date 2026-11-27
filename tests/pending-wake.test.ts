@@ -402,7 +402,7 @@ test('5-P 作業の決まりの文に、積まれても待たなくてよいこ�
   const prompt = taskPrompt({ id: 'aaaaaaaa-0000', title: 'T', origin: 'user', body: '', next_action: null, done_criteria: null } as never, [], 'UTC');
   const line = prompt.split('\n').find(l => l.includes('Pending'))!;
   assert.match(line, /^- You do not need to wait for a call held in Pending/u);
-  assert.match(line, /resumes the task as soon as the user decides/u);
+  assert.match(line, /resumes the task as soon as the owner decides/u);
   assert.match(line, /task_complete only when nothing left in the task depends on/u);
   assert.match(line, /task_checkpoint/u);
 });

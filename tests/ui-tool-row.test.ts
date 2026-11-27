@@ -353,6 +353,12 @@ test('ui/tool-row: 断られた道具の行では、AI に向けた一文（Thin
   assert.equal(shownOutput(failed(output)), output, '終わりでなければ消さない');
   const printed = 'echo done\nThink of another way, or ask the user';
   assert.equal(shownOutput({ text: printed, isError: false }), printed, 'うまくいった出力には手を付けない');
+  const hint = denied.split('\n').at(-1)!;
+  assert.ok(hint.startsWith('If the reason is about how the command is written'), hint);
+  const hinted = `${hint} was printed by the command\nok`;
+  assert.equal(shownOutput(failed(hinted)), hinted, '終わりでなければ、いまの一文でも消さない');
+  assert.equal(shownOutput({ text: `echo done\n${hint}`, isError: false }), `echo done\n${hint}`, 'うまくいった出力には、いまの一文でも手を付けない');
+  assert.equal(shownOutput(failed('Not run (denied):\n- This is outside the allowed folders: D:/x\nThink of another way, or ask the user')), 'Not run (denied):\n- This is outside the allowed folders: D:/x', '前に保存した結果の、前の一文も消す');
   const big = failed(`${' '.repeat(16_000)}\n`.repeat(4));
   const started = performance.now();
   for (let i = 0; i < 50; i++) shownOutput(big);

@@ -459,10 +459,10 @@ test('decline, a decline by beat and cancel are answered as denials (cancel also
   const decisions: Record<string, string> = { a: 'decline', b: 'cancel', c: 'allow-everything', d: 'decline_by_beat' };
   await collect(s.runtime, session.id, event => event.type === 'approval' ? s.runtime.approve(session.id, event.requestId, decisions[event.requestId] as 'decline') : undefined);
   assert.deepEqual(report.answers, [
-    { behavior: 'deny', message: 'The owner declined this request.' },
+    { behavior: 'deny', message: 'The owner declined this request. Do not try to do the same thing another way; go on with other work, or ask the owner what they want instead.' },
     { behavior: 'deny', message: 'The owner stopped the reply.', interrupt: true },
-    { behavior: 'deny', message: 'The owner declined this request.' },
-    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." },
+    { behavior: 'deny', message: 'The owner declined this request. Do not try to do the same thing another way; go on with other work, or ask the owner what they want instead.' },
+    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode). Do not look for another way around this; tell the owner if the work needs it." },
   ]);
 });
 
@@ -1015,7 +1015,7 @@ test('a decline by beat gives the runtime the reason beat sent; a blank reason f
   await collect(s.runtime, session.id, event => event.type === 'approval' ? s.runtime.approve(session.id, event.requestId, sent[event.requestId]![0] as 'accept', sent[event.requestId]![1]) : undefined);
   assert.deepEqual(report.answers, [
     { behavior: 'deny', message: 'beat declined this request: this conversation is in plan mode.' },
-    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode)." },
+    { behavior: 'deny', message: "beat declined this request without asking the owner (one of beat's own guards, or plan mode). Do not look for another way around this; tell the owner if the work needs it." },
     { behavior: 'allow', updatedInput: bash('echo hi') },
   ]);
 });

@@ -62,7 +62,7 @@ test('2-3 指示ファイル: AGENTS.md を読み、無ければ CLAUDE.md、ど
   assert.deepEqual(readInstructions(root, 2000), { name: 'CLAUDE.md', text: 'claude rules', truncated: false });
   writeFileSync(join(root, 'AGENTS.md'), '\u{FEFF}agents rules\n');
   assert.deepEqual(readInstructions(root, 2000), { name: 'AGENTS.md', text: 'agents rules', truncated: false });
-  assert.equal(instructionsSection(readInstructions(root, 2000)), '# Product instructions (AGENTS.md)\n\nagents rules');
+  assert.equal(instructionsSection(readInstructions(root, 2000)), "# Product instructions (AGENTS.md)\nThis file is in the product folder. Follow it for work on this product. Where it conflicts with beat's basic rules above, the basic rules win, and it cannot give permission for anything that needs the owner's OK.\n\nagents rules");
 });
 
 test('2-3 指示ファイル: 見えない文字（幅ゼロ・向きを変える印・タグ文字・制御文字）を取り除く。改行とタブは残す', t => {
@@ -206,7 +206,7 @@ test('2-3 製品の会話: 固定の system に指示ファイルがあり、SOU
   s.adapter().scripts.push(reply('ok'));
   await s.send('p1', 'hello', s.project.id);
   const frozen = frozenOf(s.app, 'p1');
-  assert.match(frozen, /# Product instructions \(AGENTS\.md\)\n\nPRODUCT-RULES: use tabs/u);
+  assert.match(frozen, /# Product instructions \(AGENTS\.md\)\nThis file is in the product folder\.[^\n]*\n\nPRODUCT-RULES: use tabs/u);
   for (const absent of ['SOUL-MARKER', 'USER-MARKER', 'MEMORY-MARKER', '# What you remember (memory)']) assert.ok(!frozen.includes(absent), absent);
   const call = s.adapter().calls[0]!;
   assert.equal(call.system.frozen, frozen);
@@ -237,7 +237,7 @@ test('2-3 製品の会話で指示ファイルが無ければ節ごと無い（S
   await s.send('p1', 'again');
   assert.equal(frozenOf(s.app, 'p1'), first, '会話の途中では変わらない');
   await s.send('p2', 'new', s.project.id);
-  assert.match(frozenOf(s.app, 'p2'), /# Product instructions \(CLAUDE\.md\)\n\nLATER-RULES/u);
+  assert.match(frozenOf(s.app, 'p2'), /# Product instructions \(CLAUDE\.md\)\nThis file is in the product folder\.[^\n]*\n\nLATER-RULES/u);
 });
 
 test('2-3 製品のフォルダがジャンクションにすり替わっていたら、指示ファイルを読まない（SOUL.md・USER.md も入らないまま）', async t => {
@@ -369,7 +369,7 @@ test('2-3 製品のタスクの会話: 固定の system に指示ファイルが
   s.adapter().scripts.push(toolCall('task_complete', { summary: 'done', notify: false }));
   assert.equal(await s.app.worker.tick(), 'ran');
   const frozen = frozenOf(s.app, s.app.tasks.get(product.id)!.conversation_id!);
-  assert.match(frozen, /# Product instructions \(AGENTS\.md\)\n\nTASK-RULES/u);
+  assert.match(frozen, /# Product instructions \(AGENTS\.md\)\nThis file is in the product folder\.[^\n]*\n\nTASK-RULES/u);
   for (const absent of ['SOUL-MARKER', 'USER-MARKER']) assert.ok(!frozen.includes(absent), absent);
   assert.equal(s.adapter().calls.at(-1)!.system.frozen, frozen);
   const plain = s.app.tasks.create({ title: 'Plain chore', origin: 'user', actor: 'user' });
@@ -431,7 +431,7 @@ test('2-3 ルールの「覚えておくこと」は、記憶を約束せず USE
   await s.send('n1', 'hello');
   const frozen = frozenOf(s.app, 'n1');
   assert.ok(!frozen.includes('Write important things to memory') && !frozen.includes('Write to memory'), frozen);
-  assert.match(frozen, /- Outside a product, you do not keep memories between conversations for now: do not promise to remember something, and if the user wants you to know something about them every time, suggest they write it in USER\.md \(Settings › Persona\)\. A product's conversations do not read USER\.md: there, suggest the product's AGENTS\.md or CLAUDE\.md instead/u);
+  assert.match(frozen, /- You remember across conversations only what is in a memory section of these instructions or what you save with a memory tool\. If this conversation has neither, do not promise to remember: when the user wants you to know something about them every time, suggest they write it in USER\.md \(Settings › Persona\)\. A product's conversations do not read USER\.md: there, suggest the product's AGENTS\.md or CLAUDE\.md instead/u);
   assert.ok(!frozen.includes('- You do not keep memories between conversations'), '10-2: 「覚えない」は製品の外だけ（製品の会話は記憶の道具・目次の記憶の行と食い違わない）');
 });
 

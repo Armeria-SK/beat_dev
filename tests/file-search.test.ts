@@ -184,7 +184,7 @@ test('ファイル検索: 上限を超えたら全体で止まる（内側のル
   for (let i = 1; i <= 20_000; i++) writeFileSync(join(ws, `z${String(i).padStart(5, '0')}.dat`), 'x');
   const out = await s.call('file_search', { name: '*.txt' });
   assert.equal(out.decision, 'allow');
-  assert.match(out.output.content, /stopped after looking at 20000\]/u);
+  assert.match(out.output.content, /stopped after looking at 20000\. Narrow path to search the rest\]/u);
   assert.doesNotMatch(out.output.content, /looking at 20001/u);
   assert.doesNotMatch(out.output.content, /sub\/b\.txt/u);
 });

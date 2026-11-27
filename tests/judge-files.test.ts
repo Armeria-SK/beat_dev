@@ -36,6 +36,7 @@ test('P2 判定役の文: ファイルの中身は FILES の区切りの中。�
   assert.match(section(one!, 'CHECKS'), /round 1 of 2/u);
   const plain = buildClassifierPrompt(input());
   assert.ok(!plain.system.includes(CODE_RULE) && !plain.user.includes('FILES'), 'no files, no FILES section and no code rule');
+  assert.ok(plain.system.includes(PROVENANCE_RULE), 'the provenance rule is in every judge prompt, with or without files');
 });
 
 test('P2 回に分ける: 上限まで 1 回、超えたら分ける。import し合うファイルは同じ回。1 つで上限を超える・6 回以上は持ち主', () => {

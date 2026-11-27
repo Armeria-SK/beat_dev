@@ -105,7 +105,7 @@ test('V1: スクリプトを書いて node で動かす筋道は、製品の外�
   s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
   assert.ok((await (await s.send('もう一度')).done).ok);
   assert.equal(s.adapter().judged.length, 2, '2 回目も判定役が見る');
-  assert.doesNotMatch(judgeTextOf(s.adapter().judged[1]!), /beat itself/u, '無害な中身には目印が付かない');
+  assert.doesNotMatch(judgeTextOf(s.adapter().judged[1]!), /touches beat itself/u, '無害な中身には目印が付かない');
   assert.equal(readFileSync(marker, 'utf8'), 'harmless', '判定役が許せば動く（積んだだけで動かないことの対照）');
   assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore);
 

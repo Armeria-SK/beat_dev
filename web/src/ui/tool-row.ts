@@ -238,15 +238,16 @@ const num = (text: string): number => Number(text.replace(/,/gu, ''));
 
 export const emptyOutput = (text: string): boolean => /^\s*(?:\[E-\d+\]\s*)?$/u.test(text);
 
-const MODEL_HINT = toolText('en', 'pipeline.denied').split('\n').at(-1)!;
+const MODEL_HINTS = [toolText('en', 'pipeline.denied').split('\n').at(-1)!, 'Think of another way, or ask the user'];
 const EVIDENCE_AT_END = /\n\[E-\d+\]$/u;
 
 export function shownOutput(result: ToolResult): string {
   if (!result.isError) return result.text;
   const evidence = EVIDENCE_AT_END.exec(result.text)?.[0] ?? '';
   const body = result.text.slice(0, result.text.length - evidence.length);
-  if (!body.endsWith(MODEL_HINT)) return result.text;
-  const head = body.slice(0, -MODEL_HINT.length);
+  const hint = MODEL_HINTS.find(candidate => body.endsWith(candidate));
+  if (hint === undefined) return result.text;
+  const head = body.slice(0, -hint.length);
   return (head.endsWith('\n') || head.endsWith(' ') ? head.slice(0, -1) : head) + evidence;
 }
 

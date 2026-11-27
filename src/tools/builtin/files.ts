@@ -196,7 +196,7 @@ function readPage(lines: readonly string[], start: number, end: number, language
 
 export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwrite' | 'append' | 'create' }> = {
   name: 'file_write',
-  description: 'Write a text file. mode: overwrite (overwrite; the default) / append (add to the end) / create (create only if it does not exist). Folders are created automatically.',
+  description: 'Write a text file. mode: overwrite (overwrite; the default) / append (add to the end) / create (create only if it does not exist). Folders are created automatically. A file that already exists must have been read with file_read in this conversation before it is changed; for a small change, use file_edit.',
   input: Type.Object({
     path: PathArg, content: Type.String({ maxLength: MAX_WRITE_CHARS }),
     mode: Type.Optional(Type.Union([Type.Literal('overwrite'), Type.Literal('append'), Type.Literal('create')])),
@@ -238,7 +238,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
 
 export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: boolean }> = {
   name: 'file_edit',
-  description: 'Replace part of a file. old must be text that appears exactly once in the file (with all=true, every occurrence is replaced).',
+  description: 'Replace part of a file. The file must have been read with file_read in this conversation first. old must be text that appears exactly once in the file (with all=true, every occurrence is replaced).',
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
   allowedIn: ['chat', 'task', 'agent'],

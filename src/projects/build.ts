@@ -20,7 +20,7 @@ export function languageName(tag: string): string {
 }
 
 export const BUILD_BODY = (docLanguage: string | null, only?: readonly string[], language?: string | null): string => [
-  'Build the product as planned. Read the plan with mesh_read("plan.md") and the acceptance items with mesh_read("acceptance.json").',
+  'Build the product as planned. Read the plan with mesh_read("plan.md") and the acceptance items with mesh_read("acceptance.json"). Follow the plan\'s Steps in order; where your work has to differ from the plan or from an acceptance item, record it with deviation_add and keep going.',
   ...(only ? [`This build covers only the new or changed acceptance items ${only.join(', ')}.`] : []),
   ...(docLanguage ? [`Owner-facing documents, such as deviation notes, go in ${languageName(docLanguage)}.`] : []),
   ...(language ? [`Use ${language} for the product (the owner picked it before building; see DECISIONS.md).`] : []),

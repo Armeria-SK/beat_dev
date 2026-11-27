@@ -173,7 +173,7 @@ const GUARD_NOTE: Record<RefusalCode, string> = {
   shell_deny: "the same shell check that guards beat's own shell tool refuses this command",
 };
 const declineNote = (code: RefusalCode | 'plan_mode', detail: string): string =>
-  code === 'plan_mode' ? `${PLAN_MODE_NOTE} [beat guard: plan_mode]` : `beat declined this request without asking the owner: ${GUARD_NOTE[code]}${detail !== '' ? ` (${detail})` : ''}. The owner was not asked. [beat guard: ${code}]`;
+  code === 'plan_mode' ? `${PLAN_MODE_NOTE} [beat guard: plan_mode]` : `beat declined this request without asking the owner: ${GUARD_NOTE[code]}${detail !== '' ? ` (${detail})` : ''}. The owner was not asked. Do not look for another way around this; if the work needs it, tell the owner what is needed and why. [beat guard: ${code}]`;
 
 type Outcome = { ok: true } | { ok: false; kind: EngineErrorKind; key: EngineMessageKey; params: MessageParams; cancelled?: true };
 

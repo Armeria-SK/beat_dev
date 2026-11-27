@@ -236,7 +236,7 @@ test('4-2d: 却下は元のタスクの経過と会話の注記に残り、承�
   assert.match(events[1]!.content, new RegExp(`^#${second!.id} approved and ran \\(exit code 0\\)`, 'u'));
   assert.ok(!events[1]!.content.includes('IGNORE'), 'タスクの経過には出力を入れない');
   const notes = s.app.conversations.messages(conversation.id).filter(m => m.message.role === 'user' && m.message.note === 'pending').map(m => m.message as { content: string; generated?: true; fetched?: true });
-  assert.match(notes[0]!.content, /The owner rejected Pending #\d+/u);
+  assert.match(notes[0]!.content, /The owner rejected Pending #\d+ \(fake_[a-z_]+\)\. Do not try to do the same thing another way; go on without it, or ask the owner what they want instead\./u);
   assert.match(notes[0]!.content, /The owner's reason: not now/u);
   assert.equal(notes[0]!.fetched, undefined);
   assert.equal(notes[1]!.generated, true);

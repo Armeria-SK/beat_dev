@@ -43,7 +43,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
   description: [
     'Write a to-do (a task) in the notebook. You work on it yourself later.',
     'For something the user asked for, requested_by_user=true. when is the start date and time (ISO 8601, with a time zone); repeat is the repetition (cron: "minute hour day month weekday", e.g. "0 9 * * MON-FRI").',
-    'Do not make a task for something that finishes quickly; do it right away.',
+    'Do not make a task for something that finishes quickly; do it right away. The task runs later in its own conversation and does not see this one: put what it needs in body (the goal, the paths, what was decided) and say in done_criteria how to tell that it is done.',
     'items hands acceptance items this task covers (e.g. ["A-2"]) to the new task.',
   ].join(' '),
   input: Type.Object({
