@@ -5,6 +5,8 @@ import { createElement, type ComponentType } from 'react';
 import type { Conversation, PreFix, Project, Proposal, Task } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
 import { en } from '../web/src/i18n/en.ts';
+import { setExplainLanguage } from '../web/src/i18n/index.ts';
+import { ja } from '../web/src/i18n/ja.ts';
 import { PREFIX_DIFF_LINES, prefixDiff, prefixOf, type ChangesTarget } from '../web/src/ui/kanban.ts';
 import { runTaskOp, type TaskOpDeps } from '../web/src/ui/task-ops.ts';
 
@@ -220,6 +222,7 @@ test('ui/ProductHome（DOM, 8-6c）: with a check command "Research and pre-fix"
   const fix = container.querySelector<HTMLButtonElement>('.ui-home__mode [data-mode="fix"]')!;
   assert.equal(fix.disabled, false);
   assert.ok(!fix.textContent?.includes(en['ui.scout.mode.needsCheck']));
+  assert.equal(container.querySelector('[data-check-hint]'), null, 'with a check command there is no reason to show');
   await click(fix);
   await settle();
   assert.deepEqual(sent.find(s => s.method === 'PATCH')?.body, { scoutMode: 'fix' });
@@ -251,9 +254,24 @@ test('ui/ProductSettings（DOM, 8-6c）: the product settings have the same mode
   assert.deepEqual(options.map(o => o.getAttribute('aria-pressed')), ['false', 'true', 'false']);
   assert.equal(options[2]!.disabled, true);
   assert.ok(options[2]!.textContent?.includes(en['ui.scout.mode.needsCheck']));
+  assert.equal(container.querySelector('[data-scout-mode] [data-check-hint]')?.textContent, en['ui.scout.mode.needsCheckWhere']);
   await click(options[0]!);
   await settle();
   assert.deepEqual(sent.map(s => [s.method, s.body]), [['PATCH', { scoutMode: 'off' }]]);
+});
+
+test('ui/ProductSettings（DOM）: 日本語の説明の言語でも、Research and pre-fix が押せない理由は Product settings の Check command と画面の名前のまま言う。確かめのコマンドを入れると理由は消える', async () => {
+  serve(() => undefined);
+  setExplainLanguage('ja');
+  try {
+    const { container } = await render(createElement(ProductSettings, { project: project({ check_command: null }), onProject: () => {} }));
+    const hint = container.querySelector('[data-scout-mode] [data-check-hint]');
+    assert.equal(hint?.textContent, ja['ui.scout.mode.needsCheckWhere']);
+    assert.ok(hint?.textContent?.includes(en['ui.product.settings']) && hint.textContent.includes(en['ui.np.check']), '画面の名前（Product settings・Check command）は英語のまま');
+    await cleanup();
+    const withCheck = (await render(createElement(ProductSettings, { project: project({ check_command: 'npm test' }), onProject: () => {} }))).container;
+    assert.equal(withCheck.querySelector('[data-check-hint]'), null, 'コマンドがあれば理由は出ない');
+  } finally { setExplainLanguage('en'); }
 });
 
 test('ui/Task（DOM, 8-6c review）: on the task screen a pre-fix is approved without an Undo, and rejected without an Undo (the decision comes from task.prefix, not from the caller)', async () => {

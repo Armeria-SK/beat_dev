@@ -64,17 +64,12 @@ export function nextMidnight(now: number, timezone: string): number {
 // 考える役が動くモード（Research only と Research and pre-fix）。モードの比べはここだけ（F7）
 export const scoutsOn = (mode: ScoutMode | string): boolean => mode === 'research' || mode === 'fix';
 
-export function scoutBuilt(db: DatabaseSync, projectId: string): boolean {
-  return db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND acceptance_items IS NOT NULL AND spawned_by IS NULL AND status = 'done' LIMIT 1").get(projectId) !== undefined;
-}
-
 export function scoutBusy(db: DatabaseSync, projectId: string): boolean {
   return db.prepare("SELECT 1 FROM tasks WHERE project_id = ? AND status IN ('ready', 'running') AND proposed_by IS NOT 'scout-run' LIMIT 1").get(projectId) !== undefined;
 }
 
 export function scoutProjects(db: DatabaseSync): ProjectRow[] {
   return (db.prepare(`SELECT p.* FROM projects p WHERE p.archived_at IS NULL
-    AND EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.acceptance_items IS NOT NULL AND t.spawned_by IS NULL AND t.status = 'done')
     AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.status IN ('ready', 'running') AND t.proposed_by IS NOT 'scout-run')
     ORDER BY p.created_at, p.rowid`).all() as unknown as ProjectRow[]).filter(p => scoutsOn(p.scout_mode));
 }

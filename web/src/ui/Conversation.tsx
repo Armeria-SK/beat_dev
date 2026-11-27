@@ -525,7 +525,11 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
       case 'archive': if (id) void api.archiveConversation(id).then(() => load(), changeFailed); return;
       case 'summary': setSummaryOpen(true); stick.current = false; scroller.current?.scrollTo({ top: 0 }); return;
       case 'build': panes?.onOpenPlan?.(true); return;
-      case 'propose': if (product) void api.scoutRun(product.id).then(() => toast({ icon: 'refresh', title: t('ui.scout.started') }), error => reportOpError(error)); return;
+      case 'propose':
+        if (!product) return;
+        if (product.scout_mode === 'off') { toast({ kind: 'info', icon: 'alert', title: t('ui.scout.proposeOff'), body: t('ui.scout.proposeOffWhere'), href: routeHash({ view: 'productSettings', id: product.id }) }); return; }
+        void api.scoutRun(product.id).then(() => toast({ icon: 'refresh', title: t('ui.scout.started') }), error => reportOpError(error));
+        return;
       case 'rename': return;
     }
   };
@@ -655,7 +659,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
         <Composer
           draftKey={id ?? (product ? `${NEW_DRAFT}:${product.id}` : NEW_DRAFT)} hasConversation={id !== null} product={Boolean(product)} planless={startMode === 'plan'} running={running} sending={sending} pending={pending}
           models={modelsRead ? models : null} chatOrder={chatOrder} modelId={choice.modelId} effort={choice.effort} mode={choice.permissionMode} runtime={{ bound: conversation?.runtime_id ?? null, allowed: (id === null || messages.length === 0) && Boolean(product ?? conversation?.project_id) }}
-          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1, product: Boolean(product && panes?.onOpenPlan), scout: Boolean(product && product.scout_mode !== 'off') }}
+          slash={{ hasConversation: conversation !== null, running, hasSummary: Boolean(conversation?.has_summary), archived: conversation?.archived === 1, product: Boolean(product && panes?.onOpenPlan), propose: Boolean(product) }}
           onSubmit={(kind, text, attachments) => submit(kind, text, attachments)}
           onStop={() => { if (draft) void api.stop(draft.runId).catch(changeFailed); }}
           onChoose={next => void choose(next)} onCancelPending={pendingId => void cancelPending(pendingId)} onSlash={runSlash}

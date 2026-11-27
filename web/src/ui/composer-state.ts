@@ -118,7 +118,7 @@ export const UI_SLASH = [
 export type UiSlash = (typeof UI_SLASH)[number];
 export type UiSlashName = UiSlash['name'];
 
-export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean; scout?: boolean }
+export interface SlashContext { hasConversation: boolean; running: boolean; hasSummary: boolean; archived: boolean; product?: boolean; propose?: boolean }
 
 export function slashAvailable(ctx: SlashContext): UiSlash[] {
   return UI_SLASH.filter(c => {
@@ -128,7 +128,7 @@ export function slashAvailable(ctx: SlashContext): UiSlash[] {
       case 'archive': return ctx.hasConversation && !ctx.archived;
       case 'summary': return ctx.hasConversation && ctx.hasSummary;
       case 'build': return ctx.product === true;
-      case 'propose': return ctx.scout === true;
+      case 'propose': return ctx.propose === true;
       default: return true;
     }
   });
