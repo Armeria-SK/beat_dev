@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { App } from '../src/app.ts';
 import { defaultConfig } from '../src/config/store.ts';
 import { CuriosityStore } from '../src/curiosity/store.ts';
@@ -96,6 +98,27 @@ test('シェルの道具の説明: 「On Windows only」の組は Windows のと
   const host = process.platform === 'win32';
   assert.equal(shellRun.description, shellDescription(undefined, host), '何も渡さない既定は、動いている OS');
   assert.equal(shellRun.describe!(defaultConfig()), shellDescription(defaultConfig().tools.shell.maxTimeoutSec, host));
+});
+
+test('シェルの道具の説明: 何も渡さない既定は動いている OS で決まる。OS を差し替えた別プロセスで、linux なら「On Windows only」の組が無く、win32 なら有る（説明も describe も）', () => {
+  const loader = new URL('./helpers/tsx-loader.mjs', import.meta.url).href;
+  const shell = pathToFileURL(fileURLToPath(new URL('../src/tools/builtin/shell.ts', import.meta.url))).href;
+  const onPlatform = (platform: string): { description: string; described: string } => {
+    const script = `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
+const { shellRun } = await import(${JSON.stringify(shell)});
+console.log(JSON.stringify({ description: shellRun.description, described: shellRun.describe({ tools: { shell: { maxTimeoutSec: 120 } } }) }));`;
+    const run = spawnSync(process.execPath, ['--import', loader, '--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    return JSON.parse(run.stdout.trim().split('\n').at(-1)!) as { description: string; described: string };
+  };
+  const linux = onPlatform('linux');
+  const windows = onPlatform('win32');
+  for (const text of [linux.description, linux.described]) assert.doesNotMatch(text, /On Windows only|PowerShell runs in constrained mode|rm -rf fails/u);
+  for (const text of [windows.description, windows.described]) assert.match(text, /\n\nOn Windows only:\n- PowerShell runs in constrained mode/u);
+  assert.equal(linux.description, shellDescription(undefined, false));
+  assert.equal(windows.description, shellDescription(undefined, true));
+  assert.equal(linux.described, shellDescription(120, false));
+  assert.equal(windows.described, shellDescription(120, true));
 });
 
 test('シェルの道具の説明: 承認の文は基本ルールの「What needs the owner\'s OK」と同じ言い方。送信は持ち主を待ち、導入と許可フォルダの外は beat の確かめ役が通すか持ち主に回す。守りは小さく言わない', t => {

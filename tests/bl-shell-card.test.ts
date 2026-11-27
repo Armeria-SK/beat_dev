@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { guardText } from '../src/shared/messages/guard.ts';
-import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
+import { shellDescription, shellPreCheck } from '../src/tools/builtin/shell.ts';
 import { cardQuote, packageScriptName } from '../src/tools/hooks/code-guard.ts';
 import { selfRunRig } from './helpers/self-run-rig.ts';
 
@@ -347,5 +347,5 @@ test('UX-10: packageScriptName reads only the forms that run one named script, w
 });
 
 test('L55 (S): the shell tool description tells that Windows PowerShell 5.1 has no && or || (and shows the form that stops on failure) and no rm -rf', () => {
-  assert.match(shellRun.description, /PowerShell 5\.1[^.]*&&[^.]*\|\|[^.]*cmd1; if \(\$\?\) \{ cmd2 \}[^.]*rm -rf[^.]*Remove-Item -Recurse -Force/u);
+  assert.match(shellDescription(undefined, true), /PowerShell 5\.1[^.]*&&[^.]*\|\|[^.]*cmd1; if \(\$\?\) \{ cmd2 \}[^.]*rm -rf[^.]*Remove-Item -Recurse -Force/u);
 });
