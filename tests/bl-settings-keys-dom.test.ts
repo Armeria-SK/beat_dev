@@ -34,7 +34,7 @@ function serve(config: Json, extra: (path: string, method: string) => unknown = 
     let out: unknown = extra(String(path), method);
     if (out === undefined && String(path) === '/api/settings' && method === 'GET') out = view();
     if (out === undefined && String(path) === '/api/settings' && method === 'PUT') { current = body!.config; out = { ...view(), models: [] }; }
-    if (out === undefined && String(path) === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    if (out === undefined && String(path) === '/api/models') out = { models: [], chatOrder: [] };
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   return sent;

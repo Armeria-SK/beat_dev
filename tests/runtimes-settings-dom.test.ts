@@ -56,7 +56,7 @@ function serve(config: Json, seed: Partial<Pick<World, 'checks' | 'models' | 'fa
     const models = /^\/api\/runtimes\/([^/]+)\/models$/u.exec(url);
     if (url === '/api/settings' && method === 'GET') out = view();
     else if (url === '/api/settings' && method === 'PUT') { world.config = body!.config; out = { ...view(), models: modelViews() }; }
-    else if (url === '/api/models') out = { models: modelViews(), routing: world.config.routing };
+    else if (url === '/api/models') out = { models: modelViews(), chatOrder: world.config.routing.chat };
     else if (url === '/api/runtimes') out = { runtimes: rows() };
     else if (check) {
       world.checks[check[1]!] ??= CHECKED;

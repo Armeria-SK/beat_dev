@@ -47,7 +47,7 @@ async function startApp(calls: string[]) {
     switch (url.pathname) {
       case '/api/onboarding': return json({ done: true, steps: { user: true, identity: true, persona: true, model: true } });
       case '/api/settings': return json({ config: defaultConfig(), apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' });
-      case '/api/models': return json({ models: [], routing: { chat: [], background: [] } });
+      case '/api/models': return json({ models: [], chatOrder: [] });
       case '/api/projects': return json({ projects: [shop] });
       case '/api/conversations': return json({ conversations: [convo] });
       case '/api/conversations/c1/messages': return json({ conversation: convo, messages: [], pending: [], activeRun: null, builds: [STARTED] });

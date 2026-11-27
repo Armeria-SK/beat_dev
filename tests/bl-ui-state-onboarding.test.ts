@@ -91,7 +91,7 @@ function fakeServer(initial: Config, keyed: string[] = []) {
       if (method === 'PUT') state.config = structuredClone(body.config) as Config;
       return reply({ config: state.config, models: [] });
     }
-    if (url === '/api/models') return reply({ models: [], routing: { chat: [], background: [] } });
+    if (url === '/api/models') return reply({ models: [], chatOrder: [] });
     if (url === '/api/models/probe') return reply({ models: (state.config.models as Array<{ id: string }>).map(m => ({ id: m.id, probe: { modelId: m.id, status: 'ok', server: '', required: 0, message: '', checkedAt: 1 } })) });
     const key = /^\/api\/providers\/([^/]+)\/key$/u.exec(url);
     if (key) {

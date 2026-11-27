@@ -377,7 +377,7 @@ export function Conversation({ id, listTitle, aiName, product, draft, notices, l
     void api.checklist(id).then(r => { if (live) setReadList({ items: r.items }); }).catch(() => undefined);
     return () => { live = false; };
   }, [id, revision]);
-  useEffect(() => { void api.models().then(r => { setModels(r.models); setChatOrder(r.routing.chat); setModelsRead(true); }).catch(() => undefined); }, []);
+  useEffect(() => { void api.models().then(r => { setModels(r.models); setChatOrder(r.chatOrder); setModelsRead(true); }).catch(() => undefined); }, []);
   const usage = useContextUsage(loaded?.conversation?.runtime_id ? null : id, draft ? -1 : revision + usageTick * 1_000_000);
   const meter = contextMeter(usage?.ratio);
 

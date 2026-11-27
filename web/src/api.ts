@@ -492,7 +492,7 @@ export const api = {
   settings: (signal?: AbortSignal) => call<SettingsView>('/api/settings', { signal: signal ?? null }),
   applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown, signal?: AbortSignal) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }), signal: signal ?? null }),
-  models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
+  models: () => call<{ models: ModelView[]; chatOrder: string[] }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
   runtimes: () => call<{ runtimes: RuntimeView[] }>('/api/runtimes'),
   checkRuntime: (id: string) => call<RuntimeView>(`/api/runtimes/${encodeURIComponent(id)}/check`, { method: 'POST', body: '{}' }),

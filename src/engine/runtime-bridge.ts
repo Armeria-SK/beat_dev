@@ -30,7 +30,7 @@ import { plainBlock, plainLine } from '../shared/plain-text.ts';
 import { redactExact, redactJsonValue, redactSecrets } from '../shared/redaction.ts';
 import { TOOL_INPUT_PREVIEW_CHARS, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import type { RunBus } from './bus.ts';
-import { planBlocksOf, unreadPlanBlocks } from './runtime-plan-blocks.ts';
+import { planBlocksOf, unreadPlanBlocks, type PlanBlockTool } from './runtime-plan-blocks.ts';
 import type { RuntimeApprovals } from './runtime-approvals.ts';
 import type { ChatMessage, EngineErrorKind, EngineResult, ToolGate } from './types.ts';
 import { runtimeRequirementsText, type RuntimePlanChannel } from './workspace.ts';
@@ -153,6 +153,9 @@ type GateMark =
   | { kind: 'guard'; code: RefusalCode | 'plan_mode'; detail: string; name: string; input: unknown; used: boolean }
   | { kind: 'owner'; pendingId: number; used: boolean };
 
+// 読めなかった計画の塊を、持ち主に見える名前で呼ぶ（行の名前 codex:plan_write はそのまま）
+const PLAN_BLOCK_NAME: Record<PlanBlockTool, EngineMessageKey> = { plan_write: 'runtime.plan_block.plan', acceptance_write: 'runtime.plan_block.acceptance', acceptance_change: 'runtime.plan_block.acceptance_change' };
+
 const GUARD_TEXT: Record<RefusalCode | 'plan_mode', EngineMessageKey> = {
   plan_mode: 'runtime.plan_declined', secret: 'runtime.guard.secret', outside_write: 'runtime.guard.outside_write', outside_read: 'runtime.guard.outside_read', readonly_root: 'runtime.guard.readonly_root',
   link_write: 'runtime.guard.link_write', protect_files: 'runtime.guard.protect_files', outside_cwd: 'runtime.guard.outside_cwd', self_target: 'runtime.guard.self_target',
@@ -198,22 +201,20 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   const fail = (kind: EngineErrorKind, key: EngineMessageKey, params: MessageParams = {}): Outcome => ({ ok: false, kind, key, params });
   const cancelled = (): Outcome => ({ ok: false, kind: 'cancelled', key: 'runtime.stopped_partway', params: {}, cancelled: true });
 
-  // 実行役への呼びかけ（断る・止める・閉じる）を順に呼び、待つ時間は全部で止める猶予まで。応えない実行役のせいで、止めた返事が終わらないままにしない。呼びかけは必ず全部出す
-  const bounded = async (calls: ReadonlyArray<readonly [string, () => Promise<void>]>): Promise<boolean> => {
+  // 実行役への呼びかけ（断る・止める・閉じる）を 1 つ出し、待つ時間は止める猶予まで。応えない実行役のせいで、止めた返事が終わらないままにしない。呼びかけは必ず出す。時間内に答えたかを返す
+  const bounded = async (what: string, call: () => Promise<void>): Promise<boolean> => {
     let timer: NodeJS.Timeout | undefined;
-    let inTime = true;
     const limit = deps.stopGraceMs ?? STOP_GRACE_MS;
     const expiry = new Promise<'expired'>(resolve => { timer = setTimeout(() => resolve('expired'), limit); });
+    const answered = (async () => call())().then(() => 'answered' as const, (error: unknown) => {
+      log(`[WARN] Could not ${what} of runtime ${runtimeId}: ${clean((error as Error).message)}`);
+      return 'answered' as const;
+    });
     try {
-      for (const [what, call] of calls) {
-        const answered = (async () => call())().then(() => 'answered' as const, (error: unknown) => {
-          log(`[WARN] Could not ${what} of runtime ${runtimeId}: ${clean((error as Error).message)}`);
-          return 'answered' as const;
-        });
-        if (await Promise.race([answered, expiry]) === 'expired') { inTime = false; log(`[WARN] Gave up waiting for runtime ${runtimeId} to ${what} after ${limit} ms; its process may be left running`); }
-      }
+      if (await Promise.race([answered, expiry]) === 'answered') return true;
+      log(`[WARN] Gave up waiting for runtime ${runtimeId} to ${what} after ${limit} ms; its process may be left running`);
+      return false;
     } finally { clearTimeout(timer); }
-    return inTime;
   };
 
   const held: { runtime: AgentRuntime | undefined; session: RuntimeSession | undefined } = { runtime: undefined, session: undefined };
@@ -311,7 +312,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
     const { runtime, session } = held;
     if (!runtime || !session) return;
     const what = decision === 'cancel' ? 'cancel' : decision === 'accept' ? 'allow' : 'decline';
-    await bounded([[`${what} the approval request`, () => (note === undefined ? runtime.approve(session.id, event.requestId, decision) : runtime.approve(session.id, event.requestId, decision, note))]]);
+    await bounded(`${what} the approval request`, () => (note === undefined ? runtime.approve(session.id, event.requestId, decision) : runtime.approve(session.id, event.requestId, decision, note)));
   };
   // 道具の行と結ぶ ID: Claude Code の求めの ID は tool_use の id と同じ。Codex の求めの ID は別で、項目の id（itemId）が道具の行の id
   const gateKeyOf = (event: ApprovalEvent): string => {
@@ -562,7 +563,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
         const entry: OpenTool = { callId: callIdFor(`beat_${block.tool}`), name: toolName(block.tool), input: shownInput('input' in block ? block.input : {}), nested: false };
         toolCount += 1;
         deps.bus.publish({ type: 'tool.call', runId, conversationId, callId: entry.callId, name: entry.name, input: previewJson(entry.input, TOOL_INPUT_PREVIEW_CHARS) });
-        if ('error' in block) { writeTool(entry, engineText(language, 'runtime.plan_block_unreadable', { tool: block.tool, detail: clean(block.error, 200) }), true); continue; }
+        if ('error' in block) { writeTool(entry, engineText(language, 'runtime.plan_block_unreadable', { block: engineText(language, PLAN_BLOCK_NAME[block.tool]), reason: engineText(language, `runtime.plan_block.${block.error}`) }), true); continue; }
         const result = await surface.call(block.tool, block.input);
         writeTool(entry, shownOutput(result.text), result.isError);
       } catch (error) { log(`[WARN] Could not save the ${block.tool} block of run ${runId}: ${clean((error as Error).message)}`); }
@@ -574,7 +575,7 @@ export async function runRuntimeTurn(deps: RuntimeTurnDeps, input: RuntimeTurnIn
   let stillRunning = false;
   if (held.session && held.runtime) {
     const closing = { runtime: held.runtime, session: held.session };
-    stillRunning = !(await bounded([['close the runtime session', () => closing.runtime.close(closing.session.id)]])) || closing.session.containReason !== undefined;
+    stillRunning = !(await bounded('close the runtime session', () => closing.runtime.close(closing.session.id))) || closing.session.containReason !== undefined;
   }
   if (sessionEnd) { try { deps.conversations.setRuntimeSession(conversationId, sessionEnd); } catch (error) { log(`[WARN] Could not remember the runtime session of ${conversationId}: ${clean((error as Error).message)}`); } }
   // 実行役を閉じたあと、前と比べて、この返事のあいだに変わったファイルの一覧を kv に実行ごとに残す（beat の道具の記録 tool_calls・元に戻す対象の file_changes には書かない）

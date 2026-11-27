@@ -51,7 +51,7 @@ async function mount(product: Project | undefined, scoutRun: () => Response) {
     if (url.pathname === '/api/projects/p1/scout/run' && init?.method === 'POST') return scoutRun();
     if (url.pathname === `/api/conversations/${CHAT}/messages` && (init?.method ?? 'GET') === 'GET') return json({ conversation: row, messages: [{ id: 1, role: 'user', text: 'hi', runId: 'r1', createdAt: 10 }], pending: [], builds: [], activeRun: null });
     if (url.pathname === `/api/conversations/${CHAT}/checklist`) return json({ items: [], tainted: false, updatedAt: null });
-    if (url.pathname === '/api/models') return json({ models: [MODEL], routing: { chat: ['m1'], background: [] } });
+    if (url.pathname === '/api/models') return json({ models: [MODEL], chatOrder: ['m1'] });
     return json({ error: 'not_found' }, 404);
   }) as typeof fetch;
   g.matchMedia = () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });

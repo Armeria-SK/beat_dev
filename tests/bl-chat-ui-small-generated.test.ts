@@ -69,7 +69,7 @@ async function open(messages: unknown[]): Promise<HTMLElement> {
     const url = String(path);
     const body = url === `/api/conversations/${CHAT}/messages` ? { conversation: { id: CHAT, title: 'Plan', created_at: 0, last_message_at: 0, permission_mode: 'auto', has_summary: false }, messages, pending: [], builds: [], activeRun: null }
       : url === `/api/conversations/${CHAT}/checklist` ? { items: [], tainted: false, updatedAt: null }
-        : url === '/api/models' ? { models: [], routing: { chat: [] } } : { error: 'not found' };
+        : url === '/api/models' ? { models: [], chatOrder: [] } : { error: 'not found' };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });

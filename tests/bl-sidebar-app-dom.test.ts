@@ -28,7 +28,7 @@ function serve(routes: (path: string) => { status: number; body: unknown } | und
     let status = given?.status ?? 200;
     if (out === undefined && String(path) === '/api/onboarding') out = { done: true, steps: { user: true, identity: true, persona: true, model: true } };
     if (out === undefined && String(path) === '/api/settings') out = { config: defaultConfig(), apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' };
-    if (out === undefined && String(path) === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    if (out === undefined && String(path) === '/api/models') out = { models: [], chatOrder: [] };
     if (out === undefined) { out = { error: 'not found' }; status = 404; }
     return new Response(JSON.stringify(out), { status, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;

@@ -211,7 +211,7 @@ function serve(config: Json, check: Json = CHECKED): World {
     const models = /^\/api\/runtimes\/([^/]+)\/models$/u.exec(url);
     if (url === '/api/settings' && method === 'GET') out = view();
     else if (url === '/api/settings' && method === 'PUT') { world.config = body!.config; out = { ...view(), models: [] }; }
-    else if (url === '/api/models') out = { models: [], routing: world.config.routing };
+    else if (url === '/api/models') out = { models: [], chatOrder: world.config.routing.chat };
     else if (url === '/api/runtimes') out = { runtimes: rows() };
     else if (check || models) out = rows().find(row => row.id === (check ?? models)![1]);
     else out = {};
@@ -529,7 +529,7 @@ test('会話の画面: 実行役の会話には上に注意書き（実行役の
         const url = String(path);
         if (url === `/api/conversations/${CHAT}/messages`) return json(200, { conversation: { id: CHAT, title: 'Parser', created_at: 0, last_message_at: 0, permission_mode: 'auto', runtime_id: runtimeId }, messages: [{ id: 1, role: 'user', text: 'hi', runId: 'r1', createdAt: 10 }], pending: [], builds: [], activeRun: null });
         if (url === `/api/conversations/${CHAT}/checklist`) return json(200, { items: [], tainted: false, updatedAt: null });
-        if (url === '/api/models') return json(200, { models: [], routing: { chat: [] } });
+        if (url === '/api/models') return json(200, { models: [], chatOrder: [] });
         if (url === '/api/runtimes') return json(200, { runtimes: [{ id: 'claude-code', kind: 'claude-code', configured: true, enabled: true, permission: 'default', permissions: ['default', 'acceptEdits'], check: null, models: null }] });
         return json(404, { error: 'not_found' });
       }) as typeof fetch;

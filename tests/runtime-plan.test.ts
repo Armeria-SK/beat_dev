@@ -206,7 +206,8 @@ test('Codex の塊が読めない・beat の道具が断る（秘密の文字列
   await settled(r.s.app, runId);
   const rows = toolRows(r, conversation);
   assert.deepEqual(rows.map(m => [m.name, m.isError]), [['codex:plan_write', true], ['codex:acceptance_write', true]]);
-  assert.match(rows[0]!.content, /could not read the plan_write block/u);
+  assert.equal(rows[0]!.content, 'beat could not read the plan in the reply, so nothing was saved: it is empty');
+  assert.equal(rows[1]!.content, 'beat could not read the list of acceptance items in the reply, so nothing was saved: it is not valid JSON', 'the owner sees what the block is, and a reason in words of its own; not the internal tool name or a JavaScript error');
   assert.equal(r.s.app.plans.view(projectId, conversation).content, null);
   assert.equal(r.s.app.acceptance.read(projectId, conversation), undefined);
   assert.equal(count(r, 'SELECT COUNT(*) AS c FROM tool_calls'), 0);
@@ -232,7 +233,7 @@ test('Codex の塊は、その返事の最後の発言からだけ取り出す�
   await settled(r.s.app, split.runId);
   assert.equal(r.s.app.plans.view(projectId, split.conversation).content, null, 'a block in an earlier message of the same turn is not saved');
   assert.deepEqual(rowsOf(r, split.conversation), [['codex:plan_write', true]], 'and it is not dropped silently: a row says that nothing was saved');
-  assert.match(toolRows(r, split.conversation)[0]!.content, /could not read the plan_write block in the reply, so nothing was saved: the block was inside a code fence, in an earlier message of the reply, or not closed; ask for it again as plain text in the last message/u);
+  assert.match(toolRows(r, split.conversation)[0]!.content, /^beat could not read the plan in the reply, so nothing was saved: it was inside a code fence, in an earlier message of the reply, or not closed. Ask again for it as plain text in the last message/u);
 
   r.runtime.script = feed => {
     textOf(feed, `Earlier draft:\n${BLOCK('# Draft')}`);

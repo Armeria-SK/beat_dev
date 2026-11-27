@@ -38,7 +38,7 @@ function serveSettings(config: Json, extra: (path: string, method: string) => un
     let out: unknown = await extra(String(path), method);
     if (out === undefined && String(path) === '/api/settings' && method === 'GET') out = view();
     if (out === undefined && String(path) === '/api/settings' && method === 'PUT') { current = body!.config; out = { ...view(), models }; }
-    if (out === undefined && String(path) === '/api/models') out = { models, routing: { chat: [], background: [] } };
+    if (out === undefined && String(path) === '/api/models') out = { models, chatOrder: [] };
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   return sent;
@@ -302,7 +302,7 @@ function withAutoModels(): { config: Json; models: Json[] } {
 
 async function openAutoModels() {
   const { config, models } = withAutoModels();
-  const sent = serveSettings(config, path => (path === '/api/models' ? { models, routing: config.routing } : undefined));
+  const sent = serveSettings(config, path => (path === '/api/models' ? { models, chatOrder: config.routing.chat } : undefined));
   const { container } = await render(createElement(Settings, props({ section: 'models' })));
   await settle();
   return { container, sent };
@@ -486,7 +486,7 @@ test('Settings › Models（DOM）: 説明の言語が日本語なら、モデ�
   assert.ok(probeJa && keyEnvJa && probeJa !== serverText('provider.probe.unknown', {}, 'en'), '日本語の表に文がある');
   setExplainLanguage('ja');
   try {
-    serveSettings(config, path => (path === '/api/models' ? { models, routing: config.routing } : undefined), models);
+    serveSettings(config, path => (path === '/api/models' ? { models, chatOrder: config.routing.chat } : undefined), models);
     const { container } = await render(createElement(Settings, props({ section: 'models' })));
     await settle();
     assert.ok(descOf(container, 'model:blind').includes(probeJa), `確認の文が日本語でない: ${descOf(container, 'model:blind')}`);

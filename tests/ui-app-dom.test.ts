@@ -30,7 +30,7 @@ function serve(routes: (path: string, method: string) => unknown = () => undefin
     let out = await routes(String(path), method);
     if (out === undefined && String(path) === '/api/onboarding') out = { done: true, steps: { user: true, identity: true, persona: true, model: true } };
     if (out === undefined && String(path) === '/api/settings') out = { config: defaultConfig(), apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' };
-    if (out === undefined && String(path) === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    if (out === undefined && String(path) === '/api/models') out = { models: [], chatOrder: [] };
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
 }
@@ -177,7 +177,7 @@ async function openChat(over: Partial<ConversationProps> = {}, read: Array<{ tex
   serve(path => {
     if (path === '/api/conversations/c1/messages') return { conversation: chatRow, messages: [], pending: [], activeRun: null };
     if (path === '/api/conversations/c1/checklist') return { items: read, tainted: false, updatedAt: read.length ? 1 : null };
-    if (path === '/api/models') return { models: [], routing: { chat: [], background: [] } };
+    if (path === '/api/models') return { models: [], chatOrder: [] };
     return undefined;
   });
   const { container } = await render(createElement(Chat, {
@@ -258,7 +258,7 @@ test('会話の画面（DOM、model-auto）: 続きを頼んだ一言のあと�
     serve(path => {
       if (path === '/api/conversations/c1/messages') return { conversation: chatRow, messages, pending: [], activeRun: null };
       if (path === '/api/conversations/c1/checklist') return { items: [], tainted: false, updatedAt: null };
-      if (path === '/api/models') return { models: [], routing: { chat: [], background: [] } };
+      if (path === '/api/models') return { models: [], chatOrder: [] };
       return undefined;
     });
     const { container } = await render(createElement(Chat, {

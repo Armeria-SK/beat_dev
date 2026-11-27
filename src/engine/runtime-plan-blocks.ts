@@ -6,7 +6,10 @@
 // コードの囲い（``` ・ ~~~）の中の印は読まない（テンプレートの引用など）。読まなかった印は黙って捨てず、unreadPlanBlocks が「読めなかった」の結果にして、持ち主に見せる
 export type PlanBlockTool = 'plan_write' | 'acceptance_write' | 'acceptance_change';
 
-export type PlanBlock = { tool: PlanBlockTool; input: unknown } | { tool: PlanBlockTool; error: string };
+// 読めなかった理由。文は engine の表（runtime.plan_block.<理由>）にあり、ここは理由の名前だけを持つ
+export type PlanBlockError = 'empty' | 'not_object' | 'bad_json' | 'unread';
+
+export type PlanBlock = { tool: PlanBlockTool; input: unknown } | { tool: PlanBlockTool; error: PlanBlockError };
 
 const PLAN_OPEN = /^[ \t]*<beat-plan(?:[ \t]+language="([A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8}){0,3})")?[ \t]*>/u;
 
@@ -15,8 +18,6 @@ const SPECS: ReadonlyArray<{ tool: PlanBlockTool; open: RegExp; close: string; t
   { tool: 'acceptance_write', open: /^[ \t]*<beat-acceptance>/u, close: '</beat-acceptance>', tag: /^[ \t]*<\/?beat-acceptance[ \t]*>/u },
   { tool: 'acceptance_change', open: /^[ \t]*<beat-acceptance-change>/u, close: '</beat-acceptance-change>', tag: /^[ \t]*<\/?beat-acceptance-change[ \t]*>/u },
 ];
-
-const UNREAD = 'the block was inside a code fence, in an earlier message of the reply, or not closed; ask for it again as plain text in the last message, with each tag at the start of a line';
 
 // コードの囲いの中（囲いの行も含む）の行
 function fencedLines(lines: readonly string[]): boolean[] {
@@ -48,13 +49,13 @@ function closersAt(line: string, tag: string, from: number): number[] {
 }
 
 // JSON を ``` で囲んで書く実行役もいる。囲いだけ外して読む
-function jsonOf(body: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+function jsonOf(body: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: PlanBlockError } {
   const unfenced = body.trim().replace(/^```[A-Za-z]*\s*\n/u, '').replace(/\n?```$/u, '').trim();
   try {
     const value: unknown = JSON.parse(unfenced);
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ok: false, error: 'it is not a JSON object' };
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ok: false, error: 'not_object' };
     return { ok: true, value: value as Record<string, unknown> };
-  } catch (error) { return { ok: false, error: (error as Error).message }; }
+  } catch { return { ok: false, error: 'bad_json' }; }
 }
 
 const linesOf = (text: string): string[] => text.split('\r\n').join('\n').split('\n');
@@ -87,7 +88,7 @@ export function planBlocksOf(text: string): PlanBlock[] {
       const rest = j === endLine ? [] : [...lines.slice(j + 1, endLine), lines[endLine]!.slice(0, endCol)];
       const body = [first, ...rest].join('\n').replace(/^\n/u, '').replace(/\n$/u, '');
       if (spec.tool === 'plan_write') {
-        blocks.push(body.trim() === '' ? { tool: spec.tool, error: 'the plan is empty' } : { tool: spec.tool, input: { content: body, ...(open[1] ? { language: open[1] } : {}) } });
+        blocks.push(body.trim() === '' ? { tool: spec.tool, error: 'empty' } : { tool: spec.tool, input: { content: body, ...(open[1] ? { language: open[1] } : {}) } });
       } else {
         const parsed = jsonOf(body);
         blocks.push(parsed.ok ? { tool: spec.tool, input: parsed.value } : { tool: spec.tool, error: parsed.error });
@@ -101,5 +102,5 @@ export function planBlocksOf(text: string): PlanBlock[] {
 // 返事の全文に、行の頭の印（開きでも閉じでも。コードの囲いの中も数える）があるのに、最後の発言からは取れなかった種類を、「読めなかった」の結果にする。実行役が「保存した」と言うのに、何も残らないことを黙らせないため
 export function unreadPlanBlocks(whole: string, taken: readonly PlanBlock[]): PlanBlock[] {
   const lines = linesOf(whole);
-  return SPECS.filter(spec => !taken.some(block => block.tool === spec.tool) && lines.some(line => spec.tag.test(line))).map(spec => ({ tool: spec.tool, error: UNREAD }));
+  return SPECS.filter(spec => !taken.some(block => block.tool === spec.tool) && lines.some(line => spec.tag.test(line))).map(spec => ({ tool: spec.tool, error: 'unread' as const }));
 }

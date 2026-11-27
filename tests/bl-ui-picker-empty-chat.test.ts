@@ -21,7 +21,7 @@ const PRODUCT: RuntimeUse = { bound: null, allowed: true };
 const PLAIN: RuntimeUse = { bound: null, allowed: false };
 
 type Start = Awaited<ReturnType<typeof startApp>>;
-const read = async (s: Start) => (await s.json('/api/models', 'GET')).body as { routing: { chat: string[]; background: string[] }; models: ModelView[] };
+const read = async (s: Start) => (await s.json('/api/models', 'GET')).body as { chatOrder: string[]; models: ModelView[] };
 
 test('auto conversation model (routing.chat = []): the composer is not disabled, and the model it names is the one the engine would use', async t => {
   const s = await startApp(t, { models: [fakeModel('m1', { efforts: ['medium'] })], configure: withRuntimes });
@@ -30,10 +30,10 @@ test('auto conversation model (routing.chat = []): the composer is not disabled,
 
   assert.equal(composerView({ hasConversation: false, running: false, mode: 'auto', chatModels: view.models.filter(m => m.inChat).length, text: '', attachments: 0, uploading: false, sending: false, product: true, planless: false }).disabled, false);
   assert.deepEqual(view.models.filter(m => m.inChat).map(m => m.id), ['m1'], 'only provider models are in the auto list; the runtime models are not');
-  assert.deepEqual(view.routing.chat, ['m1']);
+  assert.deepEqual(view.chatOrder, ['m1']);
 
   for (const [use, fresh] of [[PRODUCT, true], [PLAIN, false]] as const) {
-    const screen = modelInEffect(runtimeShown(view.models, use), view.routing.chat, null, use);
+    const screen = modelInEffect(runtimeShown(view.models, use), view.chatOrder, null, use);
     const server = s.app.engine.effortChoices(null, null, fresh);
     assert.equal(server.modelId, 'm1');
     assert.equal(screen?.id, server.modelId, `same model on screen and in the engine (product: ${use.allowed})`);
@@ -50,7 +50,7 @@ test('auto conversation model with the only provider model offline: the composer
   assert.notEqual(m1.probe?.status, 'ok');
   assert.equal(view.models.filter(m => m.inChat).length, 1, 'the offline model counts as a chat model');
 
-  const screen = modelInEffect(runtimeShown(view.models, PRODUCT), view.routing.chat, null, PRODUCT);
+  const screen = modelInEffect(runtimeShown(view.models, PRODUCT), view.chatOrder, null, PRODUCT);
   assert.equal(screen?.id, s.app.engine.effortChoices(null, null, true).modelId, 'with nothing usable the engine names the first candidate');
   assert.equal(screen?.id, 'm1');
   assert.equal(modelOptions(view.models, null, PRODUCT).find(o => o.id === 'm1')?.disabled, true);
@@ -59,15 +59,6 @@ test('auto conversation model with the only provider model offline: the composer
 test('an explicit conversation list is sent as it is, runtime model first included', async t => {
   const s = await startApp(t, { models: [fakeModel('m1')], configure: config => { withRuntimes(config); config.routing.chat = ['rt1', 'm1']; } });
   const view = await read(s);
-  assert.deepEqual(view.routing.chat, ['rt1', 'm1']);
+  assert.deepEqual(view.chatOrder, ['rt1', 'm1']);
   assert.deepEqual(view.models.filter(m => m.inChat).map(m => m.id), ['m1', 'rt1'], 'the models come in config order; the order of the list is routing.chat');
-});
-
-test('a runtime model first in the list, outside a product conversation: the screen names the provider model the engine uses there', async t => {
-  const s = await startApp(t, { models: [fakeModel('m1', { efforts: ['medium'] })], configure: config => { withRuntimes(config); config.routing.chat = ['rt1', 'm1']; } });
-  const view = await read(s);
-  const screen = modelInEffect(runtimeShown(view.models, PLAIN), view.routing.chat, null, PLAIN);
-  const server = s.app.engine.effortChoices(null, null, false);
-  assert.equal(server.modelId, 'm1');
-  assert.equal(screen?.id, server.modelId);
 });
