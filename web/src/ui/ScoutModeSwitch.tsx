@@ -23,17 +23,20 @@ export function ScoutModeSwitch({ project, onProject }: { project: Project; onPr
     } finally { setBusy(false); }
   };
   return (
-    <div className="bt-seg ui-home__mode" role="group" aria-label={t('ui.scout.mode')}>
-      {SCOUT_MODES.map(mode => {
-        const noRun = noProvider && mode !== 'off';
-        const blocked = modeNeedsCheck(mode, project) || noRun;
-        return (
-          <button key={mode} type="button" className="bt-seg__opt" data-mode={mode} aria-pressed={project.scout_mode === mode} disabled={busy || blocked}
-            title={noRun ? t('ui.np.scout') : blocked ? t('ui.scout.mode.needsCheckHint') : undefined} onClick={() => void pick(mode)}>
-            {t(MODE_KEY[mode])}{blocked && <span className="bt-meta ui-home__later"> · {noRun ? t('ui.np.short') : t('ui.scout.mode.needsCheck')}</span>}
-          </button>
-        );
-      })}
-    </div>
+    <>
+      <div className="bt-seg ui-home__mode" role="group" aria-label={t('ui.scout.mode')}>
+        {SCOUT_MODES.map(mode => {
+          const noRun = noProvider && mode !== 'off';
+          const blocked = modeNeedsCheck(mode, project) || noRun;
+          return (
+            <button key={mode} type="button" className="bt-seg__opt" data-mode={mode} aria-pressed={project.scout_mode === mode} disabled={busy || blocked}
+              title={noRun ? t('ui.np.scout') : blocked ? t('ui.scout.mode.needsCheckHint') : undefined} onClick={() => void pick(mode)}>
+              {t(MODE_KEY[mode])}{blocked && <span className="bt-meta ui-home__later"> · {noRun ? t('ui.np.short') : t('ui.scout.mode.needsCheck')}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {modeNeedsCheck('fix', project) && <span className="bt-meta ui-home__later" data-check-hint>{t('ui.scout.mode.needsCheckWhere')}</span>}
+    </>
   );
 }

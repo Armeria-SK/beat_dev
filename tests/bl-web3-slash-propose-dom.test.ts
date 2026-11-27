@@ -4,9 +4,12 @@ import { afterEach, test } from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import type { Project } from '../web/src/api.ts';
 import { subscribe, type FeedbackItem } from '../web/src/feedback.ts';
+import { en } from '../web/src/i18n/en.ts';
+import { setExplainLanguage } from '../web/src/i18n/index.ts';
+import { ja } from '../web/src/i18n/ja.ts';
 import { composerDrafts } from '../web/src/ui/composer-state.ts';
 
-// スラッシュの /propose: 製品の会話で、考える役を今すぐ動かす（Think now と同じ POST /api/projects/:id/scout/run）。発言としては送らない。考える役が Off の製品・製品の外の会話では出さない。
+// スラッシュの /propose: 製品の会話で、考える役を今すぐ動かす（Think now と同じ POST /api/projects/:id/scout/run）。発言としては送らない。製品の外の会話では出さない。考える役が Off の製品では出し、選んだら Off だと言って場所を案内する（何も送らない）。
 
 interface ConversationProps {
   id: string | null; listTitle: string | null; product?: Project; draft: undefined; notices: never[]; liveChecklist: undefined; revision: number;
@@ -82,19 +85,39 @@ test('ui/Conversation（DOM）: /propose が断られたら（考える役が動
   assert.deepEqual(toasts.map(x => x.icon), ['alert']);
 });
 
-test('ui/Conversation（DOM）: 考える役が Off の製品・製品の外の会話では、/propose は候補に出ず、押しても何も呼ばない', async () => {
-  const offProduct = await mount(shop('off'), () => json({}, 202));
-  await input(offProduct.field, '/pro');
-  assert.deepEqual(offProduct.menu(), []);
-  await input(offProduct.field, '/propose');
-  await offProduct.enter();
-  assert.deepEqual(calls.filter(c => c.startsWith('POST')), [], 'Off の製品では呼ばない（「/propose は使えません」の知らせだけ）');
-  assert.deepEqual(toasts.map(x => x.title), ['/propose is not available here · nothing was sent']);
-  await cleanup();
-  off?.();
-  calls = [];
-  toasts = [];
+test('ui/Conversation（DOM）: 考える役が Off の製品でも /propose は候補に出る。選ぶと、どこで切り替えるかまで言い、モデルへは何も送らない（POST 無し）', async () => {
+  const ui = await mount(shop('off'), () => json({}, 202));
+  await input(ui.field, '/pro');
+  assert.deepEqual(ui.menu(), ['/proposeAsk for proposals now'], 'Off でも候補に出る');
+  await ui.enter();
+  assert.deepEqual(calls.filter(c => c.startsWith('POST')), [], 'Off の製品では何も呼ばない・何も送らない');
+  assert.deepEqual(toasts.map(x => [x.title, x.body, x.href, x.icon]), [[en['ui.scout.proposeOff'], en['ui.scout.proposeOffWhere'], '#/p/p1/settings', 'alert']]);
+  assert.match(en['ui.scout.proposeOffWhere'], /top right of the product home, or in Product settings/u);
+  assert.equal(ui.field.value, '', '入力欄は空に戻る（発言として残らない）');
+  await input(ui.field, '/propose');
+  await ui.enter();
+  assert.deepEqual(calls.filter(c => c.startsWith('POST')), [], '/propose と書いて Enter でも同じ');
+  assert.equal(toasts.length, 2);
+});
+
+test('ui/Conversation（DOM）: 説明の言語が日本語なら、Off の製品での /propose の返事も日本語（画面の名前は英語のまま）', async () => {
+  setExplainLanguage('ja');
+  try {
+    const ui = await mount(shop('off'), () => json({}, 202));
+    await input(ui.field, '/propose');
+    await ui.enter();
+    assert.deepEqual(calls.filter(c => c.startsWith('POST')), []);
+    assert.deepEqual(toasts.map(x => [x.title, x.body]), [[ja['ui.scout.proposeOff'], ja['ui.scout.proposeOffWhere']]]);
+    assert.match(ja['ui.scout.proposeOffWhere'], /ホーム画面の右上か Product settings で、Research only/u);
+  } finally { setExplainLanguage('en'); }
+});
+
+test('ui/Conversation（DOM）: 製品の外の会話では、/propose は候補に出ず、押しても何も呼ばない', async () => {
   const none = await mount(undefined, () => json({}, 202));
   await input(none.field, '/pro');
   assert.deepEqual(none.menu(), []);
+  await input(none.field, '/propose');
+  await none.enter();
+  assert.deepEqual(calls.filter(c => c.startsWith('POST')), []);
+  assert.deepEqual(toasts.map(x => x.title), ['/propose is not available here · nothing was sent']);
 });

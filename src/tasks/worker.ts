@@ -22,7 +22,7 @@ import { OWNER_FIX, OWNER_RUN_KV, SCOUT_RUN, TASK_EVENTS_WINDOW, type Task, type
 import type { ScoutRoute } from '../engine/chat.ts';
 import type { PlanStore } from '../projects/plan.ts';
 import type { ProjectRow } from '../projects/store.ts';
-import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBuilt, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutsOn, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
+import { CREDIT_ERROR, nextMidnight, noteCloudRun, cloudRunsLastHour, pickScoutProject, restScout, restUntil, saveScoutState, scoutBusy, scoutFailed, scoutMaterials, scoutProjects, scoutsOn, scoutState, SCOUT_SHORT_WAIT_MS } from '../scout/run.ts';
 import { dropUnrecordedFixes, fixCandidate, markFixTried, recordFix } from '../scout/fix.ts';
 import { runFix } from '../scout/fix-run.ts';
 import type { FixCopies } from '../scout/fix-copy.ts';
@@ -97,7 +97,7 @@ export interface WorkerRunning { kind: 'task' | 'review' | 'scout'; reviewKind?:
 interface ScoutPlan { project: ProjectRow; route: ScoutRoute; asked?: boolean; marks?: Marks }
 
 export type ScoutView = { state: 'off' | 'idle' | 'thinking' | 'asleep' | 'resting'; examined: number; area: string | null; lastChangeAt: number | null; note: string | null };
-export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_provider' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_not_built' | 'scout_busy' };
+export type ScoutAsk = { ok: true; view: ScoutView } | { ok: false; code: 'scout_off' | 'scout_no_provider' | 'scout_no_model' | 'scout_cloud_zero' | 'scout_resting' | 'scout_busy' };
 
 const NOT_SCOUT_RUN = `conversation_id NOT IN (SELECT conversation_id FROM tasks WHERE proposed_by = '${SCOUT_RUN}' AND conversation_id IS NOT NULL)`;
 
@@ -985,7 +985,6 @@ export class Worker {
     if (!route) return { ok: false, code: 'scout_no_model' };
     if (!route.local && (c.scout?.cloudRunsPerHour ?? 1) === 0) return { ok: false, code: 'scout_cloud_zero' };
     if (restUntil(this.#d.kv, route.providerId) > this.#now()) return { ok: false, code: 'scout_resting' };
-    if (!scoutBuilt(this.#d.db, projectId)) return { ok: false, code: 'scout_not_built' };
     // 材料を読んでいる最中のひとりでの回は、押されたら持ち主の頼みの回に替える（休みの判定を飛ばして必ず動く）
     const starting = this.#scoutStarting?.project.id === projectId ? this.#scoutStarting : undefined;
     if (starting && !starting.asked) {

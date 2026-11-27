@@ -169,6 +169,8 @@ test('ui/ProductHome（DOM）: the head has the mode switch (Off / Research only
   const fix = options[2]!;
   assert.equal(fix.disabled, true, 'pre-fix needs a check command');
   assert.ok(fix.textContent?.includes(en['ui.scout.mode.needsCheck']));
+  assert.equal(container.querySelector('[data-check-hint]')?.textContent, en['ui.scout.mode.needsCheckWhere'], 'the visible reason says where the command goes');
+  assert.ok(en['ui.scout.mode.needsCheckWhere'].includes(en['ui.product.settings']) && en['ui.scout.mode.needsCheckWhere'].includes(en['ui.np.check']), 'it names the real screen and field');
   assert.equal(byText(container, 'button', en['ui.scout.thinkNow']), undefined);
   await click(options[1]);
   await settle();

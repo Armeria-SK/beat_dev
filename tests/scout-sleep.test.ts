@@ -32,7 +32,7 @@ function git(cwd: string, args: string[]): string {
 
 const commitAll = (root: string, message: string): string => { git(root, ['add', '-A']); git(root, ['commit', '-q', '-m', message]); return git(root, ['rev-parse', 'HEAD']); };
 
-interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; git?: boolean }
+interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; git?: boolean; unbuilt?: boolean }
 
 async function setup(t: { after: (fn: () => void) => void }, options: Options = {}) {
   const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'beat-test-'));
@@ -78,8 +78,8 @@ async function setup(t: { after: (fn: () => void) => void }, options: Options = 
     }
     projectId = app.projects.create({ name: 'shop', root, rootKey: rootKeyOf(root), checkCommand: null }).id;
     app.projects.update(projectId, { scoutMode: 'research' });
-    const build = app.tasks.create({ title: 'build the shop', origin: 'user', actor: 'user', projectId, acceptanceItems: ['i1'] });
-    app.tasks.finish(build.id, 'done', 'built', 'user');
+    const build = options.unbuilt ? undefined : app.tasks.create({ title: 'build the shop', origin: 'user', actor: 'user', projectId, acceptanceItems: ['i1'] });
+    if (build) app.tasks.finish(build.id, 'done', 'built', 'user');
   }
   const changed: string[] = [];
   app.bus.subscribe(e => { if (e.event.type === 'scout.changed') changed.push(e.event.projectId); });
@@ -273,7 +273,7 @@ test('Think now: with background work Off it runs once; pressing twice does not 
   assert.equal(s.scoutRows().length, 2);
 });
 
-test('Think now: it waits while paused, and is refused (409) for a cloud model with cloudRunsPerHour 0, while resting, with no scout model, with the mode off, and before the first Build', async t => {
+test('Think now: it waits while paused, and is refused (409) for a cloud model with cloudRunsPerHour 0, while resting, with no scout model, and with the mode off; before the first Build it is accepted (that gate is gone)', async t => {
   const s = await setup(t, { edit: c => { c.worker.enabled = false; } });
   const call = await server(t, s);
   s.app.worker.setPaused(true);
@@ -305,10 +305,17 @@ test('Think now: it waits while paused, and is refused (409) for a cloud model w
   assert.equal((await noneCall(`/api/projects/${none.projectId}/scout/run`, 'POST')).body.code, 'project.scout_off');
   assert.equal((await noneCall('/api/projects/00000000-0000-4000-8000-000000000000/scout/run', 'POST')).status, 404);
 
-  const fresh = await setup(t);
+  const fresh = await setup(t, { unbuilt: true, edit: c => { c.worker.enabled = false; } });
   const freshCall = await server(t, fresh);
-  fresh.app.db.prepare("UPDATE tasks SET status = 'running' WHERE acceptance_items IS NOT NULL").run();
-  assert.equal((await freshCall(`/api/projects/${fresh.projectId}/scout/run`, 'POST')).body.code, 'project.scout_not_built');
+  assert.equal((await freshCall(`/api/projects/${fresh.projectId}/scout/run`, 'POST')).status, 202, 'before the first Build (no task, no plan, no acceptance list) Think now is accepted');
+  fresh.adapter().scripts.push(reply('checked'));
+  assert.equal(await fresh.app.worker.tick(), 'ran');
+  assert.equal(fresh.scoutRows().length, 1);
+
+  const building = await setup(t);
+  const buildingCall = await server(t, building);
+  building.app.db.prepare("UPDATE tasks SET status = 'running' WHERE acceptance_items IS NOT NULL").run();
+  assert.equal((await buildingCall(`/api/projects/${building.projectId}/scout/run`, 'POST')).body.code, 'project.scout_busy', 'a first Build that is still running makes the product busy, not "not built"');
 });
 
 test('scout state endpoint: the 7-1 shape; off only for mode off, no scout model or archived (not for background work Off); thinking with the area; resting; broken ledger lines in the note; scout.changed on changes', async t => {

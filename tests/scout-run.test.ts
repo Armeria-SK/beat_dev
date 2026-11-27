@@ -16,7 +16,7 @@ import { goalText, proposalAdd } from '../src/tools/builtin/proposal.ts';
 import { taskList } from '../src/tools/builtin/tasks.ts';
 import { webFetch } from '../src/tools/builtin/web.ts';
 import type { PageNetwork } from '../src/tools/web/public-page.ts';
-import { scoutProjects } from '../src/scout/run.ts';
+import { scoutMaterials, scoutProjects } from '../src/scout/run.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
@@ -28,7 +28,7 @@ import { MIN, toolCall } from './helpers/task-app.ts';
 
 const NEVER_GIVEN = ['task_complete', 'task_create', 'task_checkpoint', 'task_list', 'question_add', 'acceptance_change', 'plan_write', 'memory_save', 'web_download', 'browser_click', 'browser_type', 'shell_run', 'file_write', 'tool_search', 'mcp_fake_write'];
 
-interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean; timers?: boolean; botMemory?: boolean; network?: PageNetwork }
+interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; down?: string[]; review?: boolean; unbuilt?: boolean; timers?: boolean; botMemory?: boolean; network?: PageNetwork }
 
 async function setup(t: { after: (fn: () => void) => void }, options: Options = {}) {
   const dir = options.dir ?? tempDir(t);
@@ -82,8 +82,8 @@ async function setup(t: { after: (fn: () => void) => void }, options: Options = 
     writeFileSync(join(root, 'docs', 'b.md'), '# b\n');
     projectId = app.projects.create({ name: 'shop', root, rootKey: rootKeyOf(root), checkCommand: null }).id;
     app.projects.update(projectId, { scoutMode: 'research' });
-    const build = app.tasks.create({ title: 'build the shop', origin: 'user', actor: 'user', projectId, acceptanceItems: ['i1'] });
-    app.tasks.finish(build.id, 'done', 'built', 'user');
+    const build = options.unbuilt ? undefined : app.tasks.create({ title: 'build the shop', origin: 'user', actor: 'user', projectId, acceptanceItems: ['i1'] });
+    if (build) app.tasks.finish(build.id, 'done', 'built', 'user');
   }
   const adapter = (id = 'near') => adapters.get(id)!;
   const scoutRows = () => app.db.prepare("SELECT * FROM tasks WHERE proposed_by = 'scout-run' ORDER BY created_at, rowid").all() as unknown as Task[];
@@ -808,6 +808,38 @@ test('scout: scoutProjects skips a product with owner work ready or running', as
   assert.equal(scoutProjects(s.app.db).length, 0);
   s.app.tasks.finish(task.id, 'done', 'ok', 'user');
   assert.equal(scoutProjects(s.app.db).length, 1);
+});
+
+test('scout: a product that was never built (no task, no plan, no acceptance list) is a scout target, and both the idle tick and Think now run on it', async t => {
+  const s = await setup(t, { unbuilt: true });
+  assert.equal(s.count('tasks'), 0, 'no Build, no acceptance list');
+  assert.deepEqual(scoutProjects(s.app.db).map(p => p.id), [s.projectId]);
+  s.adapter().scripts.push(reply('Nothing to check.'));
+  assert.equal(await s.app.worker.tick(), 'ran', 'the idle tick picks the unbuilt product');
+  assert.equal(s.scoutRows().length, 1);
+  assert.equal(s.scoutRows()[0]!.status, 'done');
+  const asked = await setup(t, { unbuilt: true, edit: c => { c.worker.enabled = false; } });
+  assert.equal(asked.app.worker.scoutNow(asked.projectId)?.ok, true, 'Think now is not refused before the first Build');
+  asked.adapter().scripts.push(reply('Nothing to check.'));
+  assert.equal(await asked.app.worker.tick(), 'ran');
+  assert.equal(asked.scoutRows().length, 1);
+});
+
+test('scout: scoutMaterials for a product with no plan and no acceptance list does not throw, and every required section has a body (the code gives the unseen areas)', async t => {
+  const s = await setup(t, { unbuilt: true });
+  const project = s.app.projects.get(s.projectId)!;
+  const materials = await scoutMaterials({ db: s.app.db, project, projectsDir: s.paths.projects, dataDir: s.paths.data, plans: s.app.plans, previousHead: undefined, maxAgents: 2, budgetChars: 8000, now: s.clock.now });
+  const sections = new Map(materials.prompt.split(/\n## /u).slice(1).map(block => {
+    const [heading = '', ...rest] = block.split('\n');
+    const body = rest.join('\n').replace(/^<<<OUTSIDE CONTENT[^\n]*\n/u, '').replace(/\n<<<END OF OUTSIDE CONTENT>>>\s*$/u, '');
+    return [heading.replace(/ \(.*$/u, ''), body] as const;
+  }));
+  assert.deepEqual([...sections.keys()], ['Plan goals', 'Unseen areas', 'Stale entries', 'Ledger', 'Recent dispatches', 'Commits since the last scout run', 'Open proposals', 'Rejected proposals in the last 30 days, with the owner\'s reasons', 'Earlier proposals and their state']);
+  for (const [heading, body] of sections) assert.ok(body.trim().length > 0, `${heading}: empty section`);
+  assert.equal(sections.get('Plan goals'), '(no plan)');
+  assert.match(sections.get('Unseen areas')!, /src/u, 'the folders of the product come from the code');
+  assert.match(sections.get('Unseen areas')!, /docs/u);
+  assert.ok(materials.unseen > 0 && materials.examined === 0);
 });
 
 test('scout: a run that ends with every scout failed counts as a failure; a good run leaves a 1-minute gap before the next', async t => {
