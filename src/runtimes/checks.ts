@@ -1,4 +1,4 @@
-// 外の実行役の「確かめ」の結果の置き場（AR-6）。確かめは持ち主が押したときだけ起こす（設定を保存するたびには起こさない）。
+// 外の実行役の「確かめ」の結果の置き場（AR-6）。確かめは起動のときと、持ち主が押したときだけ起こす（設定を保存するたびには起こさない）。
 // 起こす先は、各実行役の窓口の probe（版・ログインの状態）と models（モデルの一覧）だけ。発言は送らない。結果は覚えておいて、画面とモデルの状態（status.ts）が同じものを読む
 import type { AppConfig, RuntimeConfig, RuntimeKind } from '../config/schema.ts';
 import { redactSecrets } from '../shared/redaction.ts';
@@ -111,6 +111,14 @@ export class RuntimeChecks {
     })().finally(() => { this.#running.delete(id); });
     this.#running.set(id, work);
     return work;
+  }
+
+  // 起動のとき（main.ts）に 1 回だけ。入っている実行役を確かめ、使えると分かった実行役だけ一覧も読む（確かめと一覧は覚えるだけで、起動をまたいで残らないため）
+  async checkEnabled(config: Pick<AppConfig, 'runtimes'>): Promise<void> {
+    await Promise.all((config.runtimes ?? []).map(async runtime => {
+      const outcome = await this.check(config, runtime.id);
+      if (outcome.ok && usableCheck(outcome.check.status)) await this.loadModels(config, runtime.id);
+    }));
   }
 
   // 「モデルを読み込む」。実行役自身の一覧の口（Claude Code: supportedModels()、Codex: model/list）だけを使う。取れた一覧は覚える
