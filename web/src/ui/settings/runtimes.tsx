@@ -10,7 +10,7 @@ type T = ReturnType<typeof useT>;
 
 const errorText = (error: unknown, fallback: string): string => (error instanceof ApiError ? error.message : fallback);
 
-// Claude Code・Codex（外の実行役）の行。確かめは「Check」を押したときだけ（設定を保存するたびには起こさない）。ログインは公式の手順の案内だけで、beat はログインもログイン情報も扱わない
+// Claude Code・Codex（外の実行役）の行。確かめは起動のときと「Check」を押したときだけ（設定を保存するたびには起こさない）。ログインは公式の手順の案内だけで、beat はログインもログイン情報も扱わない
 export const NAME = { 'claude-code': 'ui.set.runtime.claude-code', codex: 'ui.set.runtime.codex' } as const;
 
 const PILL = {
@@ -93,6 +93,7 @@ function RuntimeRow({ view, onView }: { view: RuntimeView; onView: (view: Runtim
   const [acting, setActing] = useState<'check' | 'models' | null>(null);
   const [loadFailed, setLoadFailed] = useState<string | null>(null);
   const [typed, setTyped] = useState('');
+  const [open, setOpen] = useState(false);
   const busy = ctx.busy !== null || acting !== null;
   const name = t(NAME[view.kind]);
   const check = view.check;
@@ -113,7 +114,7 @@ function RuntimeRow({ view, onView }: { view: RuntimeView; onView: (view: Runtim
 
   async function toggle(enabled: boolean) {
     const saved = await ctx.commit(k, c => updateRuntime(c, view, { enabled }));
-    if (saved && enabled) await act('check');
+    if (saved && enabled) { setOpen(true); await act('check'); }
   }
 
   const taken = new Set((ctx.config.models as Array<{ runtime?: string; model: string }>).filter(m => m.runtime === view.id).map(m => m.model));
@@ -130,8 +131,9 @@ function RuntimeRow({ view, onView }: { view: RuntimeView; onView: (view: Runtim
         <Pill {...(tone ? { tone } : {})}>{t(PILL[pill])}</Pill>
         {view.enabled && <Button small disabled={busy} onClick={() => void act('check')}>{acting === 'check' ? t('ui.set.runtime.checking') : t('ui.set.runtime.check')}</Button>}
         <Switch checked={view.enabled} label={t('ui.set.runtime.enable')} disabled={busy} onChange={enabled => void toggle(enabled)} />
+        {view.enabled && <Button small variant="ghost" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('ui.set.less') : t('ui.set.edit')}</Button>}
       </Row>
-      {view.enabled && (
+      {view.enabled && open && (
         <div className="ui-set__detail">
           <Row k={`${k}:permission`} title={t('ui.set.runtime.permission')}
             desc={<>{PERM_DESC[view.permission] ? t(PERM_DESC[view.permission]!) : ''} {t('ui.set.runtime.permNoteDesc', name)}</>}>

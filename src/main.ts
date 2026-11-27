@@ -43,6 +43,8 @@ async function start(): Promise<void> {
   app.settleStaleNotifications(); // 待ち受けが取れてから（同じデータで 2 つ目を起こしたとき、動いている方の知らせを触らない）
   // 外の MCP サーバーへのつなぎ（待たない。つながらなくても beat は動く）
   void app.mcp.start().catch(error => log('[ERROR] Failed to start MCP: ' + (error as Error).message));
+  // 入っている外の実行役の確かめ（待たない。終わるまで、その実行役のモデルは「確かめていない」）
+  void app.checkRuntimes().catch(error => log('[ERROR] Failed to check the runtimes: ' + (error as Error).message));
   log(`[INFO] beat started: http://${boot.host}:${boot.port}/`);
   log('[INFO] There is no login. Anyone who can open this URL (including other programs on this PC) can operate beat');
   app.worker.start();

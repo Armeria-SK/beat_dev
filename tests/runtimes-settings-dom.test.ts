@@ -75,6 +75,8 @@ const props = (): SettingsProps => ({ section: 'models', onClose: () => undefine
 const row = (root: ParentNode, key: string): HTMLElement | null => root.querySelector<HTMLElement>(`[data-row="${key}"]`);
 const text = (el: Element | null | undefined): string => (el?.textContent ?? '').replace(/\s+/gu, ' ').trim();
 const button = (root: ParentNode, label: string): HTMLButtonElement | undefined => [...root.querySelectorAll<HTMLButtonElement>('button')].find(b => text(b) === label);
+// 入れた実行役の欄を開く（閉じた状態で画面が開く）
+const expand = async (root: ParentNode, ...ids: string[]): Promise<void> => { for (const id of ids) await click(row(root, `runtime:${id}`)?.querySelector('button[aria-expanded="false"]')); };
 const menu = async (root: ParentNode, key: string): Promise<string[]> => {
   await click(row(root, key)?.querySelector('button[aria-haspopup="menu"]'));
   return [...(row(root, key)?.parentElement?.querySelectorAll('[role="menuitemradio"]') ?? document.querySelectorAll('[role="menuitemradio"]'))].map(el => text(el));
@@ -236,6 +238,7 @@ test('the sandbox message tells the owner what to do for every non-ready state (
 test('the permission row offers only the closed list for the runtime, never a value that allows everything, and saving a choice writes only that value', async () => {
   const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), { checks: { 'claude-code': CHECKED, codex: CHECKED } });
   const c = await open(world);
+  await expand(c, 'claude-code', 'codex');
   for (const [id, labels] of [['claude-code', ['Ask first', 'Allow edits']], ['codex', ['Read only', 'Write in folder']]] as const) {
     const key = `runtime:${id}:permission`;
     assert.deepEqual(await menu(c, key), labels, id);
@@ -256,6 +259,7 @@ test('the permission row offers only the closed list for the runtime, never a va
 test('sign-in is only a pointer to the runtime itself, and there is no MCP warning or MCP switch (the owner ruled the runtimes run the owner\'s own tools as they are)', async () => {
   const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }, { id: 'codex', kind: 'codex', enabled: true }] }), { checks: { 'claude-code': CHECKED, codex: CHECKED } });
   const c = await open(world);
+  await expand(c, 'claude-code', 'codex');
   assert.match(text(row(c, 'runtime:claude-code:signin')), /run "claude auth login" in a terminal\. beat never signs in for you or keeps your login/u);
   assert.match(text(row(c, 'runtime:codex:signin')), /run "codex login" in a terminal/u);
   assert.equal(row(c, 'runtime:codex:signin')!.querySelector('button, input, [role="switch"]'), null, 'a pointer, not a control');
@@ -276,6 +280,7 @@ test('an unchecked Codex version says it starts read-only whatever the permissio
   const world = serve(base({ runtimes }), { checks: { 'claude-code': { ...CHECKED, version: '2.1.400', verified: false }, codex: { ...CHECKED, version: '0.199.0', verified: false } } });
   const notesFor = async (): Promise<string[][]> => {
     const { container } = await render(createElement(Settings, props()));
+    await expand(container, 'claude-code', 'codex');
     await settle(); await settle();
     return [...container.querySelectorAll('[data-runtime-readonly]')].map(el => [el.getAttribute('data-runtime-readonly')!, text(el)]);
   };
@@ -299,6 +304,7 @@ test('Check asks the server once and shows the new state', async () => {
 test('Load models lists the runtime\'s own models; picking one adds a model that points at the runtime (no provider) with its depths, and it is not offered again', async () => {
   const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }] }), { checks: { 'claude-code': CHECKED } });
   const c = await open(world);
+  await expand(c, 'claude-code');
   await click(button(row(c, 'runtime:claude-code:models')!, 'Load models'));
   await settle(); await settle();
   assert.deepEqual(world.sent.map(s => `${s.method} ${s.path}`), ['POST /api/runtimes/claude-code/models']);
@@ -319,6 +325,7 @@ test('Load models lists the runtime\'s own models; picking one adds a model that
 test('a model list that could not be read says so and falls back to typing the model name', async () => {
   const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }] }), { checks: { 'claude-code': CHECKED }, failModels: true });
   const c = await open(world);
+  await expand(c, 'claude-code');
   await click(button(row(c, 'runtime:claude-code:models')!, 'Load models'));
   await settle(); await settle();
   const below = c.querySelector('[data-below="runtime:claude-code:models"]')!;
@@ -362,6 +369,29 @@ test('the model row for a runtime model shows its runtime and a Ready / Not chec
   assert.equal(row(c, 'model:rt:advanced'), null);
   assert.ok(row(c, 'model:rt:model'));
 });
+
+// 持ち主の見直し 2（2026-11-27）: 入れた実行役の欄（許可の設定・モデル・ログインの案内）が開いたままで、閉じられなかった。ほかの行（提供元・MCP）と同じく Edit で開き、Done で閉じる
+test('the detail of a turned-on runtime opens with Edit and closes with Done, like the other rows; turning a runtime on opens it', async () => {
+  const world = serve(base({ runtimes: [{ id: 'claude-code', kind: 'claude-code', enabled: true }] }), { checks: { 'claude-code': CHECKED } });
+  const c = await open(world);
+  const toggle = () => row(c, 'runtime:claude-code')!.querySelector<HTMLButtonElement>('button[aria-expanded]');
+  assert.ok(toggle(), 'the row has an open/close button');
+  assert.equal(toggle()!.getAttribute('aria-expanded'), 'false');
+  assert.equal(row(c, 'runtime:claude-code:permission'), null, 'closed when the screen opens');
+  await click(toggle());
+  assert.equal(toggle()!.getAttribute('aria-expanded'), 'true');
+  for (const key of ['permission', 'models', 'signin']) assert.ok(row(c, `runtime:claude-code:${key}`), key);
+  assert.equal(text(toggle()), 'Done');
+  await click(toggle());
+  for (const key of ['permission', 'models', 'signin']) assert.equal(row(c, `runtime:claude-code:${key}`), null, `${key} closed`);
+  assert.equal(text(toggle()), 'Edit');
+  assert.deepEqual(world.sent, [], 'opening and closing sends nothing');
+  await click(row(c, 'runtime:codex')!.querySelector('[role="switch"]'));
+  await settle(); await settle(); await settle();
+  assert.ok(row(c, 'runtime:codex:permission'), 'a runtime just turned on shows its detail');
+  assert.equal(row(c, 'runtime:codex')!.querySelector('button[aria-expanded]')!.getAttribute('aria-expanded'), 'true');
+});
+
 
 // ---------------------------------------------------------------- 設定を書き換える部分（画面を使わない）
 
