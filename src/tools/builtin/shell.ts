@@ -639,13 +639,23 @@ async function runBackground(input: ShellInput, ctx: ToolContext, info: ExecuteI
   };
 }
 
+const WINDOWS_SHELL_NOTES = [
+  '',
+  'On Windows only:',
+  '- PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
+  '- In Windows PowerShell 5.1, && and || do not exist (write cmd1; if ($?) { cmd2 }), and rm -rf fails (write Remove-Item -Recurse -Force).',
+  '- PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
+  "- Cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user's confirmation every time, even when the path is fixed.",
+  '- Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
+];
+
 // 設定を渡せない説明（description）は「設定の上限」と言い、渡せる説明（describe）は maxTimeoutSec の秒数まで言う。入力の型の最大 3600 は、設定で上げられる限界であって、いまの上限ではない
-const shellDescription = (maxTimeoutSec?: number): string => [
+export const shellDescription = (maxTimeoutSec?: number, windows = process.platform === 'win32'): string => [
   'Run one shell command (PowerShell on Windows, bash on Linux).',
   '',
   'Where it runs and what needs approval:',
   '- cwd must be inside an allowed folder (if omitted, the working folder). Do not use cd to move outside the allowed folders; set cwd instead.',
-  "- Sending data out, installing packages and operations that touch anything outside the allowed folders need the user's approval. Destructive operations and reading secrets cannot be run.",
+  "- Sending data out waits for the user's approval. Installing packages and operations that touch anything outside the allowed folders go through beat's checker, which may let them run or hold them for the user's approval. Destructive operations and reading secrets cannot be run.",
   '- To write a file, use the file_write / file_edit tools, not the shell.',
   "- Forms of curl or wget that save to a file (curl with -o or -O; wget in any form other than -O -) need the user's confirmation every time, even when the destination is fixed. When a curl URL contains { } [ ], add -g (without it, curl expands them, so confirmation is needed).",
   '- Walking a large folder such as node_modules or .git with -Recurse or the like is slow (over 20 seconds for 15,000 files), and the result is too long to fit in the context. Exclude such folders, or narrow the scope with -Name, -Filter or -Depth.',
@@ -657,13 +667,7 @@ const shellDescription = (maxTimeoutSec?: number): string => [
   "- Background commands work only in a product's conversation or task, and git push cannot run in the background.",
   '- Never put a command in the background yourself with &, nohup, start or Start-Process: beat could not see or stop it.',
   '- A window or GUI program that a background command opens (a browser, an app) is closed together with it; background commands run with BROWSER=none, so dev servers do not open a browser (look at the page with the browser tools instead).',
-  '',
-  'On Windows only:',
-  '- PowerShell runs in constrained mode, so do not use .NET type syntax ([Math]::, [IO.File]::, [pscustomobject]), New-Object or Add-Type; write it with cmdlets and string methods.',
-  '- In Windows PowerShell 5.1, && and || do not exist (write cmd1; if ($?) { cmd2 }), and rm -rf fails (write Remove-Item -Recurse -Force).',
-  '- PowerShell cmdlets also resolve * ? [ ] in a quoted path as wildcards. To point at a file whose name contains [ ], use -LiteralPath.',
-  "- Cmdlets that write, create, copy, move, rename or delete files (Set-Content, Out-File, Copy-Item, Move-Item, New-Item, Remove-Item and so on) and redirection (>) need the user's confirmation every time, even when the path is fixed.",
-  '- Piping the result of Get-ChildItem -Filter into Select-String or Get-Content also needs confirmation every time (use -Include or Select-String -Path).',
+  ...(windows ? WINDOWS_SHELL_NOTES : []),
 ].join('\n');
 
 export const shellRun: ToolDef<ShellInput> = {

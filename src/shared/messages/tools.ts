@@ -8,7 +8,7 @@ const en = {
   'pipeline.acceptance_draft': 'The tool "{name}" works only after the acceptance list is locked by a build. Write the draft with acceptance_write',
   'pipeline.acceptance_frozen': 'The tool "{name}" cannot change the locked acceptance list. Propose a change with acceptance_change',
   'pipeline.project_only': 'The tool "{name}" can be used only in a conversation or task that belongs to a product',
-  'pipeline.policy_blocked': 'The tool "{name}" is turned off in the settings, so it cannot be used. Think of another way, or ask the user',
+  'pipeline.policy_blocked': 'The tool "{name}" is turned off in the settings, so it cannot be used. Do not try another route to the same result: go on with other work, or tell the owner what is needed and why',
   'pipeline.review_forbidden': '"{name}" cannot be used during a review',
   'pipeline.tool_not_loaded': 'The tool "{name}" is not loaded yet. Load it first with tool_search (query: "{name}"), then call it',
   'tool_search.unavailable': 'There are no tools to load in this run',

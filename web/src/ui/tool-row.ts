@@ -238,7 +238,7 @@ const num = (text: string): number => Number(text.replace(/,/gu, ''));
 
 export const emptyOutput = (text: string): boolean => /^\s*(?:\[E-\d+\]\s*)?$/u.test(text);
 
-const MODEL_HINTS = [toolText('en', 'pipeline.denied').split('\n').at(-1)!, 'Think of another way, or ask the user'];
+const MODEL_HINTS = [toolText('en', 'pipeline.denied').split('\n').at(-1)!, 'Do not try another route to the same result: go on with other work, or tell the owner what is needed and why', 'Think of another way, or ask the user'];
 const EVIDENCE_AT_END = /\n\[E-\d+\]$/u;
 
 export function shownOutput(result: ToolResult): string {
