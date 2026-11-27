@@ -89,4 +89,12 @@ test('the model name beside "auto" when the first runtime of the list is switche
   const product = await mount(served, { product: true, runtime: { bound: null, allowed: true } });
   assert.equal(product.label, 'auto · m1-name');
   assert.equal(s.app.engine.effortChoices(null, null, true).modelId, 'm1', 'and that is where the engine sends the first message');
+
+  s.adapter().probeResult = { status: 'unreachable', message: 'offline' };
+  await s.app.status.probeAll(s.app.config());
+  await cleanup();
+  const offline = await mount(await serve(s), { product: true, runtime: { bound: null, allowed: true } });
+  const named = s.app.engine.effortChoices(null, null, true).modelId;
+  assert.equal(named, 'm1', 'with nothing usable the engine names the first model of its order, not the switched-off runtime');
+  assert.equal(offline.label, `auto · ${s.app.config().models.find(m => m.id === named)!.model}`, 'the composer shows the same model');
 });

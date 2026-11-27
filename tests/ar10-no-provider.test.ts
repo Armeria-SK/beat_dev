@@ -303,6 +303,7 @@ test('会話の順番の先頭が切った実行役: 後ろに提供元のモデ
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await settled(s.app, sent.body.runId);
   assert.equal(s.adapter().calls.at(-1)!.model.id, 'm1', 'the provider model behind the switched-off runtime answered');
+  assert.equal((JSON.parse(s.app.runs.get(sent.body.runId)!.flags) as string[]).includes('fallback'), false, 'the provider model is the first of the order the engine goes through, so the run is not logged as a fallback');
   assert.equal(s.app.conversations.runtimeOf(conversation).runtimeId, null, 'the conversation is not tied to the switched-off runtime');
   assert.equal(s.app.engine.effortChoices(null, null, true).modelId, 'm1', 'the depth the screen offers follows the same model');
   assert.deepEqual(s.app.config().routing.chat, [MODEL.id, 'm1'], 'the stored order is not touched');

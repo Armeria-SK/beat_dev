@@ -957,7 +957,7 @@ export class ChatEngine {
     const config = this.#d.config();
     const runtimeFirst = pinned === null && boundRuntime !== null ? config.models.find(m => isRuntimeModel(m) && m.runtime === boundRuntime)?.id : undefined;
     const autoRuntime = pinned === null && boundRuntime === null && freshInProduct ? this.#firstChatRuntimeModel()?.id : undefined;
-    const id = pinned ?? runtimeFirst ?? autoRuntime ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
+    const id = pinned ?? runtimeFirst ?? autoRuntime ?? this.#chain('chat').usable[0]?.model.id ?? chatOrderIds(config)[0];
     const model = config.models.find(m => m.id === id);
     return { modelId: model?.id, efforts: model ? modelEfforts(model, this.#d.status.get(model.id)) : [] };
   }
@@ -1034,7 +1034,7 @@ export class ChatEngine {
     const config = this.#d.config();
     const language = languageOf(config);
     const research = route === 'research' ? config.routing.research ?? [] : [];
-    const ids = research.length ? [...research] : pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : candidateModelIds(config, route);
+    const ids = research.length ? [...research] : pinned ? [pinned] : route === 'scout' ? [...(config.routing.scout ?? [])] : route === 'chat' ? chatOrderIds(config) : candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
