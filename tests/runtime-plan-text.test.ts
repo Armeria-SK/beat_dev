@@ -33,8 +33,7 @@ test('JSON の塊は ``` の囲いを外して読む。読めない・オブジ�
   assert.deepEqual(planBlocksOf(`<beat-acceptance>\n\`\`\`json\n${JSON.stringify(ITEMS)}\n\`\`\`\n</beat-acceptance>`), [{ tool: 'acceptance_write', input: ITEMS }]);
   const broken = planBlocksOf('<beat-acceptance>{items: nope</beat-acceptance>\n<beat-acceptance-change>[1, 2]</beat-acceptance-change>\n<beat-plan>\n  \n</beat-plan>');
   assert.deepEqual(broken.map(block => [block.tool, 'error' in block]), [['plan_write', true], ['acceptance_write', true], ['acceptance_change', true]]);
-  assert.match((broken[2] as { error: string }).error, /not a JSON object/u);
-  assert.match((broken[0] as { error: string }).error, /plan is empty/u);
+  assert.deepEqual(broken.map(block => ('error' in block ? block.error : null)), ['empty', 'bad_json', 'not_object'], 'the reason is a name, not an English sentence');
 });
 
 test('前置きの文の中の印の言及は塊の開き・閉じに読まない。本物の塊は言語も含めて取り出す', () => {
@@ -67,8 +66,8 @@ test('読まなかった印は黙って捨てない: 行の頭に印があるの
   assert.deepEqual(unread('<beat-plan language="en" onload="x">\n# Plan\n</beat-plan>'), ['plan_write'], 'an opening tag with something else in it');
   assert.deepEqual(unread('```\n<beat-plan>\nx\n</beat-plan>\n```\n<beat-acceptance-change>{"changes":[]}</beat-acceptance-change>', '<beat-acceptance-change>{"changes":[]}</beat-acceptance-change>'), ['plan_write'], 'only the kind that was not read is named; the other kind was');
   assert.deepEqual(unread('<beat-acceptance-change>\n{"changes":[]}'), ['acceptance_change'], 'acceptance and acceptance change are different kinds');
-  assert.deepEqual(unreadPlanBlocks('<beat-plan>', [{ tool: 'plan_write', error: 'the plan is empty' }]), [], 'a block that was read but is wrong is already reported by its own row');
-  assert.match((unreadPlanBlocks('<beat-plan>', [])[0] as { error: string }).error, /code fence.*earlier message.*not closed.*plain text in the last message/u);
+  assert.deepEqual(unreadPlanBlocks('<beat-plan>', [{ tool: 'plan_write', error: 'empty' }]), [], 'a block that was read but is wrong is already reported by its own row');
+  assert.deepEqual(unreadPlanBlocks('<beat-plan>', []), [{ tool: 'plan_write', error: 'unread' }]);
 });
 
 test('コードの囲い（```・~~~）の中の塊は読まない。計画の中のコードの例は、そのまま計画に入る', () => {

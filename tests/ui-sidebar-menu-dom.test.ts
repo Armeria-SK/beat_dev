@@ -482,7 +482,7 @@ async function renderBar() {
   serve((path, method) => {
     if (path === `/api/conversations/${CHAT}/messages`) return { conversation: { id: CHAT, title: 'Search', created_at: 0, last_message_at: 0, permission_mode: 'auto', has_summary: true }, messages: [], pending: [], builds: [], activeRun: null };
     if (path === `/api/conversations/${CHAT}/checklist`) return { items: [], tainted: false, updatedAt: null };
-    if (path === '/api/models') return { models: [], routing: { chat: [] } };
+    if (path === '/api/models') return { models: [], chatOrder: [] };
     if (path === `/api/conversations/${CHAT}` && (method === 'PATCH' || method === 'DELETE')) return { deleted: true, conversation: {} };
     return undefined;
   });

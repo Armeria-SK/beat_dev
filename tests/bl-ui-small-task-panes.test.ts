@@ -39,7 +39,7 @@ function serve(listed: ReturnType<typeof row>[]): void {
     const messages = /^\/api\/conversations\/([^/]+)\/messages$/u.exec(url);
     if (url === '/api/onboarding') out = { done: true, steps: { user: true, identity: true, persona: true, model: true } };
     else if (url === '/api/settings') out = { config: defaultConfig(), apiKeys: {}, configError: null, restartRequired: false, configPath: '/tmp/config.json' };
-    else if (url === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    else if (url === '/api/models') out = { models: [], chatOrder: [] };
     else if (url === '/api/conversations') out = { conversations: listed, more: {} };
     else if (url === '/api/projects') out = { projects: [project] };
     else if (messages) {

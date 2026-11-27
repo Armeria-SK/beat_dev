@@ -29,7 +29,7 @@ function serve(config: Json, research?: () => Json): { saved: Json[]; asked: str
     let out: unknown;
     if (url === '/api/settings' && method === 'GET') out = view();
     if (url === '/api/settings' && method === 'PUT') { current = body!.config; saved.push(current); out = { ...view(), models: [] }; }
-    if (url === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    if (url === '/api/models') out = { models: [], chatOrder: [] };
     if (url.endsWith('/research') && research) out = research();
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;

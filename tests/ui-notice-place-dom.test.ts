@@ -46,7 +46,7 @@ async function renderChat(notices: RunNotice[], messages: unknown[] = MESSAGES, 
       conversation: { id: CHAT, title: 'Search', created_at: 0, last_message_at: 0, permission_mode: 'auto' },
       messages,
       pending: [], builds: [], activeRun: null,
-    } : url === `/api/conversations/${CHAT}/checklist` ? { items: [], tainted: false, updatedAt: null } : url === '/api/models' ? { models: [], routing: { chat: [] } } : undefined;
+    } : url === `/api/conversations/${CHAT}/checklist` ? { items: [], tainted: false, updatedAt: null } : url === '/api/models' ? { models: [], chatOrder: [] } : undefined;
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });

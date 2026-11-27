@@ -67,7 +67,7 @@ test('ui/Conversation（DOM）: a queued Build says why it is not running ("Buil
       return { conversation: { id: CHAT, title: 'Parser', created_at: 0, last_message_at: 0, permission_mode: 'plan' }, messages: [{ id: 1, role: 'user', text: 'plan it', runId: 'r1', createdAt: 10 }], pending: [], builds: [build], activeRun: null };
     }
     if (path === `/api/conversations/${CHAT}/checklist`) return { items: [], tainted: false, updatedAt: null };
-    if (path === '/api/models') return { models: [], routing: { chat: [] } };
+    if (path === '/api/models') return { models: [], chatOrder: [] };
     return undefined;
   });
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });

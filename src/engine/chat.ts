@@ -315,6 +315,21 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
   return borrowed.length ? borrowed : own;
 }
 
+// 会話の順番のうち、モデルを選んでいない会話が実際に向かう順。先頭が切ってある実行役のモデルで、後ろに提供元のモデルがあるときは、その先頭を飛ばす（切った実行役へ行って断られない。実行役のモデルは先頭にしか置けない）。
+// 画面へ送る順（GET /api/models の chatOrder）も、はじめの設定の印も、この順を使う
+export function chatOrderIds(config: AppConfig): string[] {
+  const ids = candidateModelIds(config, 'chat');
+  const first = config.models.find(m => m.id === ids[0]);
+  const switchedOff = first !== undefined && isRuntimeModel(first) && !enabledRuntimeModels(config).some(m => m.id === first.id);
+  return switchedOff && ids.length > 1 ? ids.slice(1) : ids;
+}
+
+// chatOrderIds の先頭が実行役のモデルなら、それ（モデルを選んでいない会話の最初の送信が向かう先）
+export function firstChatRuntimeModel(config: AppConfig): RuntimeModelConfig | undefined {
+  const first = config.models.find(m => m.id === chatOrderIds(config)[0]);
+  return first && isRuntimeModel(first) ? first : undefined;
+}
+
 // 会話の tail の状態（kv の tail-state:<会話>。TE-1）: 最後に送った節と時刻、時刻・各節のいまの文を載せている発言の id（要約・削りでその発言が送る範囲から外れたら、全部を付け直す）
 // tainted: 外から読んだ一覧・裏のコマンドの節を載せた tail の発言の id（その tail は以後も送るので、要約で外れるまで次の実行を「外から読んだ」で始める）
 interface TailState { sent?: TailSent; carriers: Partial<Record<'time' | 'checklist' | 'background' | 'product' | 'build', number>>; tainted?: Partial<Record<'checklist' | 'background', number[]>> }
@@ -1134,12 +1149,9 @@ export class ChatEngine {
     return fresh && first ? { runtimeId: first.runtime, model: first, auto: true } : undefined;
   }
 
-  // The first chat candidate when it is a runtime model (where the first send of a conversation with no model goes). None when the engine has no runtimes
+  // The first chat candidate when it is a runtime model (where the first send of a conversation with no model goes). None when the engine has no runtimes (a switched-off runtime with a provider model behind it is skipped: chatOrderIds)
   #firstChatRuntimeModel(): RuntimeModelConfig | undefined {
-    if (!this.#d.runtimes) return undefined;
-    const config = this.#d.config();
-    const first = config.models.find(m => m.id === candidateModelIds(config, 'chat')[0]);
-    return first && isRuntimeModel(first) ? first : undefined;
+    return this.#d.runtimes ? firstChatRuntimeModel(this.#d.config()) : undefined;
   }
 
   #runtimeConversation(conversation: ConversationRow | undefined): boolean {

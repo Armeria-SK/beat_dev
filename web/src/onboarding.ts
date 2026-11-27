@@ -27,7 +27,7 @@ export interface ModelForm { source: ModelSource; model: string; baseUrl: string
 
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9_.-]+/gu, '-').replace(/^[^a-z0-9]+/u, '').replace(/-+$/u, '').slice(0, 40) || 'model';
 
-type Entry = Record<string, unknown> & { id: string };
+type Entry = Record<string, unknown> & { id: string; runtime?: unknown };
 
 const defaultProvider = (config: Config): Entry => newAnthropicProvider(config) as Entry;
 
@@ -77,11 +77,11 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
     vision: false,
   };
   const at = existing ? models.findIndex(m => m.id === existing.id) : -1;
-  const hadProvider = models.some(m => !isRuntimeEntry({ runtime: m.runtime }));
+  const hadProvider = models.some(m => !isRuntimeEntry(m));
   if (at >= 0) models[at] = { ...existing, ...model }; else models.push(model);
 
   const routing = config.routing as { chat: string[]; background: string[] };
-  const ids = models.filter(m => !isRuntimeEntry({ runtime: m.runtime })).map(m => m.id);
+  const ids = models.filter(m => !isRuntimeEntry(m)).map(m => m.id);
   const next = !hadProvider || (routing.chat.length === 0 && routing.background.length === 0)
     ? { ...routing, chat: ids, background: ids }
     : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
@@ -107,7 +107,7 @@ export function setupRuntimeConfig(config: Config, form: { kind: RuntimeKindId; 
 export function putRuntimeFirst(config: Config, modelId: string): Config {
   const routing = config.routing as { chat: string[]; background: string[] };
   const models = config.models as Entry[];
-  const runtimeIds = new Set(models.filter(m => isRuntimeEntry({ runtime: m.runtime })).map(m => m.id));
+  const runtimeIds = new Set(models.filter(m => isRuntimeEntry(m)).map(m => m.id));
   if (!runtimeIds.has(modelId)) return config;
   const own = models.filter(m => !runtimeIds.has(m.id)).map(m => m.id);
   const rest = routing.chat.filter(id => !runtimeIds.has(id));

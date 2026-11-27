@@ -64,7 +64,7 @@ async function renderChat(first: ChatBuild[], over: Partial<ConversationProps> =
       };
     }
     if (path === `/api/conversations/${CHAT}/checklist`) return { items: [], tainted: false, updatedAt: null };
-    if (path === '/api/models') return { models: [], routing: { chat: [] } };
+    if (path === '/api/models') return { models: [], chatOrder: [] };
     return undefined;
   });
   g.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });

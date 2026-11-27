@@ -3,7 +3,7 @@ import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, isRuntimeModel, providerOf } from '../config/schema.ts';
 import { ConfigError, parseConfig, resetConfig } from '../config/store.ts';
-import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
+import { candidateModelIds, chatOrderIds, type SendChoice } from '../engine/chat.ts';
 import { modelEfforts } from '../engine/efforts.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
@@ -100,10 +100,10 @@ function autoReasonOf(reasons: string | null): string | null {
 
 function modelsView(app: App) {
   const config = app.config();
-  // An empty conversation list means "every provider model" for the engine; send that same list so the screen follows the engine's order
-  const chat = candidateModelIds(config, 'chat');
+  // An empty conversation list means "every provider model" for the engine; send the order the engine goes through as chatOrder so the screen follows it (not routing.chat: config.routing.chat keeps what was stored)
+  const chat = chatOrderIds(config);
   return {
-    routing: { ...config.routing, chat },
+    chatOrder: chat,
     models: config.models.map(m => {
       const { capacity, maxOutput } = app.status.limits(m);
       const probe = app.status.get(m.id);

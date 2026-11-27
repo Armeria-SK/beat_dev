@@ -1,7 +1,7 @@
 import type { App } from '../app.ts';
-import { enabledRuntimeModels, isRuntimeModel, providerModels } from '../config/schema.ts';
+import { enabledRuntimeModels } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
-import { candidateModelIds } from '../engine/chat.ts';
+import { chatOrderIds, firstChatRuntimeModel } from '../engine/chat.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import {
   isInitialPersona, normalizePersonaInput, startsWithHash, PERSONA_MAX_CHARS, PersonaError, personaTexts, readPersona, STYLE_NOTE_MAX_CHARS, STYLES, USER_NAME_MAX_CHARS, NAME_MAX_CHARS,
@@ -24,16 +24,15 @@ function personaProblem(error: unknown): never {
 }
 
 export function registerOnboardingRoutes(router: Router, app: App): void {
-  // AR-10: 提供元のモデルが無くても、会話の既定（会話の順番の先頭）が入れた実行役のモデルで、その実行役の最後の確かめが「使える」なら、会話を始められる（確かめが無い・ログアウト・切った間は満たさない）
-  const usableRuntime = (config: ReturnType<App['config']>): boolean => {
-    const first = enabledRuntimeModels(config).find(model => model.id === candidateModelIds(config, 'chat')[0]);
-    const check = first && app.runtimeChecks.get(first.runtime);
-    return check !== undefined && usableCheck(check.status);
-  };
-  // 会話の既定（会話の順番の先頭）が実行役のモデルなら、その実行役の確かめで決まる（後ろに提供元のモデルがあっても、先頭が使えなければ会話は始まらない）。そうでなければ、提供元のモデルがあるか
+  // 会話の既定（会話の順番の先頭）が実行役のモデルなら、その実行役の最後の確かめが「使える」ときだけ満たす（確かめが無い・ログアウト・切った間は満たさない。後ろに提供元のモデルがあっても、先頭が使えなければ会話は始まらない）。
+  // 先頭が提供元のモデルなら、順番のどれかが確かめを通っているときだけ満たす（モデルがあるだけで付けると、キーが通らない接続先でも、何も答えられないのに付く）。切ってある先頭の実行役は、後ろに提供元のモデルがあれば飛ばす（chatOrderIds）
   const modelConnected = (config: ReturnType<App['config']>): boolean => {
-    const first = config.models.find(model => model.id === candidateModelIds(config, 'chat')[0]);
-    return first !== undefined && isRuntimeModel(first) ? usableRuntime(config) : providerModels(config).length > 0;
+    const runtime = firstChatRuntimeModel(config);
+    if (runtime) {
+      const check = enabledRuntimeModels(config).some(model => model.id === runtime.id) ? app.runtimeChecks.get(runtime.runtime) : undefined;
+      return check !== undefined && usableCheck(check.status);
+    }
+    return chatOrderIds(config).some(id => app.status.usable(id));
   };
   const state = () => {
     const config = app.config();

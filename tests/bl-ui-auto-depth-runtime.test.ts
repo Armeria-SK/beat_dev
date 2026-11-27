@@ -13,13 +13,13 @@ const withRuntimeFirst = (config: AppConfig): void => {
 
 test('画面の「自動」の深さは、起こし直したあと（実行役が未確認）でも、サーバーが最初の送信で確かめる深さと同じ（#266）', async t => {
   const s = await startApp(t, { models: [fakeModel('m1', { efforts: ['medium'] })], configure: withRuntimeFirst });
-  const view = (await s.json('/api/models', 'GET')).body as { routing: { chat: string[] }; models: ModelView[] };
+  const view = (await s.json('/api/models', 'GET')).body as { chatOrder: string[]; models: ModelView[] };
   const rt = view.models.find(m => m.id === 'rt')!;
   assert.notEqual(rt.probe?.status, 'ok', 'the check of a runtime is only in memory: after a restart it is not ok');
   assert.equal(view.models.find(m => m.id === 'm1')!.probe?.status, 'ok');
 
   const use: RuntimeUse = { bound: null, allowed: true };
-  const screen = modelInEffect(runtimeShown(view.models, use), view.routing.chat, null, use);
+  const screen = modelInEffect(runtimeShown(view.models, use), view.chatOrder, null, use);
   const server = s.app.engine.effortChoices(null, null, true);
   assert.equal(server.modelId, 'rt', 'the server sends the first message of a fresh product conversation to the first candidate');
   assert.equal(screen?.id, server.modelId);

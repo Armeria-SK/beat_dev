@@ -93,7 +93,10 @@ test('会話の既定: 提供元のモデルが 1 つも無く、会話の順番
   assert.deepEqual(candidateModelIds(r.s.app.config(), 'chat'), [MODEL.id]);
   assert.deepEqual(candidateModelIds(r.s.app.config(), 'background'), [], 'a runtime model never runs the background');
   const models = (await r.s.json('/api/models', 'GET')).body;
-  assert.deepEqual(models.routing.chat, [MODEL.id]);
+  assert.deepEqual(models.chatOrder, [MODEL.id]);
+  assert.equal('routing' in models, false, 'the stored order is only in the settings (config.routing.chat); a second routing.chat next to it would be taken for the same thing');
+  const resaved = (await r.s.json('/api/settings', 'PUT', { config: structuredClone((await r.s.json('/api/settings', 'GET')).body.config) })).body;
+  assert.deepEqual([resaved.config.routing.chat, resaved.chatOrder, 'routing' in resaved], [[], [MODEL.id], false], 'the reply to a save has the stored order in config and the engine order as chatOrder, with no second routing.chat');
   assert.equal(models.models.find((m: Json) => m.id === MODEL.id).inChat, true);
 
   await r.save(config => { config.runtimes[0].enabled = false; });
@@ -235,7 +238,7 @@ test('はじめの設定の印: 会話の既定になる実行役（会話の順
   assert.equal(await step(), true, 'with the usable runtime first in the chat order, the step is met');
 });
 
-test('はじめの設定の印: 会話の順番の先頭が実行役のモデルなら、後ろに提供元のモデルがあっても、その実行役の確かめで決まる（先頭が使えないのに印が付かない）。先頭が提供元のモデルなら、提供元のモデルがあるだけで付く', async t => {
+test('はじめの設定の印: 会話の順番の先頭が実行役のモデルなら、後ろに提供元のモデルがあっても、その実行役の確かめで決まる（先頭が使えないのに印が付かない）。先頭が提供元のモデルなら、提供元のモデルの確かめで決まる', async t => {
   const holder: { current?: ScriptedRuntime } = {};
   const s = await startApp(t, {
     models: [{ ...PROVIDER_MODEL }, { ...MODEL } as never],
@@ -268,4 +271,54 @@ test('調べものの断りの順番: 提供元が無いときは、元の会話
   await r.save(config => { config.providers = [{ ...PROVIDER }]; config.models.push({ ...PROVIDER_MODEL }); });
   const second = await r.s.json(`/api/projects/${projectId}/research`, 'POST', { conversationId: chat.id });
   assert.deepEqual([second.status, second.body.code], [409, 'research.runtime_source'], 'with a provider model the runtime source is what is refused');
+});
+
+test('はじめの設定の印: 会話の順番の先頭が提供元のモデルなら、モデルがあるだけでは付けず、その確かめが通るときだけ付く（キーが通らない・つながらない接続先では付かない）', async t => {
+  const s = await startApp(t, { models: [{ ...PROVIDER_MODEL }], env: {} });
+  const step = async () => (await s.json('/api/onboarding', 'GET')).body.steps.model as boolean;
+  assert.equal(await step(), true, 'the provider model passes its check');
+  s.adapter().probeResult = { status: 'error', message: 'The key was rejected' };
+  await s.app.status.probeAll(s.app.config());
+  assert.equal(await step(), false, 'the key does not work: nothing could answer, so the step is not met');
+  s.adapter().probeResult = {};
+  await s.app.status.probeAll(s.app.config());
+  assert.equal(await step(), true, 'the check passes again');
+});
+
+test('会話の順番の先頭が切った実行役: 後ろに提供元のモデルがあれば、製品の新しい会話はそちらで返り（切った実行役へ行って断られない）、印も提供元の確かめで決まる。後ろに無ければ今までどおり、切ってあることを理由に断る', async t => {
+  const products = realpathSync.native(tempDir(t as never));
+  const s = await startApp(t, {
+    models: [{ ...PROVIDER_MODEL }, { ...MODEL } as never],
+    configure: config => { config.runtimes = [{ id: 'claude-code', kind: 'claude-code', enabled: false }] as never; config.routing = { chat: [MODEL.id, 'm1'], background: ['m1'], retriesPerModel: 0 }; },
+    runtimeFactories: { 'claude-code': scriptedFactory({}) },
+    projectFolderExempt: [products],
+    env: {},
+  });
+  const root = join(products, 'prod');
+  mkdirSync(root, { recursive: true });
+  const made = await s.json('/api/projects', 'POST', { root });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const conversation = uuid(9101);
+  const sent = await s.json(`/api/conversations/${conversation}/messages`, 'POST', { text: 'hello', projectId: made.body.project.id });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  await settled(s.app, sent.body.runId);
+  assert.equal(s.adapter().calls.at(-1)!.model.id, 'm1', 'the provider model behind the switched-off runtime answered');
+  assert.equal(s.app.conversations.runtimeOf(conversation).runtimeId, null, 'the conversation is not tied to the switched-off runtime');
+  assert.equal(s.app.engine.effortChoices(null, null, true).modelId, 'm1', 'the depth the screen offers follows the same model');
+  assert.deepEqual(s.app.config().routing.chat, [MODEL.id, 'm1'], 'the stored order is not touched');
+  const served = (await s.json('/api/models', 'GET')).body;
+  assert.deepEqual(served.chatOrder, ['m1'], 'the screen is sent the order the engine goes through, without the switched-off runtime');
+  assert.equal(served.models.find((m: Json) => m.id === MODEL.id).inChat, false);
+  assert.equal((await s.json('/api/onboarding', 'GET')).body.steps.model, true, 'the provider model passes its check, so the mark is set');
+  s.adapter().probeResult = { status: 'error', message: 'The key was rejected' };
+  await s.app.status.probeAll(s.app.config());
+  assert.equal((await s.json('/api/onboarding', 'GET')).body.steps.model, false, 'the provider model does not pass: not set');
+
+  const r = await bare(t);
+  await r.enable();
+  await r.save(config => { config.runtimes[0].enabled = false; });
+  const { id: projectId } = await r.product();
+  const refused = await r.s.json(`/api/conversations/${uuid(9102)}/messages`, 'POST', { text: 'hello', projectId });
+  assert.deepEqual([refused.status, refused.body.errorCode], [409, 'engine.runtime.unavailable'], JSON.stringify(refused.body));
+  assert.match(refused.body.errorMessage, /turned off/u, 'with nothing behind it, the reason is that the runtime is switched off');
 });

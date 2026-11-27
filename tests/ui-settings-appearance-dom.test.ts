@@ -30,7 +30,7 @@ function serveSettings(config: Json): Json[] {
     let out: unknown;
     if (String(path) === '/api/settings' && method === 'GET') out = view();
     if (String(path) === '/api/settings' && method === 'PUT') { current = (JSON.parse(String(init?.body)) as Json).config; puts.push(current); out = { ...view(), models: [] }; }
-    if (String(path) === '/api/models') out = { models: [], routing: { chat: [], background: [] } };
+    if (String(path) === '/api/models') out = { models: [], chatOrder: [] };
     return new Response(JSON.stringify(out ?? { error: 'not found' }), { status: out === undefined ? 404 : 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
   return puts;
