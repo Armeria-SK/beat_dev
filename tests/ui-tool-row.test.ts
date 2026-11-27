@@ -348,7 +348,11 @@ test('ui/tool-row: 断られた道具の行では、AI に向けた一文（Thin
   const failed = (text: string) => ({ text, isError: true });
   assert.equal(shownOutput(failed(denied)), 'Not run (denied):\n- This is outside the allowed folders: D:/x');
   assert.equal(shownOutput(failed(`${denied}\n[E-12]`)), 'Not run (denied):\n- This is outside the allowed folders: D:/x\n[E-12]', '証拠の番号の行は残す');
-  assert.equal(shownOutput(failed(toolText('en', 'pipeline.policy_blocked', { name: 'shell_run' }))), 'The tool "shell_run" is turned off in the settings, so it cannot be used.');
+  const blocked = toolText('en', 'pipeline.policy_blocked', { name: 'shell_run' });
+  assert.equal(shownOutput(failed(blocked)), 'The tool "shell_run" is turned off in the settings, so it cannot be used.');
+  assert.ok(blocked.toLowerCase().endsWith(denied.slice(denied.indexOf('do not try another route'))), '道具が止めてある、の知らせの終わりは、断る知らせ（pipeline.denied）の「別の道で同じことをしない」の文と同じ');
+  assert.doesNotMatch(blocked, /Think of another way/u);
+  assert.equal(shownOutput(failed('The tool "shell_run" is turned off in the settings, so it cannot be used. Think of another way, or ask the user')), 'The tool "shell_run" is turned off in the settings, so it cannot be used.', '前に保存した「止めてある」の結果の、前の一文も消す');
   const output = 'Think of another way, or ask the user was printed by the command\nok';
   assert.equal(shownOutput(failed(output)), output, '終わりでなければ消さない');
   const printed = 'echo done\nThink of another way, or ask the user';

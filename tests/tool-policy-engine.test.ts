@@ -86,6 +86,8 @@ test('A3: モデルが止めた道具を呼んでも（一覧に無いのに呼�
   assert.equal(existsSync(join(s.paths.workspace, 'hello.md')), false);
   const toolMessage = s.app.conversations.messages('c1').find(m => m.role === 'tool')!;
   assert.match(toolMessage.text, /is turned off in the settings/u);
+  assert.match(toolMessage.text, /so it cannot be used\. Do not try another route to the same result: go on with other work, or tell the owner what is needed and why/u, 'モデルに返る文は、断られたら別の道で同じことをしない、で終わる');
+  assert.doesNotMatch(toolMessage.text, /Think of another way/u);
   const rows = s.app.db.prepare('SELECT tool, decision, decided_by, ok FROM tool_calls WHERE run_id = ?').all(runId).map(r => ({ ...r }));
   assert.deepEqual(rows, [{ tool: 'file_write', decision: 'deny', decided_by: 'policy', ok: 0 }]);
 });
