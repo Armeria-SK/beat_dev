@@ -9,16 +9,16 @@ import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, tempDir } from './helpers.ts';
 
 const FULL_RULE = /## Widen to daily use\n/u;
-const SECTIONS = /Sections: Goal \([^)]*\), Scope \([^)]*\), Daily use, Assumptions, Steps, Risks, Open questions\./u;
+const SECTIONS = /Sections: Goal \([^)]*\), Scope \([^)]*\), Daily use, Assumptions, Steps( \([^)]*\))?, Risks, Open questions\./u;
 
 // レビューの指摘（2026-11-21）を形で縛る: 最初の質問の前に広げて同じ ask_owner の回で聞く（2 回目の質問の回を作らない）・
 // 当てはまらない場面は飛ばす・「やらない」は AI の出どころで書き、固定のあとは計画の Scope out へ・6 つは一覧ごと
-const SHARED: RegExp[] = [/Before first questions/u, /ai_added/u, /notDoing lines? \(source ai_added; (once )?locked: plan Scope out\)/u, /same ask_owner round/u, /at most 6 (such items )?per list/iu, /skip(ping)? covered/iu];
+const SHARED: RegExp[] = [/Before (your )?first questions/u, /ai_added/u, /notDoing lines? (\(source ai_added; (once )?locked: plan Scope out\)|with source ai_added \(once the list is locked: write it under Scope out in the plan\))/u, /same ask_owner round/u, /at most 6 (such items )?per list/iu, /skip(ping)? (covered|scenes the request already covers)/iu];
 
 function fullRules(text: string): void {
   assert.match(text, FULL_RULE);
   const section = text.split('\n## ').find(part => part.startsWith('Widen to daily use'))!;
-  for (const rule of [...SHARED, /3-5 daily-use scenes/u, /a small change may need none/u, /after go ahead: an assumption/u, /Daily use section/u]) assert.match(section, rule);
+  for (const rule of [...SHARED, /picture 3-5 scenes of the product in daily use/u, /a small change may need none/u, /after the owner said go ahead: write it down as an assumption/u, /Daily use section/u]) assert.match(section, rule);
   assert.match(text, SECTIONS);
 }
 

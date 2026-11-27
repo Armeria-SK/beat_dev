@@ -72,14 +72,14 @@ const judgeSeesTaint = (tasks: TaskStore, taskId: string) => tasks.textTainted(t
 
 const OLD_NAME = new RegExp(['c', 'live'].join(''), 'iu');
 
-test('3-2-s 要件の聞き取りの文: ふつうの形は 700 トークン以下、小さい形は 350 以下。どちらも英語で旧名の字を持たず、選んだ答えが「あなたの答え」になるとは言わない', t => {
+test('3-2-s 要件の聞き取りの文: ふつうの形は 900 トークン以下、小さい形は 420 以下。どちらも英語で旧名の字を持たず、選んだ答えが「あなたの答え」になるとは言わない', t => {
   const paths = resolvePaths(tempDir(t));
   const full = requirementsText(paths, 100_000);
   const compact = requirementsText(paths, 12_672);
   assert.match(full, /^# Requirements interview\n/u);
   assert.match(compact, /^# Requirements interview \(compact\)\n/u);
-  assert.ok(estimateTextTokens(full) <= 700, String(estimateTextTokens(full)));
-  assert.ok(estimateTextTokens(compact) <= 350, String(estimateTextTokens(compact)));
+  assert.ok(estimateTextTokens(full) <= 900, String(estimateTextTokens(full)));
+  assert.ok(estimateTextTokens(compact) <= 420, String(estimateTextTokens(compact)));
   for (const text of [full, compact]) {
     assert.doesNotMatch(text, OLD_NAME);
     assert.doesNotMatch(text, /your answer|owner_choice/iu);

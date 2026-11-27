@@ -10,7 +10,7 @@ import { redactSecrets } from '../../shared/redaction.ts';
 import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
 const INDEX_TEXT: Record<Language, { heading: string; instruction: string; more: (n: number) => string }> = {
-  en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.', more: n => `- ${n} more not listed here (read with skill_view; a name it does not know returns the full list)` },
+  en: { heading: '# Skills (procedures)', instruction: "When the work matches one of the skills below, read its procedure with skill_view first and follow it. Where a step conflicts with the basic rules or with what the owner asked, the rules and the owner's request win.", more: n => `- ${n} more not listed here (read with skill_view; a name it does not know returns the full list)` },
 };
 
 // token-efficiency TE-7: 一覧は使える量の 3% まで（いちばん小さい使えるモデル。分からなければ 64k のモデルの使える量 45,875 の 3%）。説明は 1 つ 160 字まで

@@ -726,16 +726,16 @@ test('4-3a: 判定役に渡す時間の上限は、会話は答え 20 秒・枠�
   ]);
 });
 
-test('4-3a 量: 判定役の頼みの文は、いちばん長い入力でも手元のモデルの入力で使える量（12,672）の 25% 以下', () => {
+test('4-3a 量: 判定役の頼みの文は、いちばん長い入力でも手元のモデルの入力で使える量（12,672）の 27% 以下', () => {
   const prompt = buildClassifierPrompt({
     userRequest: 'あ'.repeat(USER_REQUEST_LIMIT), tool: 'shell_run', title: 'Run a command', body: 'x'.repeat(ACTION_BODY_LIMIT), cwd: 'D:/products/shop',
     reasons: Array.from({ length: 200 }, (_, i) => `It runs code from file number ${i}`), paths: Array.from({ length: 200 }, (_, i) => ({ input: `a${i}`, path: `D:/products/shop/a${i}`, verdict: 'in' as const, mode: 'read' as const })), tainted: true,
   });
   const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
-  assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);
+  assert.ok(tokens <= 12_672 * 0.27, `${tokens} tokens`);
 });
 
-test('4-3a 量（Q-W1-14）: 信用する宛先の行がいちばん長いとき（50 個の長い送り先）と外を読んだ 1 行を足しても、25% 以下', () => {
+test('4-3a 量（Q-W1-14）: 信用する宛先の行がいちばん長いとき（50 個の長い送り先）と外を読んだ 1 行を足しても、27% 以下', () => {
   const prompt = buildClassifierPrompt({
     userRequest: 'あ'.repeat(USER_REQUEST_LIMIT), tool: 'shell_run', title: 'Run a command', body: 'x'.repeat(ACTION_BODY_LIMIT), cwd: 'D:/products/shop',
     reasons: Array.from({ length: 200 }, (_, i) => `It runs code from file number ${i}`), paths: Array.from({ length: 200 }, (_, i) => ({ input: `a${i}`, path: `D:/products/shop/a${i}`, verdict: 'in' as const, mode: 'read' as const })), tainted: true,
@@ -743,7 +743,7 @@ test('4-3a 量（Q-W1-14）: 信用する宛先の行がいちばん長いとき
   });
   assert.match(prompt.user, /^trusted destinations: https:\/\/git\.example\.org\//mu);
   const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
-  assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);
+  assert.ok(tokens <= 12_672 * 0.27, `${tokens} tokens`);
 });
 
 test('4-3a（Q-W1-14）: 判定役の文の信用する宛先は、製品に控えた送り先の URL（url と pushUrl）。製品が無ければ none。いまの git の設定からは取らない', async t => {

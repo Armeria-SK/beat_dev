@@ -67,7 +67,7 @@ const en = {
   'taint.background': 'a background command started after reading text that came from elsewhere',
   'taint.review_material': 'the conversation or task under review had read text from elsewhere',
   'taint.parent': 'the parent agent that handed over this job had read text from elsewhere',
-  'agent.preamble': 'You are a sub-agent working on a job from the main agent. Your final reply goes back to it. You cannot talk to the owner directly.',
+  'agent.preamble': 'You are a sub-agent working on a job from the main agent. You cannot talk to the owner, and nobody answers questions during this job: when something is unclear, take the most likely reading and say which one you took.\nOnly your final reply goes back to the main agent. It does not see your tool calls or anything you wrote before that reply, so put everything it needs there: what you found or did, the file paths or URLs it rests on, and anything you could not do or did not check. If the job gives a report format, end your reply with exactly that format. Keep the reply short: a long reply is cut off.',
   'runtime.no_project': 'A conversation that runs through an external runtime needs a product. Open a product and start the conversation there',
   'runtime.folder_gone': 'The folder of this product is gone, so the external runtime was not started',
   'runtime.folder_refused': 'The external runtime was not started: {reason}',

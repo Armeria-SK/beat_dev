@@ -79,8 +79,8 @@ const sectionOf = (summary: string, heading: string): string[] => {
 const compactRows = (s: App) => s.app.db.prepare("SELECT summary_chars FROM model_calls WHERE purpose = 'compact' ORDER BY rowid").all() as Array<{ summary_chars: number | null }>;
 
 test('前半を読み直す形: 要求の最後が要約の頼みで、その前は直前の本番の呼び出しの道具・system・発言をそのまま頭に持つ（真似で読み ≥ 90%）。節は決まった順', async t => {
-  // 1 往復で育つ量（文 + 結果）に比べて前半が大きい会話（容量 40,000）
-  const { s, log } = await shapeRun(t, { edit: config => { config.models[0]!.contextLength = 40_000; }, turns: 48 });
+  // 1 往復で育つ量（文 + 結果）に比べて前半が大きい会話（容量 40,500）
+  const { s, log } = await shapeRun(t, { edit: config => { config.models[0]!.contextLength = 40_500; }, turns: 48 });
   const at = log.findIndex(e => e.kind === 'prefix');
   assert.ok(at > 0, '前提: 前半のあとに要約を頼んだ');
   assert.equal(log.slice(0, at).filter(e => e.kind === 'transcript').length, 0, '最初の要約は写しの形を使わない');
@@ -90,8 +90,8 @@ test('前半を読み直す形: 要求の最後が要約の頼みで、その前
   assert.equal(ask.system.frozen + ask.system.dynamic, before.system.frozen + before.system.dynamic, 'system が同じ');
   assert.equal(JSON.stringify(ask.messages.slice(0, before.messages.length)), JSON.stringify(before.messages), '直前の呼び出しの発言がそのまま頭にある');
   assert.match((ask.messages.at(-1) as { content: string }).content, /Do not call tools\.$/u);
-  // available = floor(40,000 × 0.95) − 4,096 = 33,904 → 8% は 2,712
-  assert.equal(ask.maxOutputTokens, 2712, '要約の返事の上限');
+  // available = floor(40,500 × 0.95) − 4,096 = 34,379 → 8% は 2,750
+  assert.equal(ask.maxOutputTokens, 2750, '要約の返事の上限');
   const sim = new AnthropicCacheSim();
   for (const { req } of log.slice(0, at + 1)) sim.call(anthropicBody(req, { provider: (req.model as ProviderModelConfig).provider, model: req.model.model }) as unknown as Json);
   const cost = sim.calls.at(-1)!;

@@ -263,7 +263,7 @@ function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error' | 'empty'>
 
 // 検索の間隔（1.5 秒・同じ先へは 4 秒）の待ちを実時間で待たないよう、呼ぶたびに 5 秒進む時計を渡す。jump で先の休みを越えられる
 const steppingClock = (): (() => number) & { jump: (ms: number) => void } => { let at = Date.parse('2026-11-05T00:00:00Z'); return Object.assign(() => (at += 5000), { jump: (ms: number) => { at += ms; } }); };
-const UNAVAILABLE = 'Search is unavailable for the rest of this run (no search site could be used twice in a row)';
+const UNAVAILABLE = 'Search is unavailable for the rest of this run (no search site could be used twice in a row). Do not call web_search again in this run: work with what you have, or read pages whose address you already know with web_fetch';
 const toolTexts = (s: Awaited<ReturnType<typeof setupApp>>, conversationId = 'c1') => s.app.conversations.messages(conversationId).filter(m => m.role === 'tool').map(m => m.message.content);
 
 async function chat(s: Awaited<ReturnType<typeof setupApp>>, text: string, conversationId = 'c1') {

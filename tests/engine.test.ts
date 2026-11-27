@@ -266,7 +266,7 @@ test('サーバー側で切り捨てられた疑いが2回続いたら、その�
 
 test('見積もりの補正を学習する（切り捨てが起こりえない範囲だけ）', async t => {
   const s = await setup(t, { models: [localModel('a')] });
-  s.adapter.scripts.push(reply('ok', { inputTokens: 2000 }));
+  s.adapter.scripts.push(reply('ok', { inputTokens: 3000 }));
   await sendAndWait(s.engine, 'c1', 'え'.repeat(1000));
   const factor = s.kv.getJson<number>('calibration:a');
   assert.ok(factor !== undefined && factor > 1, String(factor));

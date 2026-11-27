@@ -292,6 +292,8 @@ test('memory review scope: the record is content only (no headings, labels or at
   });
   assert.deepEqual(evidence.owner, ['first line\nsecond line']);
   assert.equal(evidence.record, 'first line\nsecond line\nfile body\nreply text\ntool output');
+  const current = reviewEvidence({ transcript: `[User] first line\n  ${attachmentBlock(upload('file body')).split('\n').join('\n  ')}\n[beat] reply text` });
+  assert.equal(current.record, 'first line\nfile body\nreply text', 'the current attachment frame is left out of the record as well');
   const task = reviewEvidence({ task: { title: 'Fix login', status: 'done', result_summary: 'Login works', body: 'Use the new API', conversation_id: 'c1' } });
   assert.equal(task.record, 'Fix login\nLogin works\nUse the new API');
   assert.deepEqual(task.owner, []);

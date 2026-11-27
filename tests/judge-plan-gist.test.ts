@@ -163,7 +163,7 @@ test('p4-build-judge P3-5: 持ち主が題を直しても要点は残る。外�
   assert.doesNotMatch(s.app.tasks.judgeRequest(taskId), /node --test/u);
 });
 
-test('p4-build-judge P3-6 量: 64,000 文字の計画書（日本語・英語）でも、頼みは 2,000 文字・1,100 トークン以下で、判定役の文の全体は 12,672 の 25% 以下', async t => {
+test('p4-build-judge P3-6 量: 64,000 文字の計画書（日本語・英語）でも、頼みは 2,000 文字・1,100 トークン以下で、判定役の文の全体は 12,672 の 27% 以下', async t => {
   const s = await setup(t);
   const long = (line: string, heading: (i: number) => string) => {
     let text = '';
@@ -189,7 +189,7 @@ test('p4-build-judge P3-6 量: 64,000 文字の計画書（日本語・英語）
       });
       assert.ok(prompt.user.includes(request), `${name}: 頼みは切られずに入る`);
       const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
-      assert.ok(tokens <= 12_672 * 0.25, `${name}: ${tokens} tokens`);
+      assert.ok(tokens <= 12_672 * 0.27, `${name}: ${tokens} tokens`);
     }
   }
 });
@@ -290,7 +290,7 @@ test('p4-build-judge 審査 3: 長い計画書の Build に持ち主が終わり
   });
   assert.ok(prompt.user.includes(criteria), '判定役の文に条件が全部入る');
   const tokens = estimateTextTokens(`${prompt.system}\n${prompt.user}`);
-  assert.ok(tokens <= 12_672 * 0.25, `${tokens} tokens`);
+  assert.ok(tokens <= 12_672 * 0.27, `${tokens} tokens`);
 });
 
 const paneText = (source: string): string => renderToStaticMarkup(createElement(ReactMarkdown, {

@@ -187,7 +187,7 @@ test('scout language: proposals follow the exact "The owner reads …" sentence 
     assert.match(s.prompt(lead), /- Write the ledger in English\. Write each proposal's title and why /u, label);
     assert.match(s.prompt(lead), SENTENCE, label);
     assert.doesNotMatch(s.prompt(lead), /ledger and proposals in English/u, label);
-    assert.match(s.prompt(lead), /write \\?"proposal <id>\\?" as the result \(the id proposal_add returns\)/u, label);
+    assert.match(s.prompt(lead), /write \\?"proposal <id>\\?" as the ledger result \(the id proposal_add returns\)/u, label);
     assert.doesNotMatch(s.prompt(lead), /proposal <title>/u, label);
     if (expected === undefined) assert.doesNotMatch(lead.system.dynamic, /The owner reads/u, label);
     else {

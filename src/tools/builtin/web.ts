@@ -109,7 +109,7 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
 
 export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
   name: 'web_search',
-  description: 'Search the web and return titles, URLs and excerpts. To look at the content in detail, read the URL with web_fetch next. Use it for the latest information, checking facts, and things you do not know.',
+  description: 'Search the web and return titles, URLs and excerpts. To look at the content in detail, read the URL with web_fetch next. Use it for the latest information, checking facts, and things you do not know. The query is sent to outside search sites: use general words, and do not put secrets, the owner\'s private details or stretches of the product\'s code into it.',
   input: Type.Object({
     query: Type.String({ minLength: 1, maxLength: 300 }),
     max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),

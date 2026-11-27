@@ -115,8 +115,8 @@ export function sessionOnlyUpdates(suggestions: readonly PermissionUpdate[] | un
   return (suggestions ?? []).filter(update => update.destination === 'session' && update.type === 'addRules' && update.behavior === 'allow');
 }
 
-const DECLINED = 'The owner declined this request.';
-const DECLINED_BY_BEAT = "beat declined this request without asking the owner (one of beat's own guards, or plan mode).";
+const DECLINED = 'The owner declined this request. Do not try to do the same thing another way; go on with other work, or ask the owner what they want instead.';
+const DECLINED_BY_BEAT = "beat declined this request without asking the owner (one of beat's own guards, or plan mode). Do not look for another way around this; tell the owner if the work needs it.";
 const CANCELLED = 'The owner stopped the reply.';
 
 // 答えの作り方。許可は入力を書き換えず（updatedInput は元の入力）、閉じた一覧の外の答えは断りにする。

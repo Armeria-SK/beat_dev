@@ -32,7 +32,7 @@ function latestUserMessage(ctx: ToolContext): number | undefined {
 export const memorySave: ToolDef<{ book: Book; content: string }> = {
   name: 'memory_save',
   description: [
-    'Save, right away, something that should be remembered in later conversations too (like ChatGPT\'s memory).',
+    'Save, right away, something that should be remembered in later conversations too. Save what the user stated or what you confirmed, not a guess.',
     'user: the user\'s name, preferences, situation and decisions. notes: your own lessons and tips on how to do things.',
     'Keep each entry short, one fact. Do not write things that only matter in the moment or that are already known.',
   ].join(' '),

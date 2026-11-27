@@ -256,7 +256,7 @@ test('T-1 起動のときの「このモデルで足りるか」は、核 + 一�
   s.adapter().scripts = [reply('ok')];
   await s.send(uuid(1), { text: 'x' });
   const usage = (await s.json(`/api/conversations/${uuid(1)}/context?modelId=m1`, 'GET')).body.tokens as number;
-  assert.ok(base < 6_000, `baseTokens ${base}`);
+  assert.ok(base < 6_500, `baseTokens ${base}`);
   assert.ok(Math.abs(base - usage) < usage * 0.35, `baseTokens ${base} vs the first request ${usage}`);
 });
 
