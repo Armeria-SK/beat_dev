@@ -82,9 +82,11 @@ export function setupModelConfig(config: Config, form: ModelForm, modelId: strin
 
   const routing = config.routing as { chat: string[]; background: string[] };
   const ids = models.filter(m => !isRuntimeEntry(m)).map(m => m.id);
+  // An empty chat list means "every provider model" for the engine (candidateModelIds). Turning it into a fixed list keeps those models: copy them, then add.
+  const add = (list: string[]): string[] => (list.includes(model.id) ? list : [...list, model.id]);
   const next = !hadProvider || (routing.chat.length === 0 && routing.background.length === 0)
     ? { ...routing, chat: ids, background: ids }
-    : { ...routing, chat: routing.chat.includes(model.id) ? routing.chat : [...routing.chat, model.id], background: routing.background.includes(model.id) ? routing.background : [...routing.background, model.id] };
+    : { ...routing, chat: routing.chat.length === 0 ? ids : add(routing.chat), background: add(routing.background) };
   return { config: { ...config, providers, models, routing: next }, modelId: model.id };
 }
 
