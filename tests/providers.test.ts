@@ -219,6 +219,24 @@ test('Anthropic: 429 は rate_limit、529 は再試行できる provider_error',
   assert.equal(busy.kind, 'provider_error'); assert.equal(busy.retryable, true);
 });
 
+test('Anthropic: 開いたストリームの中の error イベントは、型に合う HTTP の失敗と同じに分ける（overloaded・api_error は再試行する）', async () => {
+  const started = { type: 'message_start', message: { id: 'msg', type: 'message', role: 'assistant', model: 'x', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } };
+  const failWith = async (type: string) => {
+    const fetchImpl = (async () => anthropicSse([started, { type: 'error', error: { type, message: 'in-stream' } } as any])) as unknown as typeof fetch;
+    return rejection(collect(new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'test-key-in-stream' }, fetchImpl).stream(request(model()))));
+  };
+  const busy = await failWith('overloaded_error');
+  assert.equal(busy.kind, 'provider_error'); assert.equal(busy.retryable, true); assert.equal(busy.status, 529);
+  const server = await failWith('api_error');
+  assert.equal(server.kind, 'provider_error'); assert.equal(server.retryable, true); assert.equal(server.status, 500);
+  const rate = await failWith('rate_limit_error');
+  assert.equal(rate.kind, 'rate_limit');
+  const unknown = await failWith('something_new_error');
+  assert.equal(unknown.kind, 'provider_error'); assert.equal(unknown.retryable, true);
+  const bad = await failWith('invalid_request_error');
+  assert.equal(bad.kind, 'provider_error'); assert.equal(bad.retryable, false);
+});
+
 test('Anthropic: probe は max_input_tokens を上限として使う', async () => {
   const fetchImpl = (async () => new Response(JSON.stringify({ id: 'claude-x', type: 'model', display_name: 'x', created_at: '2026-01-01T00:00:00Z', max_input_tokens: 200000, max_tokens: 64000 }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
   const result = await new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, fetchImpl).probe(model({ contextLength: undefined } as unknown as Partial<ModelConfig>), 65536);
