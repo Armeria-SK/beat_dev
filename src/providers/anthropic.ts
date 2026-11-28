@@ -125,19 +125,31 @@ function mapStop(reason: string | null | undefined): StopReason {
   return 'other';
 }
 
+// 開いたストリームの中で届く error イベントの型を、同じ失敗を HTTP で返すときの状態に置き換える表（Anthropic の errors の文書）。
+// 知らない型は、OpenAI 互換の受け手と同じく 500（再試行する）として扱う
+const STREAM_ERROR_STATUS: Record<string, number> = {
+  invalid_request_error: 400, authentication_error: 401, billing_error: 402, permission_error: 403, not_found_error: 404,
+  request_too_large: 413, rate_limit_error: 429, api_error: 500, timeout_error: 504, overloaded_error: 529,
+};
+
 export function classifyAnthropicError(error: unknown, signal: AbortSignal, secrets: readonly string[] = []): ProviderError {
   if (error instanceof ProviderError) return error;
   if (error instanceof Anthropic.APIUserAbortError || signal.aborted) return providerError('cancelled', 'cancelled', {}, { retryable: false });
   if (error instanceof Anthropic.APIConnectionTimeoutError) return providerError('timeout', 'anthropic.timeout');
   if (error instanceof Anthropic.APIConnectionError) return providerError('provider_error', 'anthropic.connect', {}, { retryable: true });
-  if (error instanceof Anthropic.APIError && typeof error.status === 'number') {
+  if (error instanceof Anthropic.APIError) {
     const body = error.error as { error?: { type?: string; message?: string } } | undefined;
-    const message = body?.error?.message ?? error.message ?? '';
-    if (error.status === 529 || body?.error?.type === 'overloaded_error') {
+    // 本文はふつう { type: 'error', error: { type, message } }。中身だけのときはそれ自体を読む
+    const detail: { type?: string; message?: string } | undefined = typeof body === 'object' && body ? body.error ?? body as { type?: string; message?: string } : undefined;
+    // 状態が無い APIError は、SDK がストリームの中の error イベント（HTTP の状態は 200 のまま）から作ったもの。型を HTTP で返すときの状態に置き換える
+    const status = typeof error.status === 'number' ? error.status : STREAM_ERROR_STATUS[detail?.type ?? ''] ?? 500;
+    const raw: unknown = error.error;
+    const message = detail?.message ?? (typeof raw === 'string' ? raw : undefined) ?? error.message ?? '';
+    if (status === 529 || detail?.type === 'overloaded_error') {
       const retryAfterMs = parseRetryAfter(error.headers?.get('retry-after'));
-      return providerError('provider_error', 'anthropic.busy', {}, { retryable: true, status: error.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+      return providerError('provider_error', 'anthropic.busy', {}, { retryable: true, status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
     }
-    return classifyHttpFailure(error.status, message, error.headers, secrets);
+    return classifyHttpFailure(status, message, error.headers, secrets);
   }
   return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error), secrets).slice(0, UPSTREAM_KEEP) });
 }
