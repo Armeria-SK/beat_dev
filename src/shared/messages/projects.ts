@@ -28,7 +28,7 @@ const en = {
   'changes_no_base': 'There is nothing to compare with yet (no snapshot from a Build start, or no commit)',
   'changes_git_unusable': 'git could not be run safely in this product folder, so the changes cannot be shown',
   'changes_failed': 'The changes could not be read. Try again',
-  'changes_busy': 'A task or conversation that can write to this product folder is running (it may belong to another product, or to none). Undo or redo after it stops',
+  'changes_busy': 'A task or conversation of this product, or one that can write to this folder, is running. Undo or redo after it stops',
   'changes_redo_missing': 'There is nothing to redo with this id',
   'changes_redo_done': 'This undo has already been redone',
   'changes_worktree_missing': 'The working copy was not found',

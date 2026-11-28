@@ -84,14 +84,14 @@ test('ui/ChangesRedo（DOM）: Redo を押すと組の id で口を呼び、「r
   let busy = true;
   globalThis.fetch = (async (_path: string | URL | Request, init?: RequestInit) => {
     bodies.push(JSON.parse(String(init!.body)));
-    if (busy) return reply({ error: 'project', code: 'project.changes_busy', message: 'A task or conversation that can write to this product folder is running (it may belong to another product, or to none). Undo or redo after it stops' }, 409);
+    if (busy) return reply({ error: 'project', code: 'project.changes_busy', message: 'A task or conversation of this product, or one that can write to this folder, is running. Undo or redo after it stops' }, 409);
     return reply({ redone: ['a.ts'], refused: [] });
   }) as typeof fetch;
   const { container } = await render(createElement('div', { className: 'bt-notice' }, createElement(RedoAction, { projectId: 'p1', batch: 'batch-a' })));
   await click(byText(container, 'button', 'Redo'));
   await settle();
   assert.deepEqual(bodies, [{ redo: 'batch-a' }]);
-  assert.match(container.textContent!, /could not redo: A task or conversation that can write to this product folder is running/u);
+  assert.match(container.textContent!, /could not redo: A task or conversation of this product, or one that can write to this folder, is running/u);
   busy = false;
   await click(byText(container, 'button', 'Redo'));
   await settle();

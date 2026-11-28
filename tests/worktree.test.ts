@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, rmSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, rmSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative } from 'node:path';
@@ -14,7 +14,7 @@ import { pushFacts } from '../src/pending/snapshot.ts';
 import { ProjectStore } from '../src/projects/store.ts';
 import { rootKeyOf } from '../src/projects/work-folder.ts';
 import { BEAT_BRANCH, branchSlug, removeLinksInside, removeTree, worktreeRoot, Worktrees } from '../src/projects/worktree.ts';
-import { removeDir, tempDir } from './helpers.ts';
+import { removeDir, tempDir, trackedTempDir } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 const WINDOWS = process.platform === 'win32';
@@ -60,7 +60,7 @@ function mainState(product: string) {
 interface Setup { base: string; data: string; product: string; db: DatabaseSync; projects: ProjectStore; wt: Worktrees; projectId: string; config: ReturnType<typeof defaultConfig>; marker: string }
 
 function setup(t: Parameters<typeof tempDir>[0], options: { data?: string; home?: string; productConfig?: string[] } = {}): Setup {
-  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-test-')));
+  const base = realpathSync.native(trackedTempDir());
   const data = options.data ?? join(base, 'data');
   mkdirSync(data, { recursive: true });
   const product = join(base, 'product');

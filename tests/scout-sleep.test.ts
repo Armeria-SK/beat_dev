@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -19,7 +19,7 @@ import type { Task } from '../src/tasks/store.ts';
 import { Worker } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
 import { isScoutState } from '../web/src/ui/scout.ts';
-import { FakeAdapter, fail, reply, type Script, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, fail, reply, type Script, tempDir, testConfig, trackedTempDir } from './helpers.ts';
 import { MIN, toolCall } from './helpers/task-app.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -35,7 +35,7 @@ const commitAll = (root: string, message: string): string => { git(root, ['add',
 interface Options { scout?: string[]; edit?: (c: AppConfig) => void; dir?: string; file?: boolean; git?: boolean; unbuilt?: boolean }
 
 async function setup(t: { after: (fn: () => void) => void }, options: Options = {}) {
-  const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'beat-test-'));
+  const dir = options.dir ?? trackedTempDir();
   const paths = resolvePaths(dir);
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();

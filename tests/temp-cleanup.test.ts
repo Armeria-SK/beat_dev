@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { removeDir } from './helpers.ts';
+import { removeDir, trackedTempDir } from './helpers.ts';
 
 // 試験の後片付け（removeDir）: Windows で、ほかのプロセスがしばらく開いているファイルがあっても消し切る。開いたままなら落ちる
 const WIN = process.platform === 'win32';
@@ -22,7 +22,7 @@ async function holdOpen(file: string, ms: number): Promise<ChildProcess> {
 const exited = (child: ChildProcess) => new Promise<void>(resolve => { if (child.exitCode !== null) resolve(); else child.on('exit', () => resolve()); });
 
 test('removeDir: 少しのあいだ開かれているファイル（EPERM）があっても、閉じたあとに消し切る', { skip: !WIN }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
+  const dir = trackedTempDir();
   writeFileSync(join(dir, 'held.log'), 'x');
   const child = await holdOpen(join(dir, 'held.log'), 800);
   try {
@@ -35,7 +35,7 @@ test('removeDir: 少しのあいだ開かれているファイル（EPERM）が�
 });
 
 test('removeDir: 待つ時間を過ぎても開いたままなら、EPERM のまま落ちる（取り残しを隠さない）', { skip: !WIN }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
+  const dir = trackedTempDir();
   writeFileSync(join(dir, 'held.log'), 'x');
   const child = await holdOpen(join(dir, 'held.log'), 5000);
   try {

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { startApp, uuid, waitFor } from './app-setup.ts';
+import { trackedTempDir } from './helpers.ts';
 
 // beat 6-4: 持ち主の Terminal の欄の口。一覧・続きを読む・止める。製品ごとに見せ、無い番号・製品の違う番号は 404
 
@@ -11,7 +12,7 @@ const KEY = `sk-ant-${'B'.repeat(32)}`;
 const ESC = String.fromCharCode(27);
 
 async function setup(t: Parameters<typeof startApp>[0]) {
-  const products = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-test-')));
+  const products = realpathSync.native(trackedTempDir());
   const s = await startApp(t, { projectFolderExempt: [products] });
   t.after(async () => {
     for (const job of s.app.background.list().filter(j => j.state === 'running')) await s.app.background.stop(job.id, 'system');

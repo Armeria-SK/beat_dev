@@ -19,6 +19,7 @@ export const projectJa = {
   'scout_no_model': "scout に使えるモデルが設定されていません。Settings › Models（Scout）で選んでください",
   'scout_cloud_zero': "scout のモデルはクラウドのモデルで、scout.cloudRunsPerHour が 0 なので、scout は動きません",
   'scout_resting': "scout のモデルが使える量の上限か支払いのエラーを返したので、scout は夜中の 0 時まで休みます",
+  'changes_busy': "この製品の、またはこのフォルダに書けるタスクか会話が動いています。止まってから Undo・Redo してください",
   'scout_not_built': "scout は、この製品の最初の Build が済んでから始まります",
   'scout_busy': "この製品のタスクが待っているか動いています。scout はタスクが無いときに製品を見るので、そのあとで Think now を試してください",
   'folder_not_absolute': "フォルダのフルパスを入れてください（\".\" や \"..\" の部分なしで）",

@@ -48,6 +48,12 @@ export function metaLine(view: BrowserView): string {
   ].join(' · ');
 }
 
+// Stop の知らせの文の鍵。タスクの実行は止めても約 20 秒で再開するので、Task 画面と同じ文で言う（backlog: Browser の欄だけが言わなかった）
+export function stopToastKeys(stopped: boolean, by: BrowserView['by']['kind']): { title: 'ui.browser.stopped' | 'ui.browser.notRunning'; body?: 'ui.task.toast.stoppedBody' } {
+  if (!stopped) return { title: 'ui.browser.notRunning' };
+  return by === 'task' ? { title: 'ui.browser.stopped', body: 'ui.task.toast.stoppedBody' } : { title: 'ui.browser.stopped' };
+}
+
 interface Frame { src: string; seq: number; tab: string }
 
 export function BrowserPane({ productId }: { productId: string }) {
@@ -122,7 +128,8 @@ export function BrowserPane({ productId }: { productId: string }) {
     setStopping(true);
     try {
       const { stopped } = await api.stop(view.runId);
-      toast({ icon: 'square', title: t(stopped ? 'ui.browser.stopped' : 'ui.browser.notRunning') });
+      const keys = stopToastKeys(stopped, view.by.kind);
+      toast({ icon: 'square', title: t(keys.title), ...(keys.body ? { body: t(keys.body) } : {}) });
       void load();
     } catch (error) { reportOpError(error); } finally { setStopping(false); }
   };

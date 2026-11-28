@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { readThen, reply, tempDir, type Script } from './helpers.ts';
+import { JA_SERVER } from '../web/src/i18n/ja-server/index.ts';
 
 // L240: 裏の仕事（scout-run）・入れ子の製品・tools.roots で書ける会話の実行が動いている間も、Undo・Redo は changes_busy で断る
 
@@ -57,7 +58,9 @@ async function rig(t: Parameters<typeof startApp>[0], writeRoots = false) {
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), 'utf8');
 const busy = (r: { status: number; body: { code?: string } }): [number, string | undefined] => [r.status, r.body.code];
 // 断る文は「この製品の」と言い切らない。止めているのは、入れ子の別の製品の実行や、製品に結び付かない会話（tools.roots で書ける）のこともある
-const WRITES_HERE = /^A task or conversation that can write to this product folder is running \(it may belong to another product, or to none\)\./u;
+// 同じ製品の作業コピー（worktree）で動くタスクは製品のフォルダに書けないが、それでも断る（busy() は製品のどのタスクでも断る）ので、両方に合う文にする
+const WRITES_HERE = /^A task or conversation of this product, or one that can write to this folder, is running\./u;
+const WRITES_HERE_JA = /^この製品の、またはこのフォルダに書けるタスクか会話が動いています。/u;
 
 test('L240: 実行のない scout-run の行（考える・直す実行の印）が running でも、Undo・Redo は断らない。ふつうのタスクの running なら断る', async t => {
   const s = await rig(t);
@@ -137,4 +140,8 @@ test('L240: tools.roots でその製品のフォルダに書ける会話（製�
   try {
     assert.equal((await narrow.undo(q.id, { paths: ['a.txt'] })).status, 200, 'tools.roots が製品のフォルダに重ならなければ、ほかの会話は関係ない');
   } finally { await free(); }
+});
+
+test('changes_busy の文は英・日とも「この製品の、またはこのフォルダに書ける」の向き（作業コピーで動くタスクで断るときにも合う）', () => {
+  assert.match(JA_SERVER.project!.changes_busy!, WRITES_HERE_JA);
 });

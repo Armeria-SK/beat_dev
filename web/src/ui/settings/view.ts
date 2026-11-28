@@ -85,9 +85,13 @@ export function setScoutEffort(config: Config, effort: string): Config {
 }
 
 // 会話のモデルを決める。実行役のモデルは会話の先頭にだけ置けるので、先頭から外れた実行役のモデルは、控えにも残さない
+// 会話の並びが空（自動 = 提供元のモデル全部）のときは、その並びを写してから先頭に置く（予備の提供元のモデルを黙って外さない）
 export function setConversation(config: Config, id: string): Config {
-  const runtimeIds = new Set(((config.models ?? []) as Array<{ id: string; runtime?: unknown }>).filter(isRuntimeEntry).map(m => m.id));
-  const chat = (config.routing.chat as string[]).filter(x => x !== id && !runtimeIds.has(x));
+  const models = (config.models ?? []) as Array<{ id: string; runtime?: unknown }>;
+  const runtimeIds = new Set(models.filter(isRuntimeEntry).map(m => m.id));
+  const stored = config.routing.chat as string[];
+  const base = stored.length === 0 ? models.filter(m => !runtimeIds.has(m.id)).map(m => m.id) : stored;
+  const chat = base.filter(x => x !== id && !runtimeIds.has(x));
   return { ...config, routing: { ...config.routing, chat: [id, ...chat] } };
 }
 
