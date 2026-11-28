@@ -456,7 +456,8 @@ export class PendingStore {
       ...(files.length ? { sent: boundFacts(files) } : {}),
       ...(input.rule && input.projectId && masked === 0 && !carriesHeld([input.rule.base, input.rule.shown, ...(input.check?.ruleShape?.words ?? [])], heldNow) ? { rule: input.rule } : {}),
       ...(input.kind === 'send' || pushes.length ? { destination: destinationFacts(input.cwd, places) } : {}),
-      rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: redactSecrets(toolMask(kept?.text ?? p.text), this.#held(tool).map(h => h.value)) })) } : {}) },
+      // A held value that straddles the preview's cut is marked here too (as on the waiting card): exact matching alone leaves its visible head in the kept card
+      rest: { shown, masked: restMasked, parts, ...(preview?.length ? { preview: preview.map(({ rest: kept, chars: _chars, ...p }) => ({ ...p, ...(kept ?? {}), text: hide(redactSecrets(toolMask(kept?.text ?? p.text), heldNow.map(h => h.value)), kept?.truncated ?? p.truncated) })) } : {}) },
     };
     const result = this.#db.prepare(`INSERT INTO pending_actions (tool, input, shown, masked, cwd, kind, reason, checks, bind, state, files, run_id, run_kind, conversation_id, task_id, project_id, tainted, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`).run(
