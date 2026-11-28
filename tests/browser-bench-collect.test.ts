@@ -9,7 +9,8 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { BROWSER_TOOLS } from '../src/tools/builtin/browser.ts';
 import { toolSearch } from '../src/tools/builtin/tool-search.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
+import { trackedTempDir } from './helpers.ts';
 import { tmpdir } from 'node:os';
 
 // browser-rethink P0 の物差しの集計: 本体と子の担当を分ける・tool_search の本物の結果から読み込みを数える・読めない行は 0 に見せず数える
@@ -32,7 +33,7 @@ async function searchOutput(query: string): Promise<string> {
 }
 
 function setup(t: { after: (fn: () => void) => void }): DatabaseSync {
-  const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
+  const dir = trackedTempDir();
   const db = openDatabase(join(dir, 'beat.db'), MIGRATIONS);
   t.after(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
   for (const id of ['bench', 'child-conv']) db.prepare('INSERT INTO conversations (id, created_at, last_message_at) VALUES (?, 0, 0)').run(id);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -11,7 +11,7 @@ import { backgroundSection, shellOutput, shellStop } from '../src/tools/builtin/
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import type { BackgroundJobs } from '../src/tools/shell/background.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
-import { removeDir, reply, tempDir, withLoad, type Script } from './helpers.ts';
+import { removeDir, reply, tempDir, trackedTempDir, withLoad, type Script } from './helpers.ts';
 
 // beat 6-2: shell_run の background と shell_output / shell_stop。裏の道も、事前の判定・判定役・Pending・見張りを同じに通る
 
@@ -41,7 +41,7 @@ const hang: Script = async function* (req) {
 type Options = NonNullable<Parameters<typeof startApp>[1]>;
 
 async function setup(t: Parameters<typeof startApp>[0], options: Options = {}) {
-  const products = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-test-')));
+  const products = realpathSync.native(trackedTempDir());
   let jobs: BackgroundJobs | undefined;
   t.after(async () => {
     const running = new Set(jobs?.list().filter(job => job.state === 'running').map(job => job.conversationId));

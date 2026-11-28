@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -23,7 +23,7 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { fakeModel, settled, startApp, waitFor } from './app-setup.ts';
-import { type Script, tempDir, testConfig, withLoad, notSearch } from './helpers.ts';
+import { type Script, tempDir, testConfig, trackedTempDir, withLoad, notSearch } from './helpers.ts';
 
 const bashAvailable = spawnSync('bash', ['-c', 'echo ok'], { encoding: 'utf8' }).stdout?.trim() === 'ok';
 
@@ -396,7 +396,7 @@ test('4-2d: ほかの会話の待ちが 200 を超えても、この会話の待
 });
 
 test('4-2d: 製品の会話で、この実行で AI が作ったファイルを消すのは積まず、持ち主のファイルを消すのは Pending に積む', { skip: spawnSync('git', ['--version']).status !== 0 && 'git が無い' }, async t => {
-  const products = realpathSync.native(mkdtempSync(join(tmpdir(), 'beat-test-')));
+  const products = realpathSync.native(trackedTempDir());
   const s = await startApp(t, { models: [fakeModel('m1')], tools: builtinTools(), projectFolderExempt: [products], judge: '{"decision":"allow","reason":"asked for"}' });
   t.after(() => rmSync(products, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 }));
   const root = join(products, 'shop');

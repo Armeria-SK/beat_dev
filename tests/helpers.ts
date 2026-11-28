@@ -50,10 +50,17 @@ function sweepUntidy(): void {
   }
 }
 
-export function tempDir(t: { after: (fn: () => void | Promise<void>) => void }): string {
+// beat-test-* の一時フォルダを作り、プロセスが終わるときの掃除に載せる。試験の後片付けは呼ぶ側が自分の順で行う（アプリを止めてから消す、など）。
+// 後片付けの前に試験が落ちても、中身入りのフォルダが一時置き場にたまらない。tests/ では beat-test-* をこれか tempDir でだけ作る（tests/bl-early-tempdirs.test.ts）
+export function trackedTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'beat-test-'));
   untidy.add(dir);
   if (!sweeping) { sweeping = true; process.on('exit', sweepUntidy); }
+  return dir;
+}
+
+export function tempDir(t: { after: (fn: () => void | Promise<void>) => void }): string {
+  const dir = trackedTempDir();
   t.after(async () => { await removeDir(dir); untidy.delete(dir); });
   return dir;
 }
