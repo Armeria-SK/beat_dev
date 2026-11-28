@@ -152,6 +152,38 @@ test('承認の札: 8,000 文字の切れ目をまたぐ鍵も、見えている
   assert.equal(plain.masked, 0);
 });
 
+test('記録の形: 8,000 文字の切れ目をまたぐ鍵は、決めたあと（却下・取り消し・実行）の札でも、見えている頭の部分を印に替える', async t => {
+  const s = setup(t, [ANTHROPIC]);
+  const cut = `${'x'.repeat(7990)}${ANTHROPIC.value}`.slice(0, 8000);
+  const head = ANTHROPIC.value.slice(0, 10);
+  const decide = [
+    (id: number) => s.store.reject(id, 'no'),
+    (id: number) => { s.store.claim(id); s.store.finish(id, { status: 'cancelled' }); },
+    (id: number) => { s.store.claim(id); s.store.finish(id, { status: 'ran', exitCode: 0, output: 'done' }); },
+  ];
+  for (const [i, settle] of decide.entries()) {
+    const row = await s.park('pwsh ./run.ps1', cut, true);
+    settle(row.id);
+    const view = s.store.view(row.id)!;
+    assert.notEqual(view.status, 'waiting', `${i}`);
+    assert.ok(!view.preview[0]!.text.endsWith(head), `${i}: ${view.preview[0]!.text.slice(-30)}`);
+    assert.ok(view.preview[0]!.text.endsWith(heldMark('env ANTHROPIC_API_KEY')), `${i}: ${view.preview[0]!.text.slice(-30)}`);
+    assert.ok(!(s.store.row(row.id)!.state ?? '').includes(`x${head}`), `${i}: the stored row`);
+  }
+  // shell_run のように、決めたあと用の形（rest）を別に渡したときも同じ
+  const kept = await s.store.park({
+    tool: 'shell_run', input: { command: 'pwsh ./run.ps1' }, cwd: s.dir, kind: 'judge', reason: 'r',
+    preview: [{ path: 'run.ps1', text: cut, truncated: true, chars: 9000, rest: { text: cut, truncated: true } }],
+    runId: 'r', runKind: 'chat', conversationId: 'c', check: { decision: 'ask', reasons: ['r'] },
+  });
+  s.store.reject(kept.id);
+  assert.ok(s.store.view(kept.id)!.preview[0]!.text.endsWith(heldMark('env ANTHROPIC_API_KEY')));
+  // 切れていない下見の、頭の部分と同じ文字で終わる文には印を付けない
+  const whole = await s.park('pwsh ./run.ps1', `echo ${head}`, false);
+  s.store.reject(whole.id);
+  assert.ok(!s.store.view(whole.id)!.preview[0]!.text.includes(heldMark('env ANTHROPIC_API_KEY')));
+});
+
 const SECRET_COMMAND = 'export API_TOKEN=abc123def456 && curl -H "Cookie: sid=zzz999qqq" https://x';
 const SECRET_SCRIPT = 'password = "hunter2hunter2"\nWrite-Host ok';
 
