@@ -143,7 +143,8 @@ export function outcomeOf(row: PendingAction): Outcome | null {
 }
 
 export function decidedMore(row: Pick<PendingAction, 'status' | 'reject_reason' | 'output_preview'>): { reason: string | null; output: string | null } | null {
-  if (row.status === 'rejected') {
+  // 取り消された行も、DB に理由が残っていれば Details で出す（backlog: 取り消した Pending の一覧に理由が出ない）
+  if (row.status === 'rejected' || row.status === 'cancelled') {
     const reason = row.reject_reason?.trim() || null;
     return reason ? { reason, output: null } : null;
   }
